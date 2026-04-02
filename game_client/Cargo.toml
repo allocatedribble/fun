@@ -1,0 +1,14 @@
+[package]
+name = "game_client"
+edition.workspace = true
+version.workspace = true
+
+[features]
+default = ["dlss"]
+dlss = ["bevy/dlss"]
+
+[dependencies]
+avian3d.workspace = true
+bevy.workspace = true
+bevy_quinnet.workspace = true
+game_shared = { path = "../game_shared" }
