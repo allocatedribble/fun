@@ -35,7 +35,9 @@ use bevy::{
     },
     prelude::*,
     render::diagnostic::RenderDiagnosticsPlugin,
-    solari::prelude::{RaytracingMesh3d, SolariLighting, SolariPlugins},
+    solari::prelude::{
+        RaytracingMesh3d, SolariLighting, SolariPlugins, SolariResetEvent, SolariSettings,
+    },
     window::PresentMode,
     winit::WinitSettings,
 };
@@ -97,6 +99,8 @@ impl Plugin for GameClientPlugin {
 
         app.insert_resource(opaque_renderer_method)
             .insert_resource(render_config)
+            .insert_resource(SolariSettings::from_legacy_env())
+            .add_message::<SolariResetEvent>()
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
             .init_resource::<ClientDiagnostics>()
@@ -378,6 +382,7 @@ fn receive_world_stream(
     mut materials: ResMut<Assets<StandardMaterial>>,
     solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
     mut solari_lighting: Query<&mut SolariLighting>,
+    mut solari_reset_events: MessageWriter<SolariResetEvent>,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_supported: Option<
         Res<DlssRayReconstructionSupported>,
     >,
@@ -421,7 +426,7 @@ fn receive_world_stream(
             packet.entities.len()
         );
 
-        apply_world_stream_chunk(
+        let world_revision_changed = apply_world_stream_chunk(
             &mut commands,
             &mut loaded_world,
             &mut world_status,
@@ -431,6 +436,15 @@ fn receive_world_stream(
             &render_config,
             &packet,
         );
+        if world_revision_changed {
+            request_solari_lighting_history_reset(
+                "streamed world revision changed",
+                &mut solari_reset_events,
+                &mut solari_lighting,
+            );
+            #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+            reset_dlss_ray_reconstruction_history(&mut dlss_rr);
+        }
 
         if loaded_world.is_complete() {
             let became_ready = !world_status.ready;
@@ -446,6 +460,7 @@ fn receive_world_stream(
                     &render_config,
                     &solari_cameras,
                     &mut solari_lighting,
+                    &mut solari_reset_events,
                 );
                 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
                 enable_dlss_ray_reconstruction_for_ready_world(
@@ -494,6 +509,7 @@ fn enable_solari_lighting_for_ready_world(
     render_config: &ClientRenderConfig,
     solari_cameras: &Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
     solari_lighting: &mut Query<&mut SolariLighting>,
+    solari_reset_events: &mut MessageWriter<SolariResetEvent>,
 ) {
     if !render_config.solari_enabled {
         println!("[client render] streamed world ready; Solari remains disabled");
@@ -515,6 +531,20 @@ fn enable_solari_lighting_for_ready_world(
         );
     }
 
+    request_solari_lighting_history_reset(
+        "streamed world became ready",
+        solari_reset_events,
+        solari_lighting,
+    );
+}
+
+fn request_solari_lighting_history_reset(
+    reason: &str,
+    solari_reset_events: &mut MessageWriter<SolariResetEvent>,
+    solari_lighting: &mut Query<&mut SolariLighting>,
+) {
+    solari_reset_events.write_default();
+    println!("[client render] requested Solari temporal history reset: {reason}");
     reset_solari_lighting_history(solari_lighting);
 }
 
@@ -601,10 +631,12 @@ fn apply_world_stream_chunk(
     materials: &mut Assets<StandardMaterial>,
     render_config: &ClientRenderConfig,
     chunk: &WorldStreamChunk,
-) {
+) -> bool {
+    let mut world_revision_changed = false;
     if loaded_world.revision != Some(chunk.revision)
         || loaded_world.level_id.as_deref() != Some(chunk.level_id.0.as_str())
     {
+        world_revision_changed = true;
         println!(
             "[client stream] resetting streamed world: old_level={:?} old_revision={:?} old_entities={}",
             loaded_world.level_id,
@@ -663,6 +695,8 @@ fn apply_world_stream_chunk(
         loaded_world.expected_chunks,
         loaded_world.spawned_entities.len()
     );
+
+    world_revision_changed
 }
 
 fn spawn_streamed_entity(
