@@ -12,7 +12,7 @@ use bevy::{
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
     render::view::Msaa,
-    scene2::{
+    scene::{
         prelude::{CommandsSceneExt, Scene as BsnScene, bsn},
         template_value,
     },

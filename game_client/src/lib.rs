@@ -9,6 +9,7 @@ use std::{
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
 use bevy::render::{
     RenderPlugin,
+    error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
     render_resource::TextureUsages,
     settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
 };
@@ -24,6 +25,7 @@ use bevy::{
     camera::CameraMainTextureUsages,
     dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
     diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    ecs::world::World,
     pbr::{
         DefaultOpaqueRendererMethod,
         experimental::meshlet::{
@@ -167,19 +169,47 @@ pub fn build_client_app() -> App {
         ..default()
     });
     let default_plugins = default_plugins.set(RenderPlugin {
-        render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
-            backends: Some(render_backend),
-            instance_flags: InstanceFlags::empty().with_env(),
-            ..default()
-        })),
+        render_creation: client_render_creation(render_backend),
         ..default()
     });
 
     app.add_plugins(default_plugins)
+        .insert_resource(RenderErrorHandler(recover_render_device))
         .insert_resource(WinitSettings::continuous())
         .add_plugins(GameClientPlugin);
 
     app
+}
+
+fn client_render_creation(render_backend: Backends) -> RenderCreation {
+    RenderCreation::Automatic(Box::new(WgpuSettings {
+        backends: Some(render_backend),
+        instance_flags: InstanceFlags::empty().with_env(),
+        ..default()
+    }))
+}
+
+fn recover_render_device(
+    error: &RenderError,
+    _main_world: &mut World,
+    _render_world: &mut World,
+) -> RenderErrorPolicy {
+    println!(
+        "[client render] renderer reported {:?}: {}; recreating renderer with the same profile",
+        error.ty, error.description
+    );
+
+    match error.ty {
+        ErrorType::DeviceLost | ErrorType::OutOfMemory | ErrorType::Internal => {
+            RenderErrorPolicy::Recover(client_render_creation(selected_render_backend()))
+        }
+        ErrorType::Validation => {
+            println!(
+                "[client render] validation error may be fallout from a lost GPU device; attempting immediate renderer recovery"
+            );
+            RenderErrorPolicy::Recover(client_render_creation(selected_render_backend()))
+        }
+    }
 }
 
 fn selected_render_backend() -> Backends {

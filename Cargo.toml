@@ -64,7 +64,6 @@ bevy_ptr = { path = "../bevy/crates/bevy_ptr" }
 bevy_reflect = { path = "../bevy/crates/bevy_reflect" }
 bevy_render = { path = "../bevy/crates/bevy_render" }
 bevy_scene = { path = "../bevy/crates/bevy_scene" }
-bevy_scene2 = { path = "../bevy/crates/bevy_scene2" }
 bevy_shader = { path = "../bevy/crates/bevy_shader" }
 bevy_solari = { path = "../bevy/crates/bevy_solari" }
 bevy_sprite = { path = "../bevy/crates/bevy_sprite" }

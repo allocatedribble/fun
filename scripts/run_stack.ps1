@@ -3,6 +3,7 @@ param(
     [switch]$StaticBevy,
     [switch]$NoClient,
     [switch]$RenderDiagnostics,
+    [switch]$SolariDebugDirectVisibility,
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
@@ -53,6 +54,12 @@ if ($RenderDiagnostics) {
 }
 else {
     Remove-Item Env:\FUN_RENDER_DIAGNOSTICS -ErrorAction SilentlyContinue
+}
+if ($SolariDebugDirectVisibility) {
+    $env:FUN_SOLARI_DEBUG_DIRECT_VISIBILITY = "1"
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_DEBUG_DIRECT_VISIBILITY -ErrorAction SilentlyContinue
 }
 if ($DisableDlssRr) {
     $env:FUN_DISABLE_DLSS_RR = "1"
@@ -117,6 +124,12 @@ try {
     & cargo @buildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build failed with exit code $LASTEXITCODE"
+    }
+
+    if (-not $Release -and -not $StaticBevy) {
+        Get-ChildItem -Path $rustTargetLibDir -Filter "std-*.dll" | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $targetRoot $profile) -Force
+        }
     }
 }
 finally {

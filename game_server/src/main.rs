@@ -6,7 +6,7 @@ use bevy::{
     asset::AssetPlugin,
     mesh::MeshPlugin,
     prelude::*,
-    scene2::{
+    scene::{
         ScenePlugin,
         prelude::{CommandsSceneExt, Scene as BsnScene, bsn, bsn_list},
         template_value,

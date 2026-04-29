@@ -24,3 +24,7 @@ target
 # Added by cargo
 
 /target
+
+# Local agent scratch/vendor snapshots
+/.codex/
+/vendor/
