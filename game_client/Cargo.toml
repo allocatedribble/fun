@@ -5,10 +5,14 @@ version.workspace = true
 
 [features]
 default = ["dlss"]
+bevy_debug = ["bevy/debug"]
 dlss = ["bevy/dlss"]
+force_disable_dlss = ["bevy/force_disable_dlss"]
 
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true
 bevy_quinnet.workspace = true
 game_shared = { path = "../game_shared" }
+log.workspace = true
+thunder.workspace = true
