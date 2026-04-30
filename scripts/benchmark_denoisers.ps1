@@ -3,6 +3,11 @@ param(
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [string]$SolariInternalScale = "1.0",
+    [string]$SolariArch = "budgeted",
+    [int]$SolariTargetFps = 144,
+    [int]$SolariFrameBudgetNs = 6944444,
+    [int]$SolariGpuBudgetNs = 3000000,
+    [string]$SolariVisualTarget = "competitive",
     [int]$WarmupSeconds = 10,
     [int]$SampleSeconds = 30,
     [switch]$Release,
@@ -147,6 +152,7 @@ function Write-DenoiserReport {
     $lines.Add("- Lowest frame p95: $($bestFrameP95.mode) at $($bestFrameP95.frame_p95_ns) ns") | Out-Null
     $lines.Add("- Lowest denoiser/RR cost: $($lowestDenoiser.mode) at $($lowestDenoiser.denoiser_or_rr_mean_ns) ns") | Out-Null
     $lines.Add("- Standard runtime denoiser: balanced-fast") | Out-Null
+    $lines.Add("- Solari architecture: $SolariArch, visual target: $SolariVisualTarget, target FPS: $SolariTargetFps") | Out-Null
     $lines.Add("- Solari internal scale: $SolariInternalScale") | Out-Null
     $lines.Add("- Known RR issue: Ray Reconstruction can show a large black square/rectangle and missing or broken shadows in this project.") | Out-Null
     $lines.Add("") | Out-Null
@@ -228,7 +234,17 @@ foreach ($modeName in $Modes) {
         "-SolariDenoiseMode",
         $mode.solari_denoise_mode,
         "-SolariInternalScale",
-        $SolariInternalScale
+        $SolariInternalScale,
+        "-SolariArch",
+        $SolariArch,
+        "-SolariTargetFps",
+        "$SolariTargetFps",
+        "-SolariFrameBudgetNs",
+        "$SolariFrameBudgetNs",
+        "-SolariGpuBudgetNs",
+        "$SolariGpuBudgetNs",
+        "-SolariVisualTarget",
+        $SolariVisualTarget
     )
     if ($Release) { $clientArgs += "-Release" }
     if ($StaticBevy) { $clientArgs += "-StaticBevy" }

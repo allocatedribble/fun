@@ -10,8 +10,14 @@ param(
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
+    [string]$SolariArch = "budgeted",
+    [int]$SolariTargetFps = 144,
+    [int]$SolariFrameBudgetNs = 6944444,
+    [int]$SolariGpuBudgetNs = 3000000,
+    [string]$SolariVisualTarget = "competitive",
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
+    [string]$SolariDebugOverlay = "",
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [int]$StartupDelaySeconds = 2
@@ -112,6 +118,42 @@ if ($SolariInternalScale) {
 }
 else {
     Remove-Item Env:\FUN_SOLARI_INTERNAL_SCALE -ErrorAction SilentlyContinue
+}
+if ($SolariDebugOverlay) {
+    $env:FUN_SOLARI_DEBUG_OVERLAY = $SolariDebugOverlay
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_DEBUG_OVERLAY -ErrorAction SilentlyContinue
+}
+if ($SolariArch) {
+    $env:FUN_SOLARI_ARCH = $SolariArch
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_ARCH -ErrorAction SilentlyContinue
+}
+if ($SolariTargetFps -gt 0) {
+    $env:FUN_SOLARI_TARGET_FPS = [string]$SolariTargetFps
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_TARGET_FPS -ErrorAction SilentlyContinue
+}
+if ($SolariFrameBudgetNs -gt 0) {
+    $env:FUN_SOLARI_FRAME_BUDGET_NS = [string]$SolariFrameBudgetNs
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_FRAME_BUDGET_NS -ErrorAction SilentlyContinue
+}
+if ($SolariGpuBudgetNs -gt 0) {
+    $env:FUN_SOLARI_GPU_BUDGET_NS = [string]$SolariGpuBudgetNs
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_GPU_BUDGET_NS -ErrorAction SilentlyContinue
+}
+if ($SolariVisualTarget) {
+    $env:FUN_SOLARI_VISUAL_TARGET = $SolariVisualTarget
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_VISUAL_TARGET -ErrorAction SilentlyContinue
 }
 if ($RenderBackend) {
     $env:FUN_RENDER_BACKEND = $RenderBackend

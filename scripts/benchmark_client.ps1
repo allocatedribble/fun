@@ -5,6 +5,11 @@ param(
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
     [switch]$TraceDiagnostics,
+    [string]$SolariArch = "budgeted",
+    [int]$SolariTargetFps = 144,
+    [int]$SolariFrameBudgetNs = 6944444,
+    [int]$SolariGpuBudgetNs = 3000000,
+    [string]$SolariVisualTarget = "competitive",
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
     [string]$RenderBackend = "vulkan",
@@ -133,6 +138,12 @@ function Parse-ClientPerfLog {
         $passes = [regex]::Match($line, "\[client perf\] solari passes gpu_ms: (?<payload>.*)$")
         if ($passes.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $passes.Groups["payload"].Value -Prefix "solari_pass_" -Milliseconds
+            continue
+        }
+
+        $budget = [regex]::Match($line, "\[client perf\] solari budget: (?<payload>.*)$")
+        if ($budget.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $budget.Groups["payload"].Value -Prefix "solari_budget_"
             continue
         }
 
@@ -497,6 +508,21 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($SolariInternalScale)) {
             $runStackArgs += @("-SolariInternalScale", $SolariInternalScale)
         }
+        if (-not [string]::IsNullOrWhiteSpace($SolariArch)) {
+            $runStackArgs += @("-SolariArch", $SolariArch)
+        }
+        if ($SolariTargetFps -gt 0) {
+            $runStackArgs += @("-SolariTargetFps", $SolariTargetFps)
+        }
+        if ($SolariFrameBudgetNs -gt 0) {
+            $runStackArgs += @("-SolariFrameBudgetNs", $SolariFrameBudgetNs)
+        }
+        if ($SolariGpuBudgetNs -gt 0) {
+            $runStackArgs += @("-SolariGpuBudgetNs", $SolariGpuBudgetNs)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SolariVisualTarget)) {
+            $runStackArgs += @("-SolariVisualTarget", $SolariVisualTarget)
+        }
 
         Write-Host "Starting benchmark stack..."
         & $powerShellPath @runStackArgs
@@ -557,6 +583,11 @@ try {
             disable_dlss_rr = [bool]$DisableDlssRr
             disable_solari = [bool]$DisableSolari
             disable_meshlets = [bool]$DisableMeshlets
+            solari_arch = if ([string]::IsNullOrWhiteSpace($SolariArch)) { "legacy" } else { $SolariArch }
+            solari_target_fps = $SolariTargetFps
+            solari_frame_budget_ns = $SolariFrameBudgetNs
+            solari_gpu_budget_ns = $SolariGpuBudgetNs
+            solari_visual_target = if ([string]::IsNullOrWhiteSpace($SolariVisualTarget)) { "balanced" } else { $SolariVisualTarget }
             solari_denoise_mode = if ([string]::IsNullOrWhiteSpace($SolariDenoiseMode)) { "balanced-fast" } else { $SolariDenoiseMode }
             solari_internal_scale = if ([string]::IsNullOrWhiteSpace($SolariInternalScale)) { "1.0" } else { $SolariInternalScale }
         }

@@ -36,10 +36,22 @@ can perturb frame time.
 - `fun::perf`: FPS, frame ms/ns, Solari total ns, meshlet visibility ns, and
   external RR ns.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,
-  diffuse GI plus split diffuse initial/spatial timings, specular regular/PSR,
-  guide resolve, cheap temporal denoise, each à trous denoise pass, and
-  composite. It also reports the current world-cache active-cell count so
-  adaptive cache settings can be judged against both cost and cell pressure.
+  surface classification, work-queue construction, diffuse GI plus split
+  diffuse initial/spatial timings, specular regular/queued/PSR, guide resolve, cheap
+  temporal denoise, each à trous denoise pass, and composite. It also reports
+  the current world-cache active-cell count so adaptive cache settings can be
+  judged against both cost and cell pressure.
+- `fun::perf::solari_budget`: architecture, visual target, target FPS, frame
+  and Solari GPU budgets, budget pressure, active direct/GI/specular work,
+  cache request pressure, visual debt, and reconstruction pixels.
+- `fun::perf::solari_queues`: surface-classification-driven queue pressure:
+  critical direct pixels, GI tiles, GI repair pixels, specular pixels,
+  radiance-cache requests, denoise repair tiles, overflow count, and active
+  classified tiles.
+- `fun::perf::radiance_cache`: read-only Solari radiance-cache query pressure:
+  request count, hits, misses, hit rate, and request overflow. These counters
+  are the immediate signal for whether budgeted cache service work is keeping
+  up with GI/specular lookups.
 - `fun::render::recovery`: device loss, out-of-memory/internal render errors,
   surface-loss/acquire failures, recovery attempts, successful reinitialization,
   and frames skipped while the renderer is unavailable.
@@ -77,6 +89,11 @@ The default visual path stays Solari plus meshlets with the BalancedFast
 denoiser. These environment variables exist for controlled captures and stress
 testing; engine-side validation clamps them to bounded GPU-safe ranges:
 
+- `FUN_SOLARI_ARCH=legacy|budgeted`
+- `FUN_SOLARI_TARGET_FPS=144`
+- `FUN_SOLARI_FRAME_BUDGET_NS=6944444`
+- `FUN_SOLARI_GPU_BUDGET_NS=3000000`
+- `FUN_SOLARI_VISUAL_TARGET=competitive|balanced|cinematic`
 - `FUN_SOLARI_WORLD_CACHE_SIZE`
 - `FUN_SOLARI_WORLD_CACHE_UPDATES`
 - `FUN_SOLARI_WORLD_CACHE_LIGHT_SAMPLES`
@@ -88,6 +105,31 @@ testing; engine-side validation clamps them to bounded GPU-safe ranges:
 - `FUN_SOLARI_LIGHT_TILE_SAMPLES`
 - `FUN_SOLARI_BLAS_COMPACTION_VERTICES`
 - `FUN_SOLARI_INTERNAL_SCALE=1.0|0.75|0.66|0.5`
+- `FUN_SOLARI_DEBUG_OVERLAY=surface-classification|work-queues`
+
+`legacy` preserves the pre-budgeted control path. `budgeted` keeps Solari and
+meshlets enabled but routes adaptive runtime controls through a per-view Solari
+runtime uniform, so cache-update budgets, ReSTIR reuse radii, temporal
+confidence caps, and reconstruction strength can move without rebuilding
+pipelines. The stack script defaults to `budgeted`, `competitive`, 144 Hz, a
+6,944,444 ns frame budget, and a 3,000,000 ns Solari GPU budget.
+
+The budgeted path now emits a per-frame Solari director plan into the GPU
+runtime uniform. It reacts quickly when the previous measured Solari GPU cost
+exceeds budget, then restores quality slowly. Surface classification and
+work-queue diagnostics are built every frame. Specular lighting uses the queued
+critical/glossy/mirror pixel path in budgeted mode, while direct lighting and GI
+still keep their full-coverage fallback until their queue consumers can preserve
+history and reconstruction quality. Use
+`FUN_SOLARI_DEBUG_OVERLAY=surface-classification` or
+`FUN_SOLARI_DEBUG_OVERLAY=work-queues` for one-run visual validation.
+
+The radiance cache is now serviced as an explicit producer/consumer path.
+GI/specular lighting queries do not initialize cache cells or compare-exchange
+against the cache table. They read the camera-centered clipmap page, count
+hit/miss pressure, and append compact miss requests. The cache-service pass
+then admits the highest-budgeted request subset into resident clipmap pages and
+tracks confidence/moments for future reuse.
 
 `FUN_SOLARI_INTERNAL_SCALE` currently scales Solari GI reservoirs only. Direct
 lighting stays full resolution so direct shadows remain crisp, and raster

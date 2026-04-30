@@ -38,8 +38,9 @@ use bevy::{
     prelude::*,
     render::diagnostic::RenderDiagnosticsPlugin,
     solari::prelude::{
-        RaytracingMesh3d, SolariDenoiseMode, SolariInternalScale, SolariLighting, SolariPlugins,
-        SolariResetEvent, SolariSettings,
+        RaytracingMesh3d, SolariArchitecture, SolariDebugOverlay, SolariDenoiseMode,
+        SolariInternalScale, SolariLighting, SolariPlugins, SolariResetEvent, SolariRuntimeParams,
+        SolariSettings, SolariVisualTarget,
     },
     window::{PresentMode, PrimaryWindow},
     winit::WinitSettings,
@@ -100,6 +101,7 @@ impl Plugin for GameClientPlugin {
     fn build(&self, app: &mut App) {
         let mut render_config = ClientRenderConfig::from_env();
         let solari_settings = solari_settings_from_env();
+        let solari_runtime_params = solari_runtime_params_from_env(&solari_settings);
         if solari_settings.denoise_mode != SolariDenoiseMode::DlssRayReconstruction {
             render_config.dlss_rr_disabled_by_denoise_mode = render_config.dlss_rr_enabled;
             render_config.dlss_rr_enabled = false;
@@ -132,6 +134,14 @@ impl Plugin for GameClientPlugin {
             solari_settings.world_cache_far_camera_distance_meters
         );
         info!(
+            "[client render] Solari architecture: {:?}, visual target: {:?}, target_fps={}, frame_budget_ns={}, gpu_budget_ns={}",
+            solari_runtime_params.architecture,
+            solari_runtime_params.visual_target,
+            solari_runtime_params.target_fps,
+            solari_runtime_params.frame_budget_ns,
+            solari_runtime_params.gpu_budget_ns
+        );
+        info!(
             target: "fun::render",
             solari_enabled = render_config.solari_enabled,
             meshlets_enabled = render_config.meshlets_enabled,
@@ -145,6 +155,15 @@ impl Plugin for GameClientPlugin {
             world_cache_near_meters = solari_settings.world_cache_near_camera_distance_meters,
             world_cache_mid_meters = solari_settings.world_cache_mid_camera_distance_meters,
             world_cache_far_meters = solari_settings.world_cache_far_camera_distance_meters,
+            solari_architecture = ?solari_runtime_params.architecture,
+            solari_visual_target = ?solari_runtime_params.visual_target,
+            solari_target_fps = solari_runtime_params.target_fps,
+            solari_frame_budget_ns = solari_runtime_params.frame_budget_ns,
+            solari_gpu_budget_ns = solari_runtime_params.gpu_budget_ns,
+            solari_quality_level = solari_runtime_params.quality_level,
+            solari_cache_update_budget = solari_runtime_params.cache_update_budget,
+            solari_specular_refresh_budget = solari_runtime_params.specular_refresh_budget,
+            solari_debug_overlay = ?solari_runtime_params.debug_overlay,
             "client render configuration"
         );
 
@@ -159,6 +178,7 @@ impl Plugin for GameClientPlugin {
         app.insert_resource(opaque_renderer_method)
             .insert_resource(render_config)
             .insert_resource(solari_settings)
+            .insert_resource(solari_runtime_params)
             .add_message::<SolariResetEvent>()
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
@@ -259,6 +279,168 @@ fn solari_settings_from_env() -> SolariSettings {
     );
 
     settings
+}
+
+fn solari_runtime_params_from_env(settings: &SolariSettings) -> SolariRuntimeParams {
+    let architecture = solari_architecture_from_env();
+    let visual_target = solari_visual_target_from_env();
+    let target_fps = env_u32("FUN_SOLARI_TARGET_FPS").unwrap_or(144);
+    let frame_budget_ns = env_u32("FUN_SOLARI_FRAME_BUDGET_NS")
+        .unwrap_or_else(|| 1_000_000_000u32.saturating_div(target_fps.max(1)));
+    let gpu_budget_ns = env_u32("FUN_SOLARI_GPU_BUDGET_NS").unwrap_or(3_000_000);
+
+    let mut params = match architecture {
+        SolariArchitecture::Legacy => SolariRuntimeParams::legacy_from_settings(settings),
+        SolariArchitecture::Budgeted => SolariRuntimeParams::budgeted(
+            settings,
+            visual_target,
+            target_fps,
+            frame_budget_ns,
+            gpu_budget_ns,
+        ),
+    };
+
+    apply_runtime_f32_env(
+        "FUN_SOLARI_RECONSTRUCTION_STRENGTH",
+        &mut params.reconstruction_strength,
+    );
+    apply_runtime_u32_env(
+        "FUN_SOLARI_CACHE_UPDATE_BUDGET",
+        &mut params.cache_update_budget,
+    );
+    apply_runtime_u32_env(
+        "FUN_SOLARI_SPECULAR_REFRESH_BUDGET",
+        &mut params.specular_refresh_budget,
+    );
+    apply_runtime_f32_env(
+        "FUN_SOLARI_DI_REUSE_RADIUS",
+        &mut params.di_spatial_reuse_radius_pixels,
+    );
+    apply_runtime_f32_env(
+        "FUN_SOLARI_GI_REUSE_RADIUS",
+        &mut params.gi_spatial_reuse_radius_pixels,
+    );
+    apply_runtime_f32_env(
+        "FUN_SOLARI_DI_CONFIDENCE_CAP",
+        &mut params.di_temporal_confidence_cap,
+    );
+    apply_runtime_f32_env(
+        "FUN_SOLARI_GI_CONFIDENCE_CAP",
+        &mut params.gi_temporal_confidence_cap,
+    );
+    params.debug_overlay = solari_debug_overlay_from_env();
+
+    params.validated()
+}
+
+fn solari_architecture_from_env() -> SolariArchitecture {
+    match std::env::var("FUN_SOLARI_ARCH")
+        .ok()
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("budgeted") | Some("budget") | Some("v3") => SolariArchitecture::Budgeted,
+        Some("legacy") | None => SolariArchitecture::Legacy,
+        Some(unknown) => {
+            warn!(
+                target: "fun::render",
+                value = unknown,
+                "unknown FUN_SOLARI_ARCH; using legacy Solari architecture"
+            );
+            SolariArchitecture::Legacy
+        }
+    }
+}
+
+fn solari_visual_target_from_env() -> SolariVisualTarget {
+    match std::env::var("FUN_SOLARI_VISUAL_TARGET")
+        .ok()
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("competitive") | Some("comp") | Some("fps") => SolariVisualTarget::Competitive,
+        Some("cinematic") | Some("quality") => SolariVisualTarget::Cinematic,
+        Some("balanced") | None => SolariVisualTarget::Balanced,
+        Some(unknown) => {
+            warn!(
+                target: "fun::render",
+                value = unknown,
+                "unknown FUN_SOLARI_VISUAL_TARGET; using balanced Solari visual target"
+            );
+            SolariVisualTarget::Balanced
+        }
+    }
+}
+
+fn solari_debug_overlay_from_env() -> SolariDebugOverlay {
+    match std::env::var("FUN_SOLARI_DEBUG_OVERLAY")
+        .ok()
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("surface")
+        | Some("surface-classification")
+        | Some("surface_classification")
+        | Some("classification") => SolariDebugOverlay::SurfaceClassification,
+        Some("queue") | Some("queues") | Some("work-queue") | Some("work_queue")
+        | Some("work-queues") | Some("work_queues") => SolariDebugOverlay::WorkQueues,
+        Some("none") | Some("off") | None => SolariDebugOverlay::None,
+        Some(unknown) => {
+            warn!(
+                target: "fun::render",
+                value = unknown,
+                "unknown FUN_SOLARI_DEBUG_OVERLAY; debug overlay disabled"
+            );
+            SolariDebugOverlay::None
+        }
+    }
+}
+
+fn apply_runtime_u32_env(name: &'static str, value: &mut u32) {
+    if let Some(parsed) = env_u32(name) {
+        *value = parsed;
+        info!(target: "fun::render", setting = name, value = parsed, "applied Solari runtime integer setting");
+    }
+}
+
+fn apply_runtime_f32_env(name: &'static str, value: &mut f32) {
+    let Some(raw) = std::env::var_os(name) else {
+        return;
+    };
+    let raw = raw.to_string_lossy();
+    match raw.parse::<f32>() {
+        Ok(parsed) => {
+            *value = parsed;
+            info!(target: "fun::render", setting = name, value = parsed, "applied Solari runtime float setting");
+        }
+        Err(error) => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value = %raw,
+                %error,
+                "ignored invalid Solari runtime float setting"
+            );
+        }
+    }
+}
+
+fn env_u32(name: &'static str) -> Option<u32> {
+    let raw = std::env::var_os(name)?;
+    let raw = raw.to_string_lossy();
+    match raw.parse::<u32>() {
+        Ok(parsed) => Some(parsed),
+        Err(error) => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value = %raw,
+                %error,
+                "ignored invalid Solari integer setting"
+            );
+            None
+        }
+    }
 }
 
 fn solari_internal_scale_from_env() -> SolariInternalScale {
@@ -1228,6 +1410,7 @@ fn log_client_diagnostics(
     mut diagnostics: ResMut<ClientDiagnostics>,
     render_diagnostics: Res<DiagnosticsStore>,
     render_config: Res<ClientRenderConfig>,
+    mut solari_runtime_params: ResMut<SolariRuntimeParams>,
     render_recovery: Option<Res<RenderRecoveryStatus>>,
     loaded_world: Res<LoadedWorldState>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -1394,6 +1577,7 @@ fn log_client_diagnostics(
     log_render_performance(
         &render_diagnostics,
         render_recovery.as_deref(),
+        solari_runtime_params.as_mut(),
         render_config.render_profile_verbose,
         primary_window
             .single()
@@ -1477,6 +1661,7 @@ struct RenderProfileMetric {
 fn log_render_performance(
     diagnostics: &DiagnosticsStore,
     render_recovery: Option<&RenderRecoveryStatus>,
+    solari_runtime_params: &mut SolariRuntimeParams,
     verbose_profile: bool,
     window: Option<ClientWindowProfile>,
 ) {
@@ -1491,6 +1676,12 @@ fn log_render_performance(
         diagnostics,
         "render/solari_lighting/presample_light_tiles/elapsed_gpu",
     );
+    let solari_surface_classify = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/surface_classify/elapsed_gpu",
+    );
+    let solari_work_queue =
+        diagnostic_average(diagnostics, "render/solari_lighting/work_queue/elapsed_gpu");
     let solari_world_cache = diagnostic_average(
         diagnostics,
         "render/solari_lighting/world_cache/elapsed_gpu",
@@ -1525,6 +1716,10 @@ fn log_render_performance(
         diagnostics,
         "render/solari_lighting/specular_indirect_lighting_regular/elapsed_gpu",
     );
+    let solari_specular_queued = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/specular_indirect_lighting_queued/elapsed_gpu",
+    );
     let solari_specular_psr = diagnostic_average(
         diagnostics,
         "render/solari_lighting/specular_indirect_lighting_psr/elapsed_gpu",
@@ -1549,9 +1744,13 @@ fn log_render_performance(
         diagnostics,
         "render/solari_lighting/denoise_atrous_step_3/elapsed_gpu",
     );
-    let solari_specular = solari_specular_regular.or(solari_specular_psr);
+    let solari_specular = solari_specular_regular
+        .or(solari_specular_queued)
+        .or(solari_specular_psr);
     let solari_passes = [
         solari_presample,
+        solari_surface_classify,
+        solari_work_queue,
         solari_world_cache,
         solari_direct,
         solari_diffuse,
@@ -1569,6 +1768,19 @@ fn log_render_performance(
         .fold(None, |total: Option<f64>, value| {
             Some(total.unwrap_or_default() + value)
         });
+    let solari_denoise_total = sum_optional_ms([
+        solari_denoise_cheap,
+        solari_denoise_atrous_1,
+        solari_denoise_atrous_2,
+        solari_denoise_atrous_3,
+        solari_denoise_composite,
+    ]);
+    solari_runtime_params.previous_solari_ns = ms_to_u32_ns(solari_total);
+    solari_runtime_params.previous_direct_ns = ms_to_u32_ns(solari_direct);
+    solari_runtime_params.previous_diffuse_gi_ns = ms_to_u32_ns(solari_diffuse);
+    solari_runtime_params.previous_specular_ns = ms_to_u32_ns(solari_specular);
+    solari_runtime_params.previous_radiance_cache_ns = ms_to_u32_ns(solari_world_cache);
+    solari_runtime_params.previous_denoise_ns = ms_to_u32_ns(solari_denoise_total);
     let meshlet_visibility = diagnostic_average(
         diagnostics,
         "render/meshlet_visibility_buffer_raster/elapsed_gpu",
@@ -1576,6 +1788,96 @@ fn log_render_performance(
     let dlss_rr = diagnostic_average(diagnostics, "render/dlss_ray_reconstruction/elapsed_gpu");
     let pixel_count = window.map(ClientWindowProfile::physical_pixels);
     let mpixels = pixel_count.map(|pixels| pixels as f64 / 1_000_000.0);
+    let configured_budget_pressure =
+        diagnostic_average(diagnostics, "render/solari_lighting/solari_budget_pressure");
+    let measured_budget_pressure = solari_total
+        .map(|total_ms| (total_ms * 1_000_000.0) / solari_runtime_params.gpu_budget_ns as f64);
+    if let Some(pressure) = measured_budget_pressure {
+        solari_runtime_params.budget_pressure = pressure.max(0.0) as f32;
+        let debt = (pressure - 1.0).max(0.0) as f32;
+        solari_runtime_params.visual_debt_mean = debt;
+        solari_runtime_params.visual_debt_p95 = debt;
+    }
+    let solari_budget_pressure = measured_budget_pressure.or(configured_budget_pressure);
+    let solari_quality_level =
+        diagnostic_average(diagnostics, "render/solari_lighting/solari_quality_level")
+            .unwrap_or(solari_runtime_params.quality_level as f64);
+    let solari_direct_active_pixels = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/solari_direct_active_pixels",
+    )
+    .or_else(|| pixel_count.map(|pixels| pixels as f64));
+    let solari_gi_active_tiles =
+        diagnostic_average(diagnostics, "render/solari_lighting/solari_gi_active_tiles");
+    let solari_specular_active_pixels = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/solari_specular_active_pixels",
+    )
+    .or_else(|| pixel_count.map(|pixels| pixels as f64));
+    let solari_cache_requests =
+        diagnostic_average(diagnostics, "render/solari_lighting/solari_cache_requests")
+            .unwrap_or(solari_runtime_params.cache_update_budget as f64);
+    let solari_cache_hit_rate =
+        diagnostic_average(diagnostics, "render/solari_lighting/solari_cache_hit_rate");
+    let solari_visual_debt_mean = measured_budget_pressure
+        .map(|pressure| (pressure - 1.0).max(0.0))
+        .or_else(|| {
+            diagnostic_average(
+                diagnostics,
+                "render/solari_lighting/solari_visual_debt_mean",
+            )
+        });
+    let solari_visual_debt_p95 = solari_visual_debt_mean.or_else(|| {
+        diagnostic_average(diagnostics, "render/solari_lighting/solari_visual_debt_p95")
+    });
+    let solari_reconstruction_pixels = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/solari_reconstruction_pixels",
+    );
+    let solari_work_queue_direct = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/work_queue_direct_critical_pixels",
+    );
+    let solari_work_queue_gi_tiles =
+        diagnostic_value(diagnostics, "render/solari_lighting/work_queue_gi_tiles");
+    let solari_work_queue_gi_repair = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/work_queue_gi_repair_pixels",
+    );
+    let solari_work_queue_specular = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/work_queue_specular_pixels",
+    );
+    let solari_work_queue_cache = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/work_queue_cache_requests",
+    );
+    let solari_work_queue_denoise = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/work_queue_denoise_repair_tiles",
+    );
+    let solari_work_queue_overflow =
+        diagnostic_value(diagnostics, "render/solari_lighting/work_queue_overflow");
+    let solari_work_queue_active_tiles = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/work_queue_active_tiles",
+    );
+    let radiance_cache_requests = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/radiance_cache_requests",
+    );
+    let radiance_cache_hits =
+        diagnostic_value(diagnostics, "render/solari_lighting/radiance_cache_hits");
+    let radiance_cache_misses =
+        diagnostic_value(diagnostics, "render/solari_lighting/radiance_cache_misses");
+    let radiance_cache_overflow = diagnostic_value(
+        diagnostics,
+        "render/solari_lighting/radiance_cache_overflow",
+    );
+    let radiance_cache_hit_rate = match (radiance_cache_hits, radiance_cache_misses) {
+        (Some(hits), Some(misses)) if hits + misses > 0.0 => Some(hits / (hits + misses)),
+        _ => None,
+    };
 
     info!(
         target: "fun::perf",
@@ -1592,6 +1894,14 @@ fn log_render_performance(
         render_mpix = ?mpixels,
         "client render performance sample"
     );
+    info!(
+        "[client perf] fps={} frame_ms={} solari_gpu_ms={} meshlet_visibility_gpu_ms={} dlss_rr_gpu_ms={}",
+        format_optional_number(fps),
+        format_optional_number(frame_ms),
+        format_optional_number(solari_total),
+        format_optional_number(meshlet_visibility),
+        format_optional_number(dlss_rr),
+    );
 
     if let Some(window) = window {
         info!(
@@ -1603,6 +1913,7 @@ fn log_render_performance(
             scale_factor = window.scale_factor,
             pixels = window.physical_pixels(),
             target_120hz_ms = target_frame_ms(120.0),
+            target_solari_ms = target_frame_ms(solari_runtime_params.target_fps as f64),
             "client window render target"
         );
     }
@@ -1642,6 +1953,8 @@ fn log_render_performance(
     info!(
         target: "fun::perf::solari",
         presample_ns = ?ms_to_ns(solari_presample),
+        surface_classify_ns = ?ms_to_ns(solari_surface_classify),
+        work_queue_ns = ?ms_to_ns(solari_work_queue),
         world_cache_ns = ?ms_to_ns(solari_world_cache),
         world_cache_active_cells = ?solari_world_cache_active_cells,
         direct_ns = ?ms_to_ns(solari_direct),
@@ -1650,6 +1963,7 @@ fn log_render_performance(
         diffuse_spatial_ns = ?ms_to_ns(solari_diffuse_spatial),
         dlss_rr_guide_resolve_ns = ?ms_to_ns(solari_dlss_rr_guide_resolve),
         specular_regular_ns = ?ms_to_ns(solari_specular_regular),
+        specular_queued_ns = ?ms_to_ns(solari_specular_queued),
         specular_psr_ns = ?ms_to_ns(solari_specular_psr),
         denoise_cheap_ns = ?ms_to_ns(solari_denoise_cheap),
         denoise_atrous_1_ns = ?ms_to_ns(solari_denoise_atrous_1),
@@ -1657,6 +1971,103 @@ fn log_render_performance(
         denoise_atrous_3_ns = ?ms_to_ns(solari_denoise_atrous_3),
         denoise_composite_ns = ?ms_to_ns(solari_denoise_composite),
         "Solari GPU pass timing sample"
+    );
+    info!(
+        "[client perf] solari passes gpu_ms: presample={} surface_classify={} work_queue={} world_cache={} direct={} diffuse={} diffuse_initial={} diffuse_spatial={} dlss_rr_guide_resolve={} specular_regular={} specular_queued={} specular_psr={} denoise_cheap={} denoise_atrous_1={} denoise_atrous_2={} denoise_atrous_3={} denoise_composite={}",
+        format_optional_number(solari_presample),
+        format_optional_number(solari_surface_classify),
+        format_optional_number(solari_work_queue),
+        format_optional_number(solari_world_cache),
+        format_optional_number(solari_direct),
+        format_optional_number(solari_diffuse),
+        format_optional_number(solari_diffuse_initial),
+        format_optional_number(solari_diffuse_spatial),
+        format_optional_number(solari_dlss_rr_guide_resolve),
+        format_optional_number(solari_specular_regular),
+        format_optional_number(solari_specular_queued),
+        format_optional_number(solari_specular_psr),
+        format_optional_number(solari_denoise_cheap),
+        format_optional_number(solari_denoise_atrous_1),
+        format_optional_number(solari_denoise_atrous_2),
+        format_optional_number(solari_denoise_atrous_3),
+        format_optional_number(solari_denoise_composite),
+    );
+    info!(
+        "[client perf] solari budget: architecture={:?} visual_target={:?} target_fps={} frame_budget_ns={} gpu_budget_ns={} budget_pressure={} quality_level={} direct_active_pixels={} gi_active_tiles={} specular_active_pixels={} cache_requests={} cache_hit_rate={} visual_debt_mean={} visual_debt_p95={} reconstruction_pixels={}",
+        solari_runtime_params.architecture,
+        solari_runtime_params.visual_target,
+        solari_runtime_params.target_fps,
+        solari_runtime_params.frame_budget_ns,
+        solari_runtime_params.gpu_budget_ns,
+        format_optional_number(solari_budget_pressure),
+        format_number(solari_quality_level),
+        format_optional_number(solari_direct_active_pixels),
+        format_optional_number(solari_gi_active_tiles),
+        format_optional_number(solari_specular_active_pixels),
+        format_number(solari_cache_requests),
+        format_optional_number(solari_cache_hit_rate),
+        format_optional_number(solari_visual_debt_mean),
+        format_optional_number(solari_visual_debt_p95),
+        format_optional_number(solari_reconstruction_pixels),
+    );
+    info!(
+        target: "fun::perf::solari_budget",
+        architecture = ?solari_runtime_params.architecture,
+        visual_target = ?solari_runtime_params.visual_target,
+        target_fps = solari_runtime_params.target_fps,
+        frame_budget_ns = solari_runtime_params.frame_budget_ns,
+        gpu_budget_ns = solari_runtime_params.gpu_budget_ns,
+        budget_pressure = ?solari_budget_pressure,
+        quality_level = solari_quality_level,
+        direct_active_pixels = ?solari_direct_active_pixels,
+        gi_active_tiles = ?solari_gi_active_tiles,
+        specular_active_pixels = ?solari_specular_active_pixels,
+        cache_requests = solari_cache_requests,
+        cache_hit_rate = ?solari_cache_hit_rate,
+        visual_debt_mean = ?solari_visual_debt_mean,
+        visual_debt_p95 = ?solari_visual_debt_p95,
+        reconstruction_pixels = ?solari_reconstruction_pixels,
+        "Solari budget diagnostic sample"
+    );
+    info!(
+        target: "fun::perf::solari_queues",
+        direct_critical_pixels = ?solari_work_queue_direct,
+        gi_tiles = ?solari_work_queue_gi_tiles,
+        gi_repair_pixels = ?solari_work_queue_gi_repair,
+        specular_pixels = ?solari_work_queue_specular,
+        cache_requests = ?solari_work_queue_cache,
+        denoise_repair_tiles = ?solari_work_queue_denoise,
+        overflow = ?solari_work_queue_overflow,
+        active_tiles = ?solari_work_queue_active_tiles,
+        "Solari GPU work queue diagnostic sample"
+    );
+    info!(
+        "[client perf] solari queues: direct={} gi_tiles={} gi_repair={} specular={} cache={} denoise={} overflow={} active_tiles={}",
+        format_optional_number(solari_work_queue_direct),
+        format_optional_number(solari_work_queue_gi_tiles),
+        format_optional_number(solari_work_queue_gi_repair),
+        format_optional_number(solari_work_queue_specular),
+        format_optional_number(solari_work_queue_cache),
+        format_optional_number(solari_work_queue_denoise),
+        format_optional_number(solari_work_queue_overflow),
+        format_optional_number(solari_work_queue_active_tiles),
+    );
+    info!(
+        target: "fun::perf::radiance_cache",
+        requests = ?radiance_cache_requests,
+        hits = ?radiance_cache_hits,
+        misses = ?radiance_cache_misses,
+        hit_rate = ?radiance_cache_hit_rate,
+        overflow = ?radiance_cache_overflow,
+        "Solari radiance cache diagnostic sample"
+    );
+    info!(
+        "[client perf] radiance cache: requests={} hits={} misses={} hit_rate={} overflow={}",
+        format_optional_number(radiance_cache_requests),
+        format_optional_number(radiance_cache_hits),
+        format_optional_number(radiance_cache_misses),
+        format_optional_number(radiance_cache_hit_rate),
+        format_optional_number(radiance_cache_overflow),
     );
 
     let mut render_timings = diagnostics
@@ -1683,6 +2094,7 @@ fn log_render_performance(
             .map(|(path, value)| format!("{path}={}", format_number(value)))
             .collect::<Vec<_>>()
             .join(", ");
+        info!("[client perf] top render timings {top_timings}");
         info!(target: "fun::perf::top_render", %top_timings, "top render timings");
     }
 
@@ -1958,6 +2370,12 @@ fn diagnostic_average(diagnostics: &DiagnosticsStore, path: &'static str) -> Opt
         .and_then(|diagnostic| diagnostic.average())
 }
 
+fn diagnostic_value(diagnostics: &DiagnosticsStore, path: &'static str) -> Option<f64> {
+    diagnostics
+        .get(&DiagnosticPath::new(path))
+        .and_then(|diagnostic| diagnostic.value().or_else(|| diagnostic.average()))
+}
+
 fn diagnostic_average_path(diagnostics: &DiagnosticsStore, path: &DiagnosticPath) -> Option<f64> {
     diagnostics
         .get(path)
@@ -1972,6 +2390,19 @@ fn format_optional_number(value: Option<f64>) -> String {
 
 fn ms_to_ns(value: Option<f64>) -> Option<u64> {
     value.map(|value| (value * 1_000_000.0).round().max(0.0) as u64)
+}
+
+fn ms_to_u32_ns(value: Option<f64>) -> u32 {
+    ms_to_ns(value).unwrap_or_default().min(u64::from(u32::MAX)) as u32
+}
+
+fn sum_optional_ms(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
+    values
+        .into_iter()
+        .flatten()
+        .fold(None, |total: Option<f64>, value| {
+            Some(total.unwrap_or_default() + value)
+        })
 }
 
 fn format_number(value: f64) -> String {
