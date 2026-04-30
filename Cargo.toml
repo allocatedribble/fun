@@ -18,8 +18,10 @@ avian3d = { path = "../avian/crates/avian3d" }
 bevy = { path = "../bevy", features = ["bevy_dev_tools", "bevy_solari", "meshlet", "meshlet_processor"] }
 bevy_quinnet = { path = "../bevy_quinnet" }
 compactly = "0.1.6"
+criterion = { version = "0.8.2", features = ["html_reports"] }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 thunder = { path = "../thunder" }
+tracing = "0.1"
 
 [patch.crates-io]
 glamx = { path = "../avian/crates/glamx" }

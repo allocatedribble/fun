@@ -366,6 +366,16 @@ fn desired_planar_velocity(input: Vec2, yaw: f32, max_speed: f32) -> Vec3 {
     (forward * input.y + right * input.x).normalize_or_zero() * max_speed
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn benchmark_desired_planar_velocity(input: Vec2, yaw: f32, max_speed: f32) -> Vec3 {
+    desired_planar_velocity(input, yaw, max_speed)
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn benchmark_max_slope_dot() -> f32 {
+    max_slope_dot()
+}
+
 fn movement_input(keys: &ButtonInput<KeyCode>) -> Vec2 {
     let right = keys.pressed(KeyCode::KeyD) as i8 - keys.pressed(KeyCode::KeyA) as i8;
     let forward = keys.pressed(KeyCode::KeyW) as i8 - keys.pressed(KeyCode::KeyS) as i8;

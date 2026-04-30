@@ -3,10 +3,12 @@ param(
     [switch]$StaticBevy,
     [switch]$NoClient,
     [switch]$RenderDiagnostics,
+    [switch]$TraceDiagnostics,
     [switch]$SolariDebugDirectVisibility,
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
+    [string]$SolariDenoiseMode = "balanced",
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [int]$StartupDelaySeconds = 2
@@ -46,7 +48,12 @@ if (Test-Path $pidFile) {
 if (-not $env:RUST_BACKTRACE) {
     $env:RUST_BACKTRACE = "1"
 }
-if (-not $env:BEVY_LOG) {
+if ($TraceDiagnostics) {
+    $traceFilter = "info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug"
+    $env:RUST_LOG = $traceFilter
+    $env:BEVY_LOG = $traceFilter
+}
+elseif (-not $env:BEVY_LOG) {
     $env:BEVY_LOG = "info"
 }
 if ($RenderDiagnostics) {
@@ -78,6 +85,12 @@ if ($DisableMeshlets) {
 }
 else {
     Remove-Item Env:\FUN_DISABLE_MESHLETS -ErrorAction SilentlyContinue
+}
+if ($SolariDenoiseMode) {
+    $env:FUN_SOLARI_DENOISE_MODE = $SolariDenoiseMode
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_DENOISE_MODE -ErrorAction SilentlyContinue
 }
 if ($RenderBackend) {
     $env:FUN_RENDER_BACKEND = $RenderBackend

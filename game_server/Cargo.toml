@@ -10,3 +10,4 @@ bevy_quinnet.workspace = true
 game_shared = { path = "../game_shared" }
 log.workspace = true
 thunder.workspace = true
+tracing.workspace = true

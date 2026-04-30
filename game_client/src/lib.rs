@@ -9,7 +9,9 @@ use std::{
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
 use bevy::render::{
     RenderPlugin,
-    error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
+    error_handler::{
+        ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy, RenderRecoveryStatus,
+    },
     render_resource::TextureUsages,
     settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
 };
@@ -36,7 +38,8 @@ use bevy::{
     prelude::*,
     render::diagnostic::RenderDiagnosticsPlugin,
     solari::prelude::{
-        RaytracingMesh3d, SolariLighting, SolariPlugins, SolariResetEvent, SolariSettings,
+        RaytracingMesh3d, SolariDenoiseMode, SolariLighting, SolariPlugins, SolariResetEvent,
+        SolariSettings,
     },
     window::PresentMode,
     winit::WinitSettings,
@@ -50,15 +53,19 @@ use bevy_quinnet::client::{
 use first_person::FirstPersonControllerPlugin;
 use game_shared::{GAME_SERVER_ADDR, GAME_TITLE};
 use thunder::prelude::*;
+use tracing::{debug, error, info, warn};
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 const DLSS_PROJECT_ID: &str = "7f2c56d9-bbd1-40e6-aeea-ad1cde733e2e";
+#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
 
 #[derive(Debug, Clone, Copy, Resource)]
 struct ClientRenderConfig {
     solari_enabled: bool,
     dlss_rr_enabled: bool,
     meshlets_enabled: bool,
+    dlss_rr_disabled_by_denoise_mode: bool,
 }
 
 impl ClientRenderConfig {
@@ -67,6 +74,7 @@ impl ClientRenderConfig {
             solari_enabled: std::env::var_os("FUN_DISABLE_SOLARI").is_none(),
             dlss_rr_enabled: std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
             meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
+            dlss_rr_disabled_by_denoise_mode: false,
         }
     }
 }
@@ -75,7 +83,12 @@ pub struct GameClientPlugin;
 
 impl Plugin for GameClientPlugin {
     fn build(&self, app: &mut App) {
-        let render_config = ClientRenderConfig::from_env();
+        let mut render_config = ClientRenderConfig::from_env();
+        let solari_settings = solari_settings_from_env();
+        if solari_settings.denoise_mode != SolariDenoiseMode::DlssRayReconstruction {
+            render_config.dlss_rr_disabled_by_denoise_mode = render_config.dlss_rr_enabled;
+            render_config.dlss_rr_enabled = false;
+        }
         if render_config.solari_enabled {
             println!(
                 "[client render] Solari lighting will start after the streamed world is ready"
@@ -88,6 +101,18 @@ impl Plugin for GameClientPlugin {
         } else {
             println!("[client render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
         }
+        println!(
+            "[client render] Solari denoise mode: {:?}",
+            solari_settings.denoise_mode
+        );
+        info!(
+            target: "fun::render",
+            solari_enabled = render_config.solari_enabled,
+            meshlets_enabled = render_config.meshlets_enabled,
+            dlss_rr_enabled = render_config.dlss_rr_enabled,
+            denoise_mode = ?solari_settings.denoise_mode,
+            "client render configuration"
+        );
 
         let opaque_renderer_method = if render_config.solari_enabled {
             println!("[client render] default opaque renderer: deferred");
@@ -99,7 +124,7 @@ impl Plugin for GameClientPlugin {
 
         app.insert_resource(opaque_renderer_method)
             .insert_resource(render_config)
-            .insert_resource(SolariSettings::from_legacy_env())
+            .insert_resource(solari_settings)
             .add_message::<SolariResetEvent>()
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
@@ -149,6 +174,107 @@ impl Plugin for GameClientPlugin {
     }
 }
 
+fn solari_settings_from_env() -> SolariSettings {
+    let mut settings = SolariSettings {
+        denoise_mode: solari_denoise_mode_from_env(),
+        debug_direct_visibility: std::env::var_os("FUN_SOLARI_DEBUG_DIRECT_VISIBILITY").is_some(),
+        ..default()
+    };
+
+    apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_SIZE",
+        &mut settings.world_cache_size,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_UPDATES",
+        &mut settings.world_cache_cell_updates_soft_cap,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_LIGHT_SAMPLES",
+        &mut settings.world_cache_direct_light_sample_count,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_LIGHT_TILE_BLOCKS",
+        &mut settings.light_tile_blocks,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_LIGHT_TILE_SAMPLES",
+        &mut settings.light_tile_samples_per_block,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_BLAS_COMPACTION_VERTICES",
+        &mut settings.max_blas_compaction_budget_vertices,
+    );
+
+    settings
+}
+
+fn apply_u32_env(name: &'static str, value: &mut u32) {
+    let Some(raw) = std::env::var_os(name) else {
+        return;
+    };
+    let raw = raw.to_string_lossy();
+    match raw.parse::<u32>() {
+        Ok(parsed) => {
+            *value = parsed;
+            info!(target: "fun::render", setting = name, value = parsed, "applied Solari numeric setting");
+        }
+        Err(error) => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value = %raw,
+                %error,
+                "ignored invalid Solari numeric setting"
+            );
+        }
+    }
+}
+
+fn solari_denoise_mode_from_env() -> SolariDenoiseMode {
+    let mode = std::env::var("FUN_SOLARI_DENOISE_MODE")
+        .ok()
+        .map(|mode| mode.to_ascii_lowercase());
+
+    parse_solari_denoise_mode(
+        mode.as_deref(),
+        std::env::var_os("FUN_DISABLE_DLSS_RR").is_some(),
+    )
+}
+
+fn parse_solari_denoise_mode(
+    mode: Option<&str>,
+    _dlss_ray_reconstruction_disabled: bool,
+) -> SolariDenoiseMode {
+    let Some(mode) = mode else {
+        return SolariDenoiseMode::Balanced;
+    };
+
+    match mode {
+        "off" | "raw" => SolariDenoiseMode::Off,
+        "cheap" | "cheap-temporal" | "cheap_temporal" => SolariDenoiseMode::CheapTemporal,
+        "balanced" | "svgf" | "svgf-lite" | "svgf_lite" => SolariDenoiseMode::Balanced,
+        "quality" | "svgf-quality" | "svgf_quality" => SolariDenoiseMode::Quality,
+        "rr" | "dlss" | "dlss-rr" | "dlss_rr" | "ray-reconstruction" => {
+            SolariDenoiseMode::DlssRayReconstruction
+        }
+        unknown => {
+            warn!(
+                "Unknown FUN_SOLARI_DENOISE_MODE={unknown}; falling back to balanced Solari denoising"
+            );
+            SolariDenoiseMode::Balanced
+        }
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn benchmark_parse_solari_denoise_mode(
+    mode: Option<&str>,
+    dlss_ray_reconstruction_disabled: bool,
+) -> SolariDenoiseMode {
+    parse_solari_denoise_mode(mode, dlss_ray_reconstruction_disabled)
+}
+
 pub fn build_client_app() -> App {
     let mut app = App::new();
     let render_backend = selected_render_backend();
@@ -161,6 +287,14 @@ pub fn build_client_app() -> App {
 
     println!(
         "[client render] backend={render_backend:?} present_mode={present_mode:?} vsync=false max_frame_latency=3"
+    );
+    info!(
+        target: "fun::render",
+        backend = ?render_backend,
+        present_mode = ?present_mode,
+        vsync = false,
+        max_frame_latency = 3,
+        "client window/render backend selected"
     );
 
     let default_plugins = DefaultPlugins.set(WindowPlugin {
@@ -266,10 +400,12 @@ fn setup_lighting(mut commands: Commands) {
 fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
     if !client.is_disconnected() {
         println!("[client net] Quinnet already has an active connection");
+        debug!(target: "fun::net", "quinnet already has an active connection");
         return;
     }
 
     println!("[client net] opening connection to {GAME_SERVER_ADDR}");
+    info!(target: "fun::net", server_addr = GAME_SERVER_ADDR, "opening game server connection");
     let limits = ChannelLimits::default();
     let config = ClientConnectionConfiguration {
         addr_config: ClientAddrConfiguration::from_strings(GAME_SERVER_ADDR, "0.0.0.0:0")
@@ -287,12 +423,15 @@ fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
                 "[client net] connecting to {GAME_SERVER_ADDR} with local connection {connection_id}"
             );
             info!(
-                "Connecting to game server {GAME_SERVER_ADDR} with local connection {connection_id}"
+                target: "fun::net",
+                server_addr = GAME_SERVER_ADDR,
+                connection_id,
+                "connecting to game server"
             );
         }
         Err(error) => {
             println!("[client net] failed to start game server connection: {error}");
-            error!("Failed to start game server connection: {error}");
+            error!(target: "fun::net", server_addr = GAME_SERVER_ADDR, %error, "failed to start game server connection");
         }
     }
 }
@@ -303,10 +442,16 @@ fn send_client_hello(
 ) {
     for event in events.read() {
         println!("[client net] connection event id={}", event.id);
+        info!(target: "fun::net", connection_id = event.id, "connection event");
         let Some(connection) = client.get_connection_mut_by_id(event.id) else {
             println!(
                 "[client net] connection event id={} had no matching connection",
                 event.id
+            );
+            warn!(
+                target: "fun::net",
+                connection_id = event.id,
+                "connection event had no matching Quinnet connection"
             );
             continue;
         };
@@ -328,10 +473,17 @@ fn send_client_hello(
                     "[client net] sent hello on control channel for connection {} ({} bytes)",
                     event.id, byte_len
                 );
+                info!(
+                    target: "fun::net",
+                    connection_id = event.id,
+                    bytes = byte_len,
+                    channel = "control",
+                    "sent client hello"
+                );
             }
             Err(error) => {
                 println!("[client net] failed to encode client hello: {error}");
-                error!("Failed to encode client hello: {error}");
+                error!(target: "fun::net", %error, "failed to encode client hello");
             }
         }
     }
@@ -343,9 +495,16 @@ fn receive_server_control(mut client: ResMut<QuinnetClient>) {
     };
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Control) {
+        let payload_len = payload.as_ref().len();
         println!(
             "[client net] received control payload ({} bytes)",
-            payload.as_ref().len()
+            payload_len
+        );
+        debug!(
+            target: "fun::net",
+            bytes = payload_len,
+            channel = "control",
+            "received server control payload"
         );
         match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::Welcome { welcome }) => {
@@ -353,19 +512,26 @@ fn receive_server_control(mut client: ResMut<QuinnetClient>) {
                     "[client net] welcome client_id={} baseline_tick={}",
                     welcome.client_id.0, welcome.baseline_tick.0
                 );
-                info!("Connected as network client {}", welcome.client_id.0);
+                info!(
+                    target: "fun::net",
+                    client_id = welcome.client_id.0,
+                    server_tick = welcome.server_tick.0,
+                    baseline_tick = welcome.baseline_tick.0,
+                    feature_bits = welcome.feature_bits,
+                    "received server welcome"
+                );
             }
             Ok(ServerPacket::Disconnect { reason }) => {
                 println!("[client net] server disconnected client: {reason}");
-                warn!("Server disconnected client: {reason}");
+                warn!(target: "fun::net", %reason, "server disconnected client");
             }
             Ok(packet) => {
                 println!("[client net] ignoring control packet: {packet:?}");
-                debug!("Ignoring control packet on client: {packet:?}");
+                debug!(target: "fun::net", packet = ?packet, "ignoring control packet on client");
             }
             Err(error) => {
                 println!("[client net] failed to decode server control packet: {error}");
-                error!("Failed to decode server control packet: {error}");
+                error!(target: "fun::net", %error, bytes = payload_len, "failed to decode server control packet");
             }
         }
     }
@@ -399,20 +565,27 @@ fn receive_world_stream(
     };
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Stream) {
+        let payload_len = payload.as_ref().len();
         println!(
             "[client stream] received stream payload ({} bytes)",
-            payload.as_ref().len()
+            payload_len
+        );
+        debug!(
+            target: "fun::stream",
+            bytes = payload_len,
+            channel = "stream",
+            "received stream payload"
         );
         let packet = match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::WorldStream { chunk }) => chunk,
             Ok(packet) => {
                 println!("[client stream] ignoring non-world stream packet: {packet:?}");
-                debug!("Ignoring non-world packet on world stream channel: {packet:?}");
+                debug!(target: "fun::stream", packet = ?packet, "ignoring non-world packet on world stream channel");
                 continue;
             }
             Err(error) => {
                 println!("[client stream] failed to decode world stream packet: {error}");
-                error!("Failed to decode world stream packet: {error}");
+                error!(target: "fun::stream", %error, bytes = payload_len, "failed to decode world stream packet");
                 continue;
             }
         };
@@ -424,6 +597,17 @@ fn receive_world_stream(
             packet.level_id.0,
             packet.revision.0,
             packet.entities.len()
+        );
+        info!(
+            target: "fun::stream",
+            level = %packet.level_id.0,
+            revision = packet.revision.0,
+            chunk_index = packet.chunk_index,
+            chunk_number = packet.chunk_index + 1,
+            chunk_count = packet.chunk_count,
+            entity_count = packet.entities.len(),
+            bytes = payload_len,
+            "applying streamed world chunk"
         );
 
         let world_revision_changed = apply_world_stream_chunk(
@@ -451,6 +635,14 @@ fn receive_world_stream(
             if became_ready {
                 println!(
                     "[client stream] streamed world is ready; enabling player movement after colliders are present"
+                );
+                info!(
+                    target: "fun::stream",
+                    level = ?loaded_world.level_id,
+                    revision = ?loaded_world.revision.map(|revision| revision.0),
+                    spawned_entities = loaded_world.spawned_entities.len(),
+                    chunks_received = loaded_world.received_chunks.len(),
+                    "streamed world is ready"
                 );
             }
             world_status.ready = true;
@@ -494,10 +686,17 @@ fn receive_world_stream(
                         loaded_world.revision.unwrap_or_default().0,
                         byte_len
                     );
+                    info!(
+                        target: "fun::stream",
+                        level = %loaded_world.level_id.as_deref().unwrap_or_default(),
+                        revision = loaded_world.revision.unwrap_or_default().0,
+                        bytes = byte_len,
+                        "sent world-ready ack"
+                    );
                 }
                 Err(error) => {
                     println!("[client stream] failed to encode world-ready ack: {error}");
-                    error!("Failed to encode world ready acknowledgement: {error}");
+                    error!(target: "fun::stream", %error, "failed to encode world ready acknowledgement");
                 }
             }
         }
@@ -513,6 +712,7 @@ fn enable_solari_lighting_for_ready_world(
 ) {
     if !render_config.solari_enabled {
         println!("[client render] streamed world ready; Solari remains disabled");
+        info!(target: "fun::solari", "streamed world ready; Solari remains disabled");
         return;
     }
 
@@ -528,6 +728,11 @@ fn enable_solari_lighting_for_ready_world(
     if enabled_count > 0 {
         println!(
             "[client render] enabled Solari lighting for {enabled_count} ready camera view(s)"
+        );
+        info!(
+            target: "fun::solari",
+            enabled_views = enabled_count,
+            "enabled Solari lighting for ready world"
         );
     }
 
@@ -545,6 +750,7 @@ fn request_solari_lighting_history_reset(
 ) {
     solari_reset_events.write_default();
     println!("[client render] requested Solari temporal history reset: {reason}");
+    info!(target: "fun::solari", %reason, "requested Solari temporal history reset");
     reset_solari_lighting_history(solari_lighting);
 }
 
@@ -557,6 +763,11 @@ fn reset_solari_lighting_history(solari_lighting: &mut Query<&mut SolariLighting
 
     if reset_count > 0 {
         println!("[client render] reset Solari temporal history for {reset_count} view(s)");
+        info!(
+            target: "fun::solari",
+            reset_views = reset_count,
+            "reset Solari temporal history"
+        );
     }
 }
 
@@ -573,7 +784,18 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     }
 
     if !render_config.dlss_rr_enabled {
-        println!("[client render] DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
+        if render_config.dlss_rr_disabled_by_denoise_mode {
+            println!(
+                "[client render] DLSS Ray Reconstruction disabled because the active Solari denoiser is not the RR preset"
+            );
+            info!(
+                target: "fun::rr",
+                "DLSS Ray Reconstruction disabled by active Solari denoiser"
+            );
+        } else {
+            println!("[client render] DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
+            info!(target: "fun::rr", "DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
+        }
         return;
     }
 
@@ -581,7 +803,7 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
         println!(
             "[client render] DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path"
         );
-        info!("DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path");
+        info!(target: "fun::rr", "DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path");
         return;
     }
 
@@ -590,7 +812,7 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
         commands
             .entity(camera_entity)
             .insert(Dlss::<DlssRayReconstructionFeature> {
-                perf_quality_mode: DlssPerfQualityMode::Quality,
+                perf_quality_mode: DLSS_RR_MODE,
                 reset: true,
                 _phantom_data: Default::default(),
             });
@@ -601,7 +823,12 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
         println!(
             "[client render] enabled DLSS Ray Reconstruction for {enabled_count} ready camera view(s)"
         );
-        info!("DLSS Ray Reconstruction enabled for Solari lighting");
+        info!(
+            target: "fun::rr",
+            enabled_views = enabled_count,
+            mode = ?DLSS_RR_MODE,
+            "DLSS Ray Reconstruction enabled for Solari lighting"
+        );
     }
 
     reset_dlss_ray_reconstruction_history(dlss_rr);
@@ -619,6 +846,11 @@ fn reset_dlss_ray_reconstruction_history(
 
     if reset_count > 0 {
         println!("[client render] reset DLSS Ray Reconstruction history for {reset_count} view(s)");
+        info!(
+            target: "fun::rr",
+            reset_views = reset_count,
+            "reset DLSS Ray Reconstruction history"
+        );
     }
 }
 
@@ -643,6 +875,16 @@ fn apply_world_stream_chunk(
             loaded_world.revision.map(|revision| revision.0),
             loaded_world.spawned_entities.len()
         );
+        info!(
+            target: "fun::stream",
+            old_level = ?loaded_world.level_id,
+            old_revision = ?loaded_world.revision.map(|revision| revision.0),
+            old_spawned_entities = loaded_world.spawned_entities.len(),
+            new_level = %chunk.level_id.0,
+            new_revision = chunk.revision.0,
+            expected_chunks = chunk.chunk_count,
+            "resetting streamed world"
+        );
         for entity in loaded_world.spawned_entities.values().copied() {
             commands.entity(entity).despawn();
         }
@@ -655,8 +897,11 @@ fn apply_world_stream_chunk(
         loaded_world.ack_sent = false;
         world_status.ready = false;
         info!(
-            "Receiving world {} revision {} in {} chunks",
-            chunk.level_id.0, chunk.revision.0, chunk.chunk_count
+            target: "fun::stream",
+            level = %chunk.level_id.0,
+            revision = chunk.revision.0,
+            chunk_count = chunk.chunk_count,
+            "receiving streamed world"
         );
         println!(
             "[client stream] receiving world {} revision {} in {} chunks",
@@ -669,6 +914,12 @@ fn apply_world_stream_chunk(
             println!(
                 "[client stream] skipping duplicate entity {} ({})",
                 spec.entity.0, spec.name
+            );
+            warn!(
+                target: "fun::stream",
+                net_entity = spec.entity.0,
+                name = %spec.name,
+                "skipping duplicate streamed entity"
             );
             continue;
         }
@@ -685,6 +936,13 @@ fn apply_world_stream_chunk(
             "[client stream] spawned ECS entity {:?} for net entity {} ({})",
             entity, spec.entity.0, spec.name
         );
+        debug!(
+            target: "fun::stream",
+            ecs_entity = ?entity,
+            net_entity = spec.entity.0,
+            name = %spec.name,
+            "spawned streamed entity"
+        );
         loaded_world.spawned_entities.insert(spec.entity, entity);
     }
 
@@ -694,6 +952,13 @@ fn apply_world_stream_chunk(
         loaded_world.received_chunks.len(),
         loaded_world.expected_chunks,
         loaded_world.spawned_entities.len()
+    );
+    info!(
+        target: "fun::stream",
+        received_chunks = loaded_world.received_chunks.len(),
+        expected_chunks = loaded_world.expected_chunks,
+        spawned_entities = loaded_world.spawned_entities.len(),
+        "streamed world chunk complete"
     );
 
     world_revision_changed
@@ -733,6 +998,20 @@ fn spawn_streamed_entity(
         collider_summary(spec.collider),
         color_summary(spec.color),
     );
+    debug!(
+        target: "fun::stream::entity",
+        net_entity = spec.entity.0,
+        name = %spec.name,
+        class = ?spec.class,
+        authority = ?spec.authority,
+        translation_x = translation.x,
+        translation_y = translation.y,
+        translation_z = translation.z,
+        render = ?spec.render,
+        collider = ?spec.collider,
+        color = ?spec.color,
+        "streamed entity spawn spec"
+    );
 
     if let Some(primitive) = spec.render {
         let mesh = mesh_from_primitive(primitive);
@@ -761,6 +1040,13 @@ fn spawn_streamed_entity(
         println!(
             "[client render] inserted render components for {} meshlet={} raytracing={}",
             spec.name, render_config.meshlets_enabled, render_config.solari_enabled,
+        );
+        debug!(
+            target: "fun::render::entity",
+            name = %spec.name,
+            meshlet = render_config.meshlets_enabled,
+            raytracing = render_config.solari_enabled,
+            "inserted streamed render components"
         );
     }
 
@@ -822,6 +1108,16 @@ fn add_scene_mesh_assets(
         "[client render] built mesh assets for {name}: vertices={} raytracing_handle={:?} meshlet_handle={:?}",
         vertex_count, raytracing_handle, meshlet_handle
     );
+    debug!(
+        target: "fun::render::mesh",
+        name,
+        vertices = vertex_count,
+        meshlets_enabled = render_config.meshlets_enabled,
+        solari_enabled = render_config.solari_enabled,
+        raytracing_handle = ?raytracing_handle,
+        meshlet_handle = ?meshlet_handle,
+        "built streamed mesh assets"
+    );
 
     (raytracing_handle, meshlet_handle)
 }
@@ -830,6 +1126,7 @@ fn log_client_diagnostics(
     time: Res<Time>,
     mut diagnostics: ResMut<ClientDiagnostics>,
     render_diagnostics: Res<DiagnosticsStore>,
+    render_recovery: Option<Res<RenderRecoveryStatus>>,
     loaded_world: Res<LoadedWorldState>,
     cameras: Query<
         (
@@ -925,8 +1222,10 @@ fn log_client_diagnostics(
             camera_count, active_camera_count
         );
         warn!(
-            "Expected exactly one active 3D camera, found cameras={} active={}",
-            camera_count, active_camera_count
+            target: "fun::camera",
+            cameras = camera_count,
+            active_cameras = active_camera_count,
+            "expected exactly one active 3D camera"
         );
     }
 
@@ -946,6 +1245,24 @@ fn log_client_diagnostics(
         mesh3d_count,
         material_count,
         collider_count,
+    );
+    info!(
+        target: "fun::diag",
+        level = ?loaded_world.level_id,
+        revision = ?loaded_world.revision.map(|revision| revision.0),
+        chunks_received = loaded_world.received_chunks.len(),
+        chunks_expected = loaded_world.expected_chunks,
+        spawned_entities = loaded_world.spawned_entities.len(),
+        ack_sent = loaded_world.ack_sent,
+        cameras = camera_count,
+        active_cameras = active_camera_count,
+        renderables = renderable_count,
+        meshlets = meshlet_count,
+        raytracing = raytracing_count,
+        mesh3d = mesh3d_count,
+        materials = material_count,
+        colliders = collider_count,
+        "client world diagnostic snapshot"
     );
 
     for (entity, name, transform, camera, projection, solari) in &cameras {
@@ -968,9 +1285,10 @@ fn log_client_diagnostics(
 
     for sample in samples {
         println!("[client diag] renderable {sample}");
+        debug!(target: "fun::diag::renderable", %sample, "renderable diagnostic sample");
     }
 
-    log_render_performance(&render_diagnostics);
+    log_render_performance(&render_diagnostics, render_recovery.as_deref());
 }
 
 fn primitive_summary(primitive: Option<WorldPrimitive>) -> String {
@@ -1011,7 +1329,10 @@ fn projection_summary(projection: &Projection) -> &'static str {
     }
 }
 
-fn log_render_performance(diagnostics: &DiagnosticsStore) {
+fn log_render_performance(
+    diagnostics: &DiagnosticsStore,
+    render_recovery: Option<&RenderRecoveryStatus>,
+) {
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|diagnostic| diagnostic.value());
@@ -1035,16 +1356,51 @@ fn log_render_performance(diagnostics: &DiagnosticsStore) {
         diagnostics,
         "render/solari_lighting/diffuse_indirect_lighting/elapsed_gpu",
     );
-    let solari_specular = diagnostic_average(
+    let solari_dlss_rr_guide_resolve = diagnostic_average(
         diagnostics,
-        "render/solari_lighting/specular_indirect_lighting/elapsed_gpu",
+        "render/solari_lighting/dlss_rr_guide_resolve/elapsed_gpu",
     );
+    let solari_specular_regular = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/specular_indirect_lighting_regular/elapsed_gpu",
+    );
+    let solari_specular_psr = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/specular_indirect_lighting_psr/elapsed_gpu",
+    );
+    let solari_denoise_cheap = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/denoise_cheap_temporal/elapsed_gpu",
+    );
+    let solari_denoise_composite = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/denoise_composite/elapsed_gpu",
+    );
+    let solari_denoise_atrous_1 = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/denoise_atrous_step_1/elapsed_gpu",
+    );
+    let solari_denoise_atrous_2 = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/denoise_atrous_step_2/elapsed_gpu",
+    );
+    let solari_denoise_atrous_3 = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/denoise_atrous_step_3/elapsed_gpu",
+    );
+    let solari_specular = solari_specular_regular.or(solari_specular_psr);
     let solari_passes = [
         solari_presample,
         solari_world_cache,
         solari_direct,
         solari_diffuse,
+        solari_dlss_rr_guide_resolve,
         solari_specular,
+        solari_denoise_cheap,
+        solari_denoise_atrous_1,
+        solari_denoise_atrous_2,
+        solari_denoise_atrous_3,
+        solari_denoise_composite,
     ];
     let solari_total = solari_passes
         .into_iter()
@@ -1065,6 +1421,19 @@ fn log_render_performance(diagnostics: &DiagnosticsStore) {
         format_optional_number(solari_total),
         format_optional_number(meshlet_visibility),
         format_optional_number(dlss_rr),
+    );
+    info!(
+        target: "fun::perf",
+        fps = ?fps,
+        frame_ms = ?frame_ms,
+        frame_ns = ?ms_to_ns(frame_ms),
+        solari_gpu_ms = ?solari_total,
+        solari_gpu_ns = ?ms_to_ns(solari_total),
+        meshlet_visibility_gpu_ms = ?meshlet_visibility,
+        meshlet_visibility_gpu_ns = ?ms_to_ns(meshlet_visibility),
+        dlss_rr_gpu_ms = ?dlss_rr,
+        dlss_rr_gpu_ns = ?ms_to_ns(dlss_rr),
+        "client render performance sample"
     );
 
     let process_cpu = diagnostic_average_path(
@@ -1090,14 +1459,45 @@ fn log_render_performance(diagnostics: &DiagnosticsStore) {
         format_optional_number(system_cpu),
         format_optional_number(system_mem),
     );
+    info!(
+        target: "fun::perf::system",
+        process_cpu_pct = ?process_cpu,
+        process_mem_gib = ?process_mem,
+        system_cpu_pct = ?system_cpu,
+        system_mem_pct = ?system_mem,
+        "client system performance sample"
+    );
 
     println!(
-        "[client perf] solari passes gpu_ms: presample={} world_cache={} direct={} diffuse={} specular={}",
+        "[client perf] solari passes gpu_ms: presample={} world_cache={} direct={} diffuse={} dlss_rr_guide_resolve={} specular_regular={} specular_psr={} denoise_cheap={} denoise_atrous_1={} denoise_atrous_2={} denoise_atrous_3={} denoise_composite={}",
         format_optional_number(solari_presample),
         format_optional_number(solari_world_cache),
         format_optional_number(solari_direct),
         format_optional_number(solari_diffuse),
-        format_optional_number(solari_specular),
+        format_optional_number(solari_dlss_rr_guide_resolve),
+        format_optional_number(solari_specular_regular),
+        format_optional_number(solari_specular_psr),
+        format_optional_number(solari_denoise_cheap),
+        format_optional_number(solari_denoise_atrous_1),
+        format_optional_number(solari_denoise_atrous_2),
+        format_optional_number(solari_denoise_atrous_3),
+        format_optional_number(solari_denoise_composite),
+    );
+    info!(
+        target: "fun::perf::solari",
+        presample_ns = ?ms_to_ns(solari_presample),
+        world_cache_ns = ?ms_to_ns(solari_world_cache),
+        direct_ns = ?ms_to_ns(solari_direct),
+        diffuse_ns = ?ms_to_ns(solari_diffuse),
+        dlss_rr_guide_resolve_ns = ?ms_to_ns(solari_dlss_rr_guide_resolve),
+        specular_regular_ns = ?ms_to_ns(solari_specular_regular),
+        specular_psr_ns = ?ms_to_ns(solari_specular_psr),
+        denoise_cheap_ns = ?ms_to_ns(solari_denoise_cheap),
+        denoise_atrous_1_ns = ?ms_to_ns(solari_denoise_atrous_1),
+        denoise_atrous_2_ns = ?ms_to_ns(solari_denoise_atrous_2),
+        denoise_atrous_3_ns = ?ms_to_ns(solari_denoise_atrous_3),
+        denoise_composite_ns = ?ms_to_ns(solari_denoise_composite),
+        "Solari GPU pass timing sample"
     );
 
     let mut render_timings = diagnostics
@@ -1125,6 +1525,48 @@ fn log_render_performance(diagnostics: &DiagnosticsStore) {
             .collect::<Vec<_>>()
             .join(", ");
         println!("[client perf] top render timings {top_timings}");
+        info!(target: "fun::perf::top_render", %top_timings, "top render timings");
+    }
+
+    if let Some(status) = render_recovery
+        && (status.errors_seen > 0
+            || status.surface_losses > 0
+            || status.surface_validation_errors > 0
+            || status.surface_timeouts > 0
+            || status.recovery_attempts > 0
+            || status.frames_without_rendering > 0)
+    {
+        println!(
+            "[client render recovery] errors={} surface_lost={} surface_validation={} surface_timeout={} attempts={} successes={} failures={} no_render_frames={} last_type={:?} last_reason={:?} last_policy={:?} last_desc={}",
+            status.errors_seen,
+            status.surface_losses,
+            status.surface_validation_errors,
+            status.surface_timeouts,
+            status.recovery_attempts,
+            status.recovery_successes,
+            status.recovery_failures,
+            status.frames_without_rendering,
+            status.last_error_type,
+            status.last_device_lost_reason,
+            status.last_policy,
+            status.last_error_description,
+        );
+        warn!(
+            target: "fun::render::recovery",
+            errors = status.errors_seen,
+            surface_losses = status.surface_losses,
+            surface_validation_errors = status.surface_validation_errors,
+            surface_timeouts = status.surface_timeouts,
+            attempts = status.recovery_attempts,
+            successes = status.recovery_successes,
+            failures = status.recovery_failures,
+            frames_without_rendering = status.frames_without_rendering,
+            last_type = ?status.last_error_type,
+            last_reason = ?status.last_device_lost_reason,
+            last_policy = ?status.last_policy,
+            last_description = %status.last_error_description,
+            "renderer recovery status"
+        );
     }
 }
 
@@ -1144,6 +1586,10 @@ fn format_optional_number(value: Option<f64>) -> String {
     value
         .map(format_number)
         .unwrap_or_else(|| "pending".to_owned())
+}
+
+fn ms_to_ns(value: Option<f64>) -> Option<u64> {
+    value.map(|value| (value * 1_000_000.0).round().max(0.0) as u64)
 }
 
 fn format_number(value: f64) -> String {

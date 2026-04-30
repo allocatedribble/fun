@@ -5,6 +5,7 @@ version.workspace = true
 
 [features]
 default = ["dlss"]
+benchmarks = []
 bevy_debug = ["bevy/debug"]
 dlss = ["bevy/dlss"]
 force_disable_dlss = ["bevy/force_disable_dlss"]
@@ -16,3 +17,12 @@ bevy_quinnet.workspace = true
 game_shared = { path = "../game_shared" }
 log.workspace = true
 thunder.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "client_costs"
+harness = false
+required-features = ["benchmarks"]
