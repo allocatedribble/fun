@@ -25,42 +25,45 @@ use game_shared::{
     MATERIAL_RAMP, MATERIAL_WALL,
 };
 use thunder::prelude::*;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-                1.0 / DEFAULT_TICK_RATE_HZ,
-            ))),
-            AssetPlugin::default(),
-            LogPlugin::default(),
-            MeshPlugin,
-            ScenePlugin,
-            PhysicsPlugins::default(),
-            QuinnetServerPlugin::default(),
-            ThunderPlugin::default(),
-        ))
-        .init_resource::<ServerWorldStream>()
-        .insert_resource(ServerLogConfig::from_env())
-        .init_resource::<ConnectedClients>()
-        .init_resource::<PendingWorldStreams>()
-        .init_resource::<ServerWorldDiagnostics>()
-        .add_systems(Startup, (start_endpoint, spawn_demo_world).chain())
-        .add_systems(
-            Update,
-            (
-                receive_client_control,
-                log_streamable_inventory,
-                rebuild_world_stream,
-                queue_world_stream_for_new_clients,
-                send_pending_world_streams,
-            )
-                .chain(),
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+            1.0 / DEFAULT_TICK_RATE_HZ,
+        ))),
+        AssetPlugin::default(),
+        LogPlugin::default(),
+        MeshPlugin,
+        ScenePlugin,
+        PhysicsPlugins::default(),
+        QuinnetServerPlugin::default(),
+        ThunderPlugin::default(),
+    ))
+    .init_resource::<ServerWorldStream>()
+    .insert_resource(ServerLogConfig::from_env())
+    .init_resource::<ConnectedClients>()
+    .init_resource::<PendingWorldStreams>()
+    .add_systems(Startup, (start_endpoint, spawn_demo_world).chain())
+    .add_systems(
+        Update,
+        (
+            receive_client_control,
+            rebuild_world_stream,
+            queue_world_stream_for_new_clients,
+            send_pending_world_streams,
         )
-        .run();
+            .chain(),
+    );
+
+    #[cfg(all(feature = "diagnostics", debug_assertions))]
+    app.init_resource::<ServerWorldDiagnostics>()
+        .add_systems(Update, log_streamable_inventory);
+
+    app.run();
 }
 
 fn start_endpoint(mut server: ResMut<QuinnetServer>) {
@@ -189,6 +192,7 @@ struct PendingWorldStreams {
     ids: HashSet<u64>,
 }
 
+#[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
 #[derive(Debug, Clone, Copy, Resource)]
 struct ServerLogConfig {
     stream_verbose: bool,
@@ -196,6 +200,7 @@ struct ServerLogConfig {
     benchmark_minimal: bool,
 }
 
+#[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
 impl ServerLogConfig {
     fn from_env() -> Self {
         Self {
@@ -214,11 +219,13 @@ impl ServerLogConfig {
     }
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 #[derive(Debug, Default, Resource)]
 struct ServerWorldDiagnostics {
     logged_streamable_inventory: bool,
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 fn log_streamable_inventory(
     mut diagnostics: ResMut<ServerWorldDiagnostics>,
     log_config: Res<ServerLogConfig>,
@@ -235,10 +242,14 @@ fn log_streamable_inventory(
     }
 
     diagnostics.logged_streamable_inventory = true;
-    info!(target: "fun::server::stream", entities = query.iter().count(), "streamable inventory");
+    game_shared::fun_diag_info!(
+        target: "fun::server::stream",
+        entities = query.iter().count(),
+        "streamable inventory"
+    );
 
     for (entity, name, identity, transform, streamed) in &query {
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::server::stream::entity",
             entity = ?entity,
             name = name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
@@ -261,7 +272,7 @@ fn rebuild_world_stream(
     mut manifest: ResMut<ServerWorldStream>,
     mut pending: ResMut<PendingWorldStreams>,
     connected: Res<ConnectedClients>,
-    log_config: Res<ServerLogConfig>,
+    _log_config: Res<ServerLogConfig>,
     query: Query<(
         &NetworkIdentity,
         &NetworkAuthority,
@@ -308,17 +319,18 @@ fn rebuild_world_stream(
     pending.ids.clear();
     pending.ids.extend(connected.ids.iter().copied());
 
-    if log_config.stream_verbose() {
-        info!(
-            target: "fun::server::stream",
-            revision = manifest.revision.0,
-            specs = manifest.signature.len(),
-            chunks = manifest.chunks.len(),
-            pending_clients = pending.ids.len(),
-            "built world stream"
-        );
+    game_shared::fun_diag_info_if!(
+        _log_config.stream_verbose(),
+        target: "fun::server::stream",
+        revision = manifest.revision.0,
+        specs = manifest.signature.len(),
+        chunks = manifest.chunks.len(),
+        pending_clients = pending.ids.len(),
+        "built world stream"
+    );
+    game_shared::fun_diag_block_if!(_log_config.stream_verbose(), {
         for chunk in &manifest.chunks {
-            info!(
+            game_shared::fun_diag_info!(
                 target: "fun::server::stream",
                 chunk_number = chunk.chunk_index + 1,
                 chunk_count = chunk.chunk_count,
@@ -327,69 +339,69 @@ fn rebuild_world_stream(
                 "world stream chunk"
             );
         }
-    }
+    });
 }
 
 fn queue_world_stream_for_new_clients(
     mut events: MessageReader<ConnectionEvent>,
     mut connected: ResMut<ConnectedClients>,
     mut pending: ResMut<PendingWorldStreams>,
-    log_config: Res<ServerLogConfig>,
+    _log_config: Res<ServerLogConfig>,
 ) {
     for event in events.read() {
         connected.ids.insert(event.id);
         pending.ids.insert(event.id);
-        if log_config.net_verbose() {
-            info!(
-                target: "fun::server::net",
-                client_id = event.id,
-                pending_world_streams = pending.ids.len(),
-                "client connected"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            _log_config.net_verbose(),
+            target: "fun::server::net",
+            client_id = event.id,
+            pending_world_streams = pending.ids.len(),
+            "client connected"
+        );
     }
 }
 
-fn receive_client_control(mut server: ResMut<QuinnetServer>, log_config: Res<ServerLogConfig>) {
+fn receive_client_control(mut server: ResMut<QuinnetServer>, _log_config: Res<ServerLogConfig>) {
     let Some(endpoint) = server.get_endpoint_mut() else {
         return;
     };
 
     for client_id in endpoint.clients() {
         while let Some(payload) = endpoint.try_receive_payload(client_id, ClientChannel::Control) {
-            if log_config.net_verbose() {
-                info!(
-                    target: "fun::server::net",
-                    client_id,
-                    bytes = payload.as_ref().len(),
-                    "received control payload"
-                );
-            }
+            game_shared::fun_diag_info_if!(
+                _log_config.net_verbose(),
+                target: "fun::server::net",
+                client_id,
+                bytes = payload.as_ref().len(),
+                "received control payload"
+            );
             match decode_client_packet(payload.as_ref()) {
                 Ok(ClientPacket::Hello { hello: _hello }) => {
-                    if log_config.net_verbose() {
-                        info!(
-                            target: "fun::server::net",
-                            client_id,
-                            "client completed Thunder hello"
-                        );
-                    }
+                    game_shared::fun_diag_info_if!(
+                        _log_config.net_verbose(),
+                        target: "fun::server::net",
+                        client_id,
+                        "client completed Thunder hello"
+                    );
                 }
-                Ok(ClientPacket::WorldReady { ack }) => {
-                    if log_config.net_verbose() {
-                        info!(
-                            target: "fun::server::net",
-                            client_id,
-                            level = %ack.level_id.0,
-                            revision = ack.revision.0,
-                            "client loaded world"
-                        );
-                    }
+                Ok(ClientPacket::WorldReady { ack: _ack }) => {
+                    game_shared::fun_diag_info_if!(
+                        _log_config.net_verbose(),
+                        target: "fun::server::net",
+                        client_id,
+                        level = %_ack.level_id.0,
+                        revision = _ack.revision.0,
+                        "client loaded world"
+                    );
                 }
-                Ok(packet) => {
-                    if log_config.net_verbose() {
-                        debug!(target: "fun::server::net", client_id, packet = ?packet, "ignoring client control packet");
-                    }
+                Ok(_packet) => {
+                    game_shared::fun_diag_debug_if!(
+                        _log_config.net_verbose(),
+                        target: "fun::server::net",
+                        client_id,
+                        packet = ?_packet,
+                        "ignoring client control packet"
+                    );
                 }
                 Err(error) => {
                     error!(target: "fun::server::net", client_id, %error, "failed to decode client control packet");
@@ -403,7 +415,7 @@ fn send_pending_world_streams(
     mut server: ResMut<QuinnetServer>,
     mut pending: ResMut<PendingWorldStreams>,
     manifest: Res<ServerWorldStream>,
-    log_config: Res<ServerLogConfig>,
+    _log_config: Res<ServerLogConfig>,
 ) {
     if manifest.chunks.is_empty() || pending.ids.is_empty() {
         return;
@@ -415,15 +427,14 @@ fn send_pending_world_streams(
 
     let pending_clients = pending.ids.iter().copied().collect::<Vec<_>>();
     for client_id in pending_clients {
-        if log_config.stream_verbose() {
-            info!(
-                target: "fun::server::stream",
-                revision = manifest.revision.0,
-                client_id,
-                chunks = manifest.chunks.len(),
-                "sending world stream"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            _log_config.stream_verbose(),
+            target: "fun::server::stream",
+            revision = manifest.revision.0,
+            client_id,
+            chunks = manifest.chunks.len(),
+            "sending world stream"
+        );
         let welcome = ServerPacket::Welcome {
             welcome: ServerWelcome {
                 client_id: NetClientId(client_id),
@@ -435,16 +446,15 @@ fn send_pending_world_streams(
 
         match encode_server_packet(&welcome) {
             Ok(bytes) => {
-                let byte_len = bytes.len();
+                let _byte_len = bytes.len();
                 endpoint.try_send_payload_on(client_id, ServerChannel::Control, bytes);
-                if log_config.stream_verbose() {
-                    info!(
-                        target: "fun::server::stream",
-                        client_id,
-                        bytes = byte_len,
-                        "sent welcome"
-                    );
-                }
+                game_shared::fun_diag_info_if!(
+                    _log_config.stream_verbose(),
+                    target: "fun::server::stream",
+                    client_id,
+                    bytes = _byte_len,
+                    "sent welcome"
+                );
             }
             Err(error) => {
                 error!(target: "fun::server::stream", client_id, %error, "failed to encode welcome");
@@ -458,19 +468,18 @@ fn send_pending_world_streams(
             };
             match encode_server_packet(&packet) {
                 Ok(bytes) => {
-                    let byte_len = bytes.len();
+                    let _byte_len = bytes.len();
                     endpoint.try_send_payload_on(client_id, ServerChannel::Stream, bytes);
-                    if log_config.stream_verbose() {
-                        info!(
-                            target: "fun::server::stream",
-                            chunk_number = chunk.chunk_index + 1,
-                            chunk_count = chunk.chunk_count,
-                            client_id,
-                            entities = chunk.entities.len(),
-                            bytes = byte_len,
-                            "sent stream chunk"
-                        );
-                    }
+                    game_shared::fun_diag_info_if!(
+                        _log_config.stream_verbose(),
+                        target: "fun::server::stream",
+                        chunk_number = chunk.chunk_index + 1,
+                        chunk_count = chunk.chunk_count,
+                        client_id,
+                        entities = chunk.entities.len(),
+                        bytes = _byte_len,
+                        "sent stream chunk"
+                    );
                 }
                 Err(error) => {
                     error!(target: "fun::server::stream", client_id, %error, "failed to encode world stream");
@@ -480,17 +489,17 @@ fn send_pending_world_streams(
         }
 
         pending.ids.remove(&client_id);
-        if log_config.stream_verbose() {
-            info!(
-                target: "fun::server::stream",
-                revision = manifest.revision.0,
-                client_id,
-                "completed world stream"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            _log_config.stream_verbose(),
+            target: "fun::server::stream",
+            revision = manifest.revision.0,
+            client_id,
+            "completed world stream"
+        );
     }
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 fn catalog_summary(catalog: Option<WorldCatalogRef>) -> String {
     catalog
         .map(|catalog| {
@@ -502,6 +511,7 @@ fn catalog_summary(catalog: Option<WorldCatalogRef>) -> String {
         .unwrap_or_else(|| "none".to_owned())
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 fn render_summary(render: Option<WorldPrimitive>) -> String {
     match render {
         Some(WorldPrimitive::Plane { size }) => {
@@ -516,6 +526,7 @@ fn render_summary(render: Option<WorldPrimitive>) -> String {
     }
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 fn collider_summary(collider: Option<WorldCollider>) -> String {
     match collider {
         Some(WorldCollider::Cuboid { size }) => {
@@ -525,7 +536,6 @@ fn collider_summary(collider: Option<WorldCollider>) -> String {
         None => "none".to_owned(),
     }
 }
-
 fn chunk_world_specs(
     level_id: &str,
     revision: WorldRevision,

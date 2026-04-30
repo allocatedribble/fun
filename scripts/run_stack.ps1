@@ -5,6 +5,7 @@ param(
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
     [switch]$RenderProfileVerbose,
+    [switch]$FrameTimeDiagnostics,
     [switch]$BenchmarkLogMinimal,
     [switch]$LogStreamVerbose,
     [switch]$LogNetVerbose,
@@ -29,6 +30,12 @@ param(
     [int]$WindowHeight = 0,
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
+    [int]$FrameTimeDiagnosticInterval = 60,
+    [int]$FrameTimeDiagnosticMinNs = 0,
+    [int]$FrameTimeDiagnosticMaxDepth = 10,
+    [int]$FrameTimeDiagnosticTopChildren = 16,
+    [int]$FrameTimeDiagnosticTopSpans = 32,
+    [switch]$FrameTimeDiagnosticRowEvents,
     [int]$StartupDelaySeconds = 2
 )
 
@@ -37,6 +44,11 @@ $ErrorActionPreference = "Stop"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 $profile = if ($Release) { "release" } else { "debug" }
+$clientRenderDiagnosticsRequested = -not $NoClient -and ($RenderDiagnostics -or $TraceDiagnostics -or $RenderProfileVerbose -or $FrameTimeDiagnostics)
+$clientLogDiagnosticsRequested = -not $NoClient -and ($LogStreamVerbose -or $LogNetVerbose -or $LogRenderVerbose)
+$clientDiagnosticsRequested = $clientRenderDiagnosticsRequested -or $clientLogDiagnosticsRequested
+$serverDiagnosticsRequested = $TraceDiagnostics -or $LogStreamVerbose -or $LogNetVerbose
+$diagnosticsRequested = $clientDiagnosticsRequested -or $serverDiagnosticsRequested
 $targetRoot = Join-Path $repoRoot "target"
 $runRoot = Join-Path $targetRoot "run-stack"
 $logRoot = Join-Path $runRoot "logs"
@@ -74,11 +86,39 @@ if ($TraceDiagnostics) {
 elseif (-not $env:BEVY_LOG) {
     $env:BEVY_LOG = "info"
 }
-if ($RenderDiagnostics) {
+if ($RenderDiagnostics -or $FrameTimeDiagnostics) {
     $env:FUN_RENDER_DIAGNOSTICS = "1"
 }
 else {
     Remove-Item Env:\FUN_RENDER_DIAGNOSTICS -ErrorAction SilentlyContinue
+}
+if ($FrameTimeDiagnostics) {
+    $env:FUN_FRAME_TIME_DIAGNOSTICS = "1"
+    $env:FUN_FRAME_TIME_DIAGNOSTIC_INTERVAL = [string]$FrameTimeDiagnosticInterval
+    $env:FUN_FRAME_TIME_DIAGNOSTIC_MAX_DEPTH = [string]$FrameTimeDiagnosticMaxDepth
+    $env:FUN_FRAME_TIME_DIAGNOSTIC_TOP_CHILDREN = [string]$FrameTimeDiagnosticTopChildren
+    $env:FUN_FRAME_TIME_DIAGNOSTIC_TOP_SPANS = [string]$FrameTimeDiagnosticTopSpans
+    if ($FrameTimeDiagnosticMinNs -gt 0) {
+        $env:FUN_FRAME_TIME_DIAGNOSTIC_MIN_NS = [string]$FrameTimeDiagnosticMinNs
+    }
+    else {
+        Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_MIN_NS -ErrorAction SilentlyContinue
+    }
+    if ($FrameTimeDiagnosticRowEvents) {
+        $env:FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS = "1"
+    }
+    else {
+        Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS -ErrorAction SilentlyContinue
+    }
+}
+else {
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTICS -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_INTERVAL -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_MIN_NS -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_MAX_DEPTH -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_TOP_CHILDREN -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_TOP_SPANS -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS -ErrorAction SilentlyContinue
 }
 if ($RenderProfileVerbose) {
     $env:FUN_RENDER_PROFILE_VERBOSE = "1"
@@ -249,12 +289,41 @@ if ($Release) {
 if (-not $Release -and -not $StaticBevy) {
     $buildArgs += @("--features", "bevy/dynamic_linking")
 }
+if ($diagnosticsRequested -and $Release) {
+    Write-Warning "Diagnostic flags are debug-build only; no diagnostic features will be compiled into this release build."
+}
+if (-not $Release) {
+    $diagnosticFeatures = @()
+    if ($clientRenderDiagnosticsRequested) {
+        $diagnosticFeatures += "game_client/render_diagnostics"
+    }
+    elseif ($clientLogDiagnosticsRequested) {
+        $diagnosticFeatures += "game_client/diagnostics"
+    }
+    if ($serverDiagnosticsRequested) {
+        $diagnosticFeatures += "game_server/diagnostics"
+    }
+    if ($diagnosticFeatures.Count -gt 0) {
+        $buildArgs += @("--features", ($diagnosticFeatures -join ","))
+    }
+}
 
 Push-Location $repoRoot
 try {
     Write-Host "Building $($packages -join ', ') in $profile profile..."
     if (-not $Release -and -not $StaticBevy) {
         Write-Host "Using Bevy dynamic linking for faster iterative stack builds."
+    }
+    if (-not $Release -and $diagnosticsRequested) {
+        if ($clientRenderDiagnosticsRequested) {
+            Write-Host "Enabling game_client/render_diagnostics for diagnostic build."
+        }
+        elseif ($clientLogDiagnosticsRequested) {
+            Write-Host "Enabling game_client/diagnostics for diagnostic build."
+        }
+        if ($serverDiagnosticsRequested) {
+            Write-Host "Enabling game_server/diagnostics for diagnostic build."
+        }
     }
     & cargo @buildArgs
     if ($LASTEXITCODE -ne 0) {

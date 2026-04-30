@@ -24,6 +24,90 @@ For every-frame Solari dispatch tracing, use
 that mode is intentionally not used by comparison scripts because trace-volume
 can perturb frame time.
 
+## Frame-Time Profiler
+
+The detailed frame profiler is compile-gated behind both
+`game_client/render_diagnostics` and `debug_assertions`. The stack script enables
+that feature automatically for debug builds when `-FrameTimeDiagnostics`,
+`-RenderDiagnostics`, `-TraceDiagnostics`, or `-RenderProfileVerbose` is used,
+and refuses to compile diagnostic features into `--release` runs. Normal and
+release client builds do not compile the profiler module, FPS overlay, Bevy
+render diagnostics plugin, or client diagnostic systems. That same feature
+enables Bevy's `debug` and `track_location` feature flags for debug diagnostic
+builds so system/debug metadata is available without leaking that overhead into
+release.
+
+Use this for a targeted frame tree without launching any separate benchmark
+tool:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -FrameTimeDiagnostics -FrameTimeDiagnosticInterval 60 -FrameTimeDiagnosticMaxDepth 10 -FrameTimeDiagnosticTopChildren 16 -RenderBackend vulkan -PresentMode immediate
+```
+
+Set `-FrameTimeDiagnosticMinNs 6944444` to emit only frames that miss the 144 Hz
+budget. Use `-FrameTimeDiagnosticTopSpans 40` to widen the slow-span list, and
+`-FrameTimeDiagnosticRowEvents` when an external parser wants one structured
+event per thread/span/summary row. The report is emitted through `tracing`
+target `fun::frame_time` and is shaped for direct frame attribution:
+
+```text
+GAME FRAME 330: 3012900 ns
+summary: main_profiled_ns=2798600 main_unattributed_ns=214300 gpu_render_ns=2150912 render_cpu_ns=38800 total_profiled_ns=4988312 thread_count=3 span_count=68 marker_count=34
+timeline -
+@17900ns First:begin
+@156700ns First:end
+@506100ns RunFixedMainLoop:begin
+@545500ns FixedFirst:begin
+@687100ns FixedUpdate:begin
+@2036200ns RunFixedMainLoop:end
+main-thread -
+-main-schedule 92.89% 2798600 ns
+--RunFixedMainLoop 54.73% 1531600 ns self_ns=295000 start_ns=506100
+---FixedUpdate 9.38% 143700 ns count=2 self_ns=113000 start_ns=687100
+----apply_kinematic_movement [fn=apply_kinematic_movement @ game_client/src/first_person.rs:660] 21.36% 30700 ns count=2 self_ns=8600 start_ns=719200
+-----move_and_slide [fn=move_and_slide @ game_client/src/first_person.rs:605] 71.99% 22100 ns count=2 start_ns=721500
+--Update 4.21% 117900 ns self_ns=113000 start_ns=2063600
+---receive_world_stream [fn=receive_world_stream @ game_client/src/lib.rs:1576] 1.27% 1500 ns start_ns=2118700
+-unattributed 7.11% 214300 ns
+gpu-render -
+-solari_lighting 89.90% 1933568 ns
+--direct_lighting 36.65% 708608 ns
+--diffuse_indirect_lighting_spatial 17.82% 344576 ns
+render-cpu -
+-clustering 29.64% 11500 ns
+slow-spans inclusive -
+#1 main-thread main-schedule/RunFixedMainLoop 50.83% 1531600 ns start_ns=506100
+#2 gpu-render solari_lighting/direct_lighting 23.52% 708608 ns
+```
+
+Frame nodes keep explicitly recorded inclusive time separate from child time, so
+children do not double-count parent rows. Fixed schedules are nested under
+`RunFixedMainLoop`, and manually instrumented systems are nested under their
+actual Bevy schedule. `self_ns` is emitted when a parent has recorded time not
+explained by profiled children. Source annotations use `#[track_caller]`, giving
+the callsite file and line for client systems and manually instrumented
+sub-steps.
+
+The `summary:` row is also emitted as structured tracing fields on the same
+event: `main_profiled_ns`, `main_unattributed_ns`, `gpu_render_ns`,
+`render_cpu_ns`, `total_profiled_ns`, and `thread_count`. This makes it possible
+to filter a capture down to the frame ledger before expanding the hierarchy.
+
+Client instrumentation should use the `frame_profile_start!`,
+`frame_profile_scope!`, `frame_profile_elapsed!`, and `frame_profile_ns!` macros.
+Those macros expand to no-ops unless `game_client/render_diagnostics` and
+`debug_assertions` are both active, so callsites can stay close to the measured
+code without pulling profiler types or timing work into normal/release builds.
+
+Cross-crate diagnostic tracing should use the shared `game_shared` macros:
+`fun_diag_block!`, `fun_diag_block_if!`, `fun_diag_info!`,
+`fun_diag_info_if!`, `fun_diag_debug!`, `fun_diag_debug_if!`,
+`fun_diag_trace!`, `fun_diag_trace_if!`, `fun_diag_warn!`, and
+`fun_diag_warn_if!`. These require the crate's `diagnostics` feature plus
+`debug_assertions`, and whole blocks wrapped by them are compiled out otherwise.
+Each emitted event automatically includes `diag_file`, `diag_line`, and
+`diag_module` fields from the macro call site.
+
 ## Targets
 
 - `fun::render`: backend, present mode, Solari, meshlets, DLSS RR, and denoiser
@@ -45,7 +129,12 @@ can perturb frame time.
   extraction/preparation CPU timings, world-stream apply cost, catalog lookup
   cost, physics fixed-update cost, postprocess cost, overlay cost, and present
   wait. It also reports render-path counts and standard-raster GPU cost so the
-  meshlet floor can be separated from normal PBR raster work.
+  meshlet floor can be separated from normal PBR raster work. Meshlet material
+  queue diagnostics report the dirty instance count and queue CPU ns, and
+  buffer diagnostics report full versus range writes for instance/material
+  buffers, view-visibility mask writes, and per-view reset CPU queue writes.
+  Together these show whether static or transform-only scenes are avoiding
+  whole-buffer uploads, full material scans, and CPU-side reset write spam.
 - `fun::render_catalog`: prewarmed render-catalog inventory, per-asset geometry
   class decisions, and runtime catalog usage counts.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,

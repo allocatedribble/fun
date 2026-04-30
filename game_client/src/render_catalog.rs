@@ -13,7 +13,6 @@ use game_shared::{
     RenderCatalogEntry, RenderCostClass, VisualImportance, material_preset,
 };
 use thunder::prelude::WorldCatalogRef;
-use tracing::{info, warn};
 
 use crate::{
     ClientRenderConfig, RenderGeometryClass, RenderGeometryPolicy,
@@ -28,6 +27,7 @@ pub(crate) struct WorldRenderCatalog {
 
 #[derive(Debug)]
 pub(crate) struct CompiledRenderAsset {
+    #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub entry: &'static RenderCatalogEntry,
     pub raster_mesh: Option<Handle<Mesh>>,
     pub meshlet_mesh: Option<Handle<MeshletMesh>>,
@@ -35,6 +35,7 @@ pub(crate) struct CompiledRenderAsset {
     pub material: Option<Handle<StandardMaterial>>,
     pub collider: Option<Collider>,
     pub geometry_class: RenderGeometryClass,
+    #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub triangle_count: usize,
 }
 
@@ -43,6 +44,7 @@ impl WorldRenderCatalog {
         self.assets.get(&catalog_ref.asset_id)
     }
 
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     pub(crate) fn len(&self) -> usize {
         self.assets.len()
     }
@@ -56,13 +58,13 @@ pub(crate) fn prewarm_world_render_catalog(
     render_config: Res<ClientRenderConfig>,
 ) {
     let compiled_package = CompiledWorldPackage::demo_package();
-    let occlusion_cells = compiled_package
+    let _occlusion_cells = compiled_package
         .static_assets
         .iter()
         .map(|asset| asset.occlusion_cell)
         .collect::<HashSet<_>>()
         .len();
-    let dense_assets = compiled_package
+    let _dense_assets = compiled_package
         .static_assets
         .iter()
         .filter(|asset| {
@@ -72,21 +74,21 @@ pub(crate) fn prewarm_world_render_catalog(
             )
         })
         .count();
-    let package_asset_ids = compiled_package
+    let _package_asset_ids = compiled_package
         .static_assets
         .iter()
         .map(|asset| asset.asset_id.0.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::render_catalog",
         package_id = compiled_package.id.0,
         revision = compiled_package.revision,
         content_hash = format!("{:016x}", compiled_package.content_hash),
         static_assets = compiled_package.static_assets.len(),
-        dense_assets,
-        occlusion_cells,
-        asset_ids = package_asset_ids,
+        dense_assets = _dense_assets,
+        occlusion_cells = _occlusion_cells,
+        asset_ids = _package_asset_ids,
         "compiled world package ready"
     );
 
@@ -153,7 +155,7 @@ pub(crate) fn prewarm_world_render_catalog(
             .collider
             .map(|(_, collider)| collider_from_catalog(collider));
 
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::render_catalog",
             asset_id = entry.asset_id.0,
             name = entry.name,
@@ -186,7 +188,7 @@ pub(crate) fn prewarm_world_render_catalog(
         );
     }
 
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::render_catalog",
         asset_count = catalog.assets.len(),
         material_count = catalog.materials.len(),
@@ -285,6 +287,7 @@ fn distance_band(entry: &RenderCatalogEntry) -> RenderPathDistanceBand {
     }
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 pub(crate) fn catalog_ref_summary(catalog_ref: Option<WorldCatalogRef>) -> String {
     catalog_ref
         .map(|value| {
@@ -296,13 +299,13 @@ pub(crate) fn catalog_ref_summary(catalog_ref: Option<WorldCatalogRef>) -> Strin
         .unwrap_or_else(|| "none".to_owned())
 }
 
-pub(crate) fn warn_missing_catalog_ref(catalog_ref: WorldCatalogRef, name: &str) {
-    warn!(
+pub(crate) fn warn_missing_catalog_ref(_catalog_ref: WorldCatalogRef, _name: &str) {
+    game_shared::fun_diag_warn!(
         target: "fun::render_catalog",
-        asset_id = catalog_ref.asset_id,
-        material_id = catalog_ref.material_id,
-        collider_id = catalog_ref.collider_id,
-        name,
+        asset_id = _catalog_ref.asset_id,
+        material_id = _catalog_ref.material_id,
+        collider_id = _catalog_ref.collider_id,
+        name = _name,
         "streamed entity referenced missing render catalog asset"
     );
 }

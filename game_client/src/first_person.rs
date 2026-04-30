@@ -1,6 +1,8 @@
 use std::f32::consts::FRAC_PI_2;
 
-use crate::{ClientScheduleProfiler, ClientScheduleSystem, ClientWorldStatus};
+use crate::ClientWorldStatus;
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use crate::{ClientScheduleProfiler, ClientScheduleSystem, frame_profile::DetailedFrameProfiler};
 use avian3d::{
     math::{AdjustPrecision as _, AsF32 as _},
     prelude::{
@@ -19,7 +21,6 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions},
 };
 use game_shared::{DEFAULT_CORRECTION_HALF_LIFE_SECONDS, PLAYER_SPAWN};
-use tracing::info;
 
 pub struct FirstPersonControllerPlugin;
 pub const PLAYER_RADIUS: f32 = 0.45;
@@ -298,17 +299,25 @@ fn base_camera_scene() -> impl BsnScene {
 
 fn cache_movement_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
+        ClientScheduleProfiler,
+    >,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
     mut players: Query<&mut MovementInputState, With<Player>>,
 ) {
-    let started = std::time::Instant::now();
+    crate::frame_profile_start!(started);
+    crate::frame_profile_scope!(_scope, frame_profiler, "PreUpdate", "cache_movement_input");
     let Ok(mut input_state) = players.single_mut() else {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::MovementInput, started);
         return;
     };
 
     input_state.movement = movement_input(&keys);
     input_state.jump_queued |= keys.just_pressed(KeyCode::Space);
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler.record_elapsed(ClientScheduleSystem::MovementInput, started);
 }
 
@@ -331,19 +340,27 @@ fn update_cursor_grab(
 fn apply_look(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     cursor_options: Single<&CursorOptions>,
-    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
+        ClientScheduleProfiler,
+    >,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
     mut player: Single<&mut LookSettings, With<Player>>,
     mut yaw_pivot: Single<&mut Transform, (With<YawPivot>, Without<PitchPivot>)>,
     mut pitch_pivot: Single<&mut Transform, (With<PitchPivot>, Without<YawPivot>)>,
 ) {
-    let started = std::time::Instant::now();
+    crate::frame_profile_start!(started);
+    crate::frame_profile_scope!(_scope, frame_profiler, "Update", "apply_look");
     if cursor_options.grab_mode == CursorGrabMode::None {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
         return;
     }
 
     let delta = accumulated_mouse_motion.delta;
     if delta == Vec2::ZERO {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
         return;
     }
@@ -354,6 +371,7 @@ fn apply_look(
 
     yaw_pivot.rotation = Quat::from_rotation_y(player.yaw);
     pitch_pivot.rotation = Quat::from_rotation_x(player.pitch);
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
 }
 
@@ -367,10 +385,21 @@ fn restore_simulation_transform(
 fn interpolate_player_render_transform(
     time: Res<Time>,
     fixed_time: Res<Time<Fixed>>,
-    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
+        ClientScheduleProfiler,
+    >,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
     player: Single<(&mut Transform, &mut NetworkInterpolationState), With<Player>>,
 ) {
-    let started = std::time::Instant::now();
+    crate::frame_profile_start!(started);
+    crate::frame_profile_scope!(
+        _scope,
+        frame_profiler,
+        "Update",
+        "interpolate_player_render_transform",
+    );
     let (mut transform, mut interpolation) = player.into_inner();
     let alpha = fixed_time.overstep_fraction().clamp(0.0, 1.0);
     let target = interpolate_transform(
@@ -400,6 +429,7 @@ fn interpolate_player_render_transform(
         Vec3::ZERO
     };
     interpolation.previous_render = *transform;
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler.record_elapsed(ClientScheduleSystem::RenderInterpolation, started);
 }
 
@@ -407,7 +437,12 @@ fn apply_kinematic_movement(
     time: Res<Time>,
     mut commands: Commands,
     world_status: Res<ClientWorldStatus>,
-    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
+        ClientScheduleProfiler,
+    >,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
     player: Single<
         (
             Entity,
@@ -424,7 +459,7 @@ fn apply_kinematic_movement(
     >,
     move_and_slide: MoveAndSlide,
 ) {
-    let started = std::time::Instant::now();
+    crate::frame_profile_start!(started);
     let (
         entity,
         collider,
@@ -440,9 +475,11 @@ fn apply_kinematic_movement(
     if !world_status.ready {
         let spawn = Vec3::from_array(PLAYER_SPAWN);
         if transform.translation.distance_squared(spawn) > 0.0001 {
-            info!(
+            game_shared::fun_diag_info!(
                 "[client movement] holding player at spawn until streamed world is ready; previous_pos=({:.2},{:.2},{:.2})",
-                transform.translation.x, transform.translation.y, transform.translation.z
+                transform.translation.x,
+                transform.translation.y,
+                transform.translation.z
             );
         }
         transform.translation = spawn;
@@ -451,7 +488,14 @@ fn apply_kinematic_movement(
         contact_cache.mark_airborne();
         input_state.jump_queued = false;
         commands.entity(entity).remove::<Grounded>();
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::PhysicsMovement, started);
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            started,
+            "FixedUpdate",
+            "apply_kinematic_movement",
+        );
         return;
     }
 
@@ -461,11 +505,19 @@ fn apply_kinematic_movement(
     let jump_requested = input_state.jump_queued;
     input_state.jump_queued = false;
     if contact_cache.should_probe_before_move(velocity.0, delta_seconds, jump_requested) {
+        crate::frame_profile_start!(probe_started);
         if let Some(contact) = probe_ground(collider, &transform, &move_and_slide, &filter) {
             contact_cache.refresh(contact);
         } else if !contact_cache.has_valid_ground() {
             contact_cache.mark_airborne();
         }
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            probe_started,
+            "FixedUpdate",
+            "apply_kinematic_movement",
+            "probe_ground_before_move",
+        );
     }
     let was_grounded = contact_cache.has_valid_ground();
 
@@ -517,6 +569,7 @@ fn apply_kinematic_movement(
     let mut grounded_now = false;
     let mut had_walkable_move_hit = false;
     let previous_translation = transform.translation;
+    crate::frame_profile_start!(move_started);
     let output = move_and_slide.move_and_slide(
         collider,
         transform.translation.adjust_precision(),
@@ -549,6 +602,13 @@ fn apply_kinematic_movement(
             MoveAndSlideHitResponse::Accept
         },
     );
+    crate::frame_profile_elapsed!(
+        frame_profiler,
+        move_started,
+        "FixedUpdate",
+        "apply_kinematic_movement",
+        "move_and_slide",
+    );
 
     transform.translation = output.position.f32();
     velocity.0 = output.projected_velocity.f32();
@@ -560,12 +620,20 @@ fn apply_kinematic_movement(
         vertical_delta,
         input_state.movement,
     ) {
+        crate::frame_profile_start!(probe_started);
         if let Some(contact) = probe_ground(collider, &transform, &move_and_slide, &filter) {
             contact_cache.refresh(contact);
             grounded_now = true;
         } else if !had_walkable_move_hit {
             contact_cache.mark_airborne();
         }
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            probe_started,
+            "FixedUpdate",
+            "apply_kinematic_movement",
+            "probe_ground_after_move",
+        );
     } else {
         grounded_now |= contact_cache.has_valid_ground();
     }
@@ -587,7 +655,14 @@ fn apply_kinematic_movement(
     }
 
     interpolation.commit_simulation(*transform);
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler.record_elapsed(ClientScheduleSystem::PhysicsMovement, started);
+    crate::frame_profile_elapsed!(
+        frame_profiler,
+        started,
+        "FixedUpdate",
+        "apply_kinematic_movement",
+    );
 }
 
 fn probe_ground(

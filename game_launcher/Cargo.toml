@@ -3,5 +3,9 @@ name = "game_launcher"
 edition.workspace = true
 version.workspace = true
 
+[features]
+default = []
+diagnostics = ["game_shared/diagnostics"]
+
 [dependencies]
 game_shared = { path = "../game_shared" }

@@ -6,6 +6,10 @@ version.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+diagnostics = ["game_shared/diagnostics"]
+
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true

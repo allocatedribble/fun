@@ -6,6 +6,13 @@ param(
     [switch]$DisableMeshlets,
     [switch]$DisableFpsOverlay,
     [switch]$TraceDiagnostics,
+    [switch]$FrameTimeDiagnostics,
+    [int]$FrameTimeDiagnosticInterval = 60,
+    [int]$FrameTimeDiagnosticMinNs = 0,
+    [int]$FrameTimeDiagnosticMaxDepth = 10,
+    [int]$FrameTimeDiagnosticTopChildren = 16,
+    [int]$FrameTimeDiagnosticTopSpans = 32,
+    [switch]$FrameTimeDiagnosticRowEvents,
     [ValidateSet("full_runtime", "solari_floor", "meshlet_floor", "cpu_floor", "streaming_spike", "presentation_floor")]
     [string]$BenchmarkLane = "full_runtime",
     [string]$SolariArch = "budgeted",
@@ -175,6 +182,12 @@ function Parse-ClientPerfLog {
         $renderPaths = [regex]::Match($line, "\[client perf\] render paths: (?<payload>.*)$")
         if ($renderPaths.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $renderPaths.Groups["payload"].Value -Prefix ""
+            continue
+        }
+
+        $meshletBuffers = [regex]::Match($line, "\[client perf\] meshlet buffers: (?<payload>.*)$")
+        if ($meshletBuffers.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $meshletBuffers.Groups["payload"].Value -Prefix "meshlet_"
             continue
         }
 
@@ -430,6 +443,16 @@ function Write-MarkdownReport {
         "meshlet_extract_cpu_ns",
         "meshlet_prepare_cpu_ns",
         "meshlet_bind_group_prepare_cpu_ns",
+        "meshlet_material_queue_cpu_ns",
+        "meshlet_material_queue_dirty_instance_count",
+        "meshlet_instance_full_buffer_writes",
+        "meshlet_instance_range_buffer_writes",
+        "meshlet_material_full_buffer_writes",
+        "meshlet_material_range_buffer_writes",
+        "meshlet_view_visibility_buffer_writes",
+        "meshlet_view_reset_cpu_queue_writes",
+        "meshlet_view_reset_cpu_queue_writes_per_view",
+        "meshlet_view_count",
         "transient_texture_requests",
         "transient_texture_creates",
         "transient_texture_reuses",
@@ -643,6 +666,22 @@ try {
         if ($DisableFpsOverlay) { $runStackArgs += "-DisableFpsOverlay" }
         $runStackArgs += "-BenchmarkLogMinimal"
         if ($TraceDiagnostics) { $runStackArgs += "-TraceDiagnostics" }
+        if ($FrameTimeDiagnostics) {
+            $runStackArgs += @(
+                "-FrameTimeDiagnostics",
+                "-FrameTimeDiagnosticInterval",
+                $FrameTimeDiagnosticInterval,
+                "-FrameTimeDiagnosticMinNs",
+                $FrameTimeDiagnosticMinNs,
+                "-FrameTimeDiagnosticMaxDepth",
+                $FrameTimeDiagnosticMaxDepth,
+                "-FrameTimeDiagnosticTopChildren",
+                $FrameTimeDiagnosticTopChildren,
+                "-FrameTimeDiagnosticTopSpans",
+                $FrameTimeDiagnosticTopSpans
+            )
+            if ($FrameTimeDiagnosticRowEvents) { $runStackArgs += "-FrameTimeDiagnosticRowEvents" }
+        }
         if (-not [string]::IsNullOrWhiteSpace($SolariDenoiseMode)) {
             $runStackArgs += @("-SolariDenoiseMode", $SolariDenoiseMode)
         }

@@ -1,4 +1,5 @@
 pub const GAME_TITLE: &str = "Fun";
+pub mod diagnostics;
 pub mod render_catalog;
 
 pub use render_catalog::*;

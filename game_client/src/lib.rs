@@ -1,23 +1,36 @@
 mod compiled_world;
 pub mod first_person;
+mod frame_profile;
 mod render_catalog;
 
-use render_catalog::{
-    WorldRenderCatalog, catalog_ref_summary, prewarm_world_render_catalog, warn_missing_catalog_ref,
+pub(crate) use frame_profile::{
+    frame_profile_elapsed, frame_profile_ns, frame_profile_scope, frame_profile_start,
 };
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use frame_profile::DetailedFrameProfiler;
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use frame_profile::install_detailed_frame_profiler;
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+use render_catalog::catalog_ref_summary;
+use render_catalog::{WorldRenderCatalog, prewarm_world_render_catalog, warn_missing_catalog_ref};
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    num::NonZeroU32,
+    collections::BTreeMap,
     time::{Duration, Instant},
+};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU32,
 };
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use bevy::render::error_handler::RenderRecoveryStatus;
 use bevy::render::{
     RenderPlugin,
-    error_handler::{
-        ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy, RenderRecoveryStatus,
-    },
+    error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
     render_resource::TextureUsages,
     settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
 };
@@ -31,8 +44,6 @@ use bevy::{
 };
 use bevy::{
     camera::CameraMainTextureUsages,
-    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
-    diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::world::World,
     pbr::{
         DefaultOpaqueRendererMethod,
@@ -42,7 +53,6 @@ use bevy::{
         },
     },
     prelude::*,
-    render::diagnostic::RenderDiagnosticsPlugin,
     solari::prelude::{
         RaytracingMesh3d, SolariArchitecture, SolariDebugOverlay, SolariDenoiseMode,
         SolariInternalScale, SolariLighting, SolariPlugins, SolariResetEvent, SolariRuntimeParams,
@@ -51,6 +61,12 @@ use bevy::{
     window::{PresentMode, PrimaryWindow, WindowResolution},
     winit::WinitSettings,
 };
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use bevy::{
+    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
+    diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    render::diagnostic::RenderDiagnosticsPlugin,
+};
 use bevy_quinnet::client::{
     ClientConnectionConfiguration, ClientConnectionConfigurationDefaultables, QuinnetClient,
     QuinnetClientPlugin,
@@ -58,9 +74,9 @@ use bevy_quinnet::client::{
     connection::{ClientAddrConfiguration, ConnectionEvent},
 };
 use first_person::FirstPersonControllerPlugin;
-use game_shared::{
-    DEFAULT_RENDER_TARGET_RATE_HZ, DEFAULT_TICK_RATE_HZ, GAME_SERVER_ADDR, GAME_TITLE,
-};
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use game_shared::DEFAULT_RENDER_TARGET_RATE_HZ;
+use game_shared::{DEFAULT_TICK_RATE_HZ, GAME_SERVER_ADDR, GAME_TITLE};
 use thunder::prelude::*;
 use tracing::{debug, error, info, warn};
 
@@ -75,9 +91,11 @@ pub(crate) struct ClientRenderConfig {
     dlss_rr_enabled: bool,
     meshlets_enabled: bool,
     dlss_rr_disabled_by_denoise_mode: bool,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     render_profile_verbose: bool,
     pub(crate) geometry_policy: RenderGeometryPolicy,
     pub(crate) meshlet_min_triangles: usize,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     fps_overlay_enabled: bool,
 }
 
@@ -88,9 +106,11 @@ impl ClientRenderConfig {
             dlss_rr_enabled: std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
             meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
             dlss_rr_disabled_by_denoise_mode: false,
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             render_profile_verbose: std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some(),
             geometry_policy: RenderGeometryPolicy::from_env(),
             meshlet_min_triangles: env_usize("FUN_MESHLET_MIN_TRIANGLES", 512),
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             fps_overlay_enabled: std::env::var_os("FUN_DISABLE_FPS_OVERLAY").is_none(),
         }
     }
@@ -174,6 +194,7 @@ impl ClientWindowConfig {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Default, Resource)]
 struct ClientPerfCounters {
     network_receive_cpu_ns: u64,
@@ -184,13 +205,44 @@ struct ClientPerfCounters {
     ray_proxy_only_count: u64,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+impl ClientPerfCounters {
+    fn add_network_receive_ns(&mut self, ns: u64) {
+        self.network_receive_cpu_ns = self.network_receive_cpu_ns.saturating_add(ns);
+    }
+
+    fn add_world_stream_apply_ns(&mut self, ns: u64) {
+        self.world_stream_apply_cpu_ns = self.world_stream_apply_cpu_ns.saturating_add(ns);
+    }
+
+    fn add_catalog_lookup_ns(&mut self, ns: u64) {
+        self.catalog_lookup_cpu_ns = self.catalog_lookup_cpu_ns.saturating_add(ns);
+    }
+
+    fn set_render_path_counts(
+        &mut self,
+        meshlet_path_instance_count: u64,
+        raster_path_instance_count: u64,
+        ray_proxy_only_count: u64,
+    ) {
+        self.meshlet_path_instance_count = meshlet_path_instance_count;
+        self.raster_path_instance_count = raster_path_instance_count;
+        self.ray_proxy_only_count = ray_proxy_only_count;
+    }
+}
+
 #[derive(bevy::ecs::system::SystemParam)]
 struct ClientRuntimeProfiler<'w> {
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     perf_counters: ResMut<'w, ClientPerfCounters>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler: ResMut<'w, ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    frame_profiler: ResMut<'w, DetailedFrameProfiler>,
     log_config: Res<'w, ClientLogConfig>,
 }
 
+#[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
 #[derive(Debug, Clone, Copy, Resource)]
 pub(crate) struct ClientLogConfig {
     stream_verbose: bool,
@@ -199,6 +251,7 @@ pub(crate) struct ClientLogConfig {
     benchmark_minimal: bool,
 }
 
+#[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
 impl ClientLogConfig {
     fn from_env() -> Self {
         Self {
@@ -221,12 +274,15 @@ impl ClientLogConfig {
         self.render_verbose && !self.benchmark_minimal
     }
 
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     fn diagnostics_verbose(self) -> bool {
         !self.benchmark_minimal
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 const CLIENT_SCHEDULE_SYSTEM_COUNT: usize = 10;
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 const CLIENT_SCHEDULE_SYSTEMS: [ClientScheduleSystem; CLIENT_SCHEDULE_SYSTEM_COUNT] = [
     ClientScheduleSystem::NetworkingReceive,
     ClientScheduleSystem::WorldStreamApply,
@@ -240,6 +296,7 @@ const CLIENT_SCHEDULE_SYSTEMS: [ClientScheduleSystem; CLIENT_SCHEDULE_SYSTEM_COU
     ClientScheduleSystem::RenderInterpolation,
 ];
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientScheduleSystem {
     NetworkingReceive,
@@ -254,6 +311,7 @@ pub(crate) enum ClientScheduleSystem {
     RenderInterpolation,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 impl ClientScheduleSystem {
     const fn index(self) -> usize {
         match self {
@@ -286,6 +344,7 @@ impl ClientScheduleSystem {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Clone, Copy, Default)]
 struct ClientScheduleSample {
     total_ns: u64,
@@ -293,6 +352,7 @@ struct ClientScheduleSample {
     count: u32,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Clone, Copy)]
 struct ClientScheduleReport {
     system: ClientScheduleSystem,
@@ -301,11 +361,13 @@ struct ClientScheduleReport {
     count: u32,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Resource)]
 pub(crate) struct ClientScheduleProfiler {
     samples: [ClientScheduleSample; CLIENT_SCHEDULE_SYSTEM_COUNT],
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 impl Default for ClientScheduleProfiler {
     fn default() -> Self {
         Self {
@@ -314,6 +376,7 @@ impl Default for ClientScheduleProfiler {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 impl ClientScheduleProfiler {
     pub(crate) fn record_ns(&mut self, system: ClientScheduleSystem, ns: u64) {
         let sample = &mut self.samples[system.index()];
@@ -397,7 +460,6 @@ impl Plugin for GameClientPlugin {
             solari_enabled = render_config.solari_enabled,
             meshlets_enabled = render_config.meshlets_enabled,
             dlss_rr_enabled = render_config.dlss_rr_enabled,
-            render_profile_verbose = render_config.render_profile_verbose,
             denoise_mode = ?solari_settings.denoise_mode,
             internal_scale = ?solari_settings.internal_scale,
             world_cache_size = solari_settings.world_cache_size,
@@ -417,8 +479,14 @@ impl Plugin for GameClientPlugin {
             solari_debug_overlay = ?solari_runtime_params.debug_overlay,
             geometry_policy = ?render_config.geometry_policy,
             meshlet_min_triangles = render_config.meshlet_min_triangles,
-            fps_overlay_enabled = render_config.fps_overlay_enabled,
             "client render configuration"
+        );
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        game_shared::fun_diag_info!(
+            target: "fun::render",
+            render_profile_verbose = render_config.render_profile_verbose,
+            fps_overlay_enabled = render_config.fps_overlay_enabled,
+            "client render diagnostic configuration"
         );
 
         let opaque_renderer_method = if render_config.solari_enabled {
@@ -438,20 +506,22 @@ impl Plugin for GameClientPlugin {
             .add_message::<SolariResetEvent>()
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
-            .init_resource::<ClientDiagnostics>()
-            .init_resource::<ClientPerfCounters>()
-            .init_resource::<ClientScheduleProfiler>()
             .add_plugins((
                 PhysicsPlugins::default(),
                 QuinnetClientPlugin::default(),
                 ThunderPlugin::default(),
-                FrameTimeDiagnosticsPlugin::default(),
                 MeshletPlugin {
                     cluster_buffer_slots: 1 << 14,
                 },
                 FirstPersonControllerPlugin,
             ));
 
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        app.init_resource::<ClientPerfCounters>()
+            .init_resource::<ClientScheduleProfiler>()
+            .init_resource::<ClientDiagnostics>();
+
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         if render_config.fps_overlay_enabled {
             app.add_plugins(FpsOverlayPlugin {
                 config: FpsOverlayConfig {
@@ -481,20 +551,40 @@ impl Plugin for GameClientPlugin {
                 send_client_hello,
                 receive_server_control,
                 receive_world_stream,
-                log_client_diagnostics,
             ),
         );
+
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        {
+            install_detailed_frame_profiler(app);
+            app.add_systems(Update, log_client_diagnostics);
+        }
 
         if render_config.solari_enabled {
             app.add_plugins(SolariPlugins);
         }
 
-        if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some() {
-            info!("[client render] GPU render diagnostics enabled");
-            app.add_plugins((
-                RenderDiagnosticsPlugin,
-                bevy::diagnostic::SystemInformationDiagnosticsPlugin,
-            ));
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        {
+            if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some() {
+                game_shared::fun_diag_info!("[client render] GPU render diagnostics enabled");
+                app.add_plugins((
+                    RenderDiagnosticsPlugin,
+                    bevy::diagnostic::SystemInformationDiagnosticsPlugin,
+                ));
+            }
+        }
+        #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
+        {
+            if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some()
+                || std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some()
+                || std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some()
+            {
+                warn!(
+                    target: "fun::render",
+                    "render diagnostics requested but game_client/render_diagnostics is not enabled"
+                );
+            }
         }
     }
 }
@@ -968,30 +1058,63 @@ fn setup_lighting(mut commands: Commands) {
 fn apply_startup_window_config(
     mut applied: Local<bool>,
     window_config: Res<ClientWindowConfig>,
-    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
+        ClientScheduleProfiler,
+    >,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
-    let started = Instant::now();
+    crate::frame_profile_start!(started);
     if *applied {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            started,
+            "Update",
+            "apply_startup_window_config",
+        );
         return;
     }
 
     *applied = true;
     if !window_config.maximized {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            started,
+            "Update",
+            "apply_startup_window_config",
+        );
         return;
     }
 
     let Ok(mut window) = primary_window.single_mut() else {
         warn!(target: "fun::render", "could not maximize client window because no primary window was available");
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            started,
+            "Update",
+            "apply_startup_window_config",
+        );
         return;
     };
 
     window.set_maximized(true);
     info!(target: "fun::render", "requested maximized primary window");
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
+    crate::frame_profile_elapsed!(
+        frame_profiler,
+        started,
+        "Update",
+        "apply_startup_window_config",
+    );
 }
 
 fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
@@ -1036,7 +1159,11 @@ fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
 fn send_client_hello(
     mut events: MessageReader<ConnectionEvent>,
     mut client: ResMut<QuinnetClient>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
 ) {
+    crate::frame_profile_scope!(_scope, frame_profiler, "Update", "send_client_hello");
     for event in events.read() {
         info!("[client net] connection event id={}", event.id);
         info!(target: "fun::net", connection_id = event.id, "connection event");
@@ -1088,60 +1215,119 @@ fn send_client_hello(
 
 fn receive_server_control(
     mut client: ResMut<QuinnetClient>,
-    mut perf_counters: ResMut<ClientPerfCounters>,
-    log_config: Res<ClientLogConfig>,
-    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut perf_counters: ResMut<
+        ClientPerfCounters,
+    >,
+    _log_config: Res<ClientLogConfig>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
+        ClientScheduleProfiler,
+    >,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut frame_profiler: ResMut<
+        DetailedFrameProfiler,
+    >,
 ) {
-    let system_started = Instant::now();
+    crate::frame_profile_start!(system_started);
     let Some(connection) = client.get_connection_mut() else {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            system_started,
+            "Update",
+            "receive_server_control",
+        );
         return;
     };
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Control) {
-        let receive_started = Instant::now();
+        crate::frame_profile_start!(receive_started);
         let payload_len = payload.as_ref().len();
-        if log_config.net_verbose() {
-            info!(
-                target: "fun::net",
-                bytes = payload_len,
-                channel = "control",
-                "received server control payload"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            _log_config.net_verbose(),
+            target: "fun::net",
+            bytes = payload_len,
+            channel = "control",
+            "received server control payload"
+        );
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            receive_started,
+            "Update",
+            "receive_server_control",
+            "try_receive_control_payload",
+        );
+        crate::frame_profile_start!(decode_started);
         match decode_server_packet(payload.as_ref()) {
-            Ok(ServerPacket::Welcome { welcome }) => {
-                if log_config.net_verbose() {
-                    info!(
-                        target: "fun::net",
-                        client_id = welcome.client_id.0,
-                        server_tick = welcome.server_tick.0,
-                        baseline_tick = welcome.baseline_tick.0,
-                        feature_bits = welcome.feature_bits,
-                        "received server welcome"
-                    );
-                }
+            Ok(ServerPacket::Welcome { welcome: _welcome }) => {
+                crate::frame_profile_elapsed!(
+                    frame_profiler,
+                    decode_started,
+                    "Update",
+                    "receive_server_control",
+                    "decode_server_packet",
+                );
+                game_shared::fun_diag_info_if!(
+                    _log_config.net_verbose(),
+                    target: "fun::net",
+                    client_id = _welcome.client_id.0,
+                    server_tick = _welcome.server_tick.0,
+                    baseline_tick = _welcome.baseline_tick.0,
+                    feature_bits = _welcome.feature_bits,
+                    "received server welcome"
+                );
             }
             Ok(ServerPacket::Disconnect { reason }) => {
+                crate::frame_profile_elapsed!(
+                    frame_profiler,
+                    decode_started,
+                    "Update",
+                    "receive_server_control",
+                    "decode_server_packet",
+                );
                 warn!(target: "fun::net", %reason, "server disconnected client");
             }
-            Ok(packet) => {
-                if log_config.net_verbose() {
-                    debug!(target: "fun::net", packet = ?packet, "ignoring control packet on client");
-                }
+            Ok(_packet) => {
+                crate::frame_profile_elapsed!(
+                    frame_profiler,
+                    decode_started,
+                    "Update",
+                    "receive_server_control",
+                    "decode_server_packet",
+                );
+                game_shared::fun_diag_debug_if!(
+                    _log_config.net_verbose(),
+                    target: "fun::net",
+                    packet = ?_packet,
+                    "ignoring control packet on client"
+                );
             }
             Err(error) => {
+                crate::frame_profile_elapsed!(
+                    frame_profiler,
+                    decode_started,
+                    "Update",
+                    "receive_server_control",
+                    "decode_server_packet",
+                );
                 error!(target: "fun::net", %error, bytes = payload_len, "failed to decode server control packet");
             }
         }
-        perf_counters.network_receive_cpu_ns = perf_counters.network_receive_cpu_ns.saturating_add(
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        perf_counters.add_network_receive_ns(
             receive_started
                 .elapsed()
                 .as_nanos()
                 .min(u128::from(u64::MAX)) as u64,
         );
     }
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     schedule_profiler.record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
+    crate::frame_profile_elapsed!(
+        frame_profiler,
+        system_started,
+        "Update",
+        "receive_server_control",
+    );
 }
 
 fn receive_world_stream(
@@ -1154,7 +1340,10 @@ fn receive_world_stream(
     mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     catalog: Res<WorldRenderCatalog>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     mut runtime: ClientRuntimeProfiler,
+    #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
+    runtime: ClientRuntimeProfiler,
     solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
     mut solari_lighting: Query<&mut SolariLighting>,
     mut solari_reset_events: MessageWriter<SolariResetEvent>,
@@ -1169,75 +1358,90 @@ fn receive_world_stream(
         &mut Dlss<DlssRayReconstructionFeature>,
     >,
 ) {
-    let system_started = Instant::now();
+    crate::frame_profile_start!(system_started);
     let Some(connection) = client.get_connection_mut() else {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime
             .schedule_profiler
             .record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
+        crate::frame_profile_elapsed!(
+            runtime.frame_profiler,
+            system_started,
+            "Update",
+            "receive_world_stream",
+        );
         return;
     };
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Stream) {
-        let receive_started = Instant::now();
+        crate::frame_profile_start!(receive_started);
         let payload_len = payload.as_ref().len();
-        if runtime.log_config.stream_verbose() {
-            debug!(
-                target: "fun::stream",
-                bytes = payload_len,
-                channel = "stream",
-                "received stream payload"
-            );
-        }
+        game_shared::fun_diag_debug_if!(
+            runtime.log_config.stream_verbose(),
+            target: "fun::stream",
+            bytes = payload_len,
+            channel = "stream",
+            "received stream payload"
+        );
         let packet = match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::WorldStream { chunk }) => chunk,
-            Ok(packet) => {
-                if runtime.log_config.stream_verbose() {
-                    debug!(target: "fun::stream", packet = ?packet, "ignoring non-world packet on world stream channel");
-                }
-                runtime.perf_counters.network_receive_cpu_ns =
-                    runtime.perf_counters.network_receive_cpu_ns.saturating_add(
-                        receive_started
-                            .elapsed()
-                            .as_nanos()
-                            .min(u128::from(u64::MAX)) as u64,
-                    );
+            Ok(_packet) => {
+                game_shared::fun_diag_debug_if!(
+                    runtime.log_config.stream_verbose(),
+                    target: "fun::stream",
+                    packet = ?_packet,
+                    "ignoring non-world packet on world stream channel"
+                );
+                #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+                runtime.perf_counters.add_network_receive_ns(
+                    receive_started
+                        .elapsed()
+                        .as_nanos()
+                        .min(u128::from(u64::MAX)) as u64,
+                );
                 continue;
             }
             Err(error) => {
                 error!(target: "fun::stream", %error, bytes = payload_len, "failed to decode world stream packet");
-                runtime.perf_counters.network_receive_cpu_ns =
-                    runtime.perf_counters.network_receive_cpu_ns.saturating_add(
-                        receive_started
-                            .elapsed()
-                            .as_nanos()
-                            .min(u128::from(u64::MAX)) as u64,
-                    );
+                #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+                runtime.perf_counters.add_network_receive_ns(
+                    receive_started
+                        .elapsed()
+                        .as_nanos()
+                        .min(u128::from(u64::MAX)) as u64,
+                );
                 continue;
             }
         };
-        runtime.perf_counters.network_receive_cpu_ns =
-            runtime.perf_counters.network_receive_cpu_ns.saturating_add(
-                receive_started
-                    .elapsed()
-                    .as_nanos()
-                    .min(u128::from(u64::MAX)) as u64,
-            );
+        crate::frame_profile_elapsed!(
+            runtime.frame_profiler,
+            receive_started,
+            "Update",
+            "receive_world_stream",
+            "decode_server_packet",
+        );
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime.perf_counters.add_network_receive_ns(
+            receive_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        );
 
-        if runtime.log_config.stream_verbose() {
-            info!(
-                target: "fun::stream",
-                level = %packet.level_id.0,
-                revision = packet.revision.0,
-                chunk_index = packet.chunk_index,
-                chunk_number = packet.chunk_index + 1,
-                chunk_count = packet.chunk_count,
-                entity_count = packet.entities.len(),
-                bytes = payload_len,
-                "applying streamed world chunk"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            runtime.log_config.stream_verbose(),
+            target: "fun::stream",
+            level = %packet.level_id.0,
+            revision = packet.revision.0,
+            chunk_index = packet.chunk_index,
+            chunk_number = packet.chunk_index + 1,
+            chunk_count = packet.chunk_count,
+            entity_count = packet.entities.len(),
+            bytes = payload_len,
+            "applying streamed world chunk"
+        );
 
-        let apply_started = Instant::now();
+        crate::frame_profile_start!(apply_started);
         let world_revision_changed = apply_world_stream_chunk(
             &mut commands,
             &mut loaded_world,
@@ -1246,20 +1450,31 @@ fn receive_world_stream(
             &mut meshlet_meshes,
             &mut materials,
             &catalog,
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             runtime.perf_counters.as_mut(),
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+            runtime.frame_profiler.as_mut(),
             &render_config,
             &runtime.log_config,
             &packet,
         );
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         let apply_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        runtime.perf_counters.world_stream_apply_cpu_ns = runtime
-            .perf_counters
-            .world_stream_apply_cpu_ns
-            .saturating_add(apply_ns);
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime.perf_counters.add_world_stream_apply_ns(apply_ns);
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime
             .schedule_profiler
             .record_ns(ClientScheduleSystem::WorldStreamApply, apply_ns);
+        crate::frame_profile_ns!(
+            runtime.frame_profiler,
+            apply_ns,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+        );
         if world_revision_changed {
+            crate::frame_profile_start!(reset_started);
             request_solari_lighting_history_reset(
                 "streamed world revision changed",
                 &mut solari_reset_events,
@@ -1267,6 +1482,13 @@ fn receive_world_stream(
             );
             #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
             reset_dlss_ray_reconstruction_history(&mut dlss_rr);
+            crate::frame_profile_elapsed!(
+                runtime.frame_profiler,
+                reset_started,
+                "Update",
+                "receive_world_stream",
+                "reset_temporal_history",
+            );
         }
 
         if loaded_world.is_complete() {
@@ -1283,6 +1505,7 @@ fn receive_world_stream(
             }
             world_status.ready = true;
             if became_ready {
+                crate::frame_profile_start!(ready_started);
                 enable_solari_lighting_for_ready_world(
                     &mut commands,
                     &render_config,
@@ -1300,10 +1523,18 @@ fn receive_world_stream(
                 );
                 #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
                 info!("[client render] DLSS feature disabled at compile time");
+                crate::frame_profile_elapsed!(
+                    runtime.frame_profiler,
+                    ready_started,
+                    "Update",
+                    "receive_world_stream",
+                    "enable_ready_world_rendering",
+                );
             }
         }
 
         if loaded_world.is_complete() && !loaded_world.ack_sent {
+            crate::frame_profile_start!(ack_started);
             let ack = ClientPacket::WorldReady {
                 ack: WorldStreamAck {
                     level_id: WorldLevelId(loaded_world.level_id.clone().unwrap_or_default()),
@@ -1313,28 +1544,41 @@ fn receive_world_stream(
 
             match encode_client_packet(&ack) {
                 Ok(bytes) => {
-                    let byte_len = bytes.len();
+                    let _byte_len = bytes.len();
                     connection.try_send_payload_on(ClientChannel::Control, bytes);
                     loaded_world.ack_sent = true;
-                    if runtime.log_config.stream_verbose() {
-                        info!(
-                            target: "fun::stream",
-                            level = %loaded_world.level_id.as_deref().unwrap_or_default(),
-                            revision = loaded_world.revision.unwrap_or_default().0,
-                            bytes = byte_len,
-                            "sent world-ready ack"
-                        );
-                    }
+                    game_shared::fun_diag_info_if!(
+                        runtime.log_config.stream_verbose(),
+                        target: "fun::stream",
+                        level = %loaded_world.level_id.as_deref().unwrap_or_default(),
+                        revision = loaded_world.revision.unwrap_or_default().0,
+                        bytes = _byte_len,
+                        "sent world-ready ack"
+                    );
                 }
                 Err(error) => {
                     error!(target: "fun::stream", %error, "failed to encode world ready acknowledgement");
                 }
             }
+            crate::frame_profile_elapsed!(
+                runtime.frame_profiler,
+                ack_started,
+                "Update",
+                "receive_world_stream",
+                "send_world_ready_ack",
+            );
         }
     }
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     runtime
         .schedule_profiler
         .record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
+    crate::frame_profile_elapsed!(
+        runtime.frame_profiler,
+        system_started,
+        "Update",
+        "receive_world_stream",
+    );
 }
 
 fn enable_solari_lighting_for_ready_world(
@@ -1494,28 +1738,31 @@ fn apply_world_stream_chunk(
     meshlet_meshes: &mut Assets<MeshletMesh>,
     materials: &mut Assets<StandardMaterial>,
     catalog: &WorldRenderCatalog,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     perf_counters: &mut ClientPerfCounters,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    frame_profiler: &mut DetailedFrameProfiler,
     render_config: &ClientRenderConfig,
-    log_config: &ClientLogConfig,
+    _log_config: &ClientLogConfig,
     chunk: &WorldStreamChunk,
 ) -> bool {
     let mut world_revision_changed = false;
     if loaded_world.revision != Some(chunk.revision)
         || loaded_world.level_id.as_deref() != Some(chunk.level_id.0.as_str())
     {
+        crate::frame_profile_start!(reset_started);
         world_revision_changed = true;
-        if log_config.stream_verbose() {
-            info!(
-                target: "fun::stream",
-                old_level = ?loaded_world.level_id,
-                old_revision = ?loaded_world.revision.map(|revision| revision.0),
-                old_spawned_entities = loaded_world.spawned_entities.len(),
-                new_level = %chunk.level_id.0,
-                new_revision = chunk.revision.0,
-                expected_chunks = chunk.chunk_count,
-                "resetting streamed world"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            _log_config.stream_verbose(),
+            target: "fun::stream",
+            old_level = ?loaded_world.level_id,
+            old_revision = ?loaded_world.revision.map(|revision| revision.0),
+            old_spawned_entities = loaded_world.spawned_entities.len(),
+            new_level = %chunk.level_id.0,
+            new_revision = chunk.revision.0,
+            expected_chunks = chunk.chunk_count,
+            "resetting streamed world"
+        );
         for entity in loaded_world.spawned_entities.values().copied() {
             commands.entity(entity).despawn();
         }
@@ -1527,20 +1774,27 @@ fn apply_world_stream_chunk(
         loaded_world.spawned_entities.clear();
         loaded_world.ack_sent = false;
         world_status.ready = false;
-        if log_config.stream_verbose() {
-            info!(
-                target: "fun::stream",
-                level = %chunk.level_id.0,
-                revision = chunk.revision.0,
-                chunk_count = chunk.chunk_count,
-                "receiving streamed world"
-            );
-        }
+        game_shared::fun_diag_info_if!(
+            _log_config.stream_verbose(),
+            target: "fun::stream",
+            level = %chunk.level_id.0,
+            revision = chunk.revision.0,
+            chunk_count = chunk.chunk_count,
+            "receiving streamed world"
+        );
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            reset_started,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+            "reset_streamed_world",
+        );
     }
 
     for spec in &chunk.entities {
         if loaded_world.spawned_entities.contains_key(&spec.entity) {
-            warn!(
+            game_shared::fun_diag_warn!(
                 target: "fun::stream",
                 net_entity = spec.entity.0,
                 name = %spec.name,
@@ -1549,39 +1803,49 @@ fn apply_world_stream_chunk(
             continue;
         }
 
+        crate::frame_profile_start!(spawn_started);
         let entity = spawn_streamed_entity(
             commands,
             meshes,
             meshlet_meshes,
             materials,
             catalog,
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             perf_counters,
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+            frame_profiler,
             render_config,
-            log_config,
+            _log_config,
             spec,
         );
-        if log_config.stream_verbose() {
-            debug!(
-                target: "fun::stream",
-                ecs_entity = ?entity,
-                net_entity = spec.entity.0,
-                name = %spec.name,
-                "spawned streamed entity"
-            );
-        }
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            spawn_started,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+            "spawn_streamed_entity",
+        );
+        game_shared::fun_diag_debug_if!(
+            _log_config.stream_verbose(),
+            target: "fun::stream",
+            ecs_entity = ?entity,
+            net_entity = spec.entity.0,
+            name = %spec.name,
+            "spawned streamed entity"
+        );
         loaded_world.spawned_entities.insert(spec.entity, entity);
     }
 
     loaded_world.received_chunks.insert(chunk.chunk_index);
-    if log_config.stream_verbose() {
-        info!(
-            target: "fun::stream",
-            received_chunks = loaded_world.received_chunks.len(),
-            expected_chunks = loaded_world.expected_chunks,
-            spawned_entities = loaded_world.spawned_entities.len(),
-            "streamed world chunk complete"
-        );
-    }
+    game_shared::fun_diag_info_if!(
+        _log_config.stream_verbose(),
+        target: "fun::stream",
+        received_chunks = loaded_world.received_chunks.len(),
+        expected_chunks = loaded_world.expected_chunks,
+        spawned_entities = loaded_world.spawned_entities.len(),
+        "streamed world chunk complete"
+    );
 
     world_revision_changed
 }
@@ -1592,12 +1856,15 @@ fn spawn_streamed_entity(
     meshlet_meshes: &mut Assets<MeshletMesh>,
     materials: &mut Assets<StandardMaterial>,
     catalog: &WorldRenderCatalog,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     perf_counters: &mut ClientPerfCounters,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    frame_profiler: &mut DetailedFrameProfiler,
     render_config: &ClientRenderConfig,
-    log_config: &ClientLogConfig,
+    _log_config: &ClientLogConfig,
     spec: &WorldEntitySpec,
 ) -> Entity {
-    let translation = vec3_from_quantized(spec.transform.translation);
+    let _translation = vec3_from_quantized(spec.transform.translation);
     let mut entity_commands = commands.spawn((
         Name::new(spec.name.clone()),
         NetworkIdentity {
@@ -1610,35 +1877,45 @@ fn spawn_streamed_entity(
         transform_from_quantized(spec.transform),
     ));
 
-    if log_config.stream_verbose() {
-        debug!(
-            target: "fun::stream::entity",
-            net_entity = spec.entity.0,
-            name = %spec.name,
-            class = ?spec.class,
-            authority = ?spec.authority,
-            translation_x = translation.x,
-            translation_y = translation.y,
-            translation_z = translation.z,
-            catalog = catalog_ref_summary(spec.catalog),
-            render = ?spec.render,
-            collider = ?spec.collider,
-            color = ?spec.color,
-            "streamed entity spawn spec"
-        );
-    }
+    game_shared::fun_diag_debug_if!(
+        _log_config.stream_verbose(),
+        target: "fun::stream::entity",
+        net_entity = spec.entity.0,
+        name = %spec.name,
+        class = ?spec.class,
+        authority = ?spec.authority,
+        translation_x = _translation.x,
+        translation_y = _translation.y,
+        translation_z = _translation.z,
+        catalog = catalog_ref_summary(spec.catalog),
+        render = ?spec.render,
+        collider = ?spec.collider,
+        color = ?spec.color,
+        "streamed entity spawn spec"
+    );
 
     if let Some(catalog_ref) = spec.catalog {
-        let lookup_started = Instant::now();
+        crate::frame_profile_start!(lookup_started);
         let compiled = catalog.lookup(catalog_ref);
-        perf_counters.catalog_lookup_cpu_ns = perf_counters.catalog_lookup_cpu_ns.saturating_add(
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        perf_counters.add_catalog_lookup_ns(
             lookup_started
                 .elapsed()
                 .as_nanos()
                 .min(u128::from(u64::MAX)) as u64,
         );
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            lookup_started,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+            "spawn_streamed_entity",
+            "catalog_lookup",
+        );
 
         if let Some(compiled) = compiled {
+            crate::frame_profile_start!(render_insert_started);
             entity_commands.insert(compiled.geometry_class);
             if compiled.geometry_class.uses_meshlet() {
                 if let (Some(meshlet_mesh), Some(material)) =
@@ -1668,27 +1945,36 @@ fn spawn_streamed_entity(
             if let Some(collider) = compiled.collider.as_ref() {
                 entity_commands.insert((RigidBody::Static, collider.clone()));
             }
+            crate::frame_profile_elapsed!(
+                frame_profiler,
+                render_insert_started,
+                "Update",
+                "receive_world_stream",
+                "apply_world_stream_chunk",
+                "spawn_streamed_entity",
+                "insert_catalog_render_components",
+            );
 
-            if log_config.render_verbose() {
-                info!(
-                    target: "fun::render_catalog",
-                    name = %spec.name,
-                    asset_id = catalog_ref.asset_id,
-                    material_id = catalog_ref.material_id,
-                    collider_id = catalog_ref.collider_id,
-                    catalog_asset = compiled.entry.name,
-                    geometry_class = ?compiled.geometry_class,
-                    triangles = compiled.triangle_count,
-                    meshlet = compiled.geometry_class.uses_meshlet(),
-                    raster = compiled.geometry_class.uses_raster_mesh(),
-                    raytracing = render_config.solari_enabled && compiled.ray_proxy.is_some(),
-                    "inserted catalog-backed streamed render components"
-                );
-            }
+            game_shared::fun_diag_info_if!(
+                _log_config.render_verbose(),
+                target: "fun::render_catalog",
+                name = %spec.name,
+                asset_id = catalog_ref.asset_id,
+                material_id = catalog_ref.material_id,
+                collider_id = catalog_ref.collider_id,
+                catalog_asset = compiled.entry.name,
+                geometry_class = ?compiled.geometry_class,
+                triangles = compiled.triangle_count,
+                meshlet = compiled.geometry_class.uses_meshlet(),
+                raster = compiled.geometry_class.uses_raster_mesh(),
+                raytracing = render_config.solari_enabled && compiled.ray_proxy.is_some(),
+                "inserted catalog-backed streamed render components"
+            );
         } else {
             warn_missing_catalog_ref(catalog_ref, &spec.name);
         }
     } else if let Some(primitive) = spec.render {
+        crate::frame_profile_start!(primitive_started);
         let mesh = mesh_from_primitive(primitive);
         let (raytracing_mesh, meshlet_mesh) = add_scene_mesh_assets(
             meshes,
@@ -1696,10 +1982,20 @@ fn spawn_streamed_entity(
             mesh,
             &spec.name,
             render_config,
-            log_config,
+            _log_config,
         );
         let material = materials.add(color_from_packed(spec.color));
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            primitive_started,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+            "spawn_streamed_entity",
+            "build_primitive_mesh_assets",
+        );
 
+        crate::frame_profile_start!(render_insert_started);
         if render_config.meshlets_enabled {
             entity_commands.insert((
                 MeshletMesh3d(meshlet_mesh.expect("meshlet handle should exist when enabled")),
@@ -1717,22 +2013,40 @@ fn spawn_streamed_entity(
         {
             entity_commands.insert(RaytracingMesh3d(raytracing_mesh));
         }
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            render_insert_started,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+            "spawn_streamed_entity",
+            "insert_primitive_render_components",
+        );
 
-        if log_config.render_verbose() {
-            debug!(
-                target: "fun::render::entity",
-                name = %spec.name,
-                meshlet = render_config.meshlets_enabled,
-                raytracing = render_config.solari_enabled,
-                "inserted streamed render components"
-            );
-        }
+        game_shared::fun_diag_debug_if!(
+            _log_config.render_verbose(),
+            target: "fun::render::entity",
+            name = %spec.name,
+            meshlet = render_config.meshlets_enabled,
+            raytracing = render_config.solari_enabled,
+            "inserted streamed render components"
+        );
     }
 
     if spec.catalog.is_none()
         && let Some(collider) = spec.collider
     {
+        crate::frame_profile_start!(collider_started);
         entity_commands.insert((RigidBody::Static, collider_from_stream(collider)));
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            collider_started,
+            "Update",
+            "receive_world_stream",
+            "apply_world_stream_chunk",
+            "spawn_streamed_entity",
+            "insert_collider",
+        );
     }
 
     entity_commands.id()
@@ -1766,9 +2080,9 @@ fn add_scene_mesh_assets(
     mesh: Mesh,
     name: &str,
     render_config: &ClientRenderConfig,
-    log_config: &ClientLogConfig,
+    _log_config: &ClientLogConfig,
 ) -> (Option<Handle<Mesh>>, Option<Handle<MeshletMesh>>) {
-    let vertex_count = mesh.count_vertices();
+    let _vertex_count = mesh.count_vertices();
     let meshlet_handle = if render_config.meshlets_enabled {
         let meshlet_mesh =
             MeshletMesh::from_mesh(&mesh, MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR)
@@ -1786,22 +2100,22 @@ fn add_scene_mesh_assets(
         None
     };
 
-    if log_config.render_verbose() {
-        debug!(
-            target: "fun::render::mesh",
-            name,
-            vertices = vertex_count,
-            meshlets_enabled = render_config.meshlets_enabled,
-            solari_enabled = render_config.solari_enabled,
-            raytracing_handle = ?raytracing_handle,
-            meshlet_handle = ?meshlet_handle,
-            "built streamed mesh assets"
-        );
-    }
+    game_shared::fun_diag_debug_if!(
+        _log_config.render_verbose(),
+        target: "fun::render::mesh",
+        name,
+        vertices = _vertex_count,
+        meshlets_enabled = render_config.meshlets_enabled,
+        solari_enabled = render_config.solari_enabled,
+        raytracing_handle = ?raytracing_handle,
+        meshlet_handle = ?meshlet_handle,
+        "built streamed mesh assets"
+    );
 
     (raytracing_handle, meshlet_handle)
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn log_client_diagnostics(
     time: Res<Time>,
     mut diagnostics: ResMut<ClientDiagnostics>,
@@ -1810,6 +2124,7 @@ fn log_client_diagnostics(
     mut solari_runtime_params: ResMut<SolariRuntimeParams>,
     mut perf_counters: ResMut<ClientPerfCounters>,
     mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    mut frame_profiler: ResMut<DetailedFrameProfiler>,
     log_config: Res<ClientLogConfig>,
     catalog: Option<Res<WorldRenderCatalog>>,
     render_recovery: Option<Res<RenderRecoveryStatus>>,
@@ -1848,10 +2163,18 @@ fn log_client_diagnostics(
         )>,
     >,
 ) {
+    crate::frame_profile_start!(system_started);
     if !diagnostics.timer.tick(time.delta()).just_finished() {
+        crate::frame_profile_elapsed!(
+            frame_profiler,
+            system_started,
+            "Update",
+            "log_client_diagnostics",
+            "timer_tick",
+        );
         return;
     }
-    let diagnostics_started = Instant::now();
+    crate::frame_profile_start!(diagnostics_started);
 
     let mut renderable_count = 0usize;
     let mut meshlet_count = 0usize;
@@ -1922,7 +2245,7 @@ fn log_client_diagnostics(
         .filter(|(_, _, _, camera, _, _)| camera.is_none_or(|camera| camera.is_active))
         .count();
     if camera_count != 1 || active_camera_count != 1 {
-        warn!(
+        game_shared::fun_diag_warn!(
             target: "fun::camera",
             cameras = camera_count,
             active_cameras = active_camera_count,
@@ -1931,7 +2254,7 @@ fn log_client_diagnostics(
     }
 
     if log_config.diagnostics_verbose() {
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::diag",
             level = ?loaded_world.level_id,
             revision = ?loaded_world.revision.map(|revision| revision.0),
@@ -1955,7 +2278,7 @@ fn log_client_diagnostics(
             viewmodel = viewmodel_count,
             "client world diagnostic snapshot"
         );
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::render_catalog",
             catalog_assets = catalog.as_ref().map(|catalog| catalog.len()).unwrap_or_default(),
             simple_raster = simple_raster_count,
@@ -1966,15 +2289,16 @@ fn log_client_diagnostics(
             "client render catalog usage snapshot"
         );
     }
-    perf_counters.meshlet_path_instance_count =
-        (meshlet_static_dense_count + meshlet_dynamic_dense_count) as u64;
-    perf_counters.raster_path_instance_count = (simple_raster_count + viewmodel_count) as u64;
-    perf_counters.ray_proxy_only_count = ray_proxy_only_count as u64;
+    perf_counters.set_render_path_counts(
+        (meshlet_static_dense_count + meshlet_dynamic_dense_count) as u64,
+        (simple_raster_count + viewmodel_count) as u64,
+        ray_proxy_only_count as u64,
+    );
 
     if log_config.diagnostics_verbose() {
         for (entity, name, transform, camera, projection, solari) in &cameras {
             let translation = transform.translation();
-            info!(
+            game_shared::fun_diag_info!(
                 target: "fun::diag::camera",
                 entity = ?entity,
                 name = name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
@@ -1992,7 +2316,7 @@ fn log_client_diagnostics(
         }
 
         for sample in samples {
-            debug!(target: "fun::diag::renderable", %sample, "renderable diagnostic sample");
+            game_shared::fun_diag_debug!(target: "fun::diag::renderable", %sample, "renderable diagnostic sample");
         }
     }
 
@@ -2000,6 +2324,7 @@ fn log_client_diagnostics(
         ClientScheduleSystem::DiagnosticsLogging,
         diagnostics_started,
     );
+    crate::frame_profile_start!(render_perf_started);
     log_render_performance(
         &render_diagnostics,
         render_recovery.as_deref(),
@@ -2012,8 +2337,22 @@ fn log_client_diagnostics(
             .ok()
             .map(ClientWindowProfile::from_window),
     );
+    crate::frame_profile_elapsed!(
+        frame_profiler,
+        render_perf_started,
+        "Update",
+        "log_client_diagnostics",
+        "log_render_performance",
+    );
+    crate::frame_profile_elapsed!(
+        frame_profiler,
+        system_started,
+        "Update",
+        "log_client_diagnostics",
+    );
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn projection_summary(projection: &Projection) -> &'static str {
     match projection {
         Projection::Perspective(_) => "perspective",
@@ -2022,6 +2361,7 @@ fn projection_summary(projection: &Projection) -> &'static str {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Clone, Copy)]
 struct ClientWindowProfile {
     logical_width: f64,
@@ -2031,6 +2371,7 @@ struct ClientWindowProfile {
     scale_factor: f64,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 impl ClientWindowProfile {
     fn from_window(window: &Window) -> Self {
         Self {
@@ -2047,6 +2388,7 @@ impl ClientWindowProfile {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Clone)]
 struct RenderProfileMetric {
     path: String,
@@ -2056,6 +2398,7 @@ struct RenderProfileMetric {
     average: Option<f64>,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn log_render_performance(
     diagnostics: &DiagnosticsStore,
     render_recovery: Option<&RenderRecoveryStatus>,
@@ -2231,6 +2574,33 @@ fn log_render_performance(
     let meshlet_bind_group_prepare_cpu_ns =
         diagnostic_average(diagnostics, "meshlet_bind_group_prepare_cpu_ns")
             .map(ms_to_ns_from_value);
+    let meshlet_material_queue_cpu_ns =
+        diagnostic_average(diagnostics, "meshlet_material_queue_cpu_ns").map(ms_to_ns_from_value);
+    let meshlet_material_queue_dirty_instance_count =
+        diagnostic_average(diagnostics, "meshlet_material_queue_dirty_instance_count")
+            .map(|value| value as u64);
+    let meshlet_instance_full_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_instance_full_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_instance_range_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_instance_range_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_material_full_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_material_full_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_material_range_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_material_range_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_view_visibility_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_view_visibility_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_view_reset_cpu_queue_writes =
+        diagnostic_average(diagnostics, "meshlet_view_reset_cpu_queue_writes")
+            .map(|value| value as u64);
+    let meshlet_view_reset_cpu_queue_writes_per_view =
+        diagnostic_average(diagnostics, "meshlet_view_reset_cpu_queue_writes_per_view");
+    let meshlet_view_count =
+        diagnostic_average(diagnostics, "meshlet_view_count").map(|value| value as u64);
     let dlss_rr = diagnostic_average(diagnostics, "render/dlss_ray_reconstruction/elapsed_gpu");
     let standard_raster = diagnostic_average(diagnostics, "render/main_opaque_pass_3d/elapsed_gpu");
     let post_process = sum_optional_ms([
@@ -2344,7 +2714,7 @@ fn log_render_performance(
         _ => None,
     };
 
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf",
         fps = ?fps,
         frame_ms = ?frame_ms,
@@ -2359,7 +2729,7 @@ fn log_render_performance(
         render_mpix = ?mpixels,
         "client render performance sample"
     );
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::non_solari",
         meshlet_visibility_gpu_ms = ?meshlet_visibility,
         meshlet_visibility_gpu_ns = ?ms_to_ns(meshlet_visibility),
@@ -2374,6 +2744,16 @@ fn log_render_performance(
         meshlet_extract_cpu_ns = ?meshlet_extract_cpu_ns,
         meshlet_prepare_cpu_ns = ?meshlet_prepare_cpu_ns,
         meshlet_bind_group_prepare_cpu_ns = ?meshlet_bind_group_prepare_cpu_ns,
+        meshlet_material_queue_cpu_ns = ?meshlet_material_queue_cpu_ns,
+        meshlet_material_queue_dirty_instance_count = ?meshlet_material_queue_dirty_instance_count,
+        meshlet_instance_full_buffer_writes = ?meshlet_instance_full_buffer_writes,
+        meshlet_instance_range_buffer_writes = ?meshlet_instance_range_buffer_writes,
+        meshlet_material_full_buffer_writes = ?meshlet_material_full_buffer_writes,
+        meshlet_material_range_buffer_writes = ?meshlet_material_range_buffer_writes,
+        meshlet_view_visibility_buffer_writes = ?meshlet_view_visibility_buffer_writes,
+        meshlet_view_reset_cpu_queue_writes = ?meshlet_view_reset_cpu_queue_writes,
+        meshlet_view_reset_cpu_queue_writes_per_view = ?meshlet_view_reset_cpu_queue_writes_per_view,
+        meshlet_view_count = ?meshlet_view_count,
         meshlet_path_instance_count,
         raster_path_instance_count,
         ray_proxy_only_count,
@@ -2387,7 +2767,7 @@ fn log_render_performance(
         present_wait_ns = ?present_wait_ns,
         "non-Solari performance budget sample"
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] fps={} frame_ms={} solari_gpu_ms={} meshlet_visibility_gpu_ms={} dlss_rr_gpu_ms={}",
         format_optional_number(fps),
         format_optional_number(frame_ms),
@@ -2395,7 +2775,7 @@ fn log_render_performance(
         format_optional_number(meshlet_visibility),
         format_optional_number(dlss_rr),
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] non_solari gpu_ms: meshlet_visibility_gpu_ms={} meshlet_first_pass_gpu_ms={} meshlet_depth_pyramid_first_gpu_ms={} meshlet_second_pass_gpu_ms={} meshlet_depth_resolve_gpu_ms={} meshlet_material_depth_gpu_ms={} meshlet_depth_pyramid_second_gpu_ms={} standard_raster_gpu_ms={} post_process_gpu_ms={}",
         format_optional_number(meshlet_visibility),
         format_optional_number(meshlet_visibility_first_pass),
@@ -2407,15 +2787,19 @@ fn log_render_performance(
         format_optional_number(standard_raster),
         format_optional_number(post_process),
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] render paths: meshlet_path_instance_count={} raster_path_instance_count={} ray_proxy_only_count={}",
-        meshlet_path_instance_count, raster_path_instance_count, ray_proxy_only_count,
+        meshlet_path_instance_count,
+        raster_path_instance_count,
+        ray_proxy_only_count,
     );
-    info!(
-        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} ui_overlay_cpu_ns={} present_wait_ns={}",
+    game_shared::fun_diag_info!(
+        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} meshlet_material_queue_cpu_ns={} meshlet_material_queue_dirty_instance_count={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} ui_overlay_cpu_ns={} present_wait_ns={}",
         format_optional_u64(meshlet_extract_cpu_ns),
         format_optional_u64(meshlet_prepare_cpu_ns),
         format_optional_u64(meshlet_bind_group_prepare_cpu_ns),
+        format_optional_u64(meshlet_material_queue_cpu_ns),
+        format_optional_u64(meshlet_material_queue_dirty_instance_count),
         format_optional_u64(physics_fixed_update_cpu_ns),
         network_receive_cpu_ns,
         world_stream_apply_cpu_ns,
@@ -2423,10 +2807,21 @@ fn log_render_performance(
         format_optional_u64(ui_overlay_cpu_ns),
         format_optional_u64(present_wait_ns),
     );
+    game_shared::fun_diag_info!(
+        "[client perf] meshlet buffers: instance_full_buffer_writes={} instance_range_buffer_writes={} material_full_buffer_writes={} material_range_buffer_writes={} view_visibility_buffer_writes={} view_reset_cpu_queue_writes={} view_reset_cpu_queue_writes_per_view={} view_count={}",
+        format_optional_u64(meshlet_instance_full_buffer_writes),
+        format_optional_u64(meshlet_instance_range_buffer_writes),
+        format_optional_u64(meshlet_material_full_buffer_writes),
+        format_optional_u64(meshlet_material_range_buffer_writes),
+        format_optional_u64(meshlet_view_visibility_buffer_writes),
+        format_optional_u64(meshlet_view_reset_cpu_queue_writes),
+        format_optional_number(meshlet_view_reset_cpu_queue_writes_per_view),
+        format_optional_u64(meshlet_view_count),
+    );
     log_schedule_heatmap(schedule_profiler);
 
     if let Some(window) = window {
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::perf::window",
             logical_width = window.logical_width,
             logical_height = window.logical_height,
@@ -2456,14 +2851,14 @@ fn log_render_performance(
         diagnostics,
         &bevy::diagnostic::SystemInformationDiagnosticsPlugin::SYSTEM_MEM_USAGE,
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] process_cpu_pct={} process_mem_gib={} system_cpu_pct={} system_mem_pct={}",
         format_optional_number(process_cpu),
         format_optional_number(process_mem),
         format_optional_number(system_cpu),
         format_optional_number(system_mem),
     );
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::system",
         process_cpu_pct = ?process_cpu,
         process_mem_gib = ?process_mem,
@@ -2472,7 +2867,7 @@ fn log_render_performance(
         "client system performance sample"
     );
 
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::solari",
         presample_ns = ?ms_to_ns(solari_presample),
         surface_classify_ns = ?ms_to_ns(solari_surface_classify),
@@ -2494,7 +2889,7 @@ fn log_render_performance(
         denoise_composite_ns = ?ms_to_ns(solari_denoise_composite),
         "Solari GPU pass timing sample"
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] solari passes gpu_ms: presample={} surface_classify={} work_queue={} world_cache={} direct={} diffuse={} diffuse_initial={} diffuse_spatial={} dlss_rr_guide_resolve={} specular_regular={} specular_queued={} specular_psr={} denoise_cheap={} denoise_atrous_1={} denoise_atrous_2={} denoise_atrous_3={} denoise_composite={}",
         format_optional_number(solari_presample),
         format_optional_number(solari_surface_classify),
@@ -2514,7 +2909,7 @@ fn log_render_performance(
         format_optional_number(solari_denoise_atrous_3),
         format_optional_number(solari_denoise_composite),
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] solari budget: architecture={:?} visual_target={:?} target_fps={} frame_budget_ns={} gpu_budget_ns={} budget_pressure={} quality_level={} direct_active_pixels={} gi_active_tiles={} specular_active_pixels={} cache_requests={} cache_hit_rate={} visual_debt_mean={} visual_debt_p95={} reconstruction_pixels={}",
         solari_runtime_params.architecture,
         solari_runtime_params.visual_target,
@@ -2532,7 +2927,7 @@ fn log_render_performance(
         format_optional_number(solari_visual_debt_p95),
         format_optional_number(solari_reconstruction_pixels),
     );
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::solari_budget",
         architecture = ?solari_runtime_params.architecture,
         visual_target = ?solari_runtime_params.visual_target,
@@ -2551,7 +2946,7 @@ fn log_render_performance(
         reconstruction_pixels = ?solari_reconstruction_pixels,
         "Solari budget diagnostic sample"
     );
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::solari_queues",
         direct_critical_pixels = ?solari_work_queue_direct,
         gi_tiles = ?solari_work_queue_gi_tiles,
@@ -2563,7 +2958,7 @@ fn log_render_performance(
         active_tiles = ?solari_work_queue_active_tiles,
         "Solari GPU work queue diagnostic sample"
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] solari queues: direct={} gi_tiles={} gi_repair={} specular={} cache={} denoise={} overflow={} active_tiles={}",
         format_optional_number(solari_work_queue_direct),
         format_optional_number(solari_work_queue_gi_tiles),
@@ -2574,7 +2969,7 @@ fn log_render_performance(
         format_optional_number(solari_work_queue_overflow),
         format_optional_number(solari_work_queue_active_tiles),
     );
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::radiance_cache",
         requests = ?radiance_cache_requests,
         hits = ?radiance_cache_hits,
@@ -2583,7 +2978,7 @@ fn log_render_performance(
         overflow = ?radiance_cache_overflow,
         "Solari radiance cache diagnostic sample"
     );
-    info!(
+    game_shared::fun_diag_info!(
         "[client perf] radiance cache: requests={} hits={} misses={} hit_rate={} overflow={}",
         format_optional_number(radiance_cache_requests),
         format_optional_number(radiance_cache_hits),
@@ -2616,8 +3011,8 @@ fn log_render_performance(
             .map(|(path, value)| format!("{path}={}", format_number(value)))
             .collect::<Vec<_>>()
             .join(", ");
-        info!("[client perf] top render timings {top_timings}");
-        info!(target: "fun::perf::top_render", %top_timings, "top render timings");
+        game_shared::fun_diag_info!("[client perf] top render timings {top_timings}");
+        game_shared::fun_diag_info!(target: "fun::perf::top_render", %top_timings, "top render timings");
     }
 
     if verbose_profile {
@@ -2632,7 +3027,7 @@ fn log_render_performance(
             || status.recovery_attempts > 0
             || status.frames_without_rendering > 0)
     {
-        warn!(
+        game_shared::fun_diag_warn!(
             target: "fun::render::recovery",
             errors = status.errors_seen,
             surface_losses = status.surface_losses,
@@ -2651,6 +3046,7 @@ fn log_render_performance(
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
     let mut reports = schedule_profiler.drain_reports();
     let total_ns = reports
@@ -2666,7 +3062,7 @@ fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
         .map(|report| format!("{}_ns={}", report.system.metric_name(), report.total_ns))
         .collect::<Vec<_>>()
         .join(" ");
-    info!("[client perf] schedule cpu_ns: {schedule_payload}");
+    game_shared::fun_diag_info!("[client perf] schedule cpu_ns: {schedule_payload}");
 
     let schedule_max_payload = reports
         .iter()
@@ -2681,7 +3077,7 @@ fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    info!("[client perf] schedule detail: {schedule_max_payload}");
+    game_shared::fun_diag_info!("[client perf] schedule detail: {schedule_max_payload}");
 
     reports.sort_by(|left, right| right.total_ns.cmp(&left.total_ns));
     let heatmap = reports
@@ -2701,8 +3097,8 @@ fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    info!("[client perf] schedule heatmap: total_ns={total_ns} {heatmap}");
-    info!(
+    game_shared::fun_diag_info!("[client perf] schedule heatmap: total_ns={total_ns} {heatmap}");
+    game_shared::fun_diag_info!(
         target: "fun::perf::schedule_heatmap",
         total_ns,
         heatmap = %heatmap,
@@ -2710,6 +3106,7 @@ fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
     );
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn log_verbose_render_profile(
     diagnostics: &DiagnosticsStore,
     window: Option<ClientWindowProfile>,
@@ -2773,7 +3170,7 @@ fn log_verbose_render_profile(
         _ => None,
     };
 
-    info!(
+    game_shared::fun_diag_info!(
         target: "fun::perf::render_profile",
         gpu_metric_count = gpu_metrics.len(),
         cpu_metric_count = cpu_metrics.len(),
@@ -2801,7 +3198,7 @@ fn log_verbose_render_profile(
 
     for (rank, (group, value)) in group_totals.iter().enumerate() {
         let pct = percentage(*value, gpu_total);
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::perf::render_profile::gpu_group",
             rank = rank + 1,
             group = %group,
@@ -2816,7 +3213,7 @@ fn log_verbose_render_profile(
 
     for (rank, metric) in gpu_metrics.iter().enumerate() {
         let pct = percentage(metric.current, gpu_total);
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::perf::render_profile::gpu_metric",
             rank = rank + 1,
             group = %metric.group,
@@ -2833,7 +3230,7 @@ fn log_verbose_render_profile(
     }
 
     for (rank, metric) in cpu_metrics.iter().enumerate() {
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::perf::render_profile::cpu_metric",
             rank = rank + 1,
             group = %metric.group,
@@ -2846,7 +3243,7 @@ fn log_verbose_render_profile(
     }
 
     for (rank, metric) in statistic_metrics.iter().take(80).enumerate() {
-        info!(
+        game_shared::fun_diag_info!(
             target: "fun::perf::render_profile::stat_metric",
             rank = rank + 1,
             group = %metric.group,
@@ -2860,6 +3257,7 @@ fn log_verbose_render_profile(
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn collect_render_profile_metrics(diagnostics: &DiagnosticsStore) -> Vec<RenderProfileMetric> {
     diagnostics
         .iter()
@@ -2883,6 +3281,7 @@ fn collect_render_profile_metrics(diagnostics: &DiagnosticsStore) -> Vec<RenderP
         .collect()
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn render_metric_group(path: &str) -> String {
     path.strip_prefix("render/")
         .unwrap_or(path)
@@ -2892,6 +3291,7 @@ fn render_metric_group(path: &str) -> String {
         .to_owned()
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn render_metric_kind(path: &str) -> &'static str {
     match path.rsplit('/').next().unwrap_or_default() {
         "elapsed_gpu" => "elapsed_gpu",
@@ -2905,6 +3305,7 @@ fn render_metric_kind(path: &str) -> &'static str {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn render_profile_recommendation(path: &str) -> &'static str {
     if path.contains("solari_lighting/direct_lighting") {
         "largest full-resolution Solari bucket: reduce direct-light ReSTIR work, specialize directional-light visibility, or make direct shadows adaptive before lowering resolution"
@@ -2927,60 +3328,72 @@ fn render_profile_recommendation(path: &str) -> &'static str {
     }
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn target_frame_ms(hz: f64) -> f64 {
     1000.0 / hz
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn percentage(value: f64, total: f64) -> Option<f64> {
     (total > 0.0).then_some((value / total) * 100.0)
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn ns_per_pixel(value_ms: f64, pixel_count: Option<u64>) -> Option<f64> {
     let pixels = pixel_count?;
     (pixels > 0).then_some((value_ms * 1_000_000.0) / pixels as f64)
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn invocations_per_pixel(value: f64, pixel_count: Option<u64>) -> Option<f64> {
     let pixels = pixel_count?;
     (pixels > 0).then_some(value / pixels as f64)
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn diagnostic_average(diagnostics: &DiagnosticsStore, path: &'static str) -> Option<f64> {
     diagnostics
         .get(&DiagnosticPath::new(path))
         .and_then(|diagnostic| diagnostic.average())
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn diagnostic_value(diagnostics: &DiagnosticsStore, path: &'static str) -> Option<f64> {
     diagnostics
         .get(&DiagnosticPath::new(path))
         .and_then(|diagnostic| diagnostic.value().or_else(|| diagnostic.average()))
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn diagnostic_average_path(diagnostics: &DiagnosticsStore, path: &DiagnosticPath) -> Option<f64> {
     diagnostics
         .get(path)
         .and_then(|diagnostic| diagnostic.average())
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn format_optional_number(value: Option<f64>) -> String {
     value
         .map(format_number)
         .unwrap_or_else(|| "pending".to_owned())
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn ms_to_ns(value: Option<f64>) -> Option<u64> {
     value.map(ms_to_ns_from_value)
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn ms_to_ns_from_value(value: f64) -> u64 {
     (value * 1_000_000.0).round().max(0.0) as u64
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn ms_to_u32_ns(value: Option<f64>) -> u32 {
     ms_to_ns(value).unwrap_or_default().min(u64::from(u32::MAX)) as u32
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn sum_optional_ms(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
     values
         .into_iter()
@@ -2990,16 +3403,19 @@ fn sum_optional_ms(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64>
         })
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn format_number(value: f64) -> String {
     format!("{value:.2}")
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn format_optional_u64(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "pending".to_owned())
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn take_counter(counter: &mut u64) -> u64 {
     let value = *counter;
     *counter = 0;
@@ -3037,11 +3453,13 @@ pub(crate) struct ClientWorldStatus {
     pub ready: bool,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Resource)]
 struct ClientDiagnostics {
     timer: Timer,
 }
 
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 impl Default for ClientDiagnostics {
     fn default() -> Self {
         Self {

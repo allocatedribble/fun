@@ -6,8 +6,11 @@ pub(crate) struct CompiledWorldPackageId(pub u64);
 
 #[derive(Debug, Clone, Resource)]
 pub(crate) struct CompiledWorldPackage {
+    #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub id: CompiledWorldPackageId,
+    #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub revision: u64,
+    #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub content_hash: u64,
     pub static_assets: Vec<CompiledStaticAsset>,
 }

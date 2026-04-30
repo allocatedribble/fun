@@ -109,7 +109,23 @@ request/create/reuse/alias counts, and render scheduler pressure when
 `-TraceDiagnostics` is enabled. Client CPU schedule work must also report the
 `schedule_*` metrics for networking receive, world-stream apply, movement input,
 look, physics movement, diagnostics logging, render config/window work, Solari
-runtime params, meshlet extraction, and render interpolation.
+runtime params, meshlet extraction, and render interpolation. Meshlet hot-path
+changes must report `meshlet_instance_full_buffer_writes`,
+`meshlet_instance_range_buffer_writes`, `meshlet_material_full_buffer_writes`,
+`meshlet_material_range_buffer_writes`, and
+`meshlet_view_visibility_buffer_writes`. Meshlet material-queue changes must
+also report `meshlet_material_queue_cpu_ns` and
+`meshlet_material_queue_dirty_instance_count`. Per-view meshlet resource reset
+changes must report `meshlet_view_reset_cpu_queue_writes`,
+`meshlet_view_reset_cpu_queue_writes_per_view`, and `meshlet_view_count`.
+When frame attribution is needed, run with `-FrameTimeDiagnostics`; this enables
+the debug-only `game_client/render_diagnostics` feature and writes a per-frame
+hierarchical `fun::frame_time` report with thread buckets, function names,
+file/line callsites, inclusive ns, `self_ns`, and child percentages. Diagnostic
+features are intentionally not compiled into release builds. Add
+`-FrameTimeDiagnosticRowEvents` when the benchmark parser should consume one
+structured tracing event per thread, slow span, and summary row instead of the
+single multiline report.
 The benchmark report includes a 144 FPS budget ledger and marks p95 pass/fail
 for the buckets that are currently measurable.
 
