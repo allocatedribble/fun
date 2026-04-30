@@ -5,7 +5,8 @@ param(
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
     [switch]$TraceDiagnostics,
-    [string]$SolariDenoiseMode = "balanced",
+    [string]$SolariDenoiseMode = "balanced-fast",
+    [string]$SolariInternalScale = "1.0",
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [int]$WarmupSeconds = 10,
@@ -343,6 +344,7 @@ function Write-MarkdownReport {
     $lines.Add("- Backend: $($Summary.config.render_backend)") | Out-Null
     $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
+    $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
     $lines.Add("- Sample count: $($Summary.samples.count)") | Out-Null
     $lines.Add("") | Out-Null
 
@@ -355,6 +357,8 @@ function Write-MarkdownReport {
         "dlss_rr_gpu_ns",
         "solari_pass_direct_ns",
         "solari_pass_diffuse_ns",
+        "solari_pass_diffuse_initial_ns",
+        "solari_pass_diffuse_spatial_ns",
         "solari_pass_specular_regular_ns",
         "solari_pass_specular_psr_ns",
         "solari_pass_denoise_cheap_ns",
@@ -490,6 +494,9 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($SolariDenoiseMode)) {
             $runStackArgs += @("-SolariDenoiseMode", $SolariDenoiseMode)
         }
+        if (-not [string]::IsNullOrWhiteSpace($SolariInternalScale)) {
+            $runStackArgs += @("-SolariInternalScale", $SolariInternalScale)
+        }
 
         Write-Host "Starting benchmark stack..."
         & $powerShellPath @runStackArgs
@@ -550,7 +557,8 @@ try {
             disable_dlss_rr = [bool]$DisableDlssRr
             disable_solari = [bool]$DisableSolari
             disable_meshlets = [bool]$DisableMeshlets
-            solari_denoise_mode = if ([string]::IsNullOrWhiteSpace($SolariDenoiseMode)) { "balanced" } else { $SolariDenoiseMode }
+            solari_denoise_mode = if ([string]::IsNullOrWhiteSpace($SolariDenoiseMode)) { "balanced-fast" } else { $SolariDenoiseMode }
+            solari_internal_scale = if ([string]::IsNullOrWhiteSpace($SolariInternalScale)) { "1.0" } else { $SolariInternalScale }
         }
         samples = [ordered]@{
             count = $samples.Count

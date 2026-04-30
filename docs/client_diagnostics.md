@@ -36,8 +36,10 @@ can perturb frame time.
 - `fun::perf`: FPS, frame ms/ns, Solari total ns, meshlet visibility ns, and
   external RR ns.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,
-  diffuse GI, specular regular/PSR, guide resolve, cheap temporal denoise, each
-  à trous denoise pass, and composite.
+  diffuse GI plus split diffuse initial/spatial timings, specular regular/PSR,
+  guide resolve, cheap temporal denoise, each à trous denoise pass, and
+  composite. It also reports the current world-cache active-cell count so
+  adaptive cache settings can be judged against both cost and cell pressure.
 - `fun::render::recovery`: device loss, out-of-memory/internal render errors,
   surface-loss/acquire failures, recovery attempts, successful reinitialization,
   and frames skipped while the renderer is unavailable.
@@ -71,16 +73,28 @@ recreated a device, or only recreated the window surface.
 
 ## GPU Budget Knobs
 
-The default visual path stays Solari plus meshlets with the Balanced denoiser.
-These environment variables exist for controlled captures and stress testing;
-engine-side validation clamps them to bounded GPU-safe ranges:
+The default visual path stays Solari plus meshlets with the BalancedFast
+denoiser. These environment variables exist for controlled captures and stress
+testing; engine-side validation clamps them to bounded GPU-safe ranges:
 
 - `FUN_SOLARI_WORLD_CACHE_SIZE`
 - `FUN_SOLARI_WORLD_CACHE_UPDATES`
 - `FUN_SOLARI_WORLD_CACHE_LIGHT_SAMPLES`
+- `FUN_SOLARI_WORLD_CACHE_FRAME_SLICES`
+- `FUN_SOLARI_WORLD_CACHE_NEAR_METERS`
+- `FUN_SOLARI_WORLD_CACHE_MID_METERS`
+- `FUN_SOLARI_WORLD_CACHE_FAR_METERS`
 - `FUN_SOLARI_LIGHT_TILE_BLOCKS`
 - `FUN_SOLARI_LIGHT_TILE_SAMPLES`
 - `FUN_SOLARI_BLAS_COMPACTION_VERTICES`
+- `FUN_SOLARI_INTERNAL_SCALE=1.0|0.75|0.66|0.5`
+
+`FUN_SOLARI_INTERNAL_SCALE` currently scales Solari GI reservoirs only. Direct
+lighting stays full resolution so direct shadows remain crisp, and raster
+meshlet presentation is not lowered by this control. Bevy's
+`MainPassResolutionOverride` path is still respected by Solari resource
+preparation when a caller explicitly opts into a lower main-pass resolution, but
+the game client does not use that route for the default Solari-only tests.
 
 ## Denoiser Comparison
 
@@ -94,7 +108,10 @@ That keeps the summary tables while also producing structured trace context for
 why a mode was expensive: guide resolve, PSR specular, external RR, cheap
 temporal, spatial à trous passes, or composite.
 
-Balanced is the normal Solari denoiser for day-to-day runtime tests. DLSS Ray
+BalancedFast is the normal Solari denoiser for day-to-day runtime tests. It uses
+cheap temporal filtering plus one à trous pass with fused final output. The
+regular Balanced preset keeps the second à trous pass for quality comparison,
+and Quality is opt-in for screenshots or explicit visual checks. DLSS Ray
 Reconstruction is preserved as an explicit `rr`/`dlss-rr` preset, but it is
 currently a known-broken path: it can show a large black square/rectangle and
 leave Solari shadows broken or missing. Use `-SolariDenoiseMode rr` only for

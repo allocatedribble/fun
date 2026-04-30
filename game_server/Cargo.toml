@@ -3,6 +3,9 @@ name = "game_server"
 edition.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true

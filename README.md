@@ -78,7 +78,15 @@ Rich tracing diagnostics:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend vulkan -PresentMode immediate
 ```
 
-The standard runtime path is Solari plus meshlets with the Balanced denoiser.
+The standard runtime path is Solari plus meshlets with the BalancedFast
+denoiser. BalancedFast is the performance-first SVGF-lite preset: cheap temporal
+history plus one à trous pass with fused output. The regular Balanced preset is
+kept as the quality-leaning comparison point, and Quality remains opt-in for
+screenshots and denoiser comparisons.
+`FUN_SOLARI_INTERNAL_SCALE=1.0|0.75|0.66|0.5` controls Solari's internal GI
+reservoir scale for controlled tests. Raster meshlet presentation remains at
+the main render resolution; the scaled GI path reconstructs into the full-res
+Solari output.
 DLSS Ray Reconstruction remains available as the explicit `rr`/`dlss-rr`
 denoiser preset, but it is currently known not to function properly in this
 project: it can produce a large black square/rectangle and broken or missing

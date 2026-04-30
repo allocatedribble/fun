@@ -4,6 +4,7 @@ use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
 use bevy::{
     app::ScheduleRunnerPlugin,
     asset::AssetPlugin,
+    log::LogPlugin,
     mesh::MeshPlugin,
     prelude::*,
     scene::{
@@ -19,6 +20,7 @@ use bevy_quinnet::server::{
 };
 use game_shared::{DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_TITLE};
 use thunder::prelude::*;
+use tracing::info;
 
 const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
 
@@ -29,6 +31,7 @@ fn main() {
                 1.0 / DEFAULT_TICK_RATE_HZ,
             ))),
             AssetPlugin::default(),
+            LogPlugin::default(),
             MeshPlugin,
             ScenePlugin,
             PhysicsPlugins::default(),
@@ -70,13 +73,13 @@ fn start_endpoint(mut server: ResMut<QuinnetServer>) {
         })
         .expect("game server endpoint should start");
 
-    println!(
+    info!(
         "Starting {GAME_TITLE} game server at {DEFAULT_TICK_RATE_HZ:.0} Hz on {GAME_SERVER_BIND_ADDR}"
     );
 }
 
 fn spawn_demo_world(mut commands: Commands) {
-    println!("[server world] queueing demo world BSN spawn");
+    info!("[server world] queueing demo world BSN spawn");
     commands.spawn_scene_list(bsn_list![
         (
             #Floor
@@ -208,13 +211,13 @@ fn log_streamable_inventory(
     }
 
     diagnostics.logged_streamable_inventory = true;
-    println!(
+    info!(
         "[server diag] streamable inventory entities={}",
         query.iter().count()
     );
 
     for (entity, name, identity, transform, streamed) in &query {
-        println!(
+        info!(
             "[server diag] streamable {:?}/{} identity={} transform={} render={} collider={}",
             entity,
             name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
@@ -287,7 +290,7 @@ fn rebuild_world_stream(
         manifest.revision.0,
         manifest.chunks.len()
     );
-    println!(
+    info!(
         "[server stream] built world stream revision {} specs={} chunks={} pending_clients={}",
         manifest.revision.0,
         manifest.signature.len(),
@@ -295,7 +298,7 @@ fn rebuild_world_stream(
         pending.ids.len()
     );
     for chunk in &manifest.chunks {
-        println!(
+        info!(
             "[server stream] chunk {}/{} level={} entities={}",
             chunk.chunk_index + 1,
             chunk.chunk_count,
@@ -304,7 +307,7 @@ fn rebuild_world_stream(
         );
         for spec in &chunk.entities {
             let translation = spec.transform.translation.to_f32(Quantization::MILLIMETERS);
-            println!(
+            info!(
                 "[server stream] entity net={} name={} class={:?} authority={:?} pos=({:.2},{:.2},{:.2}) render={} collider={}",
                 spec.entity.0,
                 spec.name,
@@ -328,7 +331,7 @@ fn queue_world_stream_for_new_clients(
     for event in events.read() {
         connected.ids.insert(event.id);
         pending.ids.insert(event.id);
-        println!(
+        info!(
             "[server net] client connected id={} pending_world_streams={}",
             event.id,
             pending.ids.len()
@@ -344,18 +347,18 @@ fn receive_client_control(mut server: ResMut<QuinnetServer>) {
 
     for client_id in endpoint.clients() {
         while let Some(payload) = endpoint.try_receive_payload(client_id, ClientChannel::Control) {
-            println!(
+            info!(
                 "[server net] received control payload from client {} ({} bytes)",
                 client_id,
                 payload.as_ref().len()
             );
             match decode_client_packet(payload.as_ref()) {
                 Ok(ClientPacket::Hello { hello: _hello }) => {
-                    println!("[server net] client {client_id} completed Thunder hello");
+                    info!("[server net] client {client_id} completed Thunder hello");
                     info!("Client {client_id} completed Thunder hello");
                 }
                 Ok(ClientPacket::WorldReady { ack }) => {
-                    println!(
+                    info!(
                         "[server net] client {client_id} loaded world {} revision {}",
                         ack.level_id.0, ack.revision.0
                     );
@@ -365,13 +368,13 @@ fn receive_client_control(mut server: ResMut<QuinnetServer>) {
                     );
                 }
                 Ok(packet) => {
-                    println!(
+                    info!(
                         "[server net] ignoring client control packet from {client_id}: {packet:?}"
                     );
                     debug!("Ignoring client control packet from {client_id}: {packet:?}");
                 }
                 Err(error) => {
-                    println!(
+                    info!(
                         "[server net] failed to decode client control packet from {client_id}: {error}"
                     );
                     error!("Failed to decode client control packet: {error}");
@@ -396,7 +399,7 @@ fn send_pending_world_streams(
 
     let pending_clients = pending.ids.iter().copied().collect::<Vec<_>>();
     for client_id in pending_clients {
-        println!(
+        info!(
             "[server stream] sending revision {} to client {} as {} chunks",
             manifest.revision.0,
             client_id,
@@ -415,15 +418,13 @@ fn send_pending_world_streams(
             Ok(bytes) => {
                 let byte_len = bytes.len();
                 endpoint.try_send_payload_on(client_id, ServerChannel::Control, bytes);
-                println!(
+                info!(
                     "[server stream] sent welcome to client {} ({} bytes)",
                     client_id, byte_len
                 );
             }
             Err(error) => {
-                println!(
-                    "[server stream] failed to encode welcome for client {client_id}: {error}"
-                );
+                info!("[server stream] failed to encode welcome for client {client_id}: {error}");
                 error!("Failed to encode welcome for client {client_id}: {error}");
                 continue;
             }
@@ -437,7 +438,7 @@ fn send_pending_world_streams(
                 Ok(bytes) => {
                     let byte_len = bytes.len();
                     endpoint.try_send_payload_on(client_id, ServerChannel::Stream, bytes);
-                    println!(
+                    info!(
                         "[server stream] sent chunk {}/{} to client {} (entities={} bytes={})",
                         chunk.chunk_index + 1,
                         chunk.chunk_count,
@@ -447,7 +448,7 @@ fn send_pending_world_streams(
                     );
                 }
                 Err(error) => {
-                    println!(
+                    info!(
                         "[server stream] failed to encode world stream for client {client_id}: {error}"
                     );
                     error!("Failed to encode world stream for client {client_id}: {error}");
@@ -461,7 +462,7 @@ fn send_pending_world_streams(
             "Sent world stream revision {} to client {}",
             manifest.revision.0, client_id
         );
-        println!(
+        info!(
             "[server stream] completed world stream revision {} to client {}",
             manifest.revision.0, client_id
         );

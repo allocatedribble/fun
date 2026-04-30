@@ -4,11 +4,14 @@ param(
     [switch]$NoClient,
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
+    [switch]$RenderProfileVerbose,
+    [switch]$Maximized,
     [switch]$SolariDebugDirectVisibility,
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
-    [string]$SolariDenoiseMode = "balanced",
+    [string]$SolariDenoiseMode = "balanced-fast",
+    [string]$SolariInternalScale = "1.0",
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [int]$StartupDelaySeconds = 2
@@ -62,6 +65,18 @@ if ($RenderDiagnostics) {
 else {
     Remove-Item Env:\FUN_RENDER_DIAGNOSTICS -ErrorAction SilentlyContinue
 }
+if ($RenderProfileVerbose) {
+    $env:FUN_RENDER_PROFILE_VERBOSE = "1"
+}
+else {
+    Remove-Item Env:\FUN_RENDER_PROFILE_VERBOSE -ErrorAction SilentlyContinue
+}
+if ($Maximized) {
+    $env:FUN_WINDOW_MAXIMIZED = "1"
+}
+else {
+    Remove-Item Env:\FUN_WINDOW_MAXIMIZED -ErrorAction SilentlyContinue
+}
 if ($SolariDebugDirectVisibility) {
     $env:FUN_SOLARI_DEBUG_DIRECT_VISIBILITY = "1"
 }
@@ -91,6 +106,12 @@ if ($SolariDenoiseMode) {
 }
 else {
     Remove-Item Env:\FUN_SOLARI_DENOISE_MODE -ErrorAction SilentlyContinue
+}
+if ($SolariInternalScale) {
+    $env:FUN_SOLARI_INTERNAL_SCALE = $SolariInternalScale
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_INTERNAL_SCALE -ErrorAction SilentlyContinue
 }
 if ($RenderBackend) {
     $env:FUN_RENDER_BACKEND = $RenderBackend

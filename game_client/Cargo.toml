@@ -3,6 +3,9 @@ name = "game_client"
 edition.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = ["dlss"]
 benchmarks = []

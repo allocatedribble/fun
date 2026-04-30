@@ -101,13 +101,17 @@ For denoiser and DLSS Ray Reconstruction comparisons:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_denoisers.ps1
 ```
 
-That matrix runs `off`, `cheap-temporal`, `balanced`, `quality`, and `rr`,
-then writes `target\benchmarks\denoisers\<timestamp>\summary.md` with denoiser
-compute nanoseconds, RR guide resolve nanoseconds, external RR nanoseconds,
-specular regular/PSR costs, Solari total cost, frame p95, and FPS.
+That matrix runs `off`, `cheap-temporal`, `balanced-fast`, `balanced`,
+`quality`, and `rr`, then writes
+`target\benchmarks\denoisers\<timestamp>\summary.md` with denoiser compute
+nanoseconds, RR guide resolve nanoseconds, external RR nanoseconds, specular
+regular/PSR costs, Solari total cost, frame p95, and FPS.
 
-Balanced is the standard runtime denoiser. DLSS Ray Reconstruction is currently
-not functioning properly in this project: it can render a large black
+BalancedFast is the standard runtime denoiser. It uses cheap temporal filtering
+plus one à trous pass with fused output, while regular Balanced keeps the second
+à trous pass as the quality-leaning comparison point. Quality is opt-in only for
+screenshots and explicit comparisons. DLSS Ray Reconstruction is currently not
+functioning properly in this project: it can render a large black
 square/rectangle and break or remove Solari shadows. Keep the `rr` mode in the
 matrix for diagnosis, but do not use it as the default path until that artifact
 is fixed.
@@ -132,8 +136,11 @@ When a change touches one of these systems, also run the matching isolation case
 - Meshlets: add `-DisableMeshlets`.
 - DLSS Ray Reconstruction: run once with `-SolariDenoiseMode rr`, but record
   the known black square/rectangle and missing-shadow artifact if it appears.
-- Denoisers: compare `-SolariDenoiseMode off`, `cheap-temporal`, `balanced`,
-  `quality`, and the DLSS RR preset where available.
+- Denoisers: compare `-SolariDenoiseMode off`, `cheap-temporal`,
+  `balanced-fast`, `balanced`, `quality`, and the DLSS RR preset where
+  available.
+- Solari internal GI scale: compare `-SolariInternalScale 1.0` against `0.75`,
+  `0.66`, and `0.5`; track diffuse initial/spatial ns and Solari VRAM logs.
 - CPU-heavy gameplay or networking: keep rendering settings fixed and compare
   process CPU, memory, FPS, and frame time.
 

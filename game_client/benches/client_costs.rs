@@ -14,6 +14,7 @@ fn solari_and_denoiser_costs(c: &mut Criterion) {
     for mode in [
         SolariDenoiseMode::Off,
         SolariDenoiseMode::CheapTemporal,
+        SolariDenoiseMode::BalancedFast,
         SolariDenoiseMode::Balanced,
         SolariDenoiseMode::Quality,
         SolariDenoiseMode::DlssRayReconstruction,
@@ -39,6 +40,7 @@ fn solari_and_denoiser_costs(c: &mut Criterion) {
     for mode in [
         "off",
         "cheap-temporal",
+        "balanced-fast",
         "balanced",
         "quality",
         "dlss-rr",
@@ -53,10 +55,10 @@ fn solari_and_denoiser_costs(c: &mut Criterion) {
             });
         });
     }
-    group.bench_function("default_balanced_rr_available", |b| {
+    group.bench_function("default_balanced_fast_rr_available", |b| {
         b.iter(|| black_box(benchmark_parse_solari_denoise_mode(None, false)));
     });
-    group.bench_function("default_balanced_rr_disabled", |b| {
+    group.bench_function("default_balanced_fast_rr_disabled", |b| {
         b.iter(|| black_box(benchmark_parse_solari_denoise_mode(None, true)));
     });
     group.finish();

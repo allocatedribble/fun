@@ -1,7 +1,8 @@
 param(
-    [string[]]$Modes = @("off", "cheap-temporal", "balanced", "quality", "rr"),
+    [string[]]$Modes = @("off", "cheap-temporal", "balanced-fast", "balanced", "quality", "rr"),
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
+    [string]$SolariInternalScale = "1.0",
     [int]$WarmupSeconds = 10,
     [int]$SampleSeconds = 30,
     [switch]$Release,
@@ -87,6 +88,15 @@ function Get-ModeConfig {
         "cheap-temporal" {
             return [pscustomobject]@{ name = "cheap-temporal"; solari_denoise_mode = "cheap-temporal"; disable_dlss_rr = $true }
         }
+        "balanced-fast" {
+            return [pscustomobject]@{ name = "balanced-fast"; solari_denoise_mode = "balanced-fast"; disable_dlss_rr = $true }
+        }
+        "balanced_fast" {
+            return [pscustomobject]@{ name = "balanced-fast"; solari_denoise_mode = "balanced-fast"; disable_dlss_rr = $true }
+        }
+        "fast" {
+            return [pscustomobject]@{ name = "balanced-fast"; solari_denoise_mode = "balanced-fast"; disable_dlss_rr = $true }
+        }
         "balanced" {
             return [pscustomobject]@{ name = "balanced"; solari_denoise_mode = "balanced"; disable_dlss_rr = $true }
         }
@@ -97,7 +107,7 @@ function Get-ModeConfig {
             return [pscustomobject]@{ name = "rr"; solari_denoise_mode = "dlss-rr"; disable_dlss_rr = $false }
         }
         default {
-            throw "Unknown denoiser mode '$Mode'. Use off, cheap-temporal, balanced, quality, or rr."
+            throw "Unknown denoiser mode '$Mode'. Use off, cheap-temporal, balanced-fast, balanced, quality, or rr."
         }
     }
 }
@@ -136,7 +146,8 @@ function Write-DenoiserReport {
     $lines.Add("- Best FPS mean: $($bestFps.mode) at $($bestFps.fps_mean)") | Out-Null
     $lines.Add("- Lowest frame p95: $($bestFrameP95.mode) at $($bestFrameP95.frame_p95_ns) ns") | Out-Null
     $lines.Add("- Lowest denoiser/RR cost: $($lowestDenoiser.mode) at $($lowestDenoiser.denoiser_or_rr_mean_ns) ns") | Out-Null
-    $lines.Add("- Standard runtime denoiser: balanced") | Out-Null
+    $lines.Add("- Standard runtime denoiser: balanced-fast") | Out-Null
+    $lines.Add("- Solari internal scale: $SolariInternalScale") | Out-Null
     $lines.Add("- Known RR issue: Ray Reconstruction can show a large black square/rectangle and missing or broken shadows in this project.") | Out-Null
     $lines.Add("") | Out-Null
     $lines.Add("## Mode Summary") | Out-Null
@@ -164,12 +175,14 @@ function Write-DenoiserReport {
     $lines.Add("") | Out-Null
     $lines.Add("## Pass Breakdown") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| mode | guide resolve ns | external RR ns | specular regular ns | specular PSR ns | cheap temporal ns | atrous 1 ns | atrous 2 ns | atrous 3 ns | composite ns |") | Out-Null
-    $lines.Add("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
+    $lines.Add("| mode | diffuse initial ns | diffuse spatial ns | guide resolve ns | external RR ns | specular regular ns | specular PSR ns | cheap temporal ns | atrous 1 ns | atrous 2 ns | atrous 3 ns | composite ns |") | Out-Null
+    $lines.Add("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
     foreach ($row in $Rows) {
         $lines.Add((
-                "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} |" -f
+                "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} | {10} | {11} |" -f
                 $row.mode,
+                $row.diffuse_initial_mean_ns,
+                $row.diffuse_spatial_mean_ns,
                 $row.dlss_rr_guide_resolve_mean_ns,
                 $row.dlss_rr_external_mean_ns,
                 $row.specular_regular_mean_ns,
@@ -213,7 +226,9 @@ foreach ($modeName in $Modes) {
         "-SampleSeconds",
         "$SampleSeconds",
         "-SolariDenoiseMode",
-        $mode.solari_denoise_mode
+        $mode.solari_denoise_mode,
+        "-SolariInternalScale",
+        $SolariInternalScale
     )
     if ($Release) { $clientArgs += "-Release" }
     if ($StaticBevy) { $clientArgs += "-StaticBevy" }
@@ -247,6 +262,8 @@ foreach ($modeName in $Modes) {
             frame_p95_ns = Round-Value (Get-MetricP95 $summary "frame_ns")
             solari_gpu_mean_ns = Round-Value (Get-MetricMean $summary "solari_gpu_ns")
             denoiser_or_rr_mean_ns = Round-Value (Get-DenoiserTotalNs -Summary $summary -Mode $mode.name)
+            diffuse_initial_mean_ns = Round-Value (Get-MetricMean $summary "solari_pass_diffuse_initial_ns")
+            diffuse_spatial_mean_ns = Round-Value (Get-MetricMean $summary "solari_pass_diffuse_spatial_ns")
             dlss_rr_guide_resolve_mean_ns = Round-Value (Get-MetricMean $summary "solari_pass_dlss_rr_guide_resolve_ns")
             dlss_rr_external_mean_ns = Round-Value (Get-MetricMean $summary "dlss_rr_gpu_ns")
             specular_regular_mean_ns = Round-Value (Get-MetricMean $summary "solari_pass_specular_regular_ns")
@@ -267,6 +284,7 @@ $result = [ordered]@{
     present_mode = $PresentMode
     warmup_seconds = $WarmupSeconds
     sample_seconds = $SampleSeconds
+    solari_internal_scale = $SolariInternalScale
     modes = $rows
 }
 $result | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding UTF8

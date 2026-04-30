@@ -1,7 +1,7 @@
 pub mod first_person;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     num::NonZeroU32,
     time::Duration,
 };
@@ -38,10 +38,10 @@ use bevy::{
     prelude::*,
     render::diagnostic::RenderDiagnosticsPlugin,
     solari::prelude::{
-        RaytracingMesh3d, SolariDenoiseMode, SolariLighting, SolariPlugins, SolariResetEvent,
-        SolariSettings,
+        RaytracingMesh3d, SolariDenoiseMode, SolariInternalScale, SolariLighting, SolariPlugins,
+        SolariResetEvent, SolariSettings,
     },
-    window::PresentMode,
+    window::{PresentMode, PrimaryWindow},
     winit::WinitSettings,
 };
 use bevy_quinnet::client::{
@@ -66,6 +66,7 @@ struct ClientRenderConfig {
     dlss_rr_enabled: bool,
     meshlets_enabled: bool,
     dlss_rr_disabled_by_denoise_mode: bool,
+    render_profile_verbose: bool,
 }
 
 impl ClientRenderConfig {
@@ -75,6 +76,20 @@ impl ClientRenderConfig {
             dlss_rr_enabled: std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
             meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
             dlss_rr_disabled_by_denoise_mode: false,
+            render_profile_verbose: std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Resource)]
+struct ClientWindowConfig {
+    maximized: bool,
+}
+
+impl ClientWindowConfig {
+    fn from_env() -> Self {
+        Self {
+            maximized: std::env::var_os("FUN_WINDOW_MAXIMIZED").is_some(),
         }
     }
 }
@@ -90,35 +105,54 @@ impl Plugin for GameClientPlugin {
             render_config.dlss_rr_enabled = false;
         }
         if render_config.solari_enabled {
-            println!(
-                "[client render] Solari lighting will start after the streamed world is ready"
-            );
+            info!("[client render] Solari lighting will start after the streamed world is ready");
         } else {
-            println!("[client render] Solari lighting disabled by FUN_DISABLE_SOLARI");
+            info!("[client render] Solari lighting disabled by FUN_DISABLE_SOLARI");
         }
         if render_config.meshlets_enabled {
-            println!("[client render] streamed world will use meshlet meshes");
+            info!("[client render] streamed world will use meshlet meshes");
         } else {
-            println!("[client render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
+            info!("[client render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
         }
-        println!(
+        info!(
             "[client render] Solari denoise mode: {:?}",
             solari_settings.denoise_mode
+        );
+        info!(
+            "[client render] Solari internal GI scale: {:?}",
+            solari_settings.internal_scale
+        );
+        info!(
+            "[client render] Solari world-cache: {} entries, {} updates/frame soft cap, {} frame slices, camera tiers {}m/{}m/{}m",
+            solari_settings.world_cache_size,
+            solari_settings.world_cache_cell_updates_soft_cap,
+            solari_settings.world_cache_frame_slice_count,
+            solari_settings.world_cache_near_camera_distance_meters,
+            solari_settings.world_cache_mid_camera_distance_meters,
+            solari_settings.world_cache_far_camera_distance_meters
         );
         info!(
             target: "fun::render",
             solari_enabled = render_config.solari_enabled,
             meshlets_enabled = render_config.meshlets_enabled,
             dlss_rr_enabled = render_config.dlss_rr_enabled,
+            render_profile_verbose = render_config.render_profile_verbose,
             denoise_mode = ?solari_settings.denoise_mode,
+            internal_scale = ?solari_settings.internal_scale,
+            world_cache_size = solari_settings.world_cache_size,
+            world_cache_updates_soft_cap = solari_settings.world_cache_cell_updates_soft_cap,
+            world_cache_frame_slice_count = solari_settings.world_cache_frame_slice_count,
+            world_cache_near_meters = solari_settings.world_cache_near_camera_distance_meters,
+            world_cache_mid_meters = solari_settings.world_cache_mid_camera_distance_meters,
+            world_cache_far_meters = solari_settings.world_cache_far_camera_distance_meters,
             "client render configuration"
         );
 
         let opaque_renderer_method = if render_config.solari_enabled {
-            println!("[client render] default opaque renderer: deferred");
+            info!("[client render] default opaque renderer: deferred");
             DefaultOpaqueRendererMethod::deferred()
         } else {
-            println!("[client render] default opaque renderer: forward");
+            info!("[client render] default opaque renderer: forward");
             DefaultOpaqueRendererMethod::forward()
         };
 
@@ -153,6 +187,7 @@ impl Plugin for GameClientPlugin {
             .add_systems(
                 Update,
                 (
+                    apply_startup_window_config,
                     send_client_hello,
                     receive_server_control,
                     receive_world_stream,
@@ -165,7 +200,7 @@ impl Plugin for GameClientPlugin {
         }
 
         if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some() {
-            println!("[client render] GPU render diagnostics enabled");
+            info!("[client render] GPU render diagnostics enabled");
             app.add_plugins((
                 RenderDiagnosticsPlugin,
                 bevy::diagnostic::SystemInformationDiagnosticsPlugin,
@@ -177,6 +212,7 @@ impl Plugin for GameClientPlugin {
 fn solari_settings_from_env() -> SolariSettings {
     let mut settings = SolariSettings {
         denoise_mode: solari_denoise_mode_from_env(),
+        internal_scale: solari_internal_scale_from_env(),
         debug_direct_visibility: std::env::var_os("FUN_SOLARI_DEBUG_DIRECT_VISIBILITY").is_some(),
         ..default()
     };
@@ -194,6 +230,22 @@ fn solari_settings_from_env() -> SolariSettings {
         &mut settings.world_cache_direct_light_sample_count,
     );
     apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_FRAME_SLICES",
+        &mut settings.world_cache_frame_slice_count,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_NEAR_METERS",
+        &mut settings.world_cache_near_camera_distance_meters,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_MID_METERS",
+        &mut settings.world_cache_mid_camera_distance_meters,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_WORLD_CACHE_FAR_METERS",
+        &mut settings.world_cache_far_camera_distance_meters,
+    );
+    apply_u32_env(
         "FUN_SOLARI_LIGHT_TILE_BLOCKS",
         &mut settings.light_tile_blocks,
     );
@@ -207,6 +259,31 @@ fn solari_settings_from_env() -> SolariSettings {
     );
 
     settings
+}
+
+fn solari_internal_scale_from_env() -> SolariInternalScale {
+    let Some(raw) = std::env::var("FUN_SOLARI_INTERNAL_SCALE")
+        .ok()
+        .map(|value| value.to_ascii_lowercase())
+    else {
+        return SolariInternalScale::Full;
+    };
+
+    match raw.as_str() {
+        "1" | "1.0" | "full" | "native" => SolariInternalScale::Full,
+        "0.75" | ".75" | "75" | "3/4" | "three-quarter" | "three_quarter" => {
+            SolariInternalScale::ThreeQuarter
+        }
+        "0.66" | "0.666" | "0.67" | ".66" | ".666" | ".67" | "66" | "2/3" | "two-thirds"
+        | "two_thirds" => SolariInternalScale::TwoThirds,
+        "0.5" | ".5" | "50" | "1/2" | "half" => SolariInternalScale::Half,
+        unknown => {
+            warn!(
+                "Unknown FUN_SOLARI_INTERNAL_SCALE={unknown}; using full-resolution Solari GI reservoirs"
+            );
+            SolariInternalScale::Full
+        }
+    }
 }
 
 fn apply_u32_env(name: &'static str, value: &mut u32) {
@@ -247,12 +324,15 @@ fn parse_solari_denoise_mode(
     _dlss_ray_reconstruction_disabled: bool,
 ) -> SolariDenoiseMode {
     let Some(mode) = mode else {
-        return SolariDenoiseMode::Balanced;
+        return SolariDenoiseMode::BalancedFast;
     };
 
     match mode {
         "off" | "raw" => SolariDenoiseMode::Off,
         "cheap" | "cheap-temporal" | "cheap_temporal" => SolariDenoiseMode::CheapTemporal,
+        "fast" | "balanced-fast" | "balanced_fast" | "balancedfast" => {
+            SolariDenoiseMode::BalancedFast
+        }
         "balanced" | "svgf" | "svgf-lite" | "svgf_lite" => SolariDenoiseMode::Balanced,
         "quality" | "svgf-quality" | "svgf_quality" => SolariDenoiseMode::Quality,
         "rr" | "dlss" | "dlss-rr" | "dlss_rr" | "ray-reconstruction" => {
@@ -260,9 +340,9 @@ fn parse_solari_denoise_mode(
         }
         unknown => {
             warn!(
-                "Unknown FUN_SOLARI_DENOISE_MODE={unknown}; falling back to balanced Solari denoising"
+                "Unknown FUN_SOLARI_DENOISE_MODE={unknown}; falling back to balanced-fast Solari denoising"
             );
-            SolariDenoiseMode::Balanced
+            SolariDenoiseMode::BalancedFast
         }
     }
 }
@@ -279,21 +359,20 @@ pub fn build_client_app() -> App {
     let mut app = App::new();
     let render_backend = selected_render_backend();
     let present_mode = selected_present_mode();
+    let window_config = ClientWindowConfig::from_env();
 
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     app.insert_resource(DlssProjectId(
         Uuid::parse_str(DLSS_PROJECT_ID).expect("DLSS project ID should be a valid UUID"),
     ));
 
-    println!(
-        "[client render] backend={render_backend:?} present_mode={present_mode:?} vsync=false max_frame_latency=3"
-    );
     info!(
         target: "fun::render",
         backend = ?render_backend,
         present_mode = ?present_mode,
         vsync = false,
         max_frame_latency = 3,
+        maximized = window_config.maximized,
         "client window/render backend selected"
     );
 
@@ -312,6 +391,7 @@ pub fn build_client_app() -> App {
     });
 
     app.add_plugins(default_plugins)
+        .insert_resource(window_config)
         .insert_resource(RenderErrorHandler(recover_render_device))
         .insert_resource(WinitSettings::continuous())
         .add_plugins(GameClientPlugin);
@@ -332,7 +412,7 @@ fn recover_render_device(
     _main_world: &mut World,
     _render_world: &mut World,
 ) -> RenderErrorPolicy {
-    println!(
+    info!(
         "[client render] renderer reported {:?}: {}; recreating renderer with the same profile",
         error.ty, error.description
     );
@@ -342,7 +422,7 @@ fn recover_render_device(
             RenderErrorPolicy::Recover(client_render_creation(selected_render_backend()))
         }
         ErrorType::Validation => {
-            println!(
+            info!(
                 "[client render] validation error may be fallout from a lost GPU device; attempting immediate renderer recovery"
             );
             RenderErrorPolicy::Recover(client_render_creation(selected_render_backend()))
@@ -360,7 +440,7 @@ fn selected_render_backend() -> Backends {
         Ok("auto") => Backends::VULKAN | Backends::DX12,
         Ok("vulkan") | Ok("vk") | Ok("") | Err(_) => Backends::VULKAN,
         Ok(other) => {
-            println!("[client render] unknown FUN_RENDER_BACKEND={other}; using Vulkan");
+            info!("[client render] unknown FUN_RENDER_BACKEND={other}; using Vulkan");
             Backends::VULKAN
         }
     }
@@ -379,14 +459,14 @@ fn selected_present_mode() -> PresentMode {
         Ok("mailbox") => PresentMode::Mailbox,
         Ok("immediate") | Ok("") | Err(_) => PresentMode::Immediate,
         Ok(other) => {
-            println!("[client render] unknown FUN_PRESENT_MODE={other}; using Immediate");
+            info!("[client render] unknown FUN_PRESENT_MODE={other}; using Immediate");
             PresentMode::Immediate
         }
     }
 }
 
 fn setup_lighting(mut commands: Commands) {
-    println!("[client render] spawning directional light");
+    info!("[client render] spawning directional light");
     commands.spawn((
         DirectionalLight {
             illuminance: 15_000.0,
@@ -397,14 +477,37 @@ fn setup_lighting(mut commands: Commands) {
     ));
 }
 
+fn apply_startup_window_config(
+    mut applied: Local<bool>,
+    window_config: Res<ClientWindowConfig>,
+    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    if *applied {
+        return;
+    }
+
+    *applied = true;
+    if !window_config.maximized {
+        return;
+    }
+
+    let Ok(mut window) = primary_window.single_mut() else {
+        warn!(target: "fun::render", "could not maximize client window because no primary window was available");
+        return;
+    };
+
+    window.set_maximized(true);
+    info!(target: "fun::render", "requested maximized primary window");
+}
+
 fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
     if !client.is_disconnected() {
-        println!("[client net] Quinnet already has an active connection");
+        info!("[client net] Quinnet already has an active connection");
         debug!(target: "fun::net", "quinnet already has an active connection");
         return;
     }
 
-    println!("[client net] opening connection to {GAME_SERVER_ADDR}");
+    info!("[client net] opening connection to {GAME_SERVER_ADDR}");
     info!(target: "fun::net", server_addr = GAME_SERVER_ADDR, "opening game server connection");
     let limits = ChannelLimits::default();
     let config = ClientConnectionConfiguration {
@@ -419,7 +522,7 @@ fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
 
     match client.open_connection(config) {
         Ok(connection_id) => {
-            println!(
+            info!(
                 "[client net] connecting to {GAME_SERVER_ADDR} with local connection {connection_id}"
             );
             info!(
@@ -430,7 +533,7 @@ fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
             );
         }
         Err(error) => {
-            println!("[client net] failed to start game server connection: {error}");
+            info!("[client net] failed to start game server connection: {error}");
             error!(target: "fun::net", server_addr = GAME_SERVER_ADDR, %error, "failed to start game server connection");
         }
     }
@@ -441,10 +544,10 @@ fn send_client_hello(
     mut client: ResMut<QuinnetClient>,
 ) {
     for event in events.read() {
-        println!("[client net] connection event id={}", event.id);
+        info!("[client net] connection event id={}", event.id);
         info!(target: "fun::net", connection_id = event.id, "connection event");
         let Some(connection) = client.get_connection_mut_by_id(event.id) else {
-            println!(
+            info!(
                 "[client net] connection event id={} had no matching connection",
                 event.id
             );
@@ -469,7 +572,7 @@ fn send_client_hello(
             Ok(bytes) => {
                 let byte_len = bytes.len();
                 connection.try_send_payload_on(ClientChannel::Control, bytes);
-                println!(
+                info!(
                     "[client net] sent hello on control channel for connection {} ({} bytes)",
                     event.id, byte_len
                 );
@@ -482,7 +585,7 @@ fn send_client_hello(
                 );
             }
             Err(error) => {
-                println!("[client net] failed to encode client hello: {error}");
+                info!("[client net] failed to encode client hello: {error}");
                 error!(target: "fun::net", %error, "failed to encode client hello");
             }
         }
@@ -496,7 +599,7 @@ fn receive_server_control(mut client: ResMut<QuinnetClient>) {
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Control) {
         let payload_len = payload.as_ref().len();
-        println!(
+        info!(
             "[client net] received control payload ({} bytes)",
             payload_len
         );
@@ -508,7 +611,7 @@ fn receive_server_control(mut client: ResMut<QuinnetClient>) {
         );
         match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::Welcome { welcome }) => {
-                println!(
+                info!(
                     "[client net] welcome client_id={} baseline_tick={}",
                     welcome.client_id.0, welcome.baseline_tick.0
                 );
@@ -522,15 +625,15 @@ fn receive_server_control(mut client: ResMut<QuinnetClient>) {
                 );
             }
             Ok(ServerPacket::Disconnect { reason }) => {
-                println!("[client net] server disconnected client: {reason}");
+                info!("[client net] server disconnected client: {reason}");
                 warn!(target: "fun::net", %reason, "server disconnected client");
             }
             Ok(packet) => {
-                println!("[client net] ignoring control packet: {packet:?}");
+                info!("[client net] ignoring control packet: {packet:?}");
                 debug!(target: "fun::net", packet = ?packet, "ignoring control packet on client");
             }
             Err(error) => {
-                println!("[client net] failed to decode server control packet: {error}");
+                info!("[client net] failed to decode server control packet: {error}");
                 error!(target: "fun::net", %error, bytes = payload_len, "failed to decode server control packet");
             }
         }
@@ -566,7 +669,7 @@ fn receive_world_stream(
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Stream) {
         let payload_len = payload.as_ref().len();
-        println!(
+        info!(
             "[client stream] received stream payload ({} bytes)",
             payload_len
         );
@@ -579,18 +682,18 @@ fn receive_world_stream(
         let packet = match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::WorldStream { chunk }) => chunk,
             Ok(packet) => {
-                println!("[client stream] ignoring non-world stream packet: {packet:?}");
+                info!("[client stream] ignoring non-world stream packet: {packet:?}");
                 debug!(target: "fun::stream", packet = ?packet, "ignoring non-world packet on world stream channel");
                 continue;
             }
             Err(error) => {
-                println!("[client stream] failed to decode world stream packet: {error}");
+                info!("[client stream] failed to decode world stream packet: {error}");
                 error!(target: "fun::stream", %error, bytes = payload_len, "failed to decode world stream packet");
                 continue;
             }
         };
 
-        println!(
+        info!(
             "[client stream] applying chunk {}/{} level={} revision={} entities={}",
             packet.chunk_index + 1,
             packet.chunk_count,
@@ -633,7 +736,7 @@ fn receive_world_stream(
         if loaded_world.is_complete() {
             let became_ready = !world_status.ready;
             if became_ready {
-                println!(
+                info!(
                     "[client stream] streamed world is ready; enabling player movement after colliders are present"
                 );
                 info!(
@@ -663,7 +766,7 @@ fn receive_world_stream(
                     &mut dlss_rr,
                 );
                 #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
-                println!("[client render] DLSS feature disabled at compile time");
+                info!("[client render] DLSS feature disabled at compile time");
             }
         }
 
@@ -680,7 +783,7 @@ fn receive_world_stream(
                     let byte_len = bytes.len();
                     connection.try_send_payload_on(ClientChannel::Control, bytes);
                     loaded_world.ack_sent = true;
-                    println!(
+                    info!(
                         "[client stream] sent world-ready ack level={} revision={} ({} bytes)",
                         loaded_world.level_id.as_deref().unwrap_or_default(),
                         loaded_world.revision.unwrap_or_default().0,
@@ -695,7 +798,7 @@ fn receive_world_stream(
                     );
                 }
                 Err(error) => {
-                    println!("[client stream] failed to encode world-ready ack: {error}");
+                    info!("[client stream] failed to encode world-ready ack: {error}");
                     error!(target: "fun::stream", %error, "failed to encode world ready acknowledgement");
                 }
             }
@@ -711,7 +814,7 @@ fn enable_solari_lighting_for_ready_world(
     solari_reset_events: &mut MessageWriter<SolariResetEvent>,
 ) {
     if !render_config.solari_enabled {
-        println!("[client render] streamed world ready; Solari remains disabled");
+        info!("[client render] streamed world ready; Solari remains disabled");
         info!(target: "fun::solari", "streamed world ready; Solari remains disabled");
         return;
     }
@@ -726,9 +829,7 @@ fn enable_solari_lighting_for_ready_world(
     }
 
     if enabled_count > 0 {
-        println!(
-            "[client render] enabled Solari lighting for {enabled_count} ready camera view(s)"
-        );
+        info!("[client render] enabled Solari lighting for {enabled_count} ready camera view(s)");
         info!(
             target: "fun::solari",
             enabled_views = enabled_count,
@@ -749,7 +850,7 @@ fn request_solari_lighting_history_reset(
     solari_lighting: &mut Query<&mut SolariLighting>,
 ) {
     solari_reset_events.write_default();
-    println!("[client render] requested Solari temporal history reset: {reason}");
+    info!("[client render] requested Solari temporal history reset: {reason}");
     info!(target: "fun::solari", %reason, "requested Solari temporal history reset");
     reset_solari_lighting_history(solari_lighting);
 }
@@ -762,7 +863,7 @@ fn reset_solari_lighting_history(solari_lighting: &mut Query<&mut SolariLighting
     }
 
     if reset_count > 0 {
-        println!("[client render] reset Solari temporal history for {reset_count} view(s)");
+        info!("[client render] reset Solari temporal history for {reset_count} view(s)");
         info!(
             target: "fun::solari",
             reset_views = reset_count,
@@ -785,7 +886,7 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
 
     if !render_config.dlss_rr_enabled {
         if render_config.dlss_rr_disabled_by_denoise_mode {
-            println!(
+            info!(
                 "[client render] DLSS Ray Reconstruction disabled because the active Solari denoiser is not the RR preset"
             );
             info!(
@@ -793,14 +894,14 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
                 "DLSS Ray Reconstruction disabled by active Solari denoiser"
             );
         } else {
-            println!("[client render] DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
+            info!("[client render] DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
             info!(target: "fun::rr", "DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
         }
         return;
     }
 
     if dlss_rr_supported.is_none() {
-        println!(
+        info!(
             "[client render] DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path"
         );
         info!(target: "fun::rr", "DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path");
@@ -820,7 +921,7 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     }
 
     if enabled_count > 0 {
-        println!(
+        info!(
             "[client render] enabled DLSS Ray Reconstruction for {enabled_count} ready camera view(s)"
         );
         info!(
@@ -845,7 +946,7 @@ fn reset_dlss_ray_reconstruction_history(
     }
 
     if reset_count > 0 {
-        println!("[client render] reset DLSS Ray Reconstruction history for {reset_count} view(s)");
+        info!("[client render] reset DLSS Ray Reconstruction history for {reset_count} view(s)");
         info!(
             target: "fun::rr",
             reset_views = reset_count,
@@ -869,7 +970,7 @@ fn apply_world_stream_chunk(
         || loaded_world.level_id.as_deref() != Some(chunk.level_id.0.as_str())
     {
         world_revision_changed = true;
-        println!(
+        info!(
             "[client stream] resetting streamed world: old_level={:?} old_revision={:?} old_entities={}",
             loaded_world.level_id,
             loaded_world.revision.map(|revision| revision.0),
@@ -903,7 +1004,7 @@ fn apply_world_stream_chunk(
             chunk_count = chunk.chunk_count,
             "receiving streamed world"
         );
-        println!(
+        info!(
             "[client stream] receiving world {} revision {} in {} chunks",
             chunk.level_id.0, chunk.revision.0, chunk.chunk_count
         );
@@ -911,7 +1012,7 @@ fn apply_world_stream_chunk(
 
     for spec in &chunk.entities {
         if loaded_world.spawned_entities.contains_key(&spec.entity) {
-            println!(
+            info!(
                 "[client stream] skipping duplicate entity {} ({})",
                 spec.entity.0, spec.name
             );
@@ -932,7 +1033,7 @@ fn apply_world_stream_chunk(
             render_config,
             spec,
         );
-        println!(
+        info!(
             "[client stream] spawned ECS entity {:?} for net entity {} ({})",
             entity, spec.entity.0, spec.name
         );
@@ -947,7 +1048,7 @@ fn apply_world_stream_chunk(
     }
 
     loaded_world.received_chunks.insert(chunk.chunk_index);
-    println!(
+    info!(
         "[client stream] chunk complete: received_chunks={}/{} spawned_entities={}",
         loaded_world.received_chunks.len(),
         loaded_world.expected_chunks,
@@ -985,7 +1086,7 @@ fn spawn_streamed_entity(
         transform_from_quantized(spec.transform),
     ));
 
-    println!(
+    info!(
         "[client stream] spawn spec net={} name={} class={:?} authority={:?} translation=({:.2}, {:.2}, {:.2}) render={} collider={} color={}",
         spec.entity.0,
         spec.name,
@@ -1037,7 +1138,7 @@ fn spawn_streamed_entity(
             entity_commands.insert(RaytracingMesh3d(raytracing_mesh));
         }
 
-        println!(
+        info!(
             "[client render] inserted render components for {} meshlet={} raytracing={}",
             spec.name, render_config.meshlets_enabled, render_config.solari_enabled,
         );
@@ -1104,7 +1205,7 @@ fn add_scene_mesh_assets(
         None
     };
 
-    println!(
+    info!(
         "[client render] built mesh assets for {name}: vertices={} raytracing_handle={:?} meshlet_handle={:?}",
         vertex_count, raytracing_handle, meshlet_handle
     );
@@ -1126,8 +1227,10 @@ fn log_client_diagnostics(
     time: Res<Time>,
     mut diagnostics: ResMut<ClientDiagnostics>,
     render_diagnostics: Res<DiagnosticsStore>,
+    render_config: Res<ClientRenderConfig>,
     render_recovery: Option<Res<RenderRecoveryStatus>>,
     loaded_world: Res<LoadedWorldState>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<
         (
             Entity,
@@ -1217,7 +1320,7 @@ fn log_client_diagnostics(
         .filter(|(_, _, _, camera, _, _)| camera.is_none_or(|camera| camera.is_active))
         .count();
     if camera_count != 1 || active_camera_count != 1 {
-        println!(
+        info!(
             "[client camera] expected exactly one active 3D camera, found cameras={} active={}",
             camera_count, active_camera_count
         );
@@ -1229,7 +1332,7 @@ fn log_client_diagnostics(
         );
     }
 
-    println!(
+    info!(
         "[client diag] world level={:?} revision={:?} chunks={}/{} spawned={} ack_sent={} cameras={} active_cameras={} renderables={} meshlet={} raytracing={} mesh3d={} materials={} colliders={}",
         loaded_world.level_id,
         loaded_world.revision.map(|revision| revision.0),
@@ -1267,7 +1370,7 @@ fn log_client_diagnostics(
 
     for (entity, name, transform, camera, projection, solari) in &cameras {
         let translation = transform.translation();
-        println!(
+        info!(
             "[client diag] camera {:?}/{} active={} projection={} solari={} pos=({:.2},{:.2},{:.2}) forward=({:.2},{:.2},{:.2})",
             entity,
             name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
@@ -1284,11 +1387,19 @@ fn log_client_diagnostics(
     }
 
     for sample in samples {
-        println!("[client diag] renderable {sample}");
+        info!("[client diag] renderable {sample}");
         debug!(target: "fun::diag::renderable", %sample, "renderable diagnostic sample");
     }
 
-    log_render_performance(&render_diagnostics, render_recovery.as_deref());
+    log_render_performance(
+        &render_diagnostics,
+        render_recovery.as_deref(),
+        render_config.render_profile_verbose,
+        primary_window
+            .single()
+            .ok()
+            .map(ClientWindowProfile::from_window),
+    );
 }
 
 fn primitive_summary(primitive: Option<WorldPrimitive>) -> String {
@@ -1329,9 +1440,45 @@ fn projection_summary(projection: &Projection) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ClientWindowProfile {
+    logical_width: f64,
+    logical_height: f64,
+    physical_width: u32,
+    physical_height: u32,
+    scale_factor: f64,
+}
+
+impl ClientWindowProfile {
+    fn from_window(window: &Window) -> Self {
+        Self {
+            logical_width: f64::from(window.resolution.width()),
+            logical_height: f64::from(window.resolution.height()),
+            physical_width: window.resolution.physical_width(),
+            physical_height: window.resolution.physical_height(),
+            scale_factor: f64::from(window.resolution.scale_factor()),
+        }
+    }
+
+    fn physical_pixels(self) -> u64 {
+        u64::from(self.physical_width) * u64::from(self.physical_height)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RenderProfileMetric {
+    path: String,
+    group: String,
+    kind: &'static str,
+    current: f64,
+    average: Option<f64>,
+}
+
 fn log_render_performance(
     diagnostics: &DiagnosticsStore,
     render_recovery: Option<&RenderRecoveryStatus>,
+    verbose_profile: bool,
+    window: Option<ClientWindowProfile>,
 ) {
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
@@ -1348,14 +1495,28 @@ fn log_render_performance(
         diagnostics,
         "render/solari_lighting/world_cache/elapsed_gpu",
     );
+    let solari_world_cache_active_cells = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/world_cache_active_cells_count",
+    );
     let solari_direct = diagnostic_average(
         diagnostics,
         "render/solari_lighting/direct_lighting/elapsed_gpu",
     );
-    let solari_diffuse = diagnostic_average(
+    let solari_diffuse_combined = diagnostic_average(
         diagnostics,
         "render/solari_lighting/diffuse_indirect_lighting/elapsed_gpu",
     );
+    let solari_diffuse_initial = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/diffuse_indirect_lighting_initial/elapsed_gpu",
+    );
+    let solari_diffuse_spatial = diagnostic_average(
+        diagnostics,
+        "render/solari_lighting/diffuse_indirect_lighting_spatial/elapsed_gpu",
+    );
+    let solari_diffuse =
+        solari_diffuse_combined.or_else(|| Some(solari_diffuse_initial? + solari_diffuse_spatial?));
     let solari_dlss_rr_guide_resolve = diagnostic_average(
         diagnostics,
         "render/solari_lighting/dlss_rr_guide_resolve/elapsed_gpu",
@@ -1413,15 +1574,9 @@ fn log_render_performance(
         "render/meshlet_visibility_buffer_raster/elapsed_gpu",
     );
     let dlss_rr = diagnostic_average(diagnostics, "render/dlss_ray_reconstruction/elapsed_gpu");
+    let pixel_count = window.map(ClientWindowProfile::physical_pixels);
+    let mpixels = pixel_count.map(|pixels| pixels as f64 / 1_000_000.0);
 
-    println!(
-        "[client perf] fps={} frame_ms={} solari_gpu_ms={} meshlet_visibility_gpu_ms={} dlss_rr_gpu_ms={}",
-        format_optional_number(fps),
-        format_optional_number(frame_ms),
-        format_optional_number(solari_total),
-        format_optional_number(meshlet_visibility),
-        format_optional_number(dlss_rr),
-    );
     info!(
         target: "fun::perf",
         fps = ?fps,
@@ -1433,8 +1588,24 @@ fn log_render_performance(
         meshlet_visibility_gpu_ns = ?ms_to_ns(meshlet_visibility),
         dlss_rr_gpu_ms = ?dlss_rr,
         dlss_rr_gpu_ns = ?ms_to_ns(dlss_rr),
+        render_pixels = ?pixel_count,
+        render_mpix = ?mpixels,
         "client render performance sample"
     );
+
+    if let Some(window) = window {
+        info!(
+            target: "fun::perf::window",
+            logical_width = window.logical_width,
+            logical_height = window.logical_height,
+            physical_width = window.physical_width,
+            physical_height = window.physical_height,
+            scale_factor = window.scale_factor,
+            pixels = window.physical_pixels(),
+            target_120hz_ms = target_frame_ms(120.0),
+            "client window render target"
+        );
+    }
 
     let process_cpu = diagnostic_average_path(
         diagnostics,
@@ -1452,7 +1623,7 @@ fn log_render_performance(
         diagnostics,
         &bevy::diagnostic::SystemInformationDiagnosticsPlugin::SYSTEM_MEM_USAGE,
     );
-    println!(
+    info!(
         "[client perf] process_cpu_pct={} process_mem_gib={} system_cpu_pct={} system_mem_pct={}",
         format_optional_number(process_cpu),
         format_optional_number(process_mem),
@@ -1468,27 +1639,15 @@ fn log_render_performance(
         "client system performance sample"
     );
 
-    println!(
-        "[client perf] solari passes gpu_ms: presample={} world_cache={} direct={} diffuse={} dlss_rr_guide_resolve={} specular_regular={} specular_psr={} denoise_cheap={} denoise_atrous_1={} denoise_atrous_2={} denoise_atrous_3={} denoise_composite={}",
-        format_optional_number(solari_presample),
-        format_optional_number(solari_world_cache),
-        format_optional_number(solari_direct),
-        format_optional_number(solari_diffuse),
-        format_optional_number(solari_dlss_rr_guide_resolve),
-        format_optional_number(solari_specular_regular),
-        format_optional_number(solari_specular_psr),
-        format_optional_number(solari_denoise_cheap),
-        format_optional_number(solari_denoise_atrous_1),
-        format_optional_number(solari_denoise_atrous_2),
-        format_optional_number(solari_denoise_atrous_3),
-        format_optional_number(solari_denoise_composite),
-    );
     info!(
         target: "fun::perf::solari",
         presample_ns = ?ms_to_ns(solari_presample),
         world_cache_ns = ?ms_to_ns(solari_world_cache),
+        world_cache_active_cells = ?solari_world_cache_active_cells,
         direct_ns = ?ms_to_ns(solari_direct),
         diffuse_ns = ?ms_to_ns(solari_diffuse),
+        diffuse_initial_ns = ?ms_to_ns(solari_diffuse_initial),
+        diffuse_spatial_ns = ?ms_to_ns(solari_diffuse_spatial),
         dlss_rr_guide_resolve_ns = ?ms_to_ns(solari_dlss_rr_guide_resolve),
         specular_regular_ns = ?ms_to_ns(solari_specular_regular),
         specular_psr_ns = ?ms_to_ns(solari_specular_psr),
@@ -1524,8 +1683,11 @@ fn log_render_performance(
             .map(|(path, value)| format!("{path}={}", format_number(value)))
             .collect::<Vec<_>>()
             .join(", ");
-        println!("[client perf] top render timings {top_timings}");
         info!(target: "fun::perf::top_render", %top_timings, "top render timings");
+    }
+
+    if verbose_profile {
+        log_verbose_render_profile(diagnostics, window, frame_ms, solari_total);
     }
 
     if let Some(status) = render_recovery
@@ -1536,21 +1698,6 @@ fn log_render_performance(
             || status.recovery_attempts > 0
             || status.frames_without_rendering > 0)
     {
-        println!(
-            "[client render recovery] errors={} surface_lost={} surface_validation={} surface_timeout={} attempts={} successes={} failures={} no_render_frames={} last_type={:?} last_reason={:?} last_policy={:?} last_desc={}",
-            status.errors_seen,
-            status.surface_losses,
-            status.surface_validation_errors,
-            status.surface_timeouts,
-            status.recovery_attempts,
-            status.recovery_successes,
-            status.recovery_failures,
-            status.frames_without_rendering,
-            status.last_error_type,
-            status.last_device_lost_reason,
-            status.last_policy,
-            status.last_error_description,
-        );
         warn!(
             target: "fun::render::recovery",
             errors = status.errors_seen,
@@ -1568,6 +1715,241 @@ fn log_render_performance(
             "renderer recovery status"
         );
     }
+}
+
+fn log_verbose_render_profile(
+    diagnostics: &DiagnosticsStore,
+    window: Option<ClientWindowProfile>,
+    frame_ms: Option<f64>,
+    solari_total: Option<f64>,
+) {
+    let mut metrics = collect_render_profile_metrics(diagnostics);
+    metrics.sort_by(|left, right| {
+        right
+            .current
+            .partial_cmp(&left.current)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut gpu_metrics = metrics
+        .iter()
+        .filter(|metric| metric.kind == "elapsed_gpu")
+        .cloned()
+        .collect::<Vec<_>>();
+    gpu_metrics.sort_by(|left, right| {
+        right
+            .current
+            .partial_cmp(&left.current)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut cpu_metrics = metrics
+        .iter()
+        .filter(|metric| metric.kind == "elapsed_cpu")
+        .cloned()
+        .collect::<Vec<_>>();
+    cpu_metrics.sort_by(|left, right| {
+        right
+            .current
+            .partial_cmp(&left.current)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut statistic_metrics = metrics
+        .iter()
+        .filter(|metric| metric.kind != "elapsed_gpu" && metric.kind != "elapsed_cpu")
+        .cloned()
+        .collect::<Vec<_>>();
+    statistic_metrics.sort_by(|left, right| {
+        right
+            .current
+            .partial_cmp(&left.current)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let gpu_total = gpu_metrics.iter().map(|metric| metric.current).sum::<f64>();
+    let cpu_total = cpu_metrics.iter().map(|metric| metric.current).sum::<f64>();
+    let pixel_count = window.map(ClientWindowProfile::physical_pixels);
+    let target_120hz = target_frame_ms(120.0);
+    let frame_budget_pct = frame_ms.map(|frame_ms| (frame_ms / target_120hz) * 100.0);
+    let recorded_gpu_budget_pct = if gpu_total > 0.0 {
+        Some((gpu_total / target_120hz) * 100.0)
+    } else {
+        None
+    };
+    let unattributed_frame_ms = match (frame_ms, Some(gpu_total).filter(|value| *value > 0.0)) {
+        (Some(frame_ms), Some(gpu_total)) => Some((frame_ms - gpu_total).max(0.0)),
+        _ => None,
+    };
+
+    info!(
+        target: "fun::perf::render_profile",
+        gpu_metric_count = gpu_metrics.len(),
+        cpu_metric_count = cpu_metrics.len(),
+        stat_metric_count = statistic_metrics.len(),
+        recorded_gpu_ms = gpu_total,
+        recorded_cpu_ms = cpu_total,
+        solari_sum_ms = ?solari_total,
+        frame_ms = ?frame_ms,
+        target_120hz_ms = target_120hz,
+        frame_budget_pct = ?frame_budget_pct,
+        recorded_gpu_budget_pct = ?recorded_gpu_budget_pct,
+        unattributed_frame_ms = ?unattributed_frame_ms,
+        pixels = ?pixel_count,
+        "verbose render profile summary"
+    );
+
+    let mut group_totals = BTreeMap::<String, f64>::new();
+    for metric in &gpu_metrics {
+        *group_totals.entry(metric.group.clone()).or_default() += metric.current;
+    }
+    let mut group_totals = group_totals.into_iter().collect::<Vec<_>>();
+    group_totals.sort_by(|(_, left), (_, right)| {
+        right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (rank, (group, value)) in group_totals.iter().enumerate() {
+        let pct = percentage(*value, gpu_total);
+        info!(
+            target: "fun::perf::render_profile::gpu_group",
+            rank = rank + 1,
+            group = %group,
+            current_ms = *value,
+            current_ns = ms_to_ns(Some(*value)),
+            pct_recorded_gpu = ?pct,
+            budget_120hz_pct = (*value / target_120hz) * 100.0,
+            ns_per_pixel = ?ns_per_pixel(*value, pixel_count),
+            "verbose render GPU group"
+        );
+    }
+
+    for (rank, metric) in gpu_metrics.iter().enumerate() {
+        let pct = percentage(metric.current, gpu_total);
+        info!(
+            target: "fun::perf::render_profile::gpu_metric",
+            rank = rank + 1,
+            group = %metric.group,
+            path = %metric.path,
+            current_ms = metric.current,
+            average_ms = ?metric.average,
+            current_ns = ms_to_ns(Some(metric.current)),
+            pct_recorded_gpu = ?pct,
+            budget_120hz_pct = (metric.current / target_120hz) * 100.0,
+            ns_per_pixel = ?ns_per_pixel(metric.current, pixel_count),
+            recommendation = render_profile_recommendation(&metric.path),
+            "verbose render GPU metric"
+        );
+    }
+
+    for (rank, metric) in cpu_metrics.iter().enumerate() {
+        info!(
+            target: "fun::perf::render_profile::cpu_metric",
+            rank = rank + 1,
+            group = %metric.group,
+            path = %metric.path,
+            current_ms = metric.current,
+            average_ms = ?metric.average,
+            current_ns = ms_to_ns(Some(metric.current)),
+            "verbose render CPU metric"
+        );
+    }
+
+    for (rank, metric) in statistic_metrics.iter().take(80).enumerate() {
+        info!(
+            target: "fun::perf::render_profile::stat_metric",
+            rank = rank + 1,
+            group = %metric.group,
+            kind = metric.kind,
+            path = %metric.path,
+            current = metric.current,
+            average = ?metric.average,
+            per_pixel = ?invocations_per_pixel(metric.current, pixel_count),
+            "verbose render statistic metric"
+        );
+    }
+}
+
+fn collect_render_profile_metrics(diagnostics: &DiagnosticsStore) -> Vec<RenderProfileMetric> {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            let path = diagnostic.path().as_str();
+            if !path.starts_with("render/") {
+                return None;
+            }
+
+            let current = diagnostic.value().or_else(|| diagnostic.average())?;
+            let average = diagnostic.average();
+            let kind = render_metric_kind(path);
+            Some(RenderProfileMetric {
+                path: path.to_owned(),
+                group: render_metric_group(path),
+                kind,
+                current,
+                average,
+            })
+        })
+        .collect()
+}
+
+fn render_metric_group(path: &str) -> String {
+    path.strip_prefix("render/")
+        .unwrap_or(path)
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+fn render_metric_kind(path: &str) -> &'static str {
+    match path.rsplit('/').next().unwrap_or_default() {
+        "elapsed_gpu" => "elapsed_gpu",
+        "elapsed_cpu" => "elapsed_cpu",
+        "compute_shader_invocations" => "compute_shader_invocations",
+        "fragment_shader_invocations" => "fragment_shader_invocations",
+        "vertex_shader_invocations" => "vertex_shader_invocations",
+        "clipper_invocations" => "clipper_invocations",
+        "clipper_primitives_out" => "clipper_primitives_out",
+        _ => "value",
+    }
+}
+
+fn render_profile_recommendation(path: &str) -> &'static str {
+    if path.contains("solari_lighting/direct_lighting") {
+        "largest full-resolution Solari bucket: reduce direct-light ReSTIR work, specialize directional-light visibility, or make direct shadows adaptive before lowering resolution"
+    } else if path.contains("meshlet_visibility_buffer_raster") {
+        "visibility-buffer raster is resolution-bound: inspect meshlet pass count, material filtering, overdraw, and per-pixel visibility work"
+    } else if path.contains("diffuse_indirect_lighting") {
+        "GI bucket: tune half-resolution/checkerboard GI, reservoir reuse radius, and near-field fallback so fewer pixels trace while preserving corners"
+    } else if path.contains("specular_indirect_lighting") {
+        "specular bucket: use roughness buckets, lower glossy bounce count, and skip expensive filtering for mirrors"
+    } else if path.contains("denoise") {
+        "denoiser bucket: use confidence alpha to skip taps, keep fused output, and reduce spatial radius where history is stable"
+    } else if path.contains("world_cache") {
+        "world cache bucket: raise frame slices or lower soft-cap only if active-cell pressure spikes; keep near-camera priority stable"
+    } else if path.contains("tonemapping") || path.contains("upscaling") {
+        "post-process bucket: keep this small; optimize only after Solari and meshlet costs are under budget"
+    } else if path.contains("prepass") || path.contains("deferred") {
+        "G-buffer/prepass bucket: verify meshlet deferred prepass does not duplicate work or write unnecessary attachments"
+    } else {
+        "inspect shader invocations and resolution scaling for this bucket before changing quality"
+    }
+}
+
+fn target_frame_ms(hz: f64) -> f64 {
+    1000.0 / hz
+}
+
+fn percentage(value: f64, total: f64) -> Option<f64> {
+    (total > 0.0).then_some((value / total) * 100.0)
+}
+
+fn ns_per_pixel(value_ms: f64, pixel_count: Option<u64>) -> Option<f64> {
+    let pixels = pixel_count?;
+    (pixels > 0).then_some((value_ms * 1_000_000.0) / pixels as f64)
+}
+
+fn invocations_per_pixel(value: f64, pixel_count: Option<u64>) -> Option<f64> {
+    let pixels = pixel_count?;
+    (pixels > 0).then_some(value / pixels as f64)
 }
 
 fn diagnostic_average(diagnostics: &DiagnosticsStore, path: &'static str) -> Option<f64> {

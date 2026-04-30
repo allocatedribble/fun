@@ -19,6 +19,7 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions},
 };
 use game_shared::PLAYER_SPAWN;
+use tracing::info;
 
 pub struct FirstPersonControllerPlugin;
 pub const PLAYER_RADIUS: f32 = 0.45;
@@ -228,7 +229,7 @@ fn apply_kinematic_movement(
     if !world_status.ready {
         let spawn = Vec3::from_array(PLAYER_SPAWN);
         if transform.translation.distance_squared(spawn) > 0.0001 {
-            println!(
+            info!(
                 "[client movement] holding player at spawn until streamed world is ready; previous_pos=({:.2},{:.2},{:.2})",
                 transform.translation.x, transform.translation.y, transform.translation.z
             );
