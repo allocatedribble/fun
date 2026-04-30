@@ -1,0 +1,10 @@
+[package]
+name = "arena_bake"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+game_shared = { path = "../../game_shared" }

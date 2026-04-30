@@ -242,6 +242,7 @@ fn sample_world_entity(index: u64) -> WorldEntitySpec {
             translation: QuantizedVec3::from_f32(position.to_array(), Quantization::MILLIMETERS),
             rotation: QuantizedQuat::from_f32(Quat::IDENTITY.to_array()),
         },
+        catalog: None,
         render: Some(WorldPrimitive::Cuboid {
             size: QuantizedVec3::from_f32([1.0, 1.0, 1.0], Quantization::MILLIMETERS),
         }),

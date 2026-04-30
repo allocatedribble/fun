@@ -18,9 +18,14 @@ use bevy_quinnet::server::{
     ServerEndpointConfiguration, ServerEndpointConfigurationDefaultables,
     certificate::CertificateRetrievalMode,
 };
-use game_shared::{DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_TITLE};
+use game_shared::{
+    ASSET_COVER_CUBE, ASSET_FLOOR, ASSET_FLOOR_COLLIDER, ASSET_RAMP, ASSET_WALL,
+    COLLIDER_COVER_CUBE, COLLIDER_FLOOR, COLLIDER_RAMP, COLLIDER_WALL, DEFAULT_TICK_RATE_HZ,
+    DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_TITLE, MATERIAL_COVER, MATERIAL_FLOOR,
+    MATERIAL_RAMP, MATERIAL_WALL,
+};
 use thunder::prelude::*;
-use tracing::info;
+use tracing::{debug, error, info};
 
 const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
 
@@ -39,6 +44,7 @@ fn main() {
             ThunderPlugin::default(),
         ))
         .init_resource::<ServerWorldStream>()
+        .insert_resource(ServerLogConfig::from_env())
         .init_resource::<ConnectedClients>()
         .init_resource::<PendingWorldStreams>()
         .init_resource::<ServerWorldDiagnostics>()
@@ -84,9 +90,8 @@ fn spawn_demo_world(mut commands: Commands) {
         (
             #Floor
             template_value(Networked::world())
-            template_value(StreamedWorldEntity::plane(
-                Vec3::new(60.0, 0.0, 60.0),
-                PackedColorRgba8::srgb(41, 48, 41),
+            template_value(StreamedWorldEntity::catalog(
+                catalog_ref(ASSET_FLOOR.0, MATERIAL_FLOOR.0, 0),
             ))
             Transform::default()
         ),
@@ -94,7 +99,9 @@ fn spawn_demo_world(mut commands: Commands) {
             #FloorCollider
             Name::new("FloorCollider")
             template_value(Networked::world())
-            template_value(StreamedWorldEntity::collider(Vec3::new(60.0, 0.5, 60.0)))
+            template_value(StreamedWorldEntity::catalog(
+                catalog_ref(ASSET_FLOOR_COLLIDER.0, MATERIAL_FLOOR.0, COLLIDER_FLOOR.0),
+            ))
             template_value(RigidBody::Static)
             Collider::cuboid(60.0, 0.5, 60.0)
             Transform::from_xyz(0.0, -0.25, 0.0)
@@ -102,9 +109,8 @@ fn spawn_demo_world(mut commands: Commands) {
         (
             #Wall
             template_value(Networked::world())
-            template_value(StreamedWorldEntity::cuboid(
-                Vec3::new(5.0, 3.0, 1.0),
-                PackedColorRgba8::srgb(82, 89, 107),
+            template_value(StreamedWorldEntity::catalog(
+                catalog_ref(ASSET_WALL.0, MATERIAL_WALL.0, COLLIDER_WALL.0),
             ))
             template_value(RigidBody::Static)
             Collider::cuboid(5.0, 3.0, 1.0)
@@ -113,9 +119,8 @@ fn spawn_demo_world(mut commands: Commands) {
         (
             #Ramp
             template_value(Networked::world())
-            template_value(StreamedWorldEntity::cuboid(
-                Vec3::new(3.0, 0.5, 6.0),
-                PackedColorRgba8::srgb(97, 71, 56),
+            template_value(StreamedWorldEntity::catalog(
+                catalog_ref(ASSET_RAMP.0, MATERIAL_RAMP.0, COLLIDER_RAMP.0),
             ))
             template_value(RigidBody::Static)
             Collider::cuboid(3.0, 0.5, 6.0)
@@ -131,9 +136,8 @@ fn spawn_demo_world(mut commands: Commands) {
 fn demo_cube(translation: Vec3) -> impl BsnScene {
     bsn! {
         template_value(Networked::world())
-        template_value(StreamedWorldEntity::cuboid(
-            Vec3::new(1.0, 1.0, 1.0),
-            PackedColorRgba8::srgb(204, 102, 77),
+        template_value(StreamedWorldEntity::catalog(
+            catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
         ))
         template_value(RigidBody::Static)
         Collider::cuboid(1.0, 1.0, 1.0)
@@ -143,34 +147,28 @@ fn demo_cube(translation: Vec3) -> impl BsnScene {
 
 #[derive(Debug, Default, Clone, Component)]
 struct StreamedWorldEntity {
+    catalog: Option<WorldCatalogRef>,
     render: Option<WorldPrimitive>,
     collider: Option<WorldCollider>,
     color: Option<PackedColorRgba8>,
 }
 
 impl StreamedWorldEntity {
-    fn plane(size: Vec3, color: PackedColorRgba8) -> Self {
+    fn catalog(catalog: WorldCatalogRef) -> Self {
         Self {
-            render: Some(WorldPrimitive::Plane { size: qvec(size) }),
-            collider: None,
-            color: Some(color),
-        }
-    }
-
-    fn cuboid(size: Vec3, color: PackedColorRgba8) -> Self {
-        Self {
-            render: Some(WorldPrimitive::Cuboid { size: qvec(size) }),
-            collider: Some(WorldCollider::Cuboid { size: qvec(size) }),
-            color: Some(color),
-        }
-    }
-
-    fn collider(size: Vec3) -> Self {
-        Self {
+            catalog: Some(catalog),
             render: None,
-            collider: Some(WorldCollider::Cuboid { size: qvec(size) }),
+            collider: None,
             color: None,
         }
+    }
+}
+
+fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> WorldCatalogRef {
+    WorldCatalogRef {
+        asset_id,
+        material_id,
+        collider_id,
     }
 }
 
@@ -191,6 +189,31 @@ struct PendingWorldStreams {
     ids: HashSet<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Resource)]
+struct ServerLogConfig {
+    stream_verbose: bool,
+    net_verbose: bool,
+    benchmark_minimal: bool,
+}
+
+impl ServerLogConfig {
+    fn from_env() -> Self {
+        Self {
+            stream_verbose: std::env::var_os("FUN_LOG_STREAM_VERBOSE").is_some(),
+            net_verbose: std::env::var_os("FUN_LOG_NET_VERBOSE").is_some(),
+            benchmark_minimal: std::env::var_os("FUN_BENCHMARK_LOG_MINIMAL").is_some(),
+        }
+    }
+
+    fn stream_verbose(self) -> bool {
+        self.stream_verbose && !self.benchmark_minimal
+    }
+
+    fn net_verbose(self) -> bool {
+        self.net_verbose && !self.benchmark_minimal
+    }
+}
+
 #[derive(Debug, Default, Resource)]
 struct ServerWorldDiagnostics {
     logged_streamable_inventory: bool,
@@ -198,6 +221,7 @@ struct ServerWorldDiagnostics {
 
 fn log_streamable_inventory(
     mut diagnostics: ResMut<ServerWorldDiagnostics>,
+    log_config: Res<ServerLogConfig>,
     query: Query<(
         Entity,
         Option<&Name>,
@@ -206,32 +230,29 @@ fn log_streamable_inventory(
         &StreamedWorldEntity,
     )>,
 ) {
-    if diagnostics.logged_streamable_inventory || query.is_empty() {
+    if diagnostics.logged_streamable_inventory || query.is_empty() || !log_config.stream_verbose() {
         return;
     }
 
     diagnostics.logged_streamable_inventory = true;
-    info!(
-        "[server diag] streamable inventory entities={}",
-        query.iter().count()
-    );
+    info!(target: "fun::server::stream", entities = query.iter().count(), "streamable inventory");
 
     for (entity, name, identity, transform, streamed) in &query {
         info!(
-            "[server diag] streamable {:?}/{} identity={} transform={} render={} collider={}",
-            entity,
-            name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
-            identity
-                .map(|identity| identity.entity.0.to_string())
-                .unwrap_or_else(|| "missing".to_owned()),
-            transform
+            target: "fun::server::stream::entity",
+            entity = ?entity,
+            name = name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
+            identity = identity.map(|identity| identity.entity.0),
+            transform = transform
                 .map(|transform| format!(
                     "({:.2},{:.2},{:.2})",
                     transform.translation.x, transform.translation.y, transform.translation.z
                 ))
                 .unwrap_or_else(|| "missing".to_owned()),
-            render_summary(streamed.render),
-            collider_summary(streamed.collider),
+            catalog = catalog_summary(streamed.catalog),
+            render = render_summary(streamed.render),
+            collider = collider_summary(streamed.collider),
+            "streamable entity"
         );
     }
 }
@@ -240,6 +261,7 @@ fn rebuild_world_stream(
     mut manifest: ResMut<ServerWorldStream>,
     mut pending: ResMut<PendingWorldStreams>,
     connected: Res<ConnectedClients>,
+    log_config: Res<ServerLogConfig>,
     query: Query<(
         &NetworkIdentity,
         &NetworkAuthority,
@@ -267,6 +289,7 @@ fn rebuild_world_stream(
             class: identity.class,
             authority: authority.mode,
             transform: qtransform(transform),
+            catalog: streamed.catalog,
             render: streamed.render,
             collider: streamed.collider,
             color: streamed.color,
@@ -285,39 +308,23 @@ fn rebuild_world_stream(
     pending.ids.clear();
     pending.ids.extend(connected.ids.iter().copied());
 
-    info!(
-        "Built world stream revision {} with {} chunks",
-        manifest.revision.0,
-        manifest.chunks.len()
-    );
-    info!(
-        "[server stream] built world stream revision {} specs={} chunks={} pending_clients={}",
-        manifest.revision.0,
-        manifest.signature.len(),
-        manifest.chunks.len(),
-        pending.ids.len()
-    );
-    for chunk in &manifest.chunks {
+    if log_config.stream_verbose() {
         info!(
-            "[server stream] chunk {}/{} level={} entities={}",
-            chunk.chunk_index + 1,
-            chunk.chunk_count,
-            chunk.level_id.0,
-            chunk.entities.len()
+            target: "fun::server::stream",
+            revision = manifest.revision.0,
+            specs = manifest.signature.len(),
+            chunks = manifest.chunks.len(),
+            pending_clients = pending.ids.len(),
+            "built world stream"
         );
-        for spec in &chunk.entities {
-            let translation = spec.transform.translation.to_f32(Quantization::MILLIMETERS);
+        for chunk in &manifest.chunks {
             info!(
-                "[server stream] entity net={} name={} class={:?} authority={:?} pos=({:.2},{:.2},{:.2}) render={} collider={}",
-                spec.entity.0,
-                spec.name,
-                spec.class,
-                spec.authority,
-                translation[0],
-                translation[1],
-                translation[2],
-                render_summary(spec.render),
-                collider_summary(spec.collider),
+                target: "fun::server::stream",
+                chunk_number = chunk.chunk_index + 1,
+                chunk_count = chunk.chunk_count,
+                level = %chunk.level_id.0,
+                entities = chunk.entities.len(),
+                "world stream chunk"
             );
         }
     }
@@ -327,57 +334,65 @@ fn queue_world_stream_for_new_clients(
     mut events: MessageReader<ConnectionEvent>,
     mut connected: ResMut<ConnectedClients>,
     mut pending: ResMut<PendingWorldStreams>,
+    log_config: Res<ServerLogConfig>,
 ) {
     for event in events.read() {
         connected.ids.insert(event.id);
         pending.ids.insert(event.id);
-        info!(
-            "[server net] client connected id={} pending_world_streams={}",
-            event.id,
-            pending.ids.len()
-        );
-        info!("Queued world stream for client {}", event.id);
+        if log_config.net_verbose() {
+            info!(
+                target: "fun::server::net",
+                client_id = event.id,
+                pending_world_streams = pending.ids.len(),
+                "client connected"
+            );
+        }
     }
 }
 
-fn receive_client_control(mut server: ResMut<QuinnetServer>) {
+fn receive_client_control(mut server: ResMut<QuinnetServer>, log_config: Res<ServerLogConfig>) {
     let Some(endpoint) = server.get_endpoint_mut() else {
         return;
     };
 
     for client_id in endpoint.clients() {
         while let Some(payload) = endpoint.try_receive_payload(client_id, ClientChannel::Control) {
-            info!(
-                "[server net] received control payload from client {} ({} bytes)",
-                client_id,
-                payload.as_ref().len()
-            );
+            if log_config.net_verbose() {
+                info!(
+                    target: "fun::server::net",
+                    client_id,
+                    bytes = payload.as_ref().len(),
+                    "received control payload"
+                );
+            }
             match decode_client_packet(payload.as_ref()) {
                 Ok(ClientPacket::Hello { hello: _hello }) => {
-                    info!("[server net] client {client_id} completed Thunder hello");
-                    info!("Client {client_id} completed Thunder hello");
+                    if log_config.net_verbose() {
+                        info!(
+                            target: "fun::server::net",
+                            client_id,
+                            "client completed Thunder hello"
+                        );
+                    }
                 }
                 Ok(ClientPacket::WorldReady { ack }) => {
-                    info!(
-                        "[server net] client {client_id} loaded world {} revision {}",
-                        ack.level_id.0, ack.revision.0
-                    );
-                    info!(
-                        "Client {client_id} loaded world {} revision {}",
-                        ack.level_id.0, ack.revision.0
-                    );
+                    if log_config.net_verbose() {
+                        info!(
+                            target: "fun::server::net",
+                            client_id,
+                            level = %ack.level_id.0,
+                            revision = ack.revision.0,
+                            "client loaded world"
+                        );
+                    }
                 }
                 Ok(packet) => {
-                    info!(
-                        "[server net] ignoring client control packet from {client_id}: {packet:?}"
-                    );
-                    debug!("Ignoring client control packet from {client_id}: {packet:?}");
+                    if log_config.net_verbose() {
+                        debug!(target: "fun::server::net", client_id, packet = ?packet, "ignoring client control packet");
+                    }
                 }
                 Err(error) => {
-                    info!(
-                        "[server net] failed to decode client control packet from {client_id}: {error}"
-                    );
-                    error!("Failed to decode client control packet: {error}");
+                    error!(target: "fun::server::net", client_id, %error, "failed to decode client control packet");
                 }
             }
         }
@@ -388,6 +403,7 @@ fn send_pending_world_streams(
     mut server: ResMut<QuinnetServer>,
     mut pending: ResMut<PendingWorldStreams>,
     manifest: Res<ServerWorldStream>,
+    log_config: Res<ServerLogConfig>,
 ) {
     if manifest.chunks.is_empty() || pending.ids.is_empty() {
         return;
@@ -399,12 +415,15 @@ fn send_pending_world_streams(
 
     let pending_clients = pending.ids.iter().copied().collect::<Vec<_>>();
     for client_id in pending_clients {
-        info!(
-            "[server stream] sending revision {} to client {} as {} chunks",
-            manifest.revision.0,
-            client_id,
-            manifest.chunks.len()
-        );
+        if log_config.stream_verbose() {
+            info!(
+                target: "fun::server::stream",
+                revision = manifest.revision.0,
+                client_id,
+                chunks = manifest.chunks.len(),
+                "sending world stream"
+            );
+        }
         let welcome = ServerPacket::Welcome {
             welcome: ServerWelcome {
                 client_id: NetClientId(client_id),
@@ -418,14 +437,17 @@ fn send_pending_world_streams(
             Ok(bytes) => {
                 let byte_len = bytes.len();
                 endpoint.try_send_payload_on(client_id, ServerChannel::Control, bytes);
-                info!(
-                    "[server stream] sent welcome to client {} ({} bytes)",
-                    client_id, byte_len
-                );
+                if log_config.stream_verbose() {
+                    info!(
+                        target: "fun::server::stream",
+                        client_id,
+                        bytes = byte_len,
+                        "sent welcome"
+                    );
+                }
             }
             Err(error) => {
-                info!("[server stream] failed to encode welcome for client {client_id}: {error}");
-                error!("Failed to encode welcome for client {client_id}: {error}");
+                error!(target: "fun::server::stream", client_id, %error, "failed to encode welcome");
                 continue;
             }
         }
@@ -438,35 +460,46 @@ fn send_pending_world_streams(
                 Ok(bytes) => {
                     let byte_len = bytes.len();
                     endpoint.try_send_payload_on(client_id, ServerChannel::Stream, bytes);
-                    info!(
-                        "[server stream] sent chunk {}/{} to client {} (entities={} bytes={})",
-                        chunk.chunk_index + 1,
-                        chunk.chunk_count,
-                        client_id,
-                        chunk.entities.len(),
-                        byte_len
-                    );
+                    if log_config.stream_verbose() {
+                        info!(
+                            target: "fun::server::stream",
+                            chunk_number = chunk.chunk_index + 1,
+                            chunk_count = chunk.chunk_count,
+                            client_id,
+                            entities = chunk.entities.len(),
+                            bytes = byte_len,
+                            "sent stream chunk"
+                        );
+                    }
                 }
                 Err(error) => {
-                    info!(
-                        "[server stream] failed to encode world stream for client {client_id}: {error}"
-                    );
-                    error!("Failed to encode world stream for client {client_id}: {error}");
+                    error!(target: "fun::server::stream", client_id, %error, "failed to encode world stream");
                     continue;
                 }
             }
         }
 
         pending.ids.remove(&client_id);
-        info!(
-            "Sent world stream revision {} to client {}",
-            manifest.revision.0, client_id
-        );
-        info!(
-            "[server stream] completed world stream revision {} to client {}",
-            manifest.revision.0, client_id
-        );
+        if log_config.stream_verbose() {
+            info!(
+                target: "fun::server::stream",
+                revision = manifest.revision.0,
+                client_id,
+                "completed world stream"
+            );
+        }
     }
+}
+
+fn catalog_summary(catalog: Option<WorldCatalogRef>) -> String {
+    catalog
+        .map(|catalog| {
+            format!(
+                "asset={} material={} collider={}",
+                catalog.asset_id, catalog.material_id, catalog.collider_id
+            )
+        })
+        .unwrap_or_else(|| "none".to_owned())
 }
 
 fn render_summary(render: Option<WorldPrimitive>) -> String {

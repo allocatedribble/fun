@@ -83,6 +83,36 @@ both files below:
 - `target\benchmarks\client\<timestamp>\summary.json`
 - `target\benchmarks\client\<timestamp>\summary.md`
 
+Required 144 FPS lanes are run through the same script, not a separate
+measurement universe:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_required_lanes.ps1 -RenderBackend vulkan -PresentMode immediate
+```
+
+Each lane writes its own `summary.json`:
+
+- `full_runtime`: Solari plus meshlets plus normal gameplay.
+- `solari_floor`: Solari disabled only to expose the non-Solari floor.
+- `meshlet_floor`: meshlets disabled only to expose meshlet cost.
+- `cpu_floor`: tiny-window workload to expose CPU, scheduling, physics, and networking.
+- `streaming_spike`: startup/chunk-apply lane with no warmup so stream p95 is visible.
+- `presentation_floor`: optional overlay/presentation cost isolated from the normal path.
+
+Performance claims must include `frame_ns.mean/p95`,
+`meshlet_visibility_gpu_ns.mean/p95`, `meshlet_extract_cpu_ns`,
+`meshlet_prepare_cpu_ns`, `world_stream_apply_cpu_ns`,
+`physics_fixed_update_cpu_ns`, `post_process_gpu_ns`, `present_wait_ns`,
+`meshlet_path_instance_count`, `raster_path_instance_count`,
+`ray_proxy_only_count`, `standard_raster_gpu_ns`, transient render-resource
+request/create/reuse/alias counts, and render scheduler pressure when
+`-TraceDiagnostics` is enabled. Client CPU schedule work must also report the
+`schedule_*` metrics for networking receive, world-stream apply, movement input,
+look, physics movement, diagnostics logging, render config/window work, Solari
+runtime params, meshlet extraction, and render interpolation.
+The benchmark report includes a 144 FPS budget ledger and marks p95 pass/fail
+for the buckets that are currently measurable.
+
 Use the JSON file as the baseline for a second run:
 
 ```powershell
@@ -173,6 +203,10 @@ Client benchmark:
 - Main pass deltas:
   - solari_gpu_ns mean: ... -> ... (...%)
   - meshlet_visibility_gpu_ns mean: ... -> ... (...%)
+  - transient_texture_creates/reuses/aliases mean: ... -> ... (...%)
+  - render_scheduler_pressure mean: ... -> ... (...%)
+  - schedule_physics_movement_ns mean: ... -> ... (...%)
+  - schedule_world_stream_apply_ns mean: ... -> ... (...%)
   - relevant_pass_ns mean: ... -> ... (...%)
 - Visual notes:
 - Limitations:

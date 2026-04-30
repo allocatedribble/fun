@@ -1,5 +1,11 @@
 pub const GAME_TITLE: &str = "Fun";
+pub mod render_catalog;
+
+pub use render_catalog::*;
+
 pub const DEFAULT_TICK_RATE_HZ: f64 = 60.0;
+pub const DEFAULT_RENDER_TARGET_RATE_HZ: f64 = 144.0;
+pub const DEFAULT_CORRECTION_HALF_LIFE_SECONDS: f32 = 0.075;
 pub const BACKEND_SERVER_ADDR: &str = "127.0.0.1:8080";
 pub const GAME_SERVER_BIND_ADDR: &str = "0.0.0.0:6000";
 pub const GAME_SERVER_ADDR: &str = "127.0.0.1:6000";

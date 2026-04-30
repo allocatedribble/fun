@@ -4,7 +4,10 @@ param(
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
+    [switch]$DisableFpsOverlay,
     [switch]$TraceDiagnostics,
+    [ValidateSet("full_runtime", "solari_floor", "meshlet_floor", "cpu_floor", "streaming_spike", "presentation_floor")]
+    [string]$BenchmarkLane = "full_runtime",
     [string]$SolariArch = "budgeted",
     [int]$SolariTargetFps = 144,
     [int]$SolariFrameBudgetNs = 6944444,
@@ -12,6 +15,10 @@ param(
     [string]$SolariVisualTarget = "competitive",
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
+    [string]$RenderGeometryPolicy = "hybrid",
+    [int]$MeshletMinTriangles = 512,
+    [int]$WindowWidth = 0,
+    [int]$WindowHeight = 0,
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [int]$WarmupSeconds = 10,
@@ -150,6 +157,52 @@ function Parse-ClientPerfLog {
         $top = [regex]::Match($line, "\[client perf\] top render timings (?<payload>.*)$")
         if ($top.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $top.Groups["payload"].Value -Prefix "top_render_" -Milliseconds
+            continue
+        }
+
+        $nonSolariGpu = [regex]::Match($line, "\[client perf\] non_solari gpu_ms: (?<payload>.*)$")
+        if ($nonSolariGpu.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $nonSolariGpu.Groups["payload"].Value -Prefix "" -Milliseconds
+            continue
+        }
+
+        $nonSolariCpu = [regex]::Match($line, "\[client perf\] non_solari cpu_ns: (?<payload>.*)$")
+        if ($nonSolariCpu.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $nonSolariCpu.Groups["payload"].Value -Prefix ""
+            continue
+        }
+
+        $renderPaths = [regex]::Match($line, "\[client perf\] render paths: (?<payload>.*)$")
+        if ($renderPaths.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $renderPaths.Groups["payload"].Value -Prefix ""
+            continue
+        }
+
+        $radianceCache = [regex]::Match($line, "\[client perf\] radiance cache: (?<payload>.*)$")
+        if ($radianceCache.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $radianceCache.Groups["payload"].Value -Prefix "radiance_cache_"
+            continue
+        }
+
+        if ($line.Contains("transient render resource arena frame")) {
+            Add-KeyValueMetrics -Sample $current -Payload $line -Prefix "transient_"
+            continue
+        }
+
+        if ($line.Contains("render graph budget pressure")) {
+            Add-KeyValueMetrics -Sample $current -Payload $line -Prefix "render_scheduler_"
+            continue
+        }
+
+        $scheduleCpu = [regex]::Match($line, "\[client perf\] schedule cpu_ns: (?<payload>.*)$")
+        if ($scheduleCpu.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $scheduleCpu.Groups["payload"].Value -Prefix "schedule_"
+            continue
+        }
+
+        $scheduleDetail = [regex]::Match($line, "\[client perf\] schedule detail: (?<payload>.*)$")
+        if ($scheduleDetail.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $scheduleDetail.Groups["payload"].Value -Prefix "schedule_"
             continue
         }
     }
@@ -365,6 +418,47 @@ function Write-MarkdownReport {
         "frame_ms",
         "solari_gpu_ns",
         "meshlet_visibility_gpu_ns",
+        "meshlet_path_instance_count",
+        "raster_path_instance_count",
+        "ray_proxy_only_count",
+        "meshlet_first_pass_gpu_ns",
+        "meshlet_depth_pyramid_first_gpu_ns",
+        "meshlet_second_pass_gpu_ns",
+        "meshlet_depth_resolve_gpu_ns",
+        "meshlet_material_depth_gpu_ns",
+        "meshlet_depth_pyramid_second_gpu_ns",
+        "meshlet_extract_cpu_ns",
+        "meshlet_prepare_cpu_ns",
+        "meshlet_bind_group_prepare_cpu_ns",
+        "transient_texture_requests",
+        "transient_texture_creates",
+        "transient_texture_reuses",
+        "transient_texture_aliases",
+        "transient_buffer_requests",
+        "transient_buffer_creates",
+        "transient_buffer_reuses",
+        "transient_buffer_aliases",
+        "transient_cached_texture_slots",
+        "transient_cached_buffer_slots",
+        "render_scheduler_pressure",
+        "schedule_networking_receive_ns",
+        "schedule_world_stream_apply_ns",
+        "schedule_movement_input_ns",
+        "schedule_look_ns",
+        "schedule_physics_movement_ns",
+        "schedule_diagnostics_logging_ns",
+        "schedule_render_config_window_ns",
+        "schedule_solari_runtime_params_update_ns",
+        "schedule_meshlet_extraction_ns",
+        "schedule_render_interpolation_ns",
+        "standard_raster_gpu_ns",
+        "physics_fixed_update_cpu_ns",
+        "network_receive_cpu_ns",
+        "world_stream_apply_cpu_ns",
+        "catalog_lookup_cpu_ns",
+        "post_process_gpu_ns",
+        "ui_overlay_cpu_ns",
+        "present_wait_ns",
         "dlss_rr_gpu_ns",
         "solari_pass_direct_ns",
         "solari_pass_diffuse_ns",
@@ -395,6 +489,29 @@ function Write-MarkdownReport {
                 (Format-StatValue -Stats $stats -Metric $metric -Field "count")
             $lines.Add($row) | Out-Null
         }
+    }
+
+    $budgetLedger = [ordered]@{
+        "frame_ns" = 6944444
+        "meshlet_visibility_gpu_ns" = 1200000
+        "standard_raster_gpu_ns" = 600000
+        "physics_fixed_update_cpu_ns" = 350000
+        "network_receive_cpu_ns" = 150000
+        "world_stream_apply_cpu_ns" = 150000
+        "post_process_gpu_ns" = 250000
+        "ui_overlay_cpu_ns" = 50000
+    }
+    $lines.Add("") | Out-Null
+    $lines.Add("## 144 FPS Budget Ledger") | Out-Null
+    $lines.Add("") | Out-Null
+    $lines.Add("| bucket | target p95 ns | actual p95 ns | pass |") | Out-Null
+    $lines.Add("|---|---:|---:|---|") | Out-Null
+    foreach ($metric in $budgetLedger.Keys) {
+        $target = [double]$budgetLedger[$metric]
+        $actual = if ($stats.Contains($metric)) { [double]$stats[$metric].p95 } else { $null }
+        $pass = if ($null -eq $actual) { "n/a" } elseif ($actual -le $target) { "true" } else { "false" }
+        $actualText = if ($null -eq $actual) { "n/a" } else { [Math]::Round($actual, 0) }
+        $lines.Add("| $metric | $target | $actualText | $pass |") | Out-Null
     }
 
     if ($null -ne $comparison) {
@@ -476,6 +593,28 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 $ranStack = $false
 $lineOffset = 0
 
+switch ($BenchmarkLane) {
+    "full_runtime" {}
+    "solari_floor" {
+        $DisableSolari = $true
+    }
+    "meshlet_floor" {
+        $DisableMeshlets = $true
+    }
+    "cpu_floor" {
+        if ($WindowWidth -le 0) { $WindowWidth = 320 }
+        if ($WindowHeight -le 0) { $WindowHeight = 180 }
+        $DisableFpsOverlay = $true
+    }
+    "streaming_spike" {
+        $WarmupSeconds = 0
+        if ($SampleSeconds -lt 8) { $SampleSeconds = 8 }
+    }
+    "presentation_floor" {
+        $DisableFpsOverlay = $true
+    }
+}
+
 try {
     if ([string]::IsNullOrWhiteSpace($InputLog)) {
         $runStackPath = Join-Path $scriptRoot "run_stack.ps1"
@@ -501,6 +640,8 @@ try {
         if ($DisableDlssRr) { $runStackArgs += "-DisableDlssRr" }
         if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
         if ($DisableMeshlets) { $runStackArgs += "-DisableMeshlets" }
+        if ($DisableFpsOverlay) { $runStackArgs += "-DisableFpsOverlay" }
+        $runStackArgs += "-BenchmarkLogMinimal"
         if ($TraceDiagnostics) { $runStackArgs += "-TraceDiagnostics" }
         if (-not [string]::IsNullOrWhiteSpace($SolariDenoiseMode)) {
             $runStackArgs += @("-SolariDenoiseMode", $SolariDenoiseMode)
@@ -522,6 +663,15 @@ try {
         }
         if (-not [string]::IsNullOrWhiteSpace($SolariVisualTarget)) {
             $runStackArgs += @("-SolariVisualTarget", $SolariVisualTarget)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($RenderGeometryPolicy)) {
+            $runStackArgs += @("-RenderGeometryPolicy", $RenderGeometryPolicy)
+        }
+        if ($MeshletMinTriangles -gt 0) {
+            $runStackArgs += @("-MeshletMinTriangles", "$MeshletMinTriangles")
+        }
+        if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) {
+            $runStackArgs += @("-WindowWidth", "$WindowWidth", "-WindowHeight", "$WindowHeight")
         }
 
         Write-Host "Starting benchmark stack..."
@@ -576,6 +726,7 @@ try {
         }
         hardware = Get-HardwareInfo
         config = [ordered]@{
+            benchmark_lane = $BenchmarkLane
             profile = if ($Release) { "release" } else { "debug" }
             static_bevy = [bool]$StaticBevy
             render_backend = $RenderBackend
@@ -583,6 +734,11 @@ try {
             disable_dlss_rr = [bool]$DisableDlssRr
             disable_solari = [bool]$DisableSolari
             disable_meshlets = [bool]$DisableMeshlets
+            disable_fps_overlay = [bool]$DisableFpsOverlay
+            render_geometry_policy = $RenderGeometryPolicy
+            meshlet_min_triangles = $MeshletMinTriangles
+            window_width = $WindowWidth
+            window_height = $WindowHeight
             solari_arch = if ([string]::IsNullOrWhiteSpace($SolariArch)) { "legacy" } else { $SolariArch }
             solari_target_fps = $SolariTargetFps
             solari_frame_budget_ns = $SolariFrameBudgetNs

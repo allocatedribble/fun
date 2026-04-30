@@ -1,6 +1,6 @@
 use std::f32::consts::FRAC_PI_2;
 
-use crate::ClientWorldStatus;
+use crate::{ClientScheduleProfiler, ClientScheduleSystem, ClientWorldStatus};
 use avian3d::{
     math::{AdjustPrecision as _, AsF32 as _},
     prelude::{
@@ -18,7 +18,7 @@ use bevy::{
     },
     window::{CursorGrabMode, CursorOptions},
 };
-use game_shared::PLAYER_SPAWN;
+use game_shared::{DEFAULT_CORRECTION_HALF_LIFE_SECONDS, PLAYER_SPAWN};
 use tracing::info;
 
 pub struct FirstPersonControllerPlugin;
@@ -27,13 +27,28 @@ pub const PLAYER_HALF_HEIGHT: f32 = 0.9;
 const PLAYER_CAPSULE_LENGTH: f32 = PLAYER_HALF_HEIGHT * 2.0 - PLAYER_RADIUS * 2.0;
 const MAX_SLOPE_ANGLE: f32 = 45.0_f32.to_radians();
 const GROUND_PROBE_DISTANCE: f32 = 0.08;
+const CONTACT_CACHE_MAX_AGE_SECONDS: f32 = 0.12;
+const COYOTE_TIME_SECONDS: f32 = 0.1;
+const LEDGE_RECHECK_AGE_SECONDS: f32 = 0.05;
+const HIGH_VERTICAL_DELTA_METERS: f32 = 0.04;
 
 impl Plugin for FirstPersonControllerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_player)
             .add_systems(PreUpdate, cache_movement_input)
-            .add_systems(FixedUpdate, apply_kinematic_movement)
-            .add_systems(Update, (update_cursor_grab, apply_look).chain());
+            .add_systems(
+                FixedUpdate,
+                (restore_simulation_transform, apply_kinematic_movement).chain(),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_cursor_grab,
+                    apply_look,
+                    interpolate_player_render_transform,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -86,6 +101,131 @@ struct MovementInputState {
 #[derive(Component, Clone, Copy, Default)]
 struct CharacterVelocity(Vec3);
 
+#[derive(Component, Clone)]
+struct NetworkInterpolationState {
+    previous_simulation: Transform,
+    current_simulation: Transform,
+    previous_render: Transform,
+    correction_velocity: Vec3,
+    correction_half_life: f32,
+}
+
+impl NetworkInterpolationState {
+    fn new(transform: Transform) -> Self {
+        Self {
+            previous_simulation: transform,
+            current_simulation: transform,
+            previous_render: transform,
+            correction_velocity: Vec3::ZERO,
+            correction_half_life: DEFAULT_CORRECTION_HALF_LIFE_SECONDS,
+        }
+    }
+
+    fn reset(&mut self, transform: Transform) {
+        self.previous_simulation = transform;
+        self.current_simulation = transform;
+        self.previous_render = transform;
+        self.correction_velocity = Vec3::ZERO;
+    }
+
+    fn commit_simulation(&mut self, transform: Transform) {
+        self.previous_simulation = self.current_simulation;
+        self.current_simulation = transform;
+    }
+}
+
+impl Default for NetworkInterpolationState {
+    fn default() -> Self {
+        Self::new(Transform::default())
+    }
+}
+
+#[derive(Component, Clone, Copy)]
+struct MovementContactCache {
+    ground_normal: Vec3,
+    ground_entity: Option<Entity>,
+    contact_age: f32,
+    coyote_timer: f32,
+    step_candidate: Option<Vec3>,
+}
+
+impl Default for MovementContactCache {
+    fn default() -> Self {
+        Self {
+            ground_normal: Vec3::Y,
+            ground_entity: None,
+            contact_age: CONTACT_CACHE_MAX_AGE_SECONDS,
+            coyote_timer: 0.0,
+            step_candidate: None,
+        }
+    }
+}
+
+impl MovementContactCache {
+    fn advance(&mut self, delta_seconds: f32) {
+        if self.ground_entity.is_some() {
+            self.contact_age += delta_seconds;
+        }
+        self.coyote_timer = (self.coyote_timer - delta_seconds).max(0.0);
+    }
+
+    fn refresh(&mut self, contact: GroundContact) {
+        self.ground_normal = contact.normal;
+        self.ground_entity = Some(contact.entity);
+        self.contact_age = 0.0;
+        self.coyote_timer = COYOTE_TIME_SECONDS;
+        self.step_candidate = Some(contact.point);
+    }
+
+    fn mark_airborne(&mut self) {
+        self.ground_entity = None;
+        self.contact_age = CONTACT_CACHE_MAX_AGE_SECONDS;
+        self.step_candidate = None;
+    }
+
+    fn has_valid_ground(&self) -> bool {
+        self.ground_entity.is_some()
+            && self.contact_age <= CONTACT_CACHE_MAX_AGE_SECONDS
+            && self.ground_normal.dot(Vec3::Y) >= max_slope_dot()
+    }
+
+    fn can_jump(&self) -> bool {
+        self.has_valid_ground() || self.coyote_timer > 0.0
+    }
+
+    fn should_probe_before_move(
+        &self,
+        velocity: Vec3,
+        delta_seconds: f32,
+        jump_requested: bool,
+    ) -> bool {
+        jump_requested
+            || !self.has_valid_ground()
+            || velocity.y.abs() * delta_seconds > HIGH_VERTICAL_DELTA_METERS
+            || self.contact_age > LEDGE_RECHECK_AGE_SECONDS
+    }
+
+    fn should_probe_after_move(
+        &self,
+        had_move_hit: bool,
+        was_grounded: bool,
+        vertical_delta: f32,
+        input: Vec2,
+    ) -> bool {
+        !had_move_hit
+            && (!self.has_valid_ground()
+                || vertical_delta.abs() > HIGH_VERTICAL_DELTA_METERS
+                || (was_grounded && input != Vec2::ZERO && self.contact_age > 0.0))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GroundContact {
+    entity: Entity,
+    normal: Vec3,
+    point: Vec3,
+}
+
 #[derive(Component, Clone, Copy)]
 struct LookSettings {
     yaw: f32,
@@ -108,6 +248,7 @@ fn spawn_player(mut commands: Commands) {
 }
 
 fn player_scene(camera: impl BsnScene) -> impl BsnScene {
+    let spawn_transform = Transform::from_xyz(PLAYER_SPAWN[0], PLAYER_SPAWN[1], PLAYER_SPAWN[2]);
     bsn! {
         #Player
         Player
@@ -115,11 +256,13 @@ fn player_scene(camera: impl BsnScene) -> impl BsnScene {
         MovementSettings::default()
         MovementInputState::default()
         CharacterVelocity::default()
+        MovementContactCache::default()
+        template_value(NetworkInterpolationState::new(spawn_transform))
         LookSettings::default()
         template_value(RigidBody::Kinematic)
         Collider::capsule(PLAYER_RADIUS, PLAYER_CAPSULE_LENGTH)
         Visibility::default()
-        Transform::from_xyz(PLAYER_SPAWN[0], PLAYER_SPAWN[1], PLAYER_SPAWN[2])
+        template_value(spawn_transform)
         Children [(
             #YawPivot
             YawPivot
@@ -155,14 +298,18 @@ fn base_camera_scene() -> impl BsnScene {
 
 fn cache_movement_input(
     keys: Res<ButtonInput<KeyCode>>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
     mut players: Query<&mut MovementInputState, With<Player>>,
 ) {
+    let started = std::time::Instant::now();
     let Ok(mut input_state) = players.single_mut() else {
+        schedule_profiler.record_elapsed(ClientScheduleSystem::MovementInput, started);
         return;
     };
 
     input_state.movement = movement_input(&keys);
     input_state.jump_queued |= keys.just_pressed(KeyCode::Space);
+    schedule_profiler.record_elapsed(ClientScheduleSystem::MovementInput, started);
 }
 
 fn update_cursor_grab(
@@ -184,16 +331,20 @@ fn update_cursor_grab(
 fn apply_look(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     cursor_options: Single<&CursorOptions>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
     mut player: Single<&mut LookSettings, With<Player>>,
     mut yaw_pivot: Single<&mut Transform, (With<YawPivot>, Without<PitchPivot>)>,
     mut pitch_pivot: Single<&mut Transform, (With<PitchPivot>, Without<YawPivot>)>,
 ) {
+    let started = std::time::Instant::now();
     if cursor_options.grab_mode == CursorGrabMode::None {
+        schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
         return;
     }
 
     let delta = accumulated_mouse_motion.delta;
     if delta == Vec2::ZERO {
+        schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
         return;
     }
 
@@ -203,12 +354,60 @@ fn apply_look(
 
     yaw_pivot.rotation = Quat::from_rotation_y(player.yaw);
     pitch_pivot.rotation = Quat::from_rotation_x(player.pitch);
+    schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
+}
+
+fn restore_simulation_transform(
+    player: Single<(&mut Transform, &NetworkInterpolationState), With<Player>>,
+) {
+    let (mut transform, interpolation) = player.into_inner();
+    *transform = interpolation.current_simulation;
+}
+
+fn interpolate_player_render_transform(
+    time: Res<Time>,
+    fixed_time: Res<Time<Fixed>>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    player: Single<(&mut Transform, &mut NetworkInterpolationState), With<Player>>,
+) {
+    let started = std::time::Instant::now();
+    let (mut transform, mut interpolation) = player.into_inner();
+    let alpha = fixed_time.overstep_fraction().clamp(0.0, 1.0);
+    let target = interpolate_transform(
+        interpolation.previous_simulation,
+        interpolation.current_simulation,
+        alpha,
+    );
+    let smoothing = half_life_alpha(interpolation.correction_half_life, time.delta_secs());
+    let previous_translation = interpolation.previous_render.translation;
+
+    transform.translation = interpolation
+        .previous_render
+        .translation
+        .lerp(target.translation, smoothing);
+    transform.rotation = interpolation
+        .previous_render
+        .rotation
+        .slerp(target.rotation, smoothing);
+    transform.scale = interpolation
+        .previous_render
+        .scale
+        .lerp(target.scale, smoothing);
+
+    interpolation.correction_velocity = if time.delta_secs() > 0.0 {
+        (transform.translation - previous_translation) / time.delta_secs()
+    } else {
+        Vec3::ZERO
+    };
+    interpolation.previous_render = *transform;
+    schedule_profiler.record_elapsed(ClientScheduleSystem::RenderInterpolation, started);
 }
 
 fn apply_kinematic_movement(
     time: Res<Time>,
     mut commands: Commands,
     world_status: Res<ClientWorldStatus>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
     player: Single<
         (
             Entity,
@@ -217,14 +416,26 @@ fn apply_kinematic_movement(
             &LookSettings,
             &mut MovementInputState,
             &mut CharacterVelocity,
+            &mut MovementContactCache,
+            &mut NetworkInterpolationState,
             &mut Transform,
         ),
         With<Player>,
     >,
     move_and_slide: MoveAndSlide,
 ) {
-    let (entity, collider, movement, look, mut input_state, mut velocity, mut transform) =
-        player.into_inner();
+    let started = std::time::Instant::now();
+    let (
+        entity,
+        collider,
+        movement,
+        look,
+        mut input_state,
+        mut velocity,
+        mut contact_cache,
+        mut interpolation,
+        mut transform,
+    ) = player.into_inner();
 
     if !world_status.ready {
         let spawn = Vec3::from_array(PLAYER_SPAWN);
@@ -235,15 +446,28 @@ fn apply_kinematic_movement(
             );
         }
         transform.translation = spawn;
+        interpolation.reset(*transform);
         velocity.0 = Vec3::ZERO;
+        contact_cache.mark_airborne();
         input_state.jump_queued = false;
         commands.entity(entity).remove::<Grounded>();
+        schedule_profiler.record_elapsed(ClientScheduleSystem::PhysicsMovement, started);
         return;
     }
 
     let delta_seconds = time.delta_secs();
     let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-    let was_grounded = is_grounded(collider, &transform, &move_and_slide, &filter);
+    contact_cache.advance(delta_seconds);
+    let jump_requested = input_state.jump_queued;
+    input_state.jump_queued = false;
+    if contact_cache.should_probe_before_move(velocity.0, delta_seconds, jump_requested) {
+        if let Some(contact) = probe_ground(collider, &transform, &move_and_slide, &filter) {
+            contact_cache.refresh(contact);
+        } else if !contact_cache.has_valid_ground() {
+            contact_cache.mark_airborne();
+        }
+    }
+    let was_grounded = contact_cache.has_valid_ground();
 
     if was_grounded && velocity.0.y < 0.0 {
         velocity.0.y = 0.0;
@@ -278,19 +502,21 @@ fn apply_kinematic_movement(
         velocity.0.z *= damping_factor;
     }
 
-    let jump_requested = input_state.jump_queued;
-    input_state.jump_queued = false;
-    if jump_requested && was_grounded {
+    let jumped = jump_requested && contact_cache.can_jump();
+    if jumped {
         velocity.0.y = movement.jump_impulse;
+        contact_cache.mark_airborne();
     }
 
     let mut move_config = MoveAndSlideConfig::default();
-    if was_grounded {
+    if was_grounded && !jumped {
         move_config.planes.push(Dir3::Y);
     }
 
     let walkable_dot = max_slope_dot();
     let mut grounded_now = false;
+    let mut had_walkable_move_hit = false;
+    let previous_translation = transform.translation;
     let output = move_and_slide.move_and_slide(
         collider,
         transform.translation.adjust_precision(),
@@ -304,6 +530,12 @@ fn apply_kinematic_movement(
             let up_dot = normal.dot(Vec3::Y);
             if up_dot >= walkable_dot {
                 grounded_now = true;
+                had_walkable_move_hit = true;
+                contact_cache.refresh(GroundContact {
+                    entity: hit.entity,
+                    normal,
+                    point: hit.point.f32(),
+                });
                 return MoveAndSlideHitResponse::Accept;
             }
 
@@ -321,15 +553,30 @@ fn apply_kinematic_movement(
     transform.translation = output.position.f32();
     velocity.0 = output.projected_velocity.f32();
 
-    grounded_now |= is_grounded(collider, &transform, &move_and_slide, &filter);
+    let vertical_delta = transform.translation.y - previous_translation.y;
+    if contact_cache.should_probe_after_move(
+        had_walkable_move_hit,
+        was_grounded,
+        vertical_delta,
+        input_state.movement,
+    ) {
+        if let Some(contact) = probe_ground(collider, &transform, &move_and_slide, &filter) {
+            contact_cache.refresh(contact);
+            grounded_now = true;
+        } else if !had_walkable_move_hit {
+            contact_cache.mark_airborne();
+        }
+    } else {
+        grounded_now |= contact_cache.has_valid_ground();
+    }
 
-    if grounded_now && !jump_requested && velocity.0.y > 0.0 {
+    if grounded_now && !jumped && velocity.0.y > 0.0 {
         velocity.0.y = 0.0;
     }
     if grounded_now && velocity.0.y < 0.0 {
         velocity.0.y = 0.0;
     }
-    if jump_requested && velocity.0.y > 0.0 {
+    if jumped && velocity.0.y > 0.0 {
         grounded_now = false;
     }
 
@@ -338,14 +585,17 @@ fn apply_kinematic_movement(
     } else {
         commands.entity(entity).remove::<Grounded>();
     }
+
+    interpolation.commit_simulation(*transform);
+    schedule_profiler.record_elapsed(ClientScheduleSystem::PhysicsMovement, started);
 }
 
-fn is_grounded(
+fn probe_ground(
     collider: &Collider,
     transform: &Transform,
     move_and_slide: &MoveAndSlide,
     filter: &SpatialQueryFilter,
-) -> bool {
+) -> Option<GroundContact> {
     let config = ShapeCastConfig::from_max_distance(GROUND_PROBE_DISTANCE);
     move_and_slide
         .spatial_query
@@ -357,7 +607,14 @@ fn is_grounded(
             &config,
             filter,
         )
-        .is_some_and(|hit| hit.normal1.f32().dot(Vec3::Y) >= max_slope_dot())
+        .and_then(|hit| {
+            let normal = hit.normal1.f32();
+            (normal.dot(Vec3::Y) >= max_slope_dot()).then_some(GroundContact {
+                entity: hit.entity,
+                normal,
+                point: hit.point1.f32(),
+            })
+        })
 }
 
 fn desired_planar_velocity(input: Vec2, yaw: f32, max_speed: f32) -> Vec3 {
@@ -365,6 +622,23 @@ fn desired_planar_velocity(input: Vec2, yaw: f32, max_speed: f32) -> Vec3 {
     let forward = yaw_rotation * -Vec3::Z;
     let right = yaw_rotation * Vec3::X;
     (forward * input.y + right * input.x).normalize_or_zero() * max_speed
+}
+
+fn interpolate_transform(previous: Transform, current: Transform, alpha: f32) -> Transform {
+    Transform {
+        translation: previous.translation.lerp(current.translation, alpha),
+        rotation: previous.rotation.slerp(current.rotation, alpha),
+        scale: previous.scale.lerp(current.scale, alpha),
+    }
+}
+
+fn half_life_alpha(half_life: f32, delta_seconds: f32) -> f32 {
+    if half_life <= 0.0 {
+        1.0
+    } else {
+        1.0 - 0.5_f32.powf(delta_seconds / half_life)
+    }
+    .clamp(0.0, 1.0)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]

@@ -5,7 +5,12 @@ param(
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
     [switch]$RenderProfileVerbose,
+    [switch]$BenchmarkLogMinimal,
+    [switch]$LogStreamVerbose,
+    [switch]$LogNetVerbose,
+    [switch]$LogRenderVerbose,
     [switch]$Maximized,
+    [switch]$DisableFpsOverlay,
     [switch]$SolariDebugDirectVisibility,
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
@@ -18,6 +23,10 @@ param(
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
     [string]$SolariDebugOverlay = "",
+    [string]$RenderGeometryPolicy = "hybrid",
+    [int]$MeshletMinTriangles = 512,
+    [int]$WindowWidth = 0,
+    [int]$WindowHeight = 0,
     [string]$RenderBackend = "vulkan",
     [string]$PresentMode = "immediate",
     [int]$StartupDelaySeconds = 2
@@ -58,7 +67,7 @@ if (-not $env:RUST_BACKTRACE) {
     $env:RUST_BACKTRACE = "1"
 }
 if ($TraceDiagnostics) {
-    $traceFilter = "info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug"
+    $traceFilter = "info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug"
     $env:RUST_LOG = $traceFilter
     $env:BEVY_LOG = $traceFilter
 }
@@ -77,11 +86,61 @@ if ($RenderProfileVerbose) {
 else {
     Remove-Item Env:\FUN_RENDER_PROFILE_VERBOSE -ErrorAction SilentlyContinue
 }
+if ($BenchmarkLogMinimal) {
+    $env:FUN_BENCHMARK_LOG_MINIMAL = "1"
+}
+else {
+    Remove-Item Env:\FUN_BENCHMARK_LOG_MINIMAL -ErrorAction SilentlyContinue
+}
+if ($LogStreamVerbose) {
+    $env:FUN_LOG_STREAM_VERBOSE = "1"
+}
+else {
+    Remove-Item Env:\FUN_LOG_STREAM_VERBOSE -ErrorAction SilentlyContinue
+}
+if ($LogNetVerbose) {
+    $env:FUN_LOG_NET_VERBOSE = "1"
+}
+else {
+    Remove-Item Env:\FUN_LOG_NET_VERBOSE -ErrorAction SilentlyContinue
+}
+if ($LogRenderVerbose) {
+    $env:FUN_LOG_RENDER_VERBOSE = "1"
+}
+else {
+    Remove-Item Env:\FUN_LOG_RENDER_VERBOSE -ErrorAction SilentlyContinue
+}
 if ($Maximized) {
     $env:FUN_WINDOW_MAXIMIZED = "1"
 }
 else {
     Remove-Item Env:\FUN_WINDOW_MAXIMIZED -ErrorAction SilentlyContinue
+}
+if ($DisableFpsOverlay) {
+    $env:FUN_DISABLE_FPS_OVERLAY = "1"
+}
+else {
+    Remove-Item Env:\FUN_DISABLE_FPS_OVERLAY -ErrorAction SilentlyContinue
+}
+if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) {
+    $env:FUN_WINDOW_WIDTH = [string]$WindowWidth
+    $env:FUN_WINDOW_HEIGHT = [string]$WindowHeight
+}
+else {
+    Remove-Item Env:\FUN_WINDOW_WIDTH -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_WINDOW_HEIGHT -ErrorAction SilentlyContinue
+}
+if ($RenderGeometryPolicy) {
+    $env:FUN_RENDER_GEOMETRY_POLICY = $RenderGeometryPolicy
+}
+else {
+    Remove-Item Env:\FUN_RENDER_GEOMETRY_POLICY -ErrorAction SilentlyContinue
+}
+if ($MeshletMinTriangles -gt 0) {
+    $env:FUN_MESHLET_MIN_TRIANGLES = [string]$MeshletMinTriangles
+}
+else {
+    Remove-Item Env:\FUN_MESHLET_MIN_TRIANGLES -ErrorAction SilentlyContinue
 }
 if ($SolariDebugDirectVisibility) {
     $env:FUN_SOLARI_DEBUG_DIRECT_VISIBILITY = "1"

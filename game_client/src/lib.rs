@@ -1,9 +1,15 @@
+mod compiled_world;
 pub mod first_person;
+mod render_catalog;
+
+use render_catalog::{
+    WorldRenderCatalog, catalog_ref_summary, prewarm_world_render_catalog, warn_missing_catalog_ref,
+};
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     num::NonZeroU32,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
@@ -42,7 +48,7 @@ use bevy::{
         SolariInternalScale, SolariLighting, SolariPlugins, SolariResetEvent, SolariRuntimeParams,
         SolariSettings, SolariVisualTarget,
     },
-    window::{PresentMode, PrimaryWindow},
+    window::{PresentMode, PrimaryWindow, WindowResolution},
     winit::WinitSettings,
 };
 use bevy_quinnet::client::{
@@ -52,7 +58,9 @@ use bevy_quinnet::client::{
     connection::{ClientAddrConfiguration, ConnectionEvent},
 };
 use first_person::FirstPersonControllerPlugin;
-use game_shared::{GAME_SERVER_ADDR, GAME_TITLE};
+use game_shared::{
+    DEFAULT_RENDER_TARGET_RATE_HZ, DEFAULT_TICK_RATE_HZ, GAME_SERVER_ADDR, GAME_TITLE,
+};
 use thunder::prelude::*;
 use tracing::{debug, error, info, warn};
 
@@ -62,12 +70,15 @@ const DLSS_PROJECT_ID: &str = "7f2c56d9-bbd1-40e6-aeea-ad1cde733e2e";
 const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
 
 #[derive(Debug, Clone, Copy, Resource)]
-struct ClientRenderConfig {
+pub(crate) struct ClientRenderConfig {
     solari_enabled: bool,
     dlss_rr_enabled: bool,
     meshlets_enabled: bool,
     dlss_rr_disabled_by_denoise_mode: bool,
     render_profile_verbose: bool,
+    pub(crate) geometry_policy: RenderGeometryPolicy,
+    pub(crate) meshlet_min_triangles: usize,
+    fps_overlay_enabled: bool,
 }
 
 impl ClientRenderConfig {
@@ -78,20 +89,260 @@ impl ClientRenderConfig {
             meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
             dlss_rr_disabled_by_denoise_mode: false,
             render_profile_verbose: std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some(),
+            geometry_policy: RenderGeometryPolicy::from_env(),
+            meshlet_min_triangles: env_usize("FUN_MESHLET_MIN_TRIANGLES", 512),
+            fps_overlay_enabled: std::env::var_os("FUN_DISABLE_FPS_OVERLAY").is_none(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenderGeometryPolicy {
+    Hybrid,
+    AllMeshlet,
+    AllRaster,
+}
+
+impl RenderGeometryPolicy {
+    fn from_env() -> Self {
+        match std::env::var("FUN_RENDER_GEOMETRY_POLICY")
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Ok("all_meshlet") | Ok("all-meshlet") | Ok("meshlet") => Self::AllMeshlet,
+            Ok("all_raster") | Ok("all-raster") | Ok("raster") => Self::AllRaster,
+            Ok("hybrid") | Ok("") | Err(_) => Self::Hybrid,
+            Ok(other) => {
+                warn!(
+                    target: "fun::render",
+                    policy = other,
+                    "unknown FUN_RENDER_GEOMETRY_POLICY; using hybrid"
+                );
+                Self::Hybrid
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub(crate) enum RenderGeometryClass {
+    SimpleRaster,
+    MeshletStaticDense,
+    MeshletDynamicDense,
+    RayProxyOnly,
+    Viewmodel,
+}
+
+impl RenderGeometryClass {
+    pub(crate) fn uses_meshlet(self) -> bool {
+        matches!(
+            self,
+            RenderGeometryClass::MeshletStaticDense | RenderGeometryClass::MeshletDynamicDense
+        )
+    }
+
+    pub(crate) fn uses_raster_mesh(self) -> bool {
+        matches!(
+            self,
+            RenderGeometryClass::SimpleRaster | RenderGeometryClass::Viewmodel
+        )
     }
 }
 
 #[derive(Debug, Clone, Copy, Resource)]
 struct ClientWindowConfig {
     maximized: bool,
+    width: Option<u32>,
+    height: Option<u32>,
 }
 
 impl ClientWindowConfig {
     fn from_env() -> Self {
         Self {
             maximized: std::env::var_os("FUN_WINDOW_MAXIMIZED").is_some(),
+            width: env_u32_opt("FUN_WINDOW_WIDTH"),
+            height: env_u32_opt("FUN_WINDOW_HEIGHT"),
         }
+    }
+
+    fn resolution(&self) -> WindowResolution {
+        match (self.width, self.height) {
+            (Some(width), Some(height)) => WindowResolution::new(width, height),
+            _ => WindowResolution::default(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Resource)]
+struct ClientPerfCounters {
+    network_receive_cpu_ns: u64,
+    world_stream_apply_cpu_ns: u64,
+    catalog_lookup_cpu_ns: u64,
+    meshlet_path_instance_count: u64,
+    raster_path_instance_count: u64,
+    ray_proxy_only_count: u64,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct ClientRuntimeProfiler<'w> {
+    perf_counters: ResMut<'w, ClientPerfCounters>,
+    schedule_profiler: ResMut<'w, ClientScheduleProfiler>,
+    log_config: Res<'w, ClientLogConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Resource)]
+pub(crate) struct ClientLogConfig {
+    stream_verbose: bool,
+    net_verbose: bool,
+    render_verbose: bool,
+    benchmark_minimal: bool,
+}
+
+impl ClientLogConfig {
+    fn from_env() -> Self {
+        Self {
+            stream_verbose: std::env::var_os("FUN_LOG_STREAM_VERBOSE").is_some(),
+            net_verbose: std::env::var_os("FUN_LOG_NET_VERBOSE").is_some(),
+            render_verbose: std::env::var_os("FUN_LOG_RENDER_VERBOSE").is_some(),
+            benchmark_minimal: std::env::var_os("FUN_BENCHMARK_LOG_MINIMAL").is_some(),
+        }
+    }
+
+    fn stream_verbose(self) -> bool {
+        self.stream_verbose && !self.benchmark_minimal
+    }
+
+    fn net_verbose(self) -> bool {
+        self.net_verbose && !self.benchmark_minimal
+    }
+
+    fn render_verbose(self) -> bool {
+        self.render_verbose && !self.benchmark_minimal
+    }
+
+    fn diagnostics_verbose(self) -> bool {
+        !self.benchmark_minimal
+    }
+}
+
+const CLIENT_SCHEDULE_SYSTEM_COUNT: usize = 10;
+const CLIENT_SCHEDULE_SYSTEMS: [ClientScheduleSystem; CLIENT_SCHEDULE_SYSTEM_COUNT] = [
+    ClientScheduleSystem::NetworkingReceive,
+    ClientScheduleSystem::WorldStreamApply,
+    ClientScheduleSystem::MovementInput,
+    ClientScheduleSystem::Look,
+    ClientScheduleSystem::PhysicsMovement,
+    ClientScheduleSystem::DiagnosticsLogging,
+    ClientScheduleSystem::RenderConfigWindow,
+    ClientScheduleSystem::SolariRuntimeParamsUpdate,
+    ClientScheduleSystem::MeshletExtraction,
+    ClientScheduleSystem::RenderInterpolation,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientScheduleSystem {
+    NetworkingReceive,
+    WorldStreamApply,
+    MovementInput,
+    Look,
+    PhysicsMovement,
+    DiagnosticsLogging,
+    RenderConfigWindow,
+    SolariRuntimeParamsUpdate,
+    MeshletExtraction,
+    RenderInterpolation,
+}
+
+impl ClientScheduleSystem {
+    const fn index(self) -> usize {
+        match self {
+            ClientScheduleSystem::NetworkingReceive => 0,
+            ClientScheduleSystem::WorldStreamApply => 1,
+            ClientScheduleSystem::MovementInput => 2,
+            ClientScheduleSystem::Look => 3,
+            ClientScheduleSystem::PhysicsMovement => 4,
+            ClientScheduleSystem::DiagnosticsLogging => 5,
+            ClientScheduleSystem::RenderConfigWindow => 6,
+            ClientScheduleSystem::SolariRuntimeParamsUpdate => 7,
+            ClientScheduleSystem::MeshletExtraction => 8,
+            ClientScheduleSystem::RenderInterpolation => 9,
+        }
+    }
+
+    const fn metric_name(self) -> &'static str {
+        match self {
+            ClientScheduleSystem::NetworkingReceive => "networking_receive",
+            ClientScheduleSystem::WorldStreamApply => "world_stream_apply",
+            ClientScheduleSystem::MovementInput => "movement_input",
+            ClientScheduleSystem::Look => "look",
+            ClientScheduleSystem::PhysicsMovement => "physics_movement",
+            ClientScheduleSystem::DiagnosticsLogging => "diagnostics_logging",
+            ClientScheduleSystem::RenderConfigWindow => "render_config_window",
+            ClientScheduleSystem::SolariRuntimeParamsUpdate => "solari_runtime_params_update",
+            ClientScheduleSystem::MeshletExtraction => "meshlet_extraction",
+            ClientScheduleSystem::RenderInterpolation => "render_interpolation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ClientScheduleSample {
+    total_ns: u64,
+    max_ns: u64,
+    count: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClientScheduleReport {
+    system: ClientScheduleSystem,
+    total_ns: u64,
+    max_ns: u64,
+    count: u32,
+}
+
+#[derive(Debug, Resource)]
+pub(crate) struct ClientScheduleProfiler {
+    samples: [ClientScheduleSample; CLIENT_SCHEDULE_SYSTEM_COUNT],
+}
+
+impl Default for ClientScheduleProfiler {
+    fn default() -> Self {
+        Self {
+            samples: [ClientScheduleSample::default(); CLIENT_SCHEDULE_SYSTEM_COUNT],
+        }
+    }
+}
+
+impl ClientScheduleProfiler {
+    pub(crate) fn record_ns(&mut self, system: ClientScheduleSystem, ns: u64) {
+        let sample = &mut self.samples[system.index()];
+        sample.total_ns = sample.total_ns.saturating_add(ns);
+        sample.max_ns = sample.max_ns.max(ns);
+        sample.count = sample.count.saturating_add(1);
+    }
+
+    pub(crate) fn record_elapsed(&mut self, system: ClientScheduleSystem, started: Instant) {
+        self.record_ns(
+            system,
+            started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        );
+    }
+
+    fn drain_reports(&mut self) -> Vec<ClientScheduleReport> {
+        let mut reports = Vec::with_capacity(CLIENT_SCHEDULE_SYSTEM_COUNT);
+        for system in CLIENT_SCHEDULE_SYSTEMS {
+            let sample = std::mem::take(&mut self.samples[system.index()]);
+            if sample.count > 0 || sample.total_ns > 0 {
+                reports.push(ClientScheduleReport {
+                    system,
+                    total_ns: sample.total_ns,
+                    max_ns: sample.max_ns,
+                    count: sample.count,
+                });
+            }
+        }
+        reports
     }
 }
 
@@ -164,6 +415,9 @@ impl Plugin for GameClientPlugin {
             solari_cache_update_budget = solari_runtime_params.cache_update_budget,
             solari_specular_refresh_budget = solari_runtime_params.specular_refresh_budget,
             solari_debug_overlay = ?solari_runtime_params.debug_overlay,
+            geometry_policy = ?render_config.geometry_policy,
+            meshlet_min_triangles = render_config.meshlet_min_triangles,
+            fps_overlay_enabled = render_config.fps_overlay_enabled,
             "client render configuration"
         );
 
@@ -177,12 +431,16 @@ impl Plugin for GameClientPlugin {
 
         app.insert_resource(opaque_renderer_method)
             .insert_resource(render_config)
+            .insert_resource(ClientLogConfig::from_env())
+            .insert_resource(Time::<Fixed>::from_hz(DEFAULT_TICK_RATE_HZ))
             .insert_resource(solari_settings)
             .insert_resource(solari_runtime_params)
             .add_message::<SolariResetEvent>()
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
             .init_resource::<ClientDiagnostics>()
+            .init_resource::<ClientPerfCounters>()
+            .init_resource::<ClientScheduleProfiler>()
             .add_plugins((
                 PhysicsPlugins::default(),
                 QuinnetClientPlugin::default(),
@@ -191,29 +449,41 @@ impl Plugin for GameClientPlugin {
                 MeshletPlugin {
                     cluster_buffer_slots: 1 << 14,
                 },
-                FpsOverlayPlugin {
-                    config: FpsOverlayConfig {
-                        refresh_interval: Duration::from_secs(1),
-                        text_config: bevy::text::TextFont {
-                            font_size: bevy::text::FontSize::Px(12.0),
-                            ..default()
-                        },
+                FirstPersonControllerPlugin,
+            ));
+
+        if render_config.fps_overlay_enabled {
+            app.add_plugins(FpsOverlayPlugin {
+                config: FpsOverlayConfig {
+                    refresh_interval: Duration::from_secs(1),
+                    text_config: bevy::text::TextFont {
+                        font_size: bevy::text::FontSize::Px(12.0),
                         ..default()
                     },
+                    ..default()
                 },
-                FirstPersonControllerPlugin,
-            ))
-            .add_systems(Startup, (setup_lighting, connect_to_game_server))
-            .add_systems(
-                Update,
-                (
-                    apply_startup_window_config,
-                    send_client_hello,
-                    receive_server_control,
-                    receive_world_stream,
-                    log_client_diagnostics,
-                ),
-            );
+            });
+        }
+
+        app.add_systems(
+            Startup,
+            (
+                setup_lighting,
+                prewarm_world_render_catalog,
+                connect_to_game_server,
+            )
+                .chain(),
+        )
+        .add_systems(
+            Update,
+            (
+                apply_startup_window_config,
+                send_client_hello,
+                receive_server_control,
+                receive_world_stream,
+                log_client_diagnostics,
+            ),
+        );
 
         if render_config.solari_enabled {
             app.add_plugins(SolariPlugins);
@@ -560,8 +830,9 @@ pub fn build_client_app() -> App {
 
     let default_plugins = DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("{GAME_TITLE} Client").into(),
+            title: format!("{GAME_TITLE} Client"),
             present_mode,
+            resolution: window_config.resolution(),
             desired_maximum_frame_latency: NonZeroU32::new(3),
             ..default()
         }),
@@ -647,6 +918,41 @@ fn selected_present_mode() -> PresentMode {
     }
 }
 
+fn env_u32_opt(name: &str) -> Option<u32> {
+    let value = std::env::var(name).ok()?;
+    match value.parse::<u32>() {
+        Ok(parsed) if parsed > 0 => Some(parsed),
+        _ => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value,
+                "ignored invalid positive integer setting"
+            );
+            None
+        }
+    }
+}
+
+fn env_usize(name: &str, default_value: usize) -> usize {
+    let Ok(value) = std::env::var(name) else {
+        return default_value;
+    };
+    match value.parse::<usize>() {
+        Ok(parsed) if parsed > 0 => parsed,
+        _ => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value,
+                default_value,
+                "ignored invalid positive integer setting"
+            );
+            default_value
+        }
+    }
+}
+
 fn setup_lighting(mut commands: Commands) {
     info!("[client render] spawning directional light");
     commands.spawn((
@@ -662,24 +968,30 @@ fn setup_lighting(mut commands: Commands) {
 fn apply_startup_window_config(
     mut applied: Local<bool>,
     window_config: Res<ClientWindowConfig>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
+    let started = Instant::now();
     if *applied {
+        schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
         return;
     }
 
     *applied = true;
     if !window_config.maximized {
+        schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
         return;
     }
 
     let Ok(mut window) = primary_window.single_mut() else {
         warn!(target: "fun::render", "could not maximize client window because no primary window was available");
+        schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
         return;
     };
 
     window.set_maximized(true);
     info!(target: "fun::render", "requested maximized primary window");
+    schedule_profiler.record_elapsed(ClientScheduleSystem::RenderConfigWindow, started);
 }
 
 fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
@@ -774,52 +1086,62 @@ fn send_client_hello(
     }
 }
 
-fn receive_server_control(mut client: ResMut<QuinnetClient>) {
+fn receive_server_control(
+    mut client: ResMut<QuinnetClient>,
+    mut perf_counters: ResMut<ClientPerfCounters>,
+    log_config: Res<ClientLogConfig>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+) {
+    let system_started = Instant::now();
     let Some(connection) = client.get_connection_mut() else {
+        schedule_profiler.record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
         return;
     };
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Control) {
+        let receive_started = Instant::now();
         let payload_len = payload.as_ref().len();
-        info!(
-            "[client net] received control payload ({} bytes)",
-            payload_len
-        );
-        debug!(
-            target: "fun::net",
-            bytes = payload_len,
-            channel = "control",
-            "received server control payload"
-        );
+        if log_config.net_verbose() {
+            info!(
+                target: "fun::net",
+                bytes = payload_len,
+                channel = "control",
+                "received server control payload"
+            );
+        }
         match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::Welcome { welcome }) => {
-                info!(
-                    "[client net] welcome client_id={} baseline_tick={}",
-                    welcome.client_id.0, welcome.baseline_tick.0
-                );
-                info!(
-                    target: "fun::net",
-                    client_id = welcome.client_id.0,
-                    server_tick = welcome.server_tick.0,
-                    baseline_tick = welcome.baseline_tick.0,
-                    feature_bits = welcome.feature_bits,
-                    "received server welcome"
-                );
+                if log_config.net_verbose() {
+                    info!(
+                        target: "fun::net",
+                        client_id = welcome.client_id.0,
+                        server_tick = welcome.server_tick.0,
+                        baseline_tick = welcome.baseline_tick.0,
+                        feature_bits = welcome.feature_bits,
+                        "received server welcome"
+                    );
+                }
             }
             Ok(ServerPacket::Disconnect { reason }) => {
-                info!("[client net] server disconnected client: {reason}");
                 warn!(target: "fun::net", %reason, "server disconnected client");
             }
             Ok(packet) => {
-                info!("[client net] ignoring control packet: {packet:?}");
-                debug!(target: "fun::net", packet = ?packet, "ignoring control packet on client");
+                if log_config.net_verbose() {
+                    debug!(target: "fun::net", packet = ?packet, "ignoring control packet on client");
+                }
             }
             Err(error) => {
-                info!("[client net] failed to decode server control packet: {error}");
                 error!(target: "fun::net", %error, bytes = payload_len, "failed to decode server control packet");
             }
         }
+        perf_counters.network_receive_cpu_ns = perf_counters.network_receive_cpu_ns.saturating_add(
+            receive_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        );
     }
+    schedule_profiler.record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
 }
 
 fn receive_world_stream(
@@ -831,6 +1153,8 @@ fn receive_world_stream(
     mut meshes: ResMut<Assets<Mesh>>,
     mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    catalog: Res<WorldRenderCatalog>,
+    mut runtime: ClientRuntimeProfiler,
     solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
     mut solari_lighting: Query<&mut SolariLighting>,
     mut solari_reset_events: MessageWriter<SolariResetEvent>,
@@ -845,56 +1169,75 @@ fn receive_world_stream(
         &mut Dlss<DlssRayReconstructionFeature>,
     >,
 ) {
+    let system_started = Instant::now();
     let Some(connection) = client.get_connection_mut() else {
+        runtime
+            .schedule_profiler
+            .record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
         return;
     };
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Stream) {
+        let receive_started = Instant::now();
         let payload_len = payload.as_ref().len();
-        info!(
-            "[client stream] received stream payload ({} bytes)",
-            payload_len
-        );
-        debug!(
-            target: "fun::stream",
-            bytes = payload_len,
-            channel = "stream",
-            "received stream payload"
-        );
+        if runtime.log_config.stream_verbose() {
+            debug!(
+                target: "fun::stream",
+                bytes = payload_len,
+                channel = "stream",
+                "received stream payload"
+            );
+        }
         let packet = match decode_server_packet(payload.as_ref()) {
             Ok(ServerPacket::WorldStream { chunk }) => chunk,
             Ok(packet) => {
-                info!("[client stream] ignoring non-world stream packet: {packet:?}");
-                debug!(target: "fun::stream", packet = ?packet, "ignoring non-world packet on world stream channel");
+                if runtime.log_config.stream_verbose() {
+                    debug!(target: "fun::stream", packet = ?packet, "ignoring non-world packet on world stream channel");
+                }
+                runtime.perf_counters.network_receive_cpu_ns =
+                    runtime.perf_counters.network_receive_cpu_ns.saturating_add(
+                        receive_started
+                            .elapsed()
+                            .as_nanos()
+                            .min(u128::from(u64::MAX)) as u64,
+                    );
                 continue;
             }
             Err(error) => {
-                info!("[client stream] failed to decode world stream packet: {error}");
                 error!(target: "fun::stream", %error, bytes = payload_len, "failed to decode world stream packet");
+                runtime.perf_counters.network_receive_cpu_ns =
+                    runtime.perf_counters.network_receive_cpu_ns.saturating_add(
+                        receive_started
+                            .elapsed()
+                            .as_nanos()
+                            .min(u128::from(u64::MAX)) as u64,
+                    );
                 continue;
             }
         };
+        runtime.perf_counters.network_receive_cpu_ns =
+            runtime.perf_counters.network_receive_cpu_ns.saturating_add(
+                receive_started
+                    .elapsed()
+                    .as_nanos()
+                    .min(u128::from(u64::MAX)) as u64,
+            );
 
-        info!(
-            "[client stream] applying chunk {}/{} level={} revision={} entities={}",
-            packet.chunk_index + 1,
-            packet.chunk_count,
-            packet.level_id.0,
-            packet.revision.0,
-            packet.entities.len()
-        );
-        info!(
-            target: "fun::stream",
-            level = %packet.level_id.0,
-            revision = packet.revision.0,
-            chunk_index = packet.chunk_index,
-            chunk_number = packet.chunk_index + 1,
-            chunk_count = packet.chunk_count,
-            entity_count = packet.entities.len(),
-            bytes = payload_len,
-            "applying streamed world chunk"
-        );
+        if runtime.log_config.stream_verbose() {
+            info!(
+                target: "fun::stream",
+                level = %packet.level_id.0,
+                revision = packet.revision.0,
+                chunk_index = packet.chunk_index,
+                chunk_number = packet.chunk_index + 1,
+                chunk_count = packet.chunk_count,
+                entity_count = packet.entities.len(),
+                bytes = payload_len,
+                "applying streamed world chunk"
+            );
+        }
 
+        let apply_started = Instant::now();
         let world_revision_changed = apply_world_stream_chunk(
             &mut commands,
             &mut loaded_world,
@@ -902,9 +1245,20 @@ fn receive_world_stream(
             &mut meshes,
             &mut meshlet_meshes,
             &mut materials,
+            &catalog,
+            runtime.perf_counters.as_mut(),
             &render_config,
+            &runtime.log_config,
             &packet,
         );
+        let apply_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        runtime.perf_counters.world_stream_apply_cpu_ns = runtime
+            .perf_counters
+            .world_stream_apply_cpu_ns
+            .saturating_add(apply_ns);
+        runtime
+            .schedule_profiler
+            .record_ns(ClientScheduleSystem::WorldStreamApply, apply_ns);
         if world_revision_changed {
             request_solari_lighting_history_reset(
                 "streamed world revision changed",
@@ -918,9 +1272,6 @@ fn receive_world_stream(
         if loaded_world.is_complete() {
             let became_ready = !world_status.ready;
             if became_ready {
-                info!(
-                    "[client stream] streamed world is ready; enabling player movement after colliders are present"
-                );
                 info!(
                     target: "fun::stream",
                     level = ?loaded_world.level_id,
@@ -965,27 +1316,25 @@ fn receive_world_stream(
                     let byte_len = bytes.len();
                     connection.try_send_payload_on(ClientChannel::Control, bytes);
                     loaded_world.ack_sent = true;
-                    info!(
-                        "[client stream] sent world-ready ack level={} revision={} ({} bytes)",
-                        loaded_world.level_id.as_deref().unwrap_or_default(),
-                        loaded_world.revision.unwrap_or_default().0,
-                        byte_len
-                    );
-                    info!(
-                        target: "fun::stream",
-                        level = %loaded_world.level_id.as_deref().unwrap_or_default(),
-                        revision = loaded_world.revision.unwrap_or_default().0,
-                        bytes = byte_len,
-                        "sent world-ready ack"
-                    );
+                    if runtime.log_config.stream_verbose() {
+                        info!(
+                            target: "fun::stream",
+                            level = %loaded_world.level_id.as_deref().unwrap_or_default(),
+                            revision = loaded_world.revision.unwrap_or_default().0,
+                            bytes = byte_len,
+                            "sent world-ready ack"
+                        );
+                    }
                 }
                 Err(error) => {
-                    info!("[client stream] failed to encode world-ready ack: {error}");
                     error!(target: "fun::stream", %error, "failed to encode world ready acknowledgement");
                 }
             }
         }
     }
+    runtime
+        .schedule_profiler
+        .record_elapsed(ClientScheduleSystem::NetworkingReceive, system_started);
 }
 
 fn enable_solari_lighting_for_ready_world(
@@ -1144,7 +1493,10 @@ fn apply_world_stream_chunk(
     meshes: &mut Assets<Mesh>,
     meshlet_meshes: &mut Assets<MeshletMesh>,
     materials: &mut Assets<StandardMaterial>,
+    catalog: &WorldRenderCatalog,
+    perf_counters: &mut ClientPerfCounters,
     render_config: &ClientRenderConfig,
+    log_config: &ClientLogConfig,
     chunk: &WorldStreamChunk,
 ) -> bool {
     let mut world_revision_changed = false;
@@ -1152,22 +1504,18 @@ fn apply_world_stream_chunk(
         || loaded_world.level_id.as_deref() != Some(chunk.level_id.0.as_str())
     {
         world_revision_changed = true;
-        info!(
-            "[client stream] resetting streamed world: old_level={:?} old_revision={:?} old_entities={}",
-            loaded_world.level_id,
-            loaded_world.revision.map(|revision| revision.0),
-            loaded_world.spawned_entities.len()
-        );
-        info!(
-            target: "fun::stream",
-            old_level = ?loaded_world.level_id,
-            old_revision = ?loaded_world.revision.map(|revision| revision.0),
-            old_spawned_entities = loaded_world.spawned_entities.len(),
-            new_level = %chunk.level_id.0,
-            new_revision = chunk.revision.0,
-            expected_chunks = chunk.chunk_count,
-            "resetting streamed world"
-        );
+        if log_config.stream_verbose() {
+            info!(
+                target: "fun::stream",
+                old_level = ?loaded_world.level_id,
+                old_revision = ?loaded_world.revision.map(|revision| revision.0),
+                old_spawned_entities = loaded_world.spawned_entities.len(),
+                new_level = %chunk.level_id.0,
+                new_revision = chunk.revision.0,
+                expected_chunks = chunk.chunk_count,
+                "resetting streamed world"
+            );
+        }
         for entity in loaded_world.spawned_entities.values().copied() {
             commands.entity(entity).despawn();
         }
@@ -1179,25 +1527,19 @@ fn apply_world_stream_chunk(
         loaded_world.spawned_entities.clear();
         loaded_world.ack_sent = false;
         world_status.ready = false;
-        info!(
-            target: "fun::stream",
-            level = %chunk.level_id.0,
-            revision = chunk.revision.0,
-            chunk_count = chunk.chunk_count,
-            "receiving streamed world"
-        );
-        info!(
-            "[client stream] receiving world {} revision {} in {} chunks",
-            chunk.level_id.0, chunk.revision.0, chunk.chunk_count
-        );
+        if log_config.stream_verbose() {
+            info!(
+                target: "fun::stream",
+                level = %chunk.level_id.0,
+                revision = chunk.revision.0,
+                chunk_count = chunk.chunk_count,
+                "receiving streamed world"
+            );
+        }
     }
 
     for spec in &chunk.entities {
         if loaded_world.spawned_entities.contains_key(&spec.entity) {
-            info!(
-                "[client stream] skipping duplicate entity {} ({})",
-                spec.entity.0, spec.name
-            );
             warn!(
                 target: "fun::stream",
                 net_entity = spec.entity.0,
@@ -1212,37 +1554,34 @@ fn apply_world_stream_chunk(
             meshes,
             meshlet_meshes,
             materials,
+            catalog,
+            perf_counters,
             render_config,
+            log_config,
             spec,
         );
-        info!(
-            "[client stream] spawned ECS entity {:?} for net entity {} ({})",
-            entity, spec.entity.0, spec.name
-        );
-        debug!(
-            target: "fun::stream",
-            ecs_entity = ?entity,
-            net_entity = spec.entity.0,
-            name = %spec.name,
-            "spawned streamed entity"
-        );
+        if log_config.stream_verbose() {
+            debug!(
+                target: "fun::stream",
+                ecs_entity = ?entity,
+                net_entity = spec.entity.0,
+                name = %spec.name,
+                "spawned streamed entity"
+            );
+        }
         loaded_world.spawned_entities.insert(spec.entity, entity);
     }
 
     loaded_world.received_chunks.insert(chunk.chunk_index);
-    info!(
-        "[client stream] chunk complete: received_chunks={}/{} spawned_entities={}",
-        loaded_world.received_chunks.len(),
-        loaded_world.expected_chunks,
-        loaded_world.spawned_entities.len()
-    );
-    info!(
-        target: "fun::stream",
-        received_chunks = loaded_world.received_chunks.len(),
-        expected_chunks = loaded_world.expected_chunks,
-        spawned_entities = loaded_world.spawned_entities.len(),
-        "streamed world chunk complete"
-    );
+    if log_config.stream_verbose() {
+        info!(
+            target: "fun::stream",
+            received_chunks = loaded_world.received_chunks.len(),
+            expected_chunks = loaded_world.expected_chunks,
+            spawned_entities = loaded_world.spawned_entities.len(),
+            "streamed world chunk complete"
+        );
+    }
 
     world_revision_changed
 }
@@ -1252,7 +1591,10 @@ fn spawn_streamed_entity(
     meshes: &mut Assets<Mesh>,
     meshlet_meshes: &mut Assets<MeshletMesh>,
     materials: &mut Assets<StandardMaterial>,
+    catalog: &WorldRenderCatalog,
+    perf_counters: &mut ClientPerfCounters,
     render_config: &ClientRenderConfig,
+    log_config: &ClientLogConfig,
     spec: &WorldEntitySpec,
 ) -> Entity {
     let translation = vec3_from_quantized(spec.transform.translation);
@@ -1268,38 +1610,94 @@ fn spawn_streamed_entity(
         transform_from_quantized(spec.transform),
     ));
 
-    info!(
-        "[client stream] spawn spec net={} name={} class={:?} authority={:?} translation=({:.2}, {:.2}, {:.2}) render={} collider={} color={}",
-        spec.entity.0,
-        spec.name,
-        spec.class,
-        spec.authority,
-        translation.x,
-        translation.y,
-        translation.z,
-        primitive_summary(spec.render),
-        collider_summary(spec.collider),
-        color_summary(spec.color),
-    );
-    debug!(
-        target: "fun::stream::entity",
-        net_entity = spec.entity.0,
-        name = %spec.name,
-        class = ?spec.class,
-        authority = ?spec.authority,
-        translation_x = translation.x,
-        translation_y = translation.y,
-        translation_z = translation.z,
-        render = ?spec.render,
-        collider = ?spec.collider,
-        color = ?spec.color,
-        "streamed entity spawn spec"
-    );
+    if log_config.stream_verbose() {
+        debug!(
+            target: "fun::stream::entity",
+            net_entity = spec.entity.0,
+            name = %spec.name,
+            class = ?spec.class,
+            authority = ?spec.authority,
+            translation_x = translation.x,
+            translation_y = translation.y,
+            translation_z = translation.z,
+            catalog = catalog_ref_summary(spec.catalog),
+            render = ?spec.render,
+            collider = ?spec.collider,
+            color = ?spec.color,
+            "streamed entity spawn spec"
+        );
+    }
 
-    if let Some(primitive) = spec.render {
+    if let Some(catalog_ref) = spec.catalog {
+        let lookup_started = Instant::now();
+        let compiled = catalog.lookup(catalog_ref);
+        perf_counters.catalog_lookup_cpu_ns = perf_counters.catalog_lookup_cpu_ns.saturating_add(
+            lookup_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        );
+
+        if let Some(compiled) = compiled {
+            entity_commands.insert(compiled.geometry_class);
+            if compiled.geometry_class.uses_meshlet() {
+                if let (Some(meshlet_mesh), Some(material)) =
+                    (compiled.meshlet_mesh.as_ref(), compiled.material.as_ref())
+                {
+                    entity_commands.insert((
+                        MeshletMesh3d(meshlet_mesh.clone()),
+                        MeshMaterial3d::<StandardMaterial>(material.clone()),
+                    ));
+                }
+            } else if compiled.geometry_class.uses_raster_mesh()
+                && let (Some(mesh), Some(material)) =
+                    (compiled.raster_mesh.as_ref(), compiled.material.as_ref())
+            {
+                entity_commands.insert((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d::<StandardMaterial>(material.clone()),
+                ));
+            }
+
+            if render_config.solari_enabled
+                && let Some(ray_proxy) = compiled.ray_proxy.as_ref()
+            {
+                entity_commands.insert(RaytracingMesh3d(ray_proxy.clone()));
+            }
+
+            if let Some(collider) = compiled.collider.as_ref() {
+                entity_commands.insert((RigidBody::Static, collider.clone()));
+            }
+
+            if log_config.render_verbose() {
+                info!(
+                    target: "fun::render_catalog",
+                    name = %spec.name,
+                    asset_id = catalog_ref.asset_id,
+                    material_id = catalog_ref.material_id,
+                    collider_id = catalog_ref.collider_id,
+                    catalog_asset = compiled.entry.name,
+                    geometry_class = ?compiled.geometry_class,
+                    triangles = compiled.triangle_count,
+                    meshlet = compiled.geometry_class.uses_meshlet(),
+                    raster = compiled.geometry_class.uses_raster_mesh(),
+                    raytracing = render_config.solari_enabled && compiled.ray_proxy.is_some(),
+                    "inserted catalog-backed streamed render components"
+                );
+            }
+        } else {
+            warn_missing_catalog_ref(catalog_ref, &spec.name);
+        }
+    } else if let Some(primitive) = spec.render {
         let mesh = mesh_from_primitive(primitive);
-        let (raytracing_mesh, meshlet_mesh) =
-            add_scene_mesh_assets(meshes, meshlet_meshes, mesh, &spec.name, render_config);
+        let (raytracing_mesh, meshlet_mesh) = add_scene_mesh_assets(
+            meshes,
+            meshlet_meshes,
+            mesh,
+            &spec.name,
+            render_config,
+            log_config,
+        );
         let material = materials.add(color_from_packed(spec.color));
 
         if render_config.meshlets_enabled {
@@ -1320,20 +1718,20 @@ fn spawn_streamed_entity(
             entity_commands.insert(RaytracingMesh3d(raytracing_mesh));
         }
 
-        info!(
-            "[client render] inserted render components for {} meshlet={} raytracing={}",
-            spec.name, render_config.meshlets_enabled, render_config.solari_enabled,
-        );
-        debug!(
-            target: "fun::render::entity",
-            name = %spec.name,
-            meshlet = render_config.meshlets_enabled,
-            raytracing = render_config.solari_enabled,
-            "inserted streamed render components"
-        );
+        if log_config.render_verbose() {
+            debug!(
+                target: "fun::render::entity",
+                name = %spec.name,
+                meshlet = render_config.meshlets_enabled,
+                raytracing = render_config.solari_enabled,
+                "inserted streamed render components"
+            );
+        }
     }
 
-    if let Some(collider) = spec.collider {
+    if spec.catalog.is_none()
+        && let Some(collider) = spec.collider
+    {
         entity_commands.insert((RigidBody::Static, collider_from_stream(collider)));
     }
 
@@ -1368,6 +1766,7 @@ fn add_scene_mesh_assets(
     mesh: Mesh,
     name: &str,
     render_config: &ClientRenderConfig,
+    log_config: &ClientLogConfig,
 ) -> (Option<Handle<Mesh>>, Option<Handle<MeshletMesh>>) {
     let vertex_count = mesh.count_vertices();
     let meshlet_handle = if render_config.meshlets_enabled {
@@ -1387,20 +1786,18 @@ fn add_scene_mesh_assets(
         None
     };
 
-    info!(
-        "[client render] built mesh assets for {name}: vertices={} raytracing_handle={:?} meshlet_handle={:?}",
-        vertex_count, raytracing_handle, meshlet_handle
-    );
-    debug!(
-        target: "fun::render::mesh",
-        name,
-        vertices = vertex_count,
-        meshlets_enabled = render_config.meshlets_enabled,
-        solari_enabled = render_config.solari_enabled,
-        raytracing_handle = ?raytracing_handle,
-        meshlet_handle = ?meshlet_handle,
-        "built streamed mesh assets"
-    );
+    if log_config.render_verbose() {
+        debug!(
+            target: "fun::render::mesh",
+            name,
+            vertices = vertex_count,
+            meshlets_enabled = render_config.meshlets_enabled,
+            solari_enabled = render_config.solari_enabled,
+            raytracing_handle = ?raytracing_handle,
+            meshlet_handle = ?meshlet_handle,
+            "built streamed mesh assets"
+        );
+    }
 
     (raytracing_handle, meshlet_handle)
 }
@@ -1411,6 +1808,10 @@ fn log_client_diagnostics(
     render_diagnostics: Res<DiagnosticsStore>,
     render_config: Res<ClientRenderConfig>,
     mut solari_runtime_params: ResMut<SolariRuntimeParams>,
+    mut perf_counters: ResMut<ClientPerfCounters>,
+    mut schedule_profiler: ResMut<ClientScheduleProfiler>,
+    log_config: Res<ClientLogConfig>,
+    catalog: Option<Res<WorldRenderCatalog>>,
     render_recovery: Option<Res<RenderRecoveryStatus>>,
     loaded_world: Res<LoadedWorldState>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -1436,18 +1837,21 @@ fn log_client_diagnostics(
             Option<&Mesh3d>,
             Option<&MeshMaterial3d<StandardMaterial>>,
             Option<&Collider>,
+            Option<&RenderGeometryClass>,
         ),
         Or<(
             With<MeshletMesh3d>,
             With<RaytracingMesh3d>,
             With<Mesh3d>,
             With<Collider>,
+            With<RenderGeometryClass>,
         )>,
     >,
 ) {
     if !diagnostics.timer.tick(time.delta()).just_finished() {
         return;
     }
+    let diagnostics_started = Instant::now();
 
     let mut renderable_count = 0usize;
     let mut meshlet_count = 0usize;
@@ -1455,6 +1859,11 @@ fn log_client_diagnostics(
     let mut mesh3d_count = 0usize;
     let mut material_count = 0usize;
     let mut collider_count = 0usize;
+    let mut simple_raster_count = 0usize;
+    let mut meshlet_static_dense_count = 0usize;
+    let mut meshlet_dynamic_dense_count = 0usize;
+    let mut ray_proxy_only_count = 0usize;
+    let mut viewmodel_count = 0usize;
     let mut samples = Vec::new();
 
     for (
@@ -1467,6 +1876,7 @@ fn log_client_diagnostics(
         mesh3d,
         material,
         collider,
+        geometry_class,
     ) in &renderables
     {
         renderable_count += 1;
@@ -1475,6 +1885,14 @@ fn log_client_diagnostics(
         mesh3d_count += usize::from(mesh3d.is_some());
         material_count += usize::from(material.is_some());
         collider_count += usize::from(collider.is_some());
+        match geometry_class {
+            Some(RenderGeometryClass::SimpleRaster) => simple_raster_count += 1,
+            Some(RenderGeometryClass::MeshletStaticDense) => meshlet_static_dense_count += 1,
+            Some(RenderGeometryClass::MeshletDynamicDense) => meshlet_dynamic_dense_count += 1,
+            Some(RenderGeometryClass::RayProxyOnly) => ray_proxy_only_count += 1,
+            Some(RenderGeometryClass::Viewmodel) => viewmodel_count += 1,
+            None => {}
+        }
 
         if samples.len() < 6 {
             let translation = global_transform
@@ -1482,7 +1900,7 @@ fn log_client_diagnostics(
                 .or_else(|| transform.map(|transform| transform.translation))
                 .unwrap_or(Vec3::NAN);
             samples.push(format!(
-                "{:?}/{} pos=({:.2},{:.2},{:.2}) meshlet={} ray={} mesh3d={} mat={} collider={}",
+                "{:?}/{} pos=({:.2},{:.2},{:.2}) meshlet={} ray={} mesh3d={} mat={} collider={} class={:?}",
                 entity,
                 name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
                 translation.x,
@@ -1493,6 +1911,7 @@ fn log_client_diagnostics(
                 mesh3d.is_some(),
                 material.is_some(),
                 collider.is_some(),
+                geometry_class,
             ));
         }
     }
@@ -1503,10 +1922,6 @@ fn log_client_diagnostics(
         .filter(|(_, _, _, camera, _, _)| camera.is_none_or(|camera| camera.is_active))
         .count();
     if camera_count != 1 || active_camera_count != 1 {
-        info!(
-            "[client camera] expected exactly one active 3D camera, found cameras={} active={}",
-            camera_count, active_camera_count
-        );
         warn!(
             target: "fun::camera",
             cameras = camera_count,
@@ -1515,105 +1930,88 @@ fn log_client_diagnostics(
         );
     }
 
-    info!(
-        "[client diag] world level={:?} revision={:?} chunks={}/{} spawned={} ack_sent={} cameras={} active_cameras={} renderables={} meshlet={} raytracing={} mesh3d={} materials={} colliders={}",
-        loaded_world.level_id,
-        loaded_world.revision.map(|revision| revision.0),
-        loaded_world.received_chunks.len(),
-        loaded_world.expected_chunks,
-        loaded_world.spawned_entities.len(),
-        loaded_world.ack_sent,
-        camera_count,
-        active_camera_count,
-        renderable_count,
-        meshlet_count,
-        raytracing_count,
-        mesh3d_count,
-        material_count,
-        collider_count,
-    );
-    info!(
-        target: "fun::diag",
-        level = ?loaded_world.level_id,
-        revision = ?loaded_world.revision.map(|revision| revision.0),
-        chunks_received = loaded_world.received_chunks.len(),
-        chunks_expected = loaded_world.expected_chunks,
-        spawned_entities = loaded_world.spawned_entities.len(),
-        ack_sent = loaded_world.ack_sent,
-        cameras = camera_count,
-        active_cameras = active_camera_count,
-        renderables = renderable_count,
-        meshlets = meshlet_count,
-        raytracing = raytracing_count,
-        mesh3d = mesh3d_count,
-        materials = material_count,
-        colliders = collider_count,
-        "client world diagnostic snapshot"
-    );
-
-    for (entity, name, transform, camera, projection, solari) in &cameras {
-        let translation = transform.translation();
+    if log_config.diagnostics_verbose() {
         info!(
-            "[client diag] camera {:?}/{} active={} projection={} solari={} pos=({:.2},{:.2},{:.2}) forward=({:.2},{:.2},{:.2})",
-            entity,
-            name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
-            camera.is_none_or(|camera| camera.is_active),
-            projection.map(projection_summary).unwrap_or("<none>"),
-            solari.is_some(),
-            translation.x,
-            translation.y,
-            translation.z,
-            transform.forward().x,
-            transform.forward().y,
-            transform.forward().z,
+            target: "fun::diag",
+            level = ?loaded_world.level_id,
+            revision = ?loaded_world.revision.map(|revision| revision.0),
+            chunks_received = loaded_world.received_chunks.len(),
+            chunks_expected = loaded_world.expected_chunks,
+            spawned_entities = loaded_world.spawned_entities.len(),
+            ack_sent = loaded_world.ack_sent,
+            cameras = camera_count,
+            active_cameras = active_camera_count,
+            renderables = renderable_count,
+            meshlets = meshlet_count,
+            raytracing = raytracing_count,
+            mesh3d = mesh3d_count,
+            materials = material_count,
+            colliders = collider_count,
+            catalog_assets = catalog.as_ref().map(|catalog| catalog.len()).unwrap_or_default(),
+            simple_raster = simple_raster_count,
+            meshlet_static_dense = meshlet_static_dense_count,
+            meshlet_dynamic_dense = meshlet_dynamic_dense_count,
+            ray_proxy_only = ray_proxy_only_count,
+            viewmodel = viewmodel_count,
+            "client world diagnostic snapshot"
+        );
+        info!(
+            target: "fun::render_catalog",
+            catalog_assets = catalog.as_ref().map(|catalog| catalog.len()).unwrap_or_default(),
+            simple_raster = simple_raster_count,
+            meshlet_static_dense = meshlet_static_dense_count,
+            meshlet_dynamic_dense = meshlet_dynamic_dense_count,
+            ray_proxy_only = ray_proxy_only_count,
+            viewmodel = viewmodel_count,
+            "client render catalog usage snapshot"
         );
     }
+    perf_counters.meshlet_path_instance_count =
+        (meshlet_static_dense_count + meshlet_dynamic_dense_count) as u64;
+    perf_counters.raster_path_instance_count = (simple_raster_count + viewmodel_count) as u64;
+    perf_counters.ray_proxy_only_count = ray_proxy_only_count as u64;
 
-    for sample in samples {
-        info!("[client diag] renderable {sample}");
-        debug!(target: "fun::diag::renderable", %sample, "renderable diagnostic sample");
+    if log_config.diagnostics_verbose() {
+        for (entity, name, transform, camera, projection, solari) in &cameras {
+            let translation = transform.translation();
+            info!(
+                target: "fun::diag::camera",
+                entity = ?entity,
+                name = name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
+                active = camera.is_none_or(|camera| camera.is_active),
+                projection = projection.map(projection_summary).unwrap_or("<none>"),
+                solari = solari.is_some(),
+                position_x = translation.x,
+                position_y = translation.y,
+                position_z = translation.z,
+                forward_x = transform.forward().x,
+                forward_y = transform.forward().y,
+                forward_z = transform.forward().z,
+                "client camera diagnostic sample"
+            );
+        }
+
+        for sample in samples {
+            debug!(target: "fun::diag::renderable", %sample, "renderable diagnostic sample");
+        }
     }
 
+    schedule_profiler.record_elapsed(
+        ClientScheduleSystem::DiagnosticsLogging,
+        diagnostics_started,
+    );
     log_render_performance(
         &render_diagnostics,
         render_recovery.as_deref(),
         solari_runtime_params.as_mut(),
+        perf_counters.as_mut(),
+        schedule_profiler.as_mut(),
         render_config.render_profile_verbose,
         primary_window
             .single()
             .ok()
             .map(ClientWindowProfile::from_window),
     );
-}
-
-fn primitive_summary(primitive: Option<WorldPrimitive>) -> String {
-    match primitive {
-        Some(WorldPrimitive::Plane { size }) => {
-            let size = vec3_from_quantized(size);
-            format!("plane({:.2},{:.2},{:.2})", size.x, size.y, size.z)
-        }
-        Some(WorldPrimitive::Cuboid { size }) => {
-            let size = vec3_from_quantized(size);
-            format!("cuboid({:.2},{:.2},{:.2})", size.x, size.y, size.z)
-        }
-        None => "none".to_owned(),
-    }
-}
-
-fn collider_summary(collider: Option<WorldCollider>) -> String {
-    match collider {
-        Some(WorldCollider::Cuboid { size }) => {
-            let size = vec3_from_quantized(size);
-            format!("cuboid({:.2},{:.2},{:.2})", size.x, size.y, size.z)
-        }
-        None => "none".to_owned(),
-    }
-}
-
-fn color_summary(color: Option<PackedColorRgba8>) -> String {
-    color
-        .map(|color| format!("rgba({}, {}, {}, {})", color.r, color.g, color.b, color.a))
-        .unwrap_or_else(|| "none".to_owned())
 }
 
 fn projection_summary(projection: &Projection) -> &'static str {
@@ -1662,6 +2060,8 @@ fn log_render_performance(
     diagnostics: &DiagnosticsStore,
     render_recovery: Option<&RenderRecoveryStatus>,
     solari_runtime_params: &mut SolariRuntimeParams,
+    perf_counters: &mut ClientPerfCounters,
+    schedule_profiler: &mut ClientScheduleProfiler,
     verbose_profile: bool,
     window: Option<ClientWindowProfile>,
 ) {
@@ -1775,17 +2175,82 @@ fn log_render_performance(
         solari_denoise_atrous_3,
         solari_denoise_composite,
     ]);
+    let solari_runtime_update_started = Instant::now();
     solari_runtime_params.previous_solari_ns = ms_to_u32_ns(solari_total);
     solari_runtime_params.previous_direct_ns = ms_to_u32_ns(solari_direct);
     solari_runtime_params.previous_diffuse_gi_ns = ms_to_u32_ns(solari_diffuse);
     solari_runtime_params.previous_specular_ns = ms_to_u32_ns(solari_specular);
     solari_runtime_params.previous_radiance_cache_ns = ms_to_u32_ns(solari_world_cache);
     solari_runtime_params.previous_denoise_ns = ms_to_u32_ns(solari_denoise_total);
+    schedule_profiler.record_elapsed(
+        ClientScheduleSystem::SolariRuntimeParamsUpdate,
+        solari_runtime_update_started,
+    );
     let meshlet_visibility = diagnostic_average(
         diagnostics,
         "render/meshlet_visibility_buffer_raster/elapsed_gpu",
     );
+    let meshlet_visibility_first_pass = diagnostic_average(
+        diagnostics,
+        "render/meshlet_visibility_buffer_raster/first_pass/elapsed_gpu",
+    );
+    let meshlet_visibility_depth_pyramid_1 = diagnostic_average(
+        diagnostics,
+        "render/meshlet_visibility_buffer_raster/depth_pyramid_first/elapsed_gpu",
+    );
+    let meshlet_visibility_second_pass = diagnostic_average(
+        diagnostics,
+        "render/meshlet_visibility_buffer_raster/second_pass/elapsed_gpu",
+    );
+    let meshlet_visibility_depth_resolve = diagnostic_average(
+        diagnostics,
+        "render/meshlet_visibility_buffer_raster/depth_resolve/elapsed_gpu",
+    );
+    let meshlet_visibility_material_depth = diagnostic_average(
+        diagnostics,
+        "render/meshlet_visibility_buffer_raster/material_depth_resolve/elapsed_gpu",
+    );
+    let meshlet_visibility_depth_pyramid_2 = diagnostic_average(
+        diagnostics,
+        "render/meshlet_visibility_buffer_raster/depth_pyramid_second/elapsed_gpu",
+    );
+    let meshlet_path_instance_count =
+        diagnostic_average(diagnostics, "meshlet_path_instance_count")
+            .map(|value| value as u64)
+            .unwrap_or(perf_counters.meshlet_path_instance_count);
+    let meshlet_extract_cpu_ns =
+        diagnostic_average(diagnostics, "meshlet_extract_cpu_ns").map(ms_to_ns_from_value);
+    if let Some(meshlet_extract_cpu_ns) = meshlet_extract_cpu_ns {
+        schedule_profiler.record_ns(
+            ClientScheduleSystem::MeshletExtraction,
+            meshlet_extract_cpu_ns,
+        );
+    }
+    let meshlet_prepare_cpu_ns =
+        diagnostic_average(diagnostics, "meshlet_prepare_cpu_ns").map(ms_to_ns_from_value);
+    let meshlet_bind_group_prepare_cpu_ns =
+        diagnostic_average(diagnostics, "meshlet_bind_group_prepare_cpu_ns")
+            .map(ms_to_ns_from_value);
     let dlss_rr = diagnostic_average(diagnostics, "render/dlss_ray_reconstruction/elapsed_gpu");
+    let standard_raster = diagnostic_average(diagnostics, "render/main_opaque_pass_3d/elapsed_gpu");
+    let post_process = sum_optional_ms([
+        diagnostic_average(diagnostics, "render/tonemapping/elapsed_gpu"),
+        diagnostic_average(diagnostics, "render/upscaling/elapsed_gpu"),
+        diagnostic_average(diagnostics, "render/bloom/elapsed_gpu"),
+        diagnostic_average(diagnostics, "render/anti_aliasing/elapsed_gpu"),
+    ]);
+    let ui_overlay_cpu_ns =
+        diagnostic_average(diagnostics, "render/ui/elapsed_cpu").map(ms_to_ns_from_value);
+    let present_wait_ns =
+        diagnostic_average(diagnostics, "render/present/elapsed_cpu").map(ms_to_ns_from_value);
+    let physics_fixed_update_cpu_ns =
+        diagnostic_average(diagnostics, "physics/fixed_update/elapsed_cpu")
+            .map(ms_to_ns_from_value);
+    let network_receive_cpu_ns = take_counter(&mut perf_counters.network_receive_cpu_ns);
+    let world_stream_apply_cpu_ns = take_counter(&mut perf_counters.world_stream_apply_cpu_ns);
+    let catalog_lookup_cpu_ns = take_counter(&mut perf_counters.catalog_lookup_cpu_ns);
+    let raster_path_instance_count = perf_counters.raster_path_instance_count;
+    let ray_proxy_only_count = perf_counters.ray_proxy_only_count;
     let pixel_count = window.map(ClientWindowProfile::physical_pixels);
     let mpixels = pixel_count.map(|pixels| pixels as f64 / 1_000_000.0);
     let configured_budget_pressure =
@@ -1895,6 +2360,34 @@ fn log_render_performance(
         "client render performance sample"
     );
     info!(
+        target: "fun::perf::non_solari",
+        meshlet_visibility_gpu_ms = ?meshlet_visibility,
+        meshlet_visibility_gpu_ns = ?ms_to_ns(meshlet_visibility),
+        meshlet_first_pass_gpu_ns = ?ms_to_ns(meshlet_visibility_first_pass),
+        meshlet_depth_pyramid_first_gpu_ns = ?ms_to_ns(meshlet_visibility_depth_pyramid_1),
+        meshlet_second_pass_gpu_ns = ?ms_to_ns(meshlet_visibility_second_pass),
+        meshlet_depth_resolve_gpu_ns = ?ms_to_ns(meshlet_visibility_depth_resolve),
+        meshlet_material_depth_gpu_ns = ?ms_to_ns(meshlet_visibility_material_depth),
+        meshlet_depth_pyramid_second_gpu_ns = ?ms_to_ns(meshlet_visibility_depth_pyramid_2),
+        post_process_gpu_ms = ?post_process,
+        post_process_gpu_ns = ?ms_to_ns(post_process),
+        meshlet_extract_cpu_ns = ?meshlet_extract_cpu_ns,
+        meshlet_prepare_cpu_ns = ?meshlet_prepare_cpu_ns,
+        meshlet_bind_group_prepare_cpu_ns = ?meshlet_bind_group_prepare_cpu_ns,
+        meshlet_path_instance_count,
+        raster_path_instance_count,
+        ray_proxy_only_count,
+        standard_raster_gpu_ms = ?standard_raster,
+        standard_raster_gpu_ns = ?ms_to_ns(standard_raster),
+        physics_fixed_update_cpu_ns = ?physics_fixed_update_cpu_ns,
+        network_receive_cpu_ns,
+        world_stream_apply_cpu_ns,
+        catalog_lookup_cpu_ns,
+        ui_overlay_cpu_ns = ?ui_overlay_cpu_ns,
+        present_wait_ns = ?present_wait_ns,
+        "non-Solari performance budget sample"
+    );
+    info!(
         "[client perf] fps={} frame_ms={} solari_gpu_ms={} meshlet_visibility_gpu_ms={} dlss_rr_gpu_ms={}",
         format_optional_number(fps),
         format_optional_number(frame_ms),
@@ -1902,6 +2395,35 @@ fn log_render_performance(
         format_optional_number(meshlet_visibility),
         format_optional_number(dlss_rr),
     );
+    info!(
+        "[client perf] non_solari gpu_ms: meshlet_visibility_gpu_ms={} meshlet_first_pass_gpu_ms={} meshlet_depth_pyramid_first_gpu_ms={} meshlet_second_pass_gpu_ms={} meshlet_depth_resolve_gpu_ms={} meshlet_material_depth_gpu_ms={} meshlet_depth_pyramid_second_gpu_ms={} standard_raster_gpu_ms={} post_process_gpu_ms={}",
+        format_optional_number(meshlet_visibility),
+        format_optional_number(meshlet_visibility_first_pass),
+        format_optional_number(meshlet_visibility_depth_pyramid_1),
+        format_optional_number(meshlet_visibility_second_pass),
+        format_optional_number(meshlet_visibility_depth_resolve),
+        format_optional_number(meshlet_visibility_material_depth),
+        format_optional_number(meshlet_visibility_depth_pyramid_2),
+        format_optional_number(standard_raster),
+        format_optional_number(post_process),
+    );
+    info!(
+        "[client perf] render paths: meshlet_path_instance_count={} raster_path_instance_count={} ray_proxy_only_count={}",
+        meshlet_path_instance_count, raster_path_instance_count, ray_proxy_only_count,
+    );
+    info!(
+        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} ui_overlay_cpu_ns={} present_wait_ns={}",
+        format_optional_u64(meshlet_extract_cpu_ns),
+        format_optional_u64(meshlet_prepare_cpu_ns),
+        format_optional_u64(meshlet_bind_group_prepare_cpu_ns),
+        format_optional_u64(physics_fixed_update_cpu_ns),
+        network_receive_cpu_ns,
+        world_stream_apply_cpu_ns,
+        catalog_lookup_cpu_ns,
+        format_optional_u64(ui_overlay_cpu_ns),
+        format_optional_u64(present_wait_ns),
+    );
+    log_schedule_heatmap(schedule_profiler);
 
     if let Some(window) = window {
         info!(
@@ -1912,7 +2434,7 @@ fn log_render_performance(
             physical_height = window.physical_height,
             scale_factor = window.scale_factor,
             pixels = window.physical_pixels(),
-            target_120hz_ms = target_frame_ms(120.0),
+            target_render_ms = target_frame_ms(DEFAULT_RENDER_TARGET_RATE_HZ),
             target_solari_ms = target_frame_ms(solari_runtime_params.target_fps as f64),
             "client window render target"
         );
@@ -2127,6 +2649,65 @@ fn log_render_performance(
             "renderer recovery status"
         );
     }
+}
+
+fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
+    let mut reports = schedule_profiler.drain_reports();
+    let total_ns = reports
+        .iter()
+        .map(|report| report.total_ns)
+        .fold(0u64, u64::saturating_add);
+    if reports.is_empty() {
+        return;
+    }
+
+    let schedule_payload = reports
+        .iter()
+        .map(|report| format!("{}_ns={}", report.system.metric_name(), report.total_ns))
+        .collect::<Vec<_>>()
+        .join(" ");
+    info!("[client perf] schedule cpu_ns: {schedule_payload}");
+
+    let schedule_max_payload = reports
+        .iter()
+        .map(|report| {
+            format!(
+                "{}_max_ns={} {}_count={}",
+                report.system.metric_name(),
+                report.max_ns,
+                report.system.metric_name(),
+                report.count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    info!("[client perf] schedule detail: {schedule_max_payload}");
+
+    reports.sort_by(|left, right| right.total_ns.cmp(&left.total_ns));
+    let heatmap = reports
+        .iter()
+        .map(|report| {
+            let pct = if total_ns > 0 {
+                (report.total_ns as f64 / total_ns as f64) * 100.0
+            } else {
+                0.0
+            };
+            format!(
+                "{}={}ns/{:.1}%",
+                report.system.metric_name(),
+                report.total_ns,
+                pct
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    info!("[client perf] schedule heatmap: total_ns={total_ns} {heatmap}");
+    info!(
+        target: "fun::perf::schedule_heatmap",
+        total_ns,
+        heatmap = %heatmap,
+        "client schedule heatmap"
+    );
 }
 
 fn log_verbose_render_profile(
@@ -2389,7 +2970,11 @@ fn format_optional_number(value: Option<f64>) -> String {
 }
 
 fn ms_to_ns(value: Option<f64>) -> Option<u64> {
-    value.map(|value| (value * 1_000_000.0).round().max(0.0) as u64)
+    value.map(ms_to_ns_from_value)
+}
+
+fn ms_to_ns_from_value(value: f64) -> u64 {
+    (value * 1_000_000.0).round().max(0.0) as u64
 }
 
 fn ms_to_u32_ns(value: Option<f64>) -> u32 {
@@ -2407,6 +2992,18 @@ fn sum_optional_ms(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64>
 
 fn format_number(value: f64) -> String {
     format!("{value:.2}")
+}
+
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "pending".to_owned())
+}
+
+fn take_counter(counter: &mut u64) -> u64 {
+    let value = *counter;
+    *counter = 0;
+    value
 }
 
 fn color_from_packed(color: Option<PackedColorRgba8>) -> StandardMaterial {

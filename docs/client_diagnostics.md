@@ -15,7 +15,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -Rende
 tools.
 
 ```text
-RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug
+RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug
 ```
 
 You can override `RUST_LOG` manually when you need a narrower view.
@@ -35,6 +35,19 @@ can perturb frame time.
 - `fun::diag`: periodic world/camera/renderable inventory.
 - `fun::perf`: FPS, frame ms/ns, Solari total ns, meshlet visibility ns, and
   external RR ns.
+- `fun::perf::schedule_heatmap`: actual client system costs gathered from the
+  running Bevy schedule. It reports networking receive, streamed-world apply,
+  movement input, look, first-person physics movement, diagnostics logging,
+  render config/window work, Solari runtime-param updates, meshlet extraction,
+  and render interpolation as nanoseconds plus share of measured client CPU
+  work.
+- `fun::perf::non_solari`: meshlet visibility sub-pass GPU timings, meshlet
+  extraction/preparation CPU timings, world-stream apply cost, catalog lookup
+  cost, physics fixed-update cost, postprocess cost, overlay cost, and present
+  wait. It also reports render-path counts and standard-raster GPU cost so the
+  meshlet floor can be separated from normal PBR raster work.
+- `fun::render_catalog`: prewarmed render-catalog inventory, per-asset geometry
+  class decisions, and runtime catalog usage counts.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,
   surface classification, work-queue construction, diffuse GI plus split
   diffuse initial/spatial timings, specular regular/queued/PSR, guide resolve, cheap
@@ -64,6 +77,28 @@ can perturb frame time.
   opaque to Bevy and are reported as such.
 - `bevy_pbr::meshlet::vram`: meshlet persistent GPU buffer allocation changes
   and queued upload counts.
+- `bevy_render::transient`: frame-local render scratch resource requests,
+  creates, previous-frame reuses, same-frame lifetime aliases, and cached slot
+  counts.
+- `bevy_render::scheduler`: render graph budget pressure.
+- `bevy_pbr::meshlet::scheduler`: meshlet visibility budget decisions and
+  async-compute policy decisions. WGPU currently runs these candidates through
+  the graphics-queue fallback unless a backend-specific async path proves a p95
+  win.
+
+## Render Graph Resource Policy
+
+The Bevy fork now exposes a render transient resource arena. Render graph users
+declare scratch resource lifetimes by logical pass range. Matching resources can
+be reused from prior frames, and same-frame aliasing is allowed only when the
+declared lifetimes do not overlap. This is intentionally conservative: it lowers
+allocation churn without depending on backend-specific explicit heap aliasing.
+
+Meshlet visibility is the first consumer. Its dummy render target is transient,
+while visibility buffers and cull queues stay persistent because they need stable
+capacity and bind-group behavior. The benchmark parser recognizes
+`bevy_render::transient` logs as `transient_*` metrics when trace diagnostics
+are enabled.
 
 ## GPU Contention
 
@@ -137,6 +172,25 @@ meshlet presentation is not lowered by this control. Bevy's
 `MainPassResolutionOverride` path is still respected by Solari resource
 preparation when a caller explicitly opts into a lower main-pass resolution, but
 the game client does not use that route for the default Solari-only tests.
+
+## Hot-Path Logging Policy
+
+Benchmarks default to metric-only logging. Repeated chunk, entity, control
+packet, render catalog, and inventory logs are opt-in so IO does not become a
+hidden frame-time variable:
+
+- `FUN_BENCHMARK_LOG_MINIMAL=1` keeps benchmark output focused on metrics.
+- `FUN_LOG_STREAM_VERBOSE=1` enables streamed-world chunk/entity details unless
+  benchmark-minimal logging is active.
+- `FUN_LOG_NET_VERBOSE=1` enables packet/control-flow details unless
+  benchmark-minimal logging is active.
+- `FUN_LOG_RENDER_VERBOSE=1` enables render-catalog/render-component details
+  unless benchmark-minimal logging is active.
+
+The stack script exposes the same controls as `-BenchmarkLogMinimal`,
+`-LogStreamVerbose`, `-LogNetVerbose`, and `-LogRenderVerbose`. New diagnostic
+output should use tracing macros and targets, not `println!` or duplicate stdout
+paths.
 
 ## Denoiser Comparison
 
