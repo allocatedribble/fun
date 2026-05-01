@@ -199,17 +199,9 @@ struct ServerEditorSchema {
     registry: game_shared::EditorSchemaRegistry<'static>,
 }
 
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, Resource, Default)]
 struct ServerEditorInspectorState {
     state: game_shared::EditorInspectorRuntimeState,
-}
-
-impl Default for ServerEditorInspectorState {
-    fn default() -> Self {
-        Self {
-            state: game_shared::EditorInspectorRuntimeState::default(),
-        }
-    }
 }
 
 impl Default for ServerEditorSchema {
@@ -651,6 +643,10 @@ fn elapsed_ns(started: Instant) -> u64 {
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy query tuple keeps streamable inventory diagnostics aligned with the exact ECS read set"
+)]
 fn log_streamable_inventory(
     mut diagnostics: ResMut<ServerWorldDiagnostics>,
     log_config: Res<ServerLogConfig>,
@@ -957,6 +953,10 @@ fn receive_client_control(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "editor mutation application is a Bevy system with explicit resource/query access at one deterministic stage"
+)]
 fn apply_server_editor_mutations(
     inspector: Res<ServerEditorInspectorState>,
     schema: Res<ServerEditorSchema>,
@@ -1205,7 +1205,7 @@ fn apply_server_transform_transaction(
         entity: patch.entity,
         class: identity.class,
         authority: authority.mode,
-        transform: Some(qtransform(&*transform)),
+        transform: Some(qtransform(&transform)),
         body: None,
         components: Vec::new(),
     };
@@ -1334,6 +1334,10 @@ fn editor_mutation_diagnostic(
     }
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy query tuple documents the authoritative server components exposed to the editor snapshot"
+)]
 fn update_server_editor_inspector_snapshot(
     inspector: Res<ServerEditorInspectorState>,
     manifest: Res<ServerWorldStream>,

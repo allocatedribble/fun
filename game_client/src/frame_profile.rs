@@ -56,7 +56,9 @@ pub(crate) use frame_profile_start;
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 mod enabled {
-    use std::{borrow::Cow, collections::BTreeMap, panic::Location, time::Instant};
+    use std::{
+        borrow::Cow, collections::BTreeMap, fmt::Write as _, panic::Location, time::Instant,
+    };
 
     use bevy::{
         app::{FixedMainScheduleOrder, MainScheduleOrder, SpawnScene},
@@ -312,7 +314,7 @@ mod enabled {
             }
 
             let frame_ns = elapsed_ns(self.frame_started);
-            let should_emit = self.frame_index % self.interval_frames == 0
+            let should_emit = self.frame_index.is_multiple_of(self.interval_frames)
                 || (self.min_frame_ns > 0 && frame_ns >= self.min_frame_ns);
             if !should_emit {
                 return;
@@ -587,7 +589,8 @@ mod enabled {
 
         fn format_report(&self, frame_ns: u64, summary: FrameProfileSummary) -> String {
             let mut output = format!("GAME FRAME {}: {} ns", self.frame_index, frame_ns);
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "\nsummary: main_profiled_ns={} main_unattributed_ns={} gpu_render_ns={} render_cpu_ns={} total_profiled_ns={} thread_count={} span_count={} marker_count={} gpu_sample_status={} app_frame_index={} render_frame_index={} gpu_query_frame_index={} sample_latency_frames={}",
                 summary.main_profiled_ns,
                 summary.main_unattributed_ns,
@@ -602,15 +605,15 @@ mod enabled {
                 format_optional_u64(summary.render_frame_index),
                 format_optional_u64(summary.gpu_query_frame_index),
                 format_optional_u64(summary.sample_latency_frames),
-            ));
+            );
 
             self.append_timeline(&mut output);
 
             let mut threads = self.threads.iter().collect::<Vec<_>>();
-            threads.sort_by(|(_, left), (_, right)| right.display_ns().cmp(&left.display_ns()));
+            threads.sort_by_key(|(_, right)| std::cmp::Reverse(right.display_ns()));
 
             if !self.threads.contains_key(MAIN_THREAD_NAME) {
-                output.push_str(&format!("\n{MAIN_THREAD_NAME} -"));
+                let _ = write!(output, "\n{MAIN_THREAD_NAME} -");
                 append_line(
                     &mut output,
                     LineRender {
@@ -632,7 +635,7 @@ mod enabled {
                 } else {
                     thread.display_ns()
                 };
-                output.push_str(&format!("\n{thread_name} -"));
+                let _ = write!(output, "\n{thread_name} -");
                 append_children(
                     &mut output,
                     &thread.root,
@@ -676,7 +679,7 @@ mod enabled {
             let mut markers = self.markers.iter().collect::<Vec<_>>();
             markers.sort_by_key(|marker| marker.offset_ns);
             for marker in markers {
-                output.push_str(&format!("\n@{}ns {}", marker.offset_ns, marker.name));
+                let _ = write!(output, "\n@{}ns {}", marker.offset_ns, marker.name);
             }
         }
 
@@ -687,7 +690,7 @@ mod enabled {
 
             output.push_str("\nslow-spans inclusive -");
             let mut spans = self.spans.iter().collect::<Vec<_>>();
-            spans.sort_by(|left, right| right.ns.cmp(&left.ns));
+            spans.sort_by_key(|right| std::cmp::Reverse(right.ns));
             for (rank, span) in spans.into_iter().take(self.top_spans).enumerate() {
                 let pct = if frame_ns > 0 {
                     (span.ns as f64 / frame_ns as f64) * 100.0
@@ -708,13 +711,14 @@ mod enabled {
                     .start_ns
                     .map(|value| format!(" start_ns={value}"))
                     .unwrap_or_default();
-                output.push_str(&format!(
+                let _ = write!(
+                    output,
                     "\n#{} {} {}{source} {pct:.2}% {} ns{start}",
                     rank + 1,
                     span.thread,
                     span.path,
                     span.ns
-                ));
+                );
             }
         }
 
@@ -731,7 +735,7 @@ mod enabled {
             }
 
             let mut spans = self.spans.iter().collect::<Vec<_>>();
-            spans.sort_by(|left, right| right.ns.cmp(&left.ns));
+            spans.sort_by_key(|right| std::cmp::Reverse(right.ns));
             for (rank, span) in spans.into_iter().take(self.top_spans).enumerate() {
                 game_shared::fun_diag_info!(
                     target: "fun::frame_time::span",
@@ -829,7 +833,7 @@ mod enabled {
         top_children: usize,
     ) {
         let mut children = node.children.values().collect::<Vec<_>>();
-        children.sort_by(|left, right| right.display_ns().cmp(&left.display_ns()));
+        children.sort_by_key(|right| std::cmp::Reverse(right.display_ns()));
         let omitted_count = children.len().saturating_sub(top_children);
         let omitted_ns = children
             .iter()
@@ -932,15 +936,17 @@ mod enabled {
             .map(|start_ns| format!(" start_ns={start_ns}"))
             .unwrap_or_default();
         if line.count > 1 {
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "\n{dashes}{}{source} {pct:.2}% {} ns count={}{}{}",
                 line.name, line.ns, line.count, self_suffix, start_suffix
-            ));
+            );
         } else {
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "\n{dashes}{}{source} {pct:.2}% {} ns{}{}",
                 line.name, line.ns, self_suffix, start_suffix
-            ));
+            );
         }
     }
 

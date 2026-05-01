@@ -233,10 +233,10 @@ impl EditorInspectorRuntimeState {
             .entities
             .iter()
             .filter(|row| {
-                if query.entity.map_or(false, |entity| row.entity != entity) {
+                if query.entity.is_some_and(|entity| row.entity != entity) {
                     return false;
                 }
-                query.component_filter.map_or(true, |component| {
+                query.component_filter.is_none_or(|component| {
                     row.components
                         .iter()
                         .any(|value| value.component_kind == component)
@@ -396,7 +396,7 @@ pub fn spawn_editor_inspector_service(
         let listener = TcpListener::bind(&bind_addr).map_err(io_error)?;
         let local_addr = listener.local_addr().map_err(io_error)?.to_string();
         let listener_config = config.clone();
-        let listener_auth = auth.clone();
+        let listener_auth = auth;
         thread::Builder::new()
             .name(format!(
                 "fun-editor-{:?}-inspector",
@@ -407,7 +407,7 @@ pub fn spawn_editor_inspector_service(
                     let config = listener_config.clone();
                     let auth = listener_auth.clone();
                     let _ = thread::Builder::new()
-                        .name("fun-editor-inspector-connection".to_string())
+                        .name("fun-editor-inspector-connection".to_owned())
                         .spawn(move || {
                             let _ = handle_runtime_editor_connection(stream, config, auth);
                         });
@@ -492,13 +492,13 @@ fn handle_runtime_editor_connection(
             EditorHandshakePayload::Hello { hello } => hello,
             _ => {
                 return Err(EditorInspectorServiceError::Protocol(
-                    "first packet must be EditorHello".to_string(),
+                    "first packet must be EditorHello".to_owned(),
                 ));
             }
         },
         _ => {
             return Err(EditorInspectorServiceError::Protocol(
-                "first packet must be a handshake packet".to_string(),
+                "first packet must be a handshake packet".to_owned(),
             ));
         }
     };
@@ -542,13 +542,13 @@ fn handle_runtime_editor_connection(
             EditorHandshakePayload::Auth { auth } => auth,
             _ => {
                 return Err(EditorInspectorServiceError::Protocol(
-                    "expected EditorAuth after AuthRequired".to_string(),
+                    "expected EditorAuth after AuthRequired".to_owned(),
                 ));
             }
         },
         _ => {
             return Err(EditorInspectorServiceError::Protocol(
-                "auth packet must be a handshake packet".to_string(),
+                "auth packet must be a handshake packet".to_owned(),
             ));
         }
     };

@@ -1143,10 +1143,10 @@ fn validate_header_revision(
     header: &EditorPacketHeader,
     context: &EditorProtocolValidationContext,
 ) -> Result<(), EditorProtocolValidationError> {
-    if let Some(base_world_revision) = header.base_world_revision {
-        if base_world_revision < context.world_revision {
-            return Err(EditorProtocolValidationError::StaleRevision);
-        }
+    if let Some(base_world_revision) = header.base_world_revision
+        && base_world_revision < context.world_revision
+    {
+        return Err(EditorProtocolValidationError::StaleRevision);
     }
     Ok(())
 }

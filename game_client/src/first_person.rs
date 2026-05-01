@@ -433,6 +433,10 @@ fn interpolate_player_render_transform(
     schedule_profiler.record_elapsed(ClientScheduleSystem::RenderInterpolation, started);
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy system query tuple keeps the player movement read/write set explicit for scheduler analysis"
+)]
 fn apply_kinematic_movement(
     time: Res<Time>,
     mut commands: Commands,

@@ -5,6 +5,11 @@ use std::{
 
 use game_shared::{BACKEND_SERVER_ADDR, GAME_TITLE};
 
+#[allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "backend_server is a temporary developer CLI scaffold until the runtime diagnostics sink owns process status"
+)]
 fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(BACKEND_SERVER_ADDR)?;
     println!("Starting {GAME_TITLE} backend server scaffold on {BACKEND_SERVER_ADDR}.");

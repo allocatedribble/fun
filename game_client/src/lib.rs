@@ -259,17 +259,9 @@ struct ClientEditorControlPlane {
     diagnostic_streams: Vec<game_shared::EditorDiagnosticStream>,
 }
 
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, Resource, Default)]
 struct ClientEditorInspectorState {
     state: game_shared::EditorInspectorRuntimeState,
-}
-
-impl Default for ClientEditorInspectorState {
-    fn default() -> Self {
-        Self {
-            state: game_shared::EditorInspectorRuntimeState::default(),
-        }
-    }
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
@@ -777,6 +769,10 @@ fn client_editor_component_schemas() -> Vec<game_shared::EditorComponentSchema> 
     ]
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "schema registration rows stay compact here until the editor schema macro owns this table"
+)]
 fn client_component_schema(
     stable_type_id: u64,
     component_kind: ComponentKind,
@@ -801,6 +797,10 @@ fn client_component_schema(
     }
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy query tuple documents the exact client mirror components exposed to the editor snapshot"
+)]
 fn update_client_editor_inspector_snapshot(
     inspector: Res<ClientEditorInspectorState>,
     loaded_world: Res<LoadedWorldState>,
@@ -1739,6 +1739,10 @@ fn receive_server_snapshots(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters expose each runtime resource and query directly to the scheduler"
+)]
 fn receive_world_stream(
     mut commands: Commands,
     mut client: ResMut<QuinnetClient>,
@@ -2189,6 +2193,10 @@ fn reset_dlss_ray_reconstruction_history(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "world-stream application threads explicit mutable stores through one deterministic baseline update path"
+)]
 fn apply_world_stream_chunk(
     commands: &mut Commands,
     loaded_world: &mut LoadedWorldState,
@@ -2309,6 +2317,10 @@ fn apply_world_stream_chunk(
     world_revision_changed
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn wiring keeps Bevy asset stores explicit while catalog-driven construction is still local"
+)]
 fn spawn_streamed_entity(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -2458,12 +2470,12 @@ fn spawn_streamed_entity(
         if render_config.meshlets_enabled {
             entity_commands.insert((
                 MeshletMesh3d(meshlet_mesh.expect("meshlet handle should exist when enabled")),
-                MeshMaterial3d::<StandardMaterial>(material.clone()),
+                MeshMaterial3d::<StandardMaterial>(material),
             ));
         } else if let Some(mesh) = raytracing_mesh.as_ref() {
             entity_commands.insert((
                 Mesh3d(mesh.clone()),
-                MeshMaterial3d::<StandardMaterial>(material.clone()),
+                MeshMaterial3d::<StandardMaterial>(material),
             ));
         }
 
@@ -2575,6 +2587,11 @@ fn add_scene_mesh_assets(
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    reason = "diagnostics collection intentionally reads many Bevy resources and query shapes without hiding scheduler access"
+)]
 fn log_client_diagnostics(
     time: Res<Time>,
     mut diagnostics: ResMut<ClientDiagnostics>,
@@ -3623,7 +3640,7 @@ fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
         .join(" ");
     game_shared::fun_diag_info!("[client perf] schedule detail: {schedule_max_payload}");
 
-    reports.sort_by(|left, right| right.total_ns.cmp(&left.total_ns));
+    reports.sort_by_key(|report| std::cmp::Reverse(report.total_ns));
     let heatmap = reports
         .iter()
         .map(|report| {

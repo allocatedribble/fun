@@ -2,6 +2,11 @@ use std::process::{Command, ExitCode};
 
 use game_shared::{BACKEND_SERVER_PACKAGE, GAME_CLIENT_PACKAGE, GAME_SERVER_PACKAGE, GAME_TITLE};
 
+#[allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "game_launcher is a developer CLI boundary; these messages are direct command output, not runtime diagnostics"
+)]
 fn main() -> ExitCode {
     let Some(target) = std::env::args().nth(1) else {
         println!(
