@@ -28,6 +28,9 @@ pub const DEFAULT_EDITOR_CONTROL_ADDR: &str = "127.0.0.1:0";
 /// Deterministic runtime schedule stage for accepted editor transactions.
 pub const EDITOR_COMMAND_APPLY_STAGE: &str = "editor_command_apply";
 
+/// Bytes required before an editor wire envelope length can be known.
+pub const EDITOR_WIRE_ENVELOPE_HEADER_LEN: usize = EDITOR_WIRE_HEADER_LEN;
+
 macro_rules! editor_wire_id {
     (
         $(#[$meta:meta])*
@@ -925,6 +928,22 @@ pub fn decode_editor_packet(
         .ok_or(EditorProtocolCodecError::InvalidPacket)
 }
 
+/// Returns the complete envelope length from a received editor wire header.
+pub fn editor_wire_envelope_len(bytes: &[u8]) -> Result<usize, EditorProtocolCodecError> {
+    if bytes.len() < EDITOR_WIRE_HEADER_LEN {
+        return Err(EditorProtocolCodecError::TruncatedEnvelope);
+    }
+    if bytes[..4] != EDITOR_WIRE_MAGIC[..] {
+        return Err(EditorProtocolCodecError::InvalidMagic);
+    }
+    if bytes[4] != EDITOR_WIRE_VERSION {
+        return Err(EditorProtocolCodecError::UnsupportedVersion);
+    }
+
+    let payload_len = u32::from_le_bytes(bytes[5..9].try_into().expect("fixed length")) as usize;
+    Ok(EDITOR_WIRE_HEADER_LEN.saturating_add(payload_len))
+}
+
 fn encode_editor_wire_payload(payload: Vec<u8>) -> Result<Vec<u8>, EditorProtocolCodecError> {
     let payload_len =
         u32::try_from(payload.len()).map_err(|_| EditorProtocolCodecError::PayloadTooLarge)?;
@@ -1253,6 +1272,39 @@ pub fn capability_is_granted(
     required: EditorCapability,
 ) -> bool {
     granted_capabilities.contains(&required)
+}
+
+#[must_use]
+pub const fn editor_capability_name(capability: EditorCapability) -> &'static str {
+    match capability {
+        EditorCapability::ReadEntities => "read_entities",
+        EditorCapability::ReadComponents => "read_components",
+        EditorCapability::ReadResources => "read_resources",
+        EditorCapability::ReadDiagnostics => "read_diagnostics",
+        EditorCapability::ControlRuntime => "control_runtime",
+        EditorCapability::MutateEntities => "mutate_entities",
+        EditorCapability::ApplyScenePatch => "apply_scene_patch",
+        EditorCapability::ExecuteServerCode => "execute_server_code",
+        EditorCapability::ExecuteClientCode => "execute_client_code",
+        EditorCapability::PersistIteration => "persist_iteration",
+    }
+}
+
+#[must_use]
+pub fn parse_editor_capability(value: &str) -> Option<EditorCapability> {
+    match value {
+        "read_entities" => Some(EditorCapability::ReadEntities),
+        "read_components" => Some(EditorCapability::ReadComponents),
+        "read_resources" => Some(EditorCapability::ReadResources),
+        "read_diagnostics" => Some(EditorCapability::ReadDiagnostics),
+        "control_runtime" => Some(EditorCapability::ControlRuntime),
+        "mutate_entities" => Some(EditorCapability::MutateEntities),
+        "apply_scene_patch" => Some(EditorCapability::ApplyScenePatch),
+        "execute_server_code" => Some(EditorCapability::ExecuteServerCode),
+        "execute_client_code" => Some(EditorCapability::ExecuteClientCode),
+        "persist_iteration" => Some(EditorCapability::PersistIteration),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

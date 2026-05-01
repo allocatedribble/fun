@@ -614,6 +614,7 @@ impl Plugin for GameClientPlugin {
             (
                 setup_lighting,
                 prewarm_world_render_catalog,
+                start_client_editor_inspector,
                 connect_to_game_server,
             )
                 .chain(),
@@ -659,6 +660,39 @@ impl Plugin for GameClientPlugin {
                     "render diagnostics requested but game_client/render_diagnostics is not enabled"
                 );
             }
+        }
+    }
+}
+
+fn start_client_editor_inspector() {
+    let execute_client_code_enabled = std::env::var_os("FUN_EDITOR_ENABLE_CLIENT_EXEC").is_some();
+    let mut config = game_shared::EditorInspectorServiceConfig::local_development(
+        game_shared::EditorTargetKind::Client,
+        "fun",
+        game_shared::local_development_capabilities(
+            game_shared::EditorTargetKind::Client,
+            execute_client_code_enabled,
+        ),
+    );
+    config.tick_rate_hz = DEFAULT_TICK_RATE_HZ.round() as u32;
+
+    match game_shared::spawn_editor_inspector_service(config) {
+        Ok(summary) => {
+            if summary.callback_started || summary.bind_addr.is_some() {
+                info!(
+                    target: "fun::editor::control",
+                    callback_started = summary.callback_started,
+                    bind_addr = ?summary.bind_addr,
+                    "client editor inspector service started"
+                );
+            }
+        }
+        Err(error) => {
+            warn!(
+                target: "fun::editor::control",
+                %error,
+                "client editor inspector service did not start"
+            );
         }
     }
 }

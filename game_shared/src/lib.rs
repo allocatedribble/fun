@@ -1,10 +1,12 @@
 pub const GAME_TITLE: &str = "Fun";
 pub mod diagnostics;
+pub mod editor_inspector;
 pub mod editor_protocol;
 pub mod editor_schema;
 pub mod render_catalog;
 
 pub use diagnostics::*;
+pub use editor_inspector::*;
 pub use editor_protocol::*;
 pub use editor_schema::*;
 pub use render_catalog::*;

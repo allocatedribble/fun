@@ -50,7 +50,15 @@ fn main() {
     .insert_resource(ServerLogConfig::from_env())
     .init_resource::<ConnectedClients>()
     .init_resource::<PendingWorldStreams>()
-    .add_systems(Startup, (start_endpoint, spawn_demo_world).chain())
+    .add_systems(
+        Startup,
+        (
+            start_endpoint,
+            start_server_editor_inspector,
+            spawn_demo_world,
+        )
+            .chain(),
+    )
     .add_systems(
         Update,
         (
@@ -360,6 +368,50 @@ fn server_editor_resources() -> &'static [game_shared::EditorResourceRegistratio
             ),
             max_payload_bytes: 0,
         },
+    }
+}
+
+fn server_editor_component_schemas() -> Vec<game_shared::EditorComponentSchema> {
+    server_editor_components()
+        .iter()
+        .enumerate()
+        .map(|(index, registration)| {
+            registration.schema(game_shared::EditorStableTypeId((index as u64) + 1))
+        })
+        .collect()
+}
+
+fn start_server_editor_inspector() {
+    let execute_server_code_enabled = std::env::var_os("FUN_EDITOR_ENABLE_SERVER_EXEC").is_some();
+    let mut config = game_shared::EditorInspectorServiceConfig::local_development(
+        game_shared::EditorTargetKind::Server,
+        "fun",
+        game_shared::local_development_capabilities(
+            game_shared::EditorTargetKind::Server,
+            execute_server_code_enabled,
+        ),
+    );
+    config.tick_rate_hz = DEFAULT_TICK_RATE_HZ.round() as u32;
+    config.component_schemas = server_editor_component_schemas();
+
+    match game_shared::spawn_editor_inspector_service(config) {
+        Ok(summary) => {
+            if summary.callback_started || summary.bind_addr.is_some() {
+                info!(
+                    target: "fun::editor::control",
+                    callback_started = summary.callback_started,
+                    bind_addr = ?summary.bind_addr,
+                    "server editor inspector service started"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "fun::editor::control",
+                %error,
+                "server editor inspector service did not start"
+            );
+        }
     }
 }
 

@@ -12,4 +12,6 @@ diagnostics = []
 
 [dependencies]
 compactly.workspace = true
+getrandom = "0.4.2"
+ring = "0.17.14"
 thunder = { path = "../../thunder", default-features = false }
