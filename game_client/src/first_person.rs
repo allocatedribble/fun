@@ -22,7 +22,31 @@ use bevy::{
 };
 use game_shared::{DEFAULT_CORRECTION_HALF_LIFE_SECONDS, PLAYER_SPAWN};
 
-pub struct FirstPersonControllerPlugin;
+pub struct FirstPersonControllerPlugin {
+    simulation_enabled: bool,
+}
+
+impl FirstPersonControllerPlugin {
+    #[must_use]
+    pub const fn gameplay() -> Self {
+        Self {
+            simulation_enabled: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn preview_camera() -> Self {
+        Self {
+            simulation_enabled: false,
+        }
+    }
+}
+
+impl Default for FirstPersonControllerPlugin {
+    fn default() -> Self {
+        Self::gameplay()
+    }
+}
 pub const PLAYER_RADIUS: f32 = 0.45;
 pub const PLAYER_HALF_HEIGHT: f32 = 0.9;
 const PLAYER_CAPSULE_LENGTH: f32 = PLAYER_HALF_HEIGHT * 2.0 - PLAYER_RADIUS * 2.0;
@@ -35,21 +59,23 @@ const HIGH_VERTICAL_DELTA_METERS: f32 = 0.04;
 
 impl Plugin for FirstPersonControllerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player)
-            .add_systems(PreUpdate, cache_movement_input)
-            .add_systems(
-                FixedUpdate,
-                (restore_simulation_transform, apply_kinematic_movement).chain(),
+        app.add_systems(Startup, spawn_player);
+        if self.simulation_enabled {
+            app.add_systems(PreUpdate, cache_movement_input)
+                .add_systems(
+                    FixedUpdate,
+                    (restore_simulation_transform, apply_kinematic_movement).chain(),
+                );
+        }
+        app.add_systems(
+            Update,
+            (
+                update_cursor_grab,
+                apply_look,
+                interpolate_player_render_transform,
             )
-            .add_systems(
-                Update,
-                (
-                    update_cursor_grab,
-                    apply_look,
-                    interpolate_player_render_transform,
-                )
-                    .chain(),
-            );
+                .chain(),
+        );
     }
 }
 

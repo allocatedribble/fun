@@ -5,34 +5,20 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
+use avian3d::prelude::PhysicsPlugins;
 use bevy::{
-    app::ScheduleRunnerPlugin,
-    asset::AssetPlugin,
-    log::LogPlugin,
-    mesh::MeshPlugin,
-    prelude::*,
-    scene::{
-        ScenePlugin,
-        prelude::{CommandsSceneExt, Scene as BsnScene, bsn, bsn_list},
-        template_value,
-    },
+    app::ScheduleRunnerPlugin, asset::AssetPlugin, log::LogPlugin, mesh::MeshPlugin, prelude::*,
+    scene::ScenePlugin,
 };
 use bevy_quinnet::server::{
     ConnectionEvent, EndpointAddrConfiguration, QuinnetServer, QuinnetServerPlugin,
     ServerEndpointConfiguration, ServerEndpointConfigurationDefaultables,
     certificate::CertificateRetrievalMode,
 };
-use game_shared::{
-    ASSET_COVER_CUBE, ASSET_FLOOR, ASSET_FLOOR_COLLIDER, ASSET_RAMP, ASSET_WALL,
-    COLLIDER_COVER_CUBE, COLLIDER_FLOOR, COLLIDER_RAMP, COLLIDER_WALL, DEFAULT_TICK_RATE_HZ,
-    DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_TITLE, MATERIAL_COVER, MATERIAL_FLOOR,
-    MATERIAL_RAMP, MATERIAL_WALL,
-};
+use game_scene::StreamedWorldEntity;
+use game_shared::{DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_TITLE};
 use thunder::prelude::*;
 use tracing::{error, info};
-
-const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
 
 fn main() {
     let mut app = App::new();
@@ -61,7 +47,8 @@ fn main() {
         (
             start_endpoint,
             start_server_editor_inspector,
-            spawn_demo_world,
+            game_scene::spawn_default_scene,
+            game_scene::apply_scene_stable_identities,
         )
             .chain(),
     )
@@ -111,86 +98,6 @@ fn start_endpoint(mut server: ResMut<QuinnetServer>) {
     info!(
         "Starting {GAME_TITLE} game server at {DEFAULT_TICK_RATE_HZ:.0} Hz on {GAME_SERVER_BIND_ADDR}"
     );
-}
-
-fn spawn_demo_world(mut commands: Commands) {
-    info!("[server world] queueing demo world BSN spawn");
-    commands.spawn_scene_list(bsn_list![
-        (
-            #Floor
-            template_value(Networked::world())
-            template_value(StreamedWorldEntity::catalog(
-                catalog_ref(ASSET_FLOOR.0, MATERIAL_FLOOR.0, 0),
-            ))
-            Transform::default()
-        ),
-        (
-            #FloorCollider
-            Name::new("FloorCollider")
-            template_value(Networked::world())
-            template_value(StreamedWorldEntity::catalog(
-                catalog_ref(ASSET_FLOOR_COLLIDER.0, MATERIAL_FLOOR.0, COLLIDER_FLOOR.0),
-            ))
-            template_value(RigidBody::Static)
-            Collider::cuboid(60.0, 0.5, 60.0)
-            Transform::from_xyz(0.0, -0.25, 0.0)
-        ),
-        (
-            #Wall
-            template_value(Networked::world())
-            template_value(StreamedWorldEntity::catalog(
-                catalog_ref(ASSET_WALL.0, MATERIAL_WALL.0, COLLIDER_WALL.0),
-            ))
-            template_value(RigidBody::Static)
-            Collider::cuboid(5.0, 3.0, 1.0)
-            Transform::from_xyz(0.0, 1.5, -8.0)
-        ),
-        (
-            #Ramp
-            template_value(Networked::world())
-            template_value(StreamedWorldEntity::catalog(
-                catalog_ref(ASSET_RAMP.0, MATERIAL_RAMP.0, COLLIDER_RAMP.0),
-            ))
-            template_value(RigidBody::Static)
-            Collider::cuboid(3.0, 0.5, 6.0)
-            template_value(Transform::from_xyz(-6.0, 0.25, -2.0)
-                .with_rotation(Quat::from_rotation_z(-12.0_f32.to_radians())))
-        ),
-        demo_cube(Vec3::new(3.0, 1.0, 2.0)),
-        demo_cube(Vec3::new(5.0, 1.0, -1.5)),
-        demo_cube(Vec3::new(7.0, 2.0, 4.0)),
-    ]);
-}
-
-fn demo_cube(translation: Vec3) -> impl BsnScene {
-    bsn! {
-        template_value(Networked::world())
-        template_value(StreamedWorldEntity::catalog(
-            catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
-        ))
-        template_value(RigidBody::Static)
-        Collider::cuboid(1.0, 1.0, 1.0)
-        template_value(Transform::from_translation(translation))
-    }
-}
-
-#[derive(Debug, Default, Clone, Component)]
-struct StreamedWorldEntity {
-    catalog: Option<WorldCatalogRef>,
-    render: Option<WorldPrimitive>,
-    collider: Option<WorldCollider>,
-    color: Option<PackedColorRgba8>,
-}
-
-impl StreamedWorldEntity {
-    fn catalog(catalog: WorldCatalogRef) -> Self {
-        Self {
-            catalog: Some(catalog),
-            render: None,
-            collider: None,
-            color: None,
-        }
-    }
 }
 
 #[derive(Resource)]
@@ -312,7 +219,7 @@ fn server_editor_components() -> &'static [game_shared::EditorComponentRegistrat
         streamed_world => {
             kind: game_shared::EDITOR_COMPONENT_KIND_WORLD_CATALOG_REF,
             type: StreamedWorldEntity,
-            reflect: "game_server::StreamedWorldEntity",
+            reflect: "game_scene::StreamedWorldEntity",
             serializer: "fun.editor.streamed_world.encode.v1",
             deserializer: "fun.editor.streamed_world.decode.v1",
             validator: game_shared::validate_non_empty_payload,
@@ -433,14 +340,6 @@ fn start_server_editor_inspector(inspector: Res<ServerEditorInspectorState>) {
                 "server editor inspector service did not start"
             );
         }
-    }
-}
-
-fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> WorldCatalogRef {
-    WorldCatalogRef {
-        asset_id,
-        material_id,
-        collider_id,
     }
 }
 
@@ -730,7 +629,7 @@ fn rebuild_world_stream(
                 .unwrap_or_else(|| format!("NetEntity-{}", editor_identity.entity.0)),
             class: editor_identity.replication_class,
             authority: editor_identity.authority,
-            transform: qtransform(transform),
+            transform: game_scene::qtransform(transform),
             catalog: streamed.catalog,
             render: streamed.render,
             collider: streamed.collider,
@@ -747,7 +646,7 @@ fn rebuild_world_stream(
     manifest.revision = WorldRevision(manifest.revision.0.saturating_add(1).max(1));
     manifest.editor_revision = manifest.revision;
     manifest.signature = signature;
-    manifest.chunks = chunk_world_specs(DEMO_LEVEL_ID, manifest.revision, specs);
+    manifest.chunks = game_scene::chunk_world_specs(DEMO_LEVEL_ID, manifest.revision, specs);
     pending.ids.clear();
     pending.ids.extend(connected.ids.iter().copied());
 
@@ -1205,7 +1104,7 @@ fn apply_server_transform_transaction(
         entity: patch.entity,
         class: identity.class,
         authority: authority.mode,
-        transform: Some(qtransform(&transform)),
+        transform: Some(game_scene::qtransform(&transform)),
         body: None,
         components: Vec::new(),
     };
@@ -1667,46 +1566,6 @@ fn collider_summary(collider: Option<WorldCollider>) -> String {
         None => "none".to_owned(),
     }
 }
-fn chunk_world_specs(
-    level_id: &str,
-    revision: WorldRevision,
-    specs: Vec<WorldEntitySpec>,
-) -> Vec<WorldStreamChunk> {
-    let chunk_count = specs
-        .len()
-        .div_ceil(WORLD_STREAM_ENTITIES_PER_CHUNK)
-        .max(1)
-        .min(u16::MAX as usize) as u16;
-
-    specs
-        .chunks(WORLD_STREAM_ENTITIES_PER_CHUNK)
-        .enumerate()
-        .map(|(chunk_index, entities)| WorldStreamChunk {
-            level_id: WorldLevelId(level_id.to_owned()),
-            revision,
-            chunk_index: chunk_index as u16,
-            chunk_count,
-            entities: entities.to_vec(),
-        })
-        .collect()
-}
-
-fn qvec(value: Vec3) -> QuantizedVec3 {
-    QuantizedVec3::from_f32(value.to_array(), Quantization::MILLIMETERS)
-}
-
-fn qtransform(transform: &Transform) -> QuantizedTransform3 {
-    QuantizedTransform3 {
-        translation: qvec(transform.translation),
-        rotation: QuantizedQuat::from_f32([
-            transform.rotation.x,
-            transform.rotation.y,
-            transform.rotation.z,
-            transform.rotation.w,
-        ]),
-    }
-}
-
 fn unix_ns() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

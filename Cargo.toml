@@ -3,6 +3,7 @@ members = [
     "backend_server",
     "game_client",
     "game_launcher",
+    "game_scene",
     "game_server",
     "game_shared",
     "tools/arena_bake",

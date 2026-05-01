@@ -1,21 +1,13 @@
 [package]
-name = "game_server"
+name = "game_scene"
 edition.workspace = true
 version.workspace = true
 
 [lints]
 workspace = true
 
-[features]
-default = []
-diagnostics = ["game_shared/diagnostics"]
-
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true
-bevy_quinnet.workspace = true
-game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
-log.workspace = true
 thunder.workspace = true
-tracing.workspace = true

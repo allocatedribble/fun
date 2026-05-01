@@ -2959,6 +2959,7 @@ dependencies = [
  "bevy",
  "bevy_quinnet",
  "criterion 0.8.2",
+ "game_scene",
  "game_shared",
  "log",
  "thunder",
@@ -2973,12 +2974,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "game_scene"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "game_shared",
+ "thunder",
+]
+
+[[package]]
 name = "game_server"
 version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
  "bevy_quinnet",
+ "game_scene",
  "game_shared",
  "log",
  "thunder",
