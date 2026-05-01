@@ -5,7 +5,8 @@
 //! inventing per-surface command shapes.
 
 pub use thunder::protocol::{
-    ChangeMask, ComponentKind, NetEntity, PacketSequence, WorldRevision as EditorWorldRevision,
+    ChangeMask, ComponentKind, NetClientId, NetEntity, PacketSequence,
+    WorldRevision as EditorWorldRevision,
 };
 
 const EDITOR_WIRE_MAGIC: [u8; 4] = *b"FED1";
@@ -33,6 +34,15 @@ macro_rules! editor_wire_id {
         $vis struct $name(pub $inner);
     };
 }
+
+editor_wire_id! {
+    /// Typed editor control protocol version.
+    pub struct EditorProtocolVersion(pub u32);
+}
+
+/// Current editor control protocol version.
+pub const CURRENT_EDITOR_PROTOCOL_VERSION: EditorProtocolVersion =
+    EditorProtocolVersion(EDITOR_PROTOCOL_VERSION);
 
 editor_wire_id! {
     /// Stable resource identity for editor-visible runtime resources.
@@ -74,6 +84,22 @@ editor_wire_id! {
     pub struct EditorTick(pub u64);
 }
 
+editor_wire_id! {
+    /// Stable schema type identity for editor-visible component/resource data.
+    pub struct EditorStableTypeId(pub u64);
+}
+
+editor_wire_id! {
+    /// Cursor for paged editor queries.
+    pub struct EditorPageCursor(pub u64);
+}
+
+/// Maximum payload budget declared by a packet sender.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub struct EditorSizeBudget {
+    pub max_bytes: u32,
+}
+
 /// Runtime side the editor is attaching to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub enum EditorTargetKind {
@@ -81,6 +107,19 @@ pub enum EditorTargetKind {
     Server,
     /// Game client local runtime.
     Client,
+    /// Specific game client runtime, addressed by network client identity.
+    ClientId(NetClientId),
+}
+
+impl EditorTargetKind {
+    #[must_use]
+    pub const fn runtime_class(self) -> Self {
+        match self {
+            Self::ClientId(_) => Self::Client,
+            Self::Server => Self::Server,
+            Self::Client => Self::Client,
+        }
+    }
 }
 
 /// Explicit editor capabilities negotiated during authentication.
@@ -186,6 +225,37 @@ impl EditorControlConfig {
     }
 }
 
+/// Required header carried by every canonical editor protocol packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub struct EditorPacketHeader {
+    pub request_id: EditorRequestId,
+    pub protocol_version: EditorProtocolVersion,
+    pub target: EditorTargetKind,
+    pub sequence: PacketSequence,
+    pub base_world_revision: Option<EditorWorldRevision>,
+    pub size_budget: EditorSizeBudget,
+}
+
+impl EditorPacketHeader {
+    #[must_use]
+    pub const fn new(
+        request_id: EditorRequestId,
+        target: EditorTargetKind,
+        sequence: PacketSequence,
+        base_world_revision: Option<EditorWorldRevision>,
+        size_budget: EditorSizeBudget,
+    ) -> Self {
+        Self {
+            request_id,
+            protocol_version: CURRENT_EDITOR_PROTOCOL_VERSION,
+            target,
+            sequence,
+            base_world_revision,
+            size_budget,
+        }
+    }
+}
+
 /// Target scope for an editor execution request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub enum EditorExecTarget {
@@ -260,6 +330,7 @@ pub enum EditorDiagnosticsPolicy {
 /// Audited, budgeted, capability-gated runtime execution request.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub struct EditorExecRequest {
+    pub header: EditorPacketHeader,
     pub request_id: EditorRequestId,
     pub sequence: PacketSequence,
     pub target: EditorExecTarget,
@@ -281,9 +352,11 @@ impl EditorExecRequest {
                 EditorCapability::ControlRuntime
             }
             EditorExecRuntime::RawRustDevMode | EditorExecRuntime::SidecarDevRuntime => {
-                match self.target.target_kind() {
+                match self.target.target_kind().runtime_class() {
                     EditorTargetKind::Server => EditorCapability::ExecuteServerCode,
-                    EditorTargetKind::Client => EditorCapability::ExecuteClientCode,
+                    EditorTargetKind::Client | EditorTargetKind::ClientId(_) => {
+                        EditorCapability::ExecuteClientCode
+                    }
                 }
             }
         }
@@ -403,6 +476,70 @@ pub struct EditorDiagnosticSubscription {
     pub since_sequence: Option<PacketSequence>,
 }
 
+/// Query for paged editor-visible entities.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorEntityQuery {
+    pub cursor: Option<EditorPageCursor>,
+    pub limit: u16,
+    pub component_filter: Option<ComponentKind>,
+    pub include_components: bool,
+}
+
+/// One row in an editor entity page.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorEntityRow {
+    pub entity: NetEntity,
+    pub target: EditorTargetKind,
+    pub display_label: String,
+    pub component_count: u16,
+    pub schema_revision: EditorSchemaRevision,
+}
+
+/// Paged entity query result.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorEntityPage {
+    pub request_id: EditorRequestId,
+    pub world_revision: EditorWorldRevision,
+    pub cursor: Option<EditorPageCursor>,
+    pub rows: Vec<EditorEntityRow>,
+    pub has_more: bool,
+}
+
+/// Whether an editor-visible component can be changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum EditorMutability {
+    ReadOnly,
+    RuntimeMutable,
+    PersistentMutable,
+}
+
+/// Serialization format for component values crossing the editor wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum EditorSerializationPolicy {
+    Compactly,
+    OpaqueBytes,
+    SchemaRegistered,
+}
+
+/// Replication semantics for a component edited through the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum EditorReplicationPolicy {
+    ServerAuthoritative,
+    ClientLocalOnly,
+    SharedSchemaOnly,
+}
+
+/// Editor-visible component schema.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorComponentSchema {
+    pub stable_type_id: EditorStableTypeId,
+    pub component_kind: ComponentKind,
+    pub display_label: String,
+    pub mutability: EditorMutability,
+    pub serialization_policy: EditorSerializationPolicy,
+    pub replication_policy: EditorReplicationPolicy,
+}
+
 /// Begin an authoritative editor transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub struct BeginTransaction {
@@ -474,9 +611,55 @@ pub struct CommitTransaction {
     pub persistence_policy: EditorPersistencePolicy,
 }
 
+/// One operation inside an ordered editor mutation transaction.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum EditorMutationOp {
+    PatchEntity { patch: PatchEntity },
+    PatchResource { patch: PatchResource },
+    SpawnEntity { spawn: SpawnEntity },
+    DespawnEntity { despawn: DespawnEntity },
+}
+
+impl EditorMutationOp {
+    #[must_use]
+    pub const fn component_kind(&self) -> Option<ComponentKind> {
+        match self {
+            Self::PatchEntity { patch } => Some(patch.component),
+            Self::PatchResource { .. } | Self::DespawnEntity { .. } => None,
+            Self::SpawnEntity { .. } => None,
+        }
+    }
+}
+
+/// Complete mutation request applied at the runtime's editor command stage.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorMutationTransaction {
+    pub header: EditorPacketHeader,
+    pub transaction_id: EditorTransactionId,
+    pub base_world_revision: EditorWorldRevision,
+    pub base_tick: EditorTick,
+    pub conflict_policy: EditorConflictPolicy,
+    pub persistence_policy: EditorPersistencePolicy,
+    pub required_capability: EditorCapability,
+    pub audit_event: EditorAuditEvent,
+    pub diagnostics_event: EditorDiagnosticEvent,
+    pub ops: Vec<EditorMutationOp>,
+}
+
+impl EditorMutationTransaction {
+    #[must_use]
+    pub const fn requires_persistence(&self) -> bool {
+        matches!(
+            self.persistence_policy,
+            EditorPersistencePolicy::PersistIteration
+        )
+    }
+}
+
 /// Mutation application result.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub struct EditorMutationAck {
+    pub header: EditorPacketHeader,
     pub transaction_id: EditorTransactionId,
     pub status: EditorMutationStatus,
     pub world_revision: EditorWorldRevision,
@@ -495,9 +678,39 @@ pub enum EditorMutationStatus {
     Failed,
 }
 
+/// Persistence request emitted after a mutation is accepted.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorPersistenceRequest {
+    pub header: EditorPacketHeader,
+    pub transaction_id: EditorTransactionId,
+    pub base_world_revision: EditorWorldRevision,
+    pub persistence_policy: EditorPersistencePolicy,
+    pub patch_payload: Vec<u8>,
+}
+
+/// Persistence request status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum EditorPersistenceStatus {
+    Queued,
+    Persisted,
+    Rejected,
+    Failed,
+}
+
+/// Persistence result sent to the editor after runtime application.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorPersistenceAck {
+    pub header: EditorPacketHeader,
+    pub transaction_id: EditorTransactionId,
+    pub status: EditorPersistenceStatus,
+    pub world_revision: EditorWorldRevision,
+    pub diagnostics: Vec<EditorDiagnosticEvent>,
+}
+
 /// Execution result sent after the runtime has completed or rejected a request.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub struct EditorExecResult {
+    pub header: EditorPacketHeader,
     pub request_id: EditorRequestId,
     pub status: EditorExecStatus,
     pub stdout_events: Vec<EditorStdoutEvent>,
@@ -524,72 +737,95 @@ pub struct EditorEntityDelta {
     pub components: Vec<EditorComponentPayload>,
 }
 
-/// Editor-to-runtime packets.
+/// Authentication and welcome payloads for the editor handshake lane.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
-pub enum EditorClientPacket {
-    Hello {
-        hello: EditorHello,
+pub enum EditorHandshakePayload {
+    Hello { hello: EditorHello },
+    Auth { auth: EditorAuth },
+    AuthRequired { required: EditorAuthRequired },
+    Welcome { welcome: EditorWelcome },
+}
+
+/// Canonical handshake packet shared by the editor, server, and client.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorHandshakePacket {
+    pub header: EditorPacketHeader,
+    pub payload: EditorHandshakePayload,
+}
+
+/// Command payloads sent from the editor to an authenticated runtime.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum EditorCommandPayload {
+    QueryEntities {
+        query: EditorEntityQuery,
     },
-    Auth {
-        auth: EditorAuth,
+    Mutate {
+        transaction: EditorMutationTransaction,
     },
     Exec {
         request: EditorExecRequest,
     },
-    BeginTransaction {
-        begin: BeginTransaction,
-    },
-    PatchEntity {
-        patch: PatchEntity,
-    },
-    PatchResource {
-        patch: PatchResource,
-    },
-    SpawnEntity {
-        spawn: SpawnEntity,
-    },
-    DespawnEntity {
-        despawn: DespawnEntity,
-    },
-    CommitTransaction {
-        commit: CommitTransaction,
+    Persist {
+        request: EditorPersistenceRequest,
     },
     SubscribeDiagnostics {
         subscription: EditorDiagnosticSubscription,
     },
-    Ping {
-        sequence: PacketSequence,
-    },
+    Ping,
 }
 
-/// Runtime-to-editor packets.
+/// Canonical editor command packet.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
-pub enum EditorRuntimePacket {
-    AuthRequired {
-        required: EditorAuthRequired,
-    },
-    Welcome {
-        welcome: EditorWelcome,
-    },
-    ExecResult {
-        result: EditorExecResult,
-    },
-    MutationAck {
-        ack: EditorMutationAck,
-    },
-    EntityDelta {
-        delta: EditorEntityDelta,
-    },
-    Diagnostics {
-        batch: EditorDiagnosticBatch,
-    },
-    Audit {
-        event: EditorAuditEvent,
-    },
-    Pong {
-        sequence: PacketSequence,
-        world_revision: EditorWorldRevision,
-    },
+pub struct EditorCommandPacket {
+    pub header: EditorPacketHeader,
+    pub payload: EditorCommandPayload,
+}
+
+/// Runtime event payloads sent to the editor.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum EditorEventPayload {
+    EntityPage { page: EditorEntityPage },
+    EntityDelta { delta: EditorEntityDelta },
+    MutationAck { ack: EditorMutationAck },
+    ExecResult { result: EditorExecResult },
+    PersistenceAck { ack: EditorPersistenceAck },
+    Audit { event: EditorAuditEvent },
+    Pong { world_revision: EditorWorldRevision },
+}
+
+/// Canonical runtime event packet.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorEventPacket {
+    pub header: EditorPacketHeader,
+    pub payload: EditorEventPayload,
+}
+
+/// Canonical diagnostic packet sent on the editor diagnostics stream.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorDiagnosticPacket {
+    pub header: EditorPacketHeader,
+    pub batch: EditorDiagnosticBatch,
+}
+
+/// One typed editor runtime protocol, independent of the transport lane.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum EditorProtocolPacket {
+    Handshake { packet: EditorHandshakePacket },
+    Command { packet: EditorCommandPacket },
+    Event { packet: EditorEventPacket },
+    Diagnostic { packet: EditorDiagnosticPacket },
+}
+
+impl EditorProtocolPacket {
+    #[must_use]
+    pub const fn header(&self) -> &EditorPacketHeader {
+        match self {
+            Self::Handshake { packet } => &packet.header,
+            Self::Command { packet } => &packet.header,
+            Self::Event { packet } => &packet.header,
+            Self::Diagnostic { packet } => &packet.header,
+        }
+    }
 }
 
 /// Error while encoding or decoding editor protocol packets.
@@ -604,32 +840,17 @@ pub enum EditorProtocolCodecError {
     InvalidPacket,
 }
 
-/// Encodes an editor-to-runtime packet into transport bytes.
-pub fn encode_editor_client_packet(
-    packet: &EditorClientPacket,
+/// Encodes a canonical editor protocol packet into transport bytes.
+pub fn encode_editor_packet(
+    packet: &EditorProtocolPacket,
 ) -> Result<Vec<u8>, EditorProtocolCodecError> {
     encode_editor_wire_payload(compactly::v1::encode(packet))
 }
 
-/// Decodes an editor-to-runtime packet from transport bytes.
-pub fn decode_editor_client_packet(
+/// Decodes a canonical editor protocol packet from transport bytes.
+pub fn decode_editor_packet(
     bytes: &[u8],
-) -> Result<EditorClientPacket, EditorProtocolCodecError> {
-    compactly::v1::decode(decode_editor_wire_payload(bytes)?)
-        .ok_or(EditorProtocolCodecError::InvalidPacket)
-}
-
-/// Encodes a runtime-to-editor packet into transport bytes.
-pub fn encode_editor_runtime_packet(
-    packet: &EditorRuntimePacket,
-) -> Result<Vec<u8>, EditorProtocolCodecError> {
-    encode_editor_wire_payload(compactly::v1::encode(packet))
-}
-
-/// Decodes a runtime-to-editor packet from transport bytes.
-pub fn decode_editor_runtime_packet(
-    bytes: &[u8],
-) -> Result<EditorRuntimePacket, EditorProtocolCodecError> {
+) -> Result<EditorProtocolPacket, EditorProtocolCodecError> {
     compactly::v1::decode(decode_editor_wire_payload(bytes)?)
         .ok_or(EditorProtocolCodecError::InvalidPacket)
 }
@@ -679,6 +900,244 @@ fn checksum32(bytes: &[u8]) -> u32 {
     hash
 }
 
+/// Deterministic protocol validation failure surfaced before runtime mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorProtocolValidationError {
+    StaleVersion,
+    MalformedAuth,
+    MissingCapability,
+    StaleRevision,
+    OversizePayload,
+    UnknownComponentKind,
+}
+
+/// Runtime-side validation context for editor protocol packets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorProtocolValidationContext {
+    pub protocol_version: EditorProtocolVersion,
+    pub granted_capabilities: Vec<EditorCapability>,
+    pub world_revision: EditorWorldRevision,
+    pub max_payload_bytes: u32,
+    pub component_schemas: Vec<EditorComponentSchema>,
+}
+
+impl EditorProtocolValidationContext {
+    #[must_use]
+    pub fn local_development(target_kind: EditorTargetKind) -> Self {
+        Self {
+            protocol_version: CURRENT_EDITOR_PROTOCOL_VERSION,
+            granted_capabilities: local_development_capabilities(target_kind, true),
+            world_revision: EditorWorldRevision(0),
+            max_payload_bytes: 256 * 1024,
+            component_schemas: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_component_schema(mut self, schema: EditorComponentSchema) -> Self {
+        self.component_schemas.push(schema);
+        self
+    }
+
+    #[must_use]
+    pub fn grants(&self, capability: EditorCapability) -> bool {
+        capability_is_granted(&self.granted_capabilities, capability)
+    }
+
+    #[must_use]
+    pub fn component_is_registered(&self, component: ComponentKind) -> bool {
+        self.component_schemas
+            .iter()
+            .any(|schema| schema.component_kind == component)
+    }
+}
+
+/// Validates packet metadata, auth shape, capabilities, revisions, and schemas.
+pub fn validate_editor_packet(
+    packet: &EditorProtocolPacket,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    let header = packet.header();
+    if header.protocol_version != context.protocol_version {
+        return Err(EditorProtocolValidationError::StaleVersion);
+    }
+
+    validate_packet_budget(packet, context)?;
+    validate_header_revision(header, context)?;
+
+    match packet {
+        EditorProtocolPacket::Handshake { packet } => validate_handshake_packet(packet, context),
+        EditorProtocolPacket::Command { packet } => validate_command_packet(packet, context),
+        EditorProtocolPacket::Event { packet } => validate_event_packet(packet, context),
+        EditorProtocolPacket::Diagnostic { .. } => {
+            require_capability(context, EditorCapability::ReadDiagnostics)
+        }
+    }
+}
+
+fn validate_packet_budget(
+    packet: &EditorProtocolPacket,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    let payload_len = compactly::v1::encode(packet).len();
+    let sender_budget = packet.header().size_budget.max_bytes as usize;
+    let runtime_budget = context.max_payload_bytes as usize;
+    if payload_len > sender_budget || payload_len > runtime_budget {
+        return Err(EditorProtocolValidationError::OversizePayload);
+    }
+    Ok(())
+}
+
+fn validate_header_revision(
+    header: &EditorPacketHeader,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    if let Some(base_world_revision) = header.base_world_revision {
+        if base_world_revision < context.world_revision {
+            return Err(EditorProtocolValidationError::StaleRevision);
+        }
+    }
+    Ok(())
+}
+
+fn validate_handshake_packet(
+    packet: &EditorHandshakePacket,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    match &packet.payload {
+        EditorHandshakePayload::Hello { hello } => {
+            if hello.protocol_version != context.protocol_version.0 || hello.nonce.is_empty() {
+                return Err(EditorProtocolValidationError::MalformedAuth);
+            }
+            Ok(())
+        }
+        EditorHandshakePayload::Auth { auth } => {
+            if auth.token_proof.is_empty() || auth.nonce_response.is_empty() {
+                return Err(EditorProtocolValidationError::MalformedAuth);
+            }
+            Ok(())
+        }
+        EditorHandshakePayload::AuthRequired { required } => {
+            if required.protocol_version != context.protocol_version.0 || required.nonce.is_empty()
+            {
+                return Err(EditorProtocolValidationError::MalformedAuth);
+            }
+            Ok(())
+        }
+        EditorHandshakePayload::Welcome { .. } => Ok(()),
+    }
+}
+
+fn validate_command_packet(
+    packet: &EditorCommandPacket,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    match &packet.payload {
+        EditorCommandPayload::QueryEntities { query } => {
+            require_capability(context, EditorCapability::ReadEntities)?;
+            if query.include_components {
+                require_capability(context, EditorCapability::ReadComponents)?;
+            }
+            if let Some(component) = query.component_filter {
+                require_component_schema(context, component)?;
+            }
+            Ok(())
+        }
+        EditorCommandPayload::Mutate { transaction } => {
+            require_capability(context, EditorCapability::MutateEntities)?;
+            require_capability(context, transaction.required_capability)?;
+            if transaction.requires_persistence() {
+                require_capability(context, EditorCapability::PersistIteration)?;
+            }
+            if transaction.base_world_revision < context.world_revision {
+                return Err(EditorProtocolValidationError::StaleRevision);
+            }
+            validate_mutation_components(transaction, context)
+        }
+        EditorCommandPayload::Exec { request } => {
+            require_capability(context, request.required_capability())
+        }
+        EditorCommandPayload::Persist { request } => {
+            require_capability(context, EditorCapability::PersistIteration)?;
+            if request.base_world_revision < context.world_revision {
+                return Err(EditorProtocolValidationError::StaleRevision);
+            }
+            Ok(())
+        }
+        EditorCommandPayload::SubscribeDiagnostics { .. } => {
+            require_capability(context, EditorCapability::ReadDiagnostics)
+        }
+        EditorCommandPayload::Ping => Ok(()),
+    }
+}
+
+fn validate_event_packet(
+    packet: &EditorEventPacket,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    match &packet.payload {
+        EditorEventPayload::EntityPage { .. } | EditorEventPayload::EntityDelta { .. } => {
+            require_capability(context, EditorCapability::ReadEntities)
+        }
+        EditorEventPayload::MutationAck { .. } => {
+            require_capability(context, EditorCapability::MutateEntities)
+        }
+        EditorEventPayload::ExecResult { result } => {
+            if result.status == EditorExecStatus::Rejected {
+                Ok(())
+            } else {
+                require_capability(context, EditorCapability::ControlRuntime)
+            }
+        }
+        EditorEventPayload::PersistenceAck { .. } => {
+            require_capability(context, EditorCapability::PersistIteration)
+        }
+        EditorEventPayload::Audit { .. } | EditorEventPayload::Pong { .. } => Ok(()),
+    }
+}
+
+fn validate_mutation_components(
+    transaction: &EditorMutationTransaction,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    for op in &transaction.ops {
+        match op {
+            EditorMutationOp::PatchEntity { patch } => {
+                require_component_schema(context, patch.component)?;
+            }
+            EditorMutationOp::SpawnEntity { spawn } => {
+                for component in &spawn.components {
+                    require_component_schema(context, component.component)?;
+                }
+            }
+            EditorMutationOp::PatchResource { .. } | EditorMutationOp::DespawnEntity { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn require_component_schema(
+    context: &EditorProtocolValidationContext,
+    component: ComponentKind,
+) -> Result<(), EditorProtocolValidationError> {
+    if context.component_is_registered(component) {
+        Ok(())
+    } else {
+        Err(EditorProtocolValidationError::UnknownComponentKind)
+    }
+}
+
+fn require_capability(
+    context: &EditorProtocolValidationContext,
+    capability: EditorCapability,
+) -> Result<(), EditorProtocolValidationError> {
+    if context.grants(capability) {
+        Ok(())
+    } else {
+        Err(EditorProtocolValidationError::MissingCapability)
+    }
+}
+
 /// Local development capabilities for a target runtime.
 #[must_use]
 pub fn local_development_capabilities(
@@ -696,7 +1155,7 @@ pub fn local_development_capabilities(
             EditorCapability::ApplyScenePatch,
             EditorCapability::PersistIteration,
         ],
-        EditorTargetKind::Client => vec![
+        EditorTargetKind::Client | EditorTargetKind::ClientId(_) => vec![
             EditorCapability::ReadEntities,
             EditorCapability::ReadComponents,
             EditorCapability::ReadResources,
@@ -708,7 +1167,9 @@ pub fn local_development_capabilities(
     if enable_privileged_exec {
         capabilities.push(match target_kind {
             EditorTargetKind::Server => EditorCapability::ExecuteServerCode,
-            EditorTargetKind::Client => EditorCapability::ExecuteClientCode,
+            EditorTargetKind::Client | EditorTargetKind::ClientId(_) => {
+                EditorCapability::ExecuteClientCode
+            }
         });
     }
 
@@ -728,68 +1189,185 @@ pub fn capability_is_granted(
 mod tests {
     use super::*;
 
-    #[test]
-    fn editor_client_packet_roundtrips_through_envelope() {
-        let packet = EditorClientPacket::Hello {
-            hello: EditorHello {
-                protocol_version: EDITOR_PROTOCOL_VERSION,
-                editor_build_id: EditorBuildId(42),
-                project_id: "fun".to_owned(),
-                target_kind: EditorTargetKind::Server,
-                requested_capabilities: local_development_capabilities(
-                    EditorTargetKind::Server,
-                    false,
-                ),
-                session_id: EditorSessionId(7),
-                nonce: vec![1, 2, 3, 4],
+    fn header(
+        request_id: u64,
+        target: EditorTargetKind,
+        sequence: u32,
+        base_world_revision: Option<EditorWorldRevision>,
+    ) -> EditorPacketHeader {
+        EditorPacketHeader::new(
+            EditorRequestId(request_id),
+            target,
+            PacketSequence(sequence),
+            base_world_revision,
+            EditorSizeBudget { max_bytes: 65_536 },
+        )
+    }
+
+    fn transform_schema() -> EditorComponentSchema {
+        EditorComponentSchema {
+            stable_type_id: EditorStableTypeId(7),
+            component_kind: ComponentKind(11),
+            display_label: "Transform".to_owned(),
+            mutability: EditorMutability::RuntimeMutable,
+            serialization_policy: EditorSerializationPolicy::Compactly,
+            replication_policy: EditorReplicationPolicy::ServerAuthoritative,
+        }
+    }
+
+    fn diagnostic_event(sequence: u32) -> EditorDiagnosticEvent {
+        EditorDiagnosticEvent {
+            sequence: PacketSequence(sequence),
+            stream: EditorDiagnosticStream::MutationTransactions,
+            severity: EditorDiagnosticSeverity::Info,
+            source: "editor_protocol_test".to_owned(),
+            message: "mutation queued".to_owned(),
+            payload: vec![1, 2, 3],
+        }
+    }
+
+    fn audit_event(sequence: u32) -> EditorAuditEvent {
+        EditorAuditEvent {
+            sequence: PacketSequence(sequence),
+            capability: EditorCapability::MutateEntities,
+            target_kind: EditorTargetKind::Server,
+            message: "authorized mutation".to_owned(),
+        }
+    }
+
+    fn validation_context() -> EditorProtocolValidationContext {
+        EditorProtocolValidationContext::local_development(EditorTargetKind::Server)
+            .with_component_schema(transform_schema())
+    }
+
+    fn mutation_transaction(base_world_revision: EditorWorldRevision) -> EditorMutationTransaction {
+        let transaction_id = EditorTransactionId(99);
+        EditorMutationTransaction {
+            header: header(42, EditorTargetKind::Server, 42, Some(base_world_revision)),
+            transaction_id,
+            base_world_revision,
+            base_tick: EditorTick(10),
+            conflict_policy: EditorConflictPolicy::RejectOnConflict,
+            persistence_policy: EditorPersistencePolicy::RuntimeOnly,
+            required_capability: EditorCapability::MutateEntities,
+            audit_event: audit_event(42),
+            diagnostics_event: diagnostic_event(42),
+            ops: vec![EditorMutationOp::PatchEntity {
+                patch: PatchEntity {
+                    transaction_id,
+                    entity: NetEntity::from_parts(1, 77),
+                    component: transform_schema().component_kind,
+                    change_mask: ChangeMask::ALL,
+                    payload: vec![4, 5, 6],
+                },
+            }],
+        }
+    }
+
+    fn mutation_command_packet(base_world_revision: EditorWorldRevision) -> EditorProtocolPacket {
+        EditorProtocolPacket::Command {
+            packet: EditorCommandPacket {
+                header: header(42, EditorTargetKind::Server, 42, Some(base_world_revision)),
+                payload: EditorCommandPayload::Mutate {
+                    transaction: mutation_transaction(base_world_revision),
+                },
             },
-        };
-
-        let bytes = encode_editor_client_packet(&packet).expect("editor hello should encode");
-        let decoded =
-            decode_editor_client_packet(&bytes).expect("editor hello should decode from envelope");
-
-        assert_eq!(decoded, packet);
+        }
     }
 
     #[test]
-    fn editor_runtime_packet_roundtrips_through_envelope() {
-        let packet = EditorRuntimePacket::Welcome {
-            welcome: EditorWelcome {
-                granted_capabilities: local_development_capabilities(
-                    EditorTargetKind::Client,
-                    true,
-                ),
-                target_build_id: EditorBuildId(9),
-                world_revision: EditorWorldRevision(12),
-                tick_rate_hz: 60,
-                schema_revision: EditorSchemaRevision(3),
-                diagnostic_schema_revision: EditorSchemaRevision(4),
+    fn protocol_packets_roundtrip_all_lanes_through_envelope() {
+        let handshake = EditorProtocolPacket::Handshake {
+            packet: EditorHandshakePacket {
+                header: header(1, EditorTargetKind::Server, 1, None),
+                payload: EditorHandshakePayload::Hello {
+                    hello: EditorHello {
+                        protocol_version: EDITOR_PROTOCOL_VERSION,
+                        editor_build_id: EditorBuildId(42),
+                        project_id: "fun".to_owned(),
+                        target_kind: EditorTargetKind::Server,
+                        requested_capabilities: local_development_capabilities(
+                            EditorTargetKind::Server,
+                            false,
+                        ),
+                        session_id: EditorSessionId(7),
+                        nonce: vec![1, 2, 3, 4],
+                    },
+                },
             },
         };
 
-        let bytes = encode_editor_runtime_packet(&packet).expect("welcome should encode");
-        let decoded =
-            decode_editor_runtime_packet(&bytes).expect("welcome should decode from envelope");
+        let command = mutation_command_packet(EditorWorldRevision(0));
 
-        assert_eq!(decoded, packet);
+        let event = EditorProtocolPacket::Event {
+            packet: EditorEventPacket {
+                header: header(
+                    43,
+                    EditorTargetKind::Server,
+                    43,
+                    Some(EditorWorldRevision(1)),
+                ),
+                payload: EditorEventPayload::MutationAck {
+                    ack: EditorMutationAck {
+                        header: header(
+                            43,
+                            EditorTargetKind::Server,
+                            43,
+                            Some(EditorWorldRevision(1)),
+                        ),
+                        transaction_id: EditorTransactionId(99),
+                        status: EditorMutationStatus::Accepted,
+                        world_revision: EditorWorldRevision(1),
+                        applied_ops: 1,
+                        conflict_count: 0,
+                        diagnostics: vec![diagnostic_event(43)],
+                    },
+                },
+            },
+        };
+
+        let diagnostic = EditorProtocolPacket::Diagnostic {
+            packet: EditorDiagnosticPacket {
+                header: header(
+                    44,
+                    EditorTargetKind::Server,
+                    44,
+                    Some(EditorWorldRevision(1)),
+                ),
+                batch: EditorDiagnosticBatch {
+                    world_revision: EditorWorldRevision(1),
+                    events: vec![diagnostic_event(44)],
+                },
+            },
+        };
+
+        for packet in [handshake, command, event, diagnostic] {
+            let bytes = encode_editor_packet(&packet).expect("packet should encode");
+            let decoded = decode_editor_packet(&bytes).expect("packet should decode");
+            assert_eq!(decoded, packet);
+        }
     }
 
     #[test]
     fn editor_wire_rejects_bad_checksum() {
-        let packet = EditorRuntimePacket::AuthRequired {
-            required: EditorAuthRequired {
-                protocol_version: EDITOR_PROTOCOL_VERSION,
-                target_kind: EditorTargetKind::Server,
-                nonce: vec![9, 8, 7],
+        let packet = EditorProtocolPacket::Handshake {
+            packet: EditorHandshakePacket {
+                header: header(2, EditorTargetKind::Server, 2, None),
+                payload: EditorHandshakePayload::AuthRequired {
+                    required: EditorAuthRequired {
+                        protocol_version: EDITOR_PROTOCOL_VERSION,
+                        target_kind: EditorTargetKind::Server,
+                        nonce: vec![9, 8, 7],
+                    },
+                },
             },
         };
-        let mut bytes = encode_editor_runtime_packet(&packet).expect("packet should encode");
+        let mut bytes = encode_editor_packet(&packet).expect("packet should encode");
         let last = bytes.len() - 1;
         bytes[last] ^= 0x55;
 
         assert_eq!(
-            decode_editor_runtime_packet(&bytes).expect_err("bad checksum should fail"),
+            decode_editor_packet(&bytes).expect_err("bad checksum should fail"),
             EditorProtocolCodecError::ChecksumMismatch
         );
     }
@@ -797,6 +1375,7 @@ mod tests {
     #[test]
     fn privileged_exec_requires_target_specific_execute_capability() {
         let request = EditorExecRequest {
+            header: header(1, EditorTargetKind::Client, 1, None),
             request_id: EditorRequestId(1),
             sequence: PacketSequence(1),
             target: EditorExecTarget::Client,
@@ -818,6 +1397,97 @@ mod tests {
         assert_eq!(
             request.required_capability(),
             EditorCapability::ExecuteClientCode
+        );
+    }
+
+    #[test]
+    fn validation_rejects_stale_protocol_version() {
+        let mut packet = mutation_command_packet(EditorWorldRevision(0));
+        match &mut packet {
+            EditorProtocolPacket::Command { packet } => {
+                packet.header.protocol_version = EditorProtocolVersion(0);
+            }
+            _ => unreachable!("mutation helper returns command"),
+        }
+
+        assert_eq!(
+            validate_editor_packet(&packet, &validation_context()).expect_err("version is stale"),
+            EditorProtocolValidationError::StaleVersion
+        );
+    }
+
+    #[test]
+    fn validation_rejects_malformed_auth() {
+        let packet = EditorProtocolPacket::Handshake {
+            packet: EditorHandshakePacket {
+                header: header(3, EditorTargetKind::Server, 3, None),
+                payload: EditorHandshakePayload::Auth {
+                    auth: EditorAuth {
+                        token_proof: Vec::new(),
+                        nonce_response: vec![1],
+                    },
+                },
+            },
+        };
+
+        assert_eq!(
+            validate_editor_packet(&packet, &validation_context())
+                .expect_err("empty token proof is malformed"),
+            EditorProtocolValidationError::MalformedAuth
+        );
+    }
+
+    #[test]
+    fn validation_rejects_missing_capability() {
+        let packet = mutation_command_packet(EditorWorldRevision(0));
+        let mut context = validation_context();
+        context
+            .granted_capabilities
+            .retain(|capability| *capability != EditorCapability::MutateEntities);
+
+        assert_eq!(
+            validate_editor_packet(&packet, &context).expect_err("mutation needs capability"),
+            EditorProtocolValidationError::MissingCapability
+        );
+    }
+
+    #[test]
+    fn validation_rejects_stale_world_revision() {
+        let packet = mutation_command_packet(EditorWorldRevision(1));
+        let mut context = validation_context();
+        context.world_revision = EditorWorldRevision(2);
+
+        assert_eq!(
+            validate_editor_packet(&packet, &context).expect_err("base revision is stale"),
+            EditorProtocolValidationError::StaleRevision
+        );
+    }
+
+    #[test]
+    fn validation_rejects_oversize_payload() {
+        let mut packet = mutation_command_packet(EditorWorldRevision(0));
+        match &mut packet {
+            EditorProtocolPacket::Command { packet } => {
+                packet.header.size_budget = EditorSizeBudget { max_bytes: 8 };
+            }
+            _ => unreachable!("mutation helper returns command"),
+        }
+
+        assert_eq!(
+            validate_editor_packet(&packet, &validation_context()).expect_err("budget is tiny"),
+            EditorProtocolValidationError::OversizePayload
+        );
+    }
+
+    #[test]
+    fn validation_rejects_unknown_component_kind() {
+        let packet = mutation_command_packet(EditorWorldRevision(0));
+        let mut context = validation_context();
+        context.component_schemas.clear();
+
+        assert_eq!(
+            validate_editor_packet(&packet, &context).expect_err("component is unknown"),
+            EditorProtocolValidationError::UnknownComponentKind
         );
     }
 
