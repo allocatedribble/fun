@@ -639,6 +639,7 @@ impl Plugin for GameClientPlugin {
                 apply_startup_window_config,
                 send_client_hello,
                 receive_server_control,
+                receive_server_snapshots,
                 receive_world_stream,
                 update_client_editor_inspector_snapshot,
             ),
@@ -1674,6 +1675,68 @@ fn receive_server_control(
         "Update",
         "receive_server_control",
     );
+}
+
+fn receive_server_snapshots(
+    mut client: ResMut<QuinnetClient>,
+    loaded_world: Res<LoadedWorldState>,
+    mut transforms: Query<&mut Transform>,
+    _log_config: Res<ClientLogConfig>,
+) {
+    let Some(connection) = client.get_connection_mut() else {
+        return;
+    };
+
+    while let Some(payload) = connection.try_receive_payload(ServerChannel::Snapshot) {
+        let payload_len = payload.as_ref().len();
+        let snapshot = match decode_server_packet(payload.as_ref()) {
+            Ok(ServerPacket::Snapshot { snapshot }) => snapshot,
+            Ok(_packet) => {
+                game_shared::fun_diag_debug_if!(
+                    _log_config.net_verbose(),
+                    target: "fun::net",
+                    packet = ?_packet,
+                    "ignoring non-snapshot packet on snapshot channel"
+                );
+                continue;
+            }
+            Err(error) => {
+                error!(
+                    target: "fun::net",
+                    %error,
+                    bytes = payload_len,
+                    "failed to decode server snapshot packet"
+                );
+                continue;
+            }
+        };
+
+        let mut applied = 0usize;
+        for delta in &snapshot.entities {
+            let Some(transform_delta) = delta.transform else {
+                continue;
+            };
+            let Some(entity) = loaded_world.spawned_entities.get(&delta.entity).copied() else {
+                continue;
+            };
+            let Ok(mut transform) = transforms.get_mut(entity) else {
+                continue;
+            };
+            *transform = transform_from_quantized(transform_delta);
+            applied = applied.saturating_add(1);
+        }
+
+        game_shared::fun_diag_info_if!(
+            _log_config.net_verbose(),
+            target: "fun::net",
+            sequence = snapshot.sequence.0,
+            server_tick = snapshot.server_tick.0,
+            entities = snapshot.entities.len(),
+            applied,
+            bytes = payload_len,
+            "applied authoritative snapshot"
+        );
+    }
 }
 
 fn receive_world_stream(

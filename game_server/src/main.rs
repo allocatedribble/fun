@@ -1,6 +1,9 @@
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 use std::time::Instant;
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
 use bevy::{
@@ -50,6 +53,8 @@ fn main() {
     .init_resource::<ServerEditorInspectorState>()
     .insert_resource(ServerLogConfig::from_env())
     .init_resource::<ConnectedClients>()
+    .init_resource::<ReadyClients>()
+    .init_resource::<ClientRelevanceSets>()
     .init_resource::<PendingWorldStreams>()
     .add_systems(
         Startup,
@@ -64,6 +69,7 @@ fn main() {
         Update,
         (
             receive_client_control,
+            apply_server_editor_mutations,
             rebuild_world_stream,
             update_server_editor_inspector_snapshot,
             queue_world_stream_for_new_clients,
@@ -449,6 +455,7 @@ fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> WorldCatalo
 #[derive(Debug, Default, Resource)]
 struct ServerWorldStream {
     revision: WorldRevision,
+    editor_revision: WorldRevision,
     signature: Vec<NetEntity>,
     chunks: Vec<WorldStreamChunk>,
 }
@@ -456,6 +463,22 @@ struct ServerWorldStream {
 #[derive(Debug, Default, Resource)]
 struct ConnectedClients {
     ids: HashSet<u64>,
+}
+
+#[derive(Debug, Default, Resource)]
+struct ReadyClients {
+    ids: HashSet<u64>,
+}
+
+#[derive(Debug, Default, Resource)]
+struct ClientRelevanceSets {
+    sets: HashMap<u64, ServerClientRelevanceSet>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ServerClientRelevanceSet {
+    tick: NetworkTick,
+    entities: HashSet<NetEntity>,
 }
 
 #[derive(Debug, Default, Resource)]
@@ -726,6 +749,7 @@ fn rebuild_world_stream(
     }
 
     manifest.revision = WorldRevision(manifest.revision.0.saturating_add(1).max(1));
+    manifest.editor_revision = manifest.revision;
     manifest.signature = signature;
     manifest.chunks = chunk_world_specs(DEMO_LEVEL_ID, manifest.revision, specs);
     pending.ids.clear();
@@ -789,11 +813,15 @@ fn rebuild_world_stream(
 fn queue_world_stream_for_new_clients(
     mut events: MessageReader<ConnectionEvent>,
     mut connected: ResMut<ConnectedClients>,
+    mut ready: ResMut<ReadyClients>,
+    mut relevance: ResMut<ClientRelevanceSets>,
     mut pending: ResMut<PendingWorldStreams>,
     _log_config: Res<ServerLogConfig>,
 ) {
     for event in events.read() {
         connected.ids.insert(event.id);
+        ready.ids.remove(&event.id);
+        relevance.sets.remove(&event.id);
         pending.ids.insert(event.id);
         game_shared::fun_diag_info_if!(
             _log_config.net_verbose(),
@@ -807,6 +835,9 @@ fn queue_world_stream_for_new_clients(
 
 fn receive_client_control(
     mut server: ResMut<QuinnetServer>,
+    mut ready: ResMut<ReadyClients>,
+    mut relevance: ResMut<ClientRelevanceSets>,
+    manifest: Res<ServerWorldStream>,
     _log_config: Res<ServerLogConfig>,
     #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
 ) {
@@ -850,6 +881,14 @@ fn receive_client_control(
                     );
                 }
                 Ok(ClientPacket::WorldReady { ack: _ack }) => {
+                    ready.ids.insert(client_id);
+                    relevance.sets.insert(
+                        client_id,
+                        ServerClientRelevanceSet {
+                            tick: NetworkTick(manifest.editor_revision.0),
+                            entities: manifest.signature.iter().copied().collect(),
+                        },
+                    );
                     #[cfg(all(feature = "diagnostics", debug_assertions))]
                     server_profiler_event(
                         &profiler,
@@ -918,6 +957,383 @@ fn receive_client_control(
     }
 }
 
+fn apply_server_editor_mutations(
+    inspector: Res<ServerEditorInspectorState>,
+    schema: Res<ServerEditorSchema>,
+    mut manifest: ResMut<ServerWorldStream>,
+    mut server: ResMut<QuinnetServer>,
+    ready: Res<ReadyClients>,
+    relevance: Res<ClientRelevanceSets>,
+    identities: Query<(&NetworkIdentity, &NetworkAuthority, Option<&Name>)>,
+    mut transforms: Query<(
+        &NetworkIdentity,
+        &NetworkAuthority,
+        Option<&Name>,
+        &mut Transform,
+    )>,
+) {
+    let transactions = inspector.state.drain_mutations(32);
+    if transactions.is_empty() {
+        return;
+    }
+
+    let known_entities = identities
+        .iter()
+        .map(|(identity, authority, name)| {
+            game_shared::EditorVisibleEntityIdentity::from_network_identity(
+                identity.entity,
+                identity.class,
+                authority.mode,
+                name.map(|name| name.as_str()),
+                game_shared::EditorEntityMutability::PersistentMutable,
+            )
+        })
+        .collect::<Vec<_>>();
+    let granted_capabilities =
+        game_shared::local_development_capabilities(game_shared::EditorTargetKind::Server, false);
+
+    for transaction in transactions {
+        let current_revision = game_shared::EditorWorldRevision(manifest.editor_revision.0);
+        let transaction_id = transaction.transaction_id;
+        let (status, applied_ops, conflict_count, mut diagnostics, editor_delta, snapshot_delta) =
+            apply_server_transform_transaction(
+                &transaction,
+                current_revision,
+                &schema,
+                &known_entities,
+                &granted_capabilities,
+                &mut transforms,
+            );
+
+        let world_revision = if status == game_shared::EditorMutationStatus::Accepted {
+            manifest.editor_revision =
+                WorldRevision(manifest.editor_revision.0.saturating_add(1).max(1));
+            game_shared::EditorWorldRevision(manifest.editor_revision.0)
+        } else {
+            current_revision
+        };
+
+        let mut events = Vec::new();
+        let ack = game_shared::EditorMutationAck {
+            header: editor_response_header(&transaction.header, world_revision),
+            transaction_id,
+            status,
+            world_revision,
+            applied_ops,
+            conflict_count,
+            diagnostics: diagnostics.clone(),
+        };
+        events.push(game_shared::EditorEventPayload::MutationAck { ack });
+
+        if let Some(mut delta) = editor_delta {
+            delta.world_revision = world_revision;
+            events.push(game_shared::EditorEventPayload::EntityDelta { delta });
+        }
+
+        let relevant_clients = snapshot_delta
+            .as_ref()
+            .map(|delta| {
+                send_editor_snapshot_delta(&mut server, &ready, &relevance, world_revision, delta)
+            })
+            .unwrap_or(0);
+
+        diagnostics.push(editor_mutation_diagnostic(
+            game_shared::DiagnosticLevel::Info,
+            "mutation_relevant_clients",
+            transaction_id,
+            world_revision,
+            format!("relevant_clients={relevant_clients}"),
+        ));
+
+        for diagnostic in diagnostics {
+            inspector
+                .state
+                .emit_diagnostic(game_shared::DiagnosticPacket::Event { event: diagnostic });
+        }
+        inspector
+            .state
+            .emit_diagnostic(game_shared::DiagnosticPacket::Counter {
+                counter: game_shared::DiagnosticCounter {
+                    target: "server".to_owned(),
+                    name: "editor_mutation_applied_ops".to_owned(),
+                    value: game_shared::DiagnosticValue::U64 {
+                        value: u64::from(applied_ops),
+                    },
+                    unit: game_shared::DiagnosticUnit::Count,
+                    window: game_shared::DiagnosticWindow {
+                        sample_count: 1,
+                        duration_ns: 0,
+                    },
+                },
+            });
+
+        inspector
+            .state
+            .complete_mutation(transaction_id, world_revision, events);
+    }
+}
+
+fn apply_server_transform_transaction(
+    transaction: &game_shared::EditorMutationTransaction,
+    current_revision: game_shared::EditorWorldRevision,
+    schema: &ServerEditorSchema,
+    known_entities: &[game_shared::EditorVisibleEntityIdentity],
+    granted_capabilities: &[game_shared::EditorCapability],
+    transforms: &mut Query<(
+        &NetworkIdentity,
+        &NetworkAuthority,
+        Option<&Name>,
+        &mut Transform,
+    )>,
+) -> (
+    game_shared::EditorMutationStatus,
+    u32,
+    u32,
+    Vec<game_shared::EditorDiagnosticEvent>,
+    Option<game_shared::EditorEntityDelta>,
+    Option<EntityDelta>,
+) {
+    let transaction_id = transaction.transaction_id;
+    if transaction.ops.len() != 1 {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_invalid_op_count",
+            "server Transform patch accepts exactly one operation",
+        );
+    }
+
+    let game_shared::EditorMutationOp::PatchEntity { patch } = &transaction.ops[0] else {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_unsupported_op",
+            "server Transform patch only supports PatchEntity",
+        );
+    };
+
+    if patch.component != game_shared::EDITOR_COMPONENT_KIND_TRANSFORM {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_unsupported_component",
+            "first mutation path only accepts Transform",
+        );
+    }
+
+    if let Err(error) = game_shared::validate_component_mutation(
+        schema.registry,
+        game_shared::EditorComponentMutationRequest {
+            entity: patch.entity,
+            component_kind: patch.component,
+            payload: &patch.payload,
+            granted_capabilities,
+            base_world_revision: transaction.base_world_revision,
+            current_world_revision: current_revision,
+            known_entities,
+            execution_budget: game_shared::EditorExecutionBudget {
+                max_ops: 1,
+                used_ops: 0,
+            },
+        },
+    ) {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_schema_validation_failed",
+            format!("schema validation failed: {error:?}"),
+        );
+    }
+
+    let Some(transform_patch) = game_shared::decode_editor_transform_patch(&patch.payload) else {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_payload_decode_failed",
+            "Transform patch payload did not decode",
+        );
+    };
+
+    let Some((identity, authority, name, mut transform)) = transforms
+        .iter_mut()
+        .find(|(identity, _, _, _)| identity.entity == patch.entity)
+    else {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_transform_missing",
+            "entity exists but does not expose a mutable Transform component",
+        );
+    };
+
+    let translation = transform_patch.translation();
+    let rotation = transform_patch.rotation_xyzw();
+    let scale = transform_patch.scale();
+    transform.translation = Vec3::from_array(translation);
+    let rotation_quat = Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]);
+    let rotation_len = rotation_quat.length_squared();
+    transform.rotation = if rotation_len.is_finite() && rotation_len > 0.0 {
+        rotation_quat.normalize()
+    } else {
+        Quat::IDENTITY
+    };
+    transform.scale = Vec3::from_array(scale);
+
+    let diagnostic = editor_mutation_diagnostic(
+        game_shared::DiagnosticLevel::Info,
+        "mutation_transform_applied",
+        transaction_id,
+        current_revision,
+        format!(
+            "entity={} name={} translation=({:.3},{:.3},{:.3})",
+            patch.entity.0,
+            name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
+            translation[0],
+            translation[1],
+            translation[2]
+        ),
+    );
+    let editor_delta = game_shared::EditorEntityDelta {
+        world_revision: current_revision,
+        entity: patch.entity,
+        components: vec![game_shared::EditorComponentPayload {
+            component: patch.component,
+            payload: patch.payload.clone(),
+        }],
+    };
+    let snapshot_delta = EntityDelta {
+        entity: patch.entity,
+        class: identity.class,
+        authority: authority.mode,
+        transform: Some(qtransform(&*transform)),
+        body: None,
+        components: Vec::new(),
+    };
+
+    (
+        game_shared::EditorMutationStatus::Accepted,
+        1,
+        0,
+        vec![diagnostic],
+        Some(editor_delta),
+        Some(snapshot_delta),
+    )
+}
+
+fn rejected_mutation(
+    transaction_id: game_shared::EditorTransactionId,
+    world_revision: game_shared::EditorWorldRevision,
+    code: &'static str,
+    message: impl Into<String>,
+) -> (
+    game_shared::EditorMutationStatus,
+    u32,
+    u32,
+    Vec<game_shared::EditorDiagnosticEvent>,
+    Option<game_shared::EditorEntityDelta>,
+    Option<EntityDelta>,
+) {
+    (
+        game_shared::EditorMutationStatus::RejectedValidation,
+        0,
+        1,
+        vec![editor_mutation_diagnostic(
+            game_shared::DiagnosticLevel::Warn,
+            code,
+            transaction_id,
+            world_revision,
+            message,
+        )],
+        None,
+        None,
+    )
+}
+
+fn send_editor_snapshot_delta(
+    server: &mut QuinnetServer,
+    ready: &ReadyClients,
+    relevance: &ClientRelevanceSets,
+    world_revision: game_shared::EditorWorldRevision,
+    delta: &EntityDelta,
+) -> usize {
+    if ready.ids.is_empty() {
+        return 0;
+    }
+    let packet = ServerPacket::Snapshot {
+        snapshot: SnapshotPacket {
+            sequence: PacketSequence((world_revision.0 & u64::from(u32::MAX)) as u32),
+            server_tick: NetworkTick(world_revision.0),
+            baseline_tick: None,
+            last_processed_input: PacketSequence(0),
+            budget: SnapshotBudget {
+                max_bytes: 1_100,
+                max_entities: 1,
+                max_component_deltas: 0,
+            },
+            entities: vec![delta.clone()],
+        },
+    };
+    let Ok(bytes) = encode_server_packet(&packet) else {
+        return 0;
+    };
+    let Some(endpoint) = server.get_endpoint_mut() else {
+        return 0;
+    };
+
+    let mut sent = 0usize;
+    for client_id in &ready.ids {
+        let relevant = relevance
+            .sets
+            .get(client_id)
+            .map(|set| set.tick.0 <= world_revision.0 && set.entities.contains(&delta.entity))
+            .unwrap_or(false);
+        if !relevant {
+            continue;
+        }
+        endpoint.try_send_payload_on(*client_id, ServerChannel::Snapshot, bytes.clone());
+        sent = sent.saturating_add(1);
+    }
+    sent
+}
+
+fn editor_response_header(
+    request: &game_shared::EditorPacketHeader,
+    world_revision: game_shared::EditorWorldRevision,
+) -> game_shared::EditorPacketHeader {
+    game_shared::EditorPacketHeader::new(
+        request.request_id,
+        request.target,
+        PacketSequence(request.sequence.0.saturating_add(1)),
+        Some(world_revision),
+        request.size_budget,
+    )
+}
+
+fn editor_mutation_diagnostic(
+    level: game_shared::DiagnosticLevel,
+    code: &'static str,
+    transaction_id: game_shared::EditorTransactionId,
+    world_revision: game_shared::EditorWorldRevision,
+    message: impl Into<String>,
+) -> game_shared::EditorDiagnosticEvent {
+    game_shared::DiagnosticEvent {
+        target: "server".to_owned(),
+        level,
+        timestamp_or_tick: game_shared::DiagnosticTimestampOrTick::TimestampNs { ns: unix_ns() },
+        fields: vec![
+            game_shared::DiagnosticField::text("stream", "mutation_transactions"),
+            game_shared::DiagnosticField::text("stage", game_shared::EDITOR_COMMAND_APPLY_STAGE),
+            game_shared::DiagnosticField::text("code", code),
+            game_shared::DiagnosticField::u64("transaction_id", transaction_id.0),
+            game_shared::DiagnosticField::u64("world_revision", world_revision.0),
+            game_shared::DiagnosticField::text("message", message),
+        ],
+        source: game_shared::DiagnosticSource::static_location(file!(), line!(), module_path!()),
+        frame_index: None,
+        span_id: None,
+    }
+}
+
 fn update_server_editor_inspector_snapshot(
     inspector: Res<ServerEditorInspectorState>,
     manifest: Res<ServerWorldStream>,
@@ -931,7 +1347,7 @@ fn update_server_editor_inspector_snapshot(
     mut last_diagnostic_revision: Local<u64>,
 ) {
     let schema_revision = game_shared::EditorSchemaRevision(1);
-    let world_revision = game_shared::EditorWorldRevision(manifest.revision.0);
+    let world_revision = game_shared::EditorWorldRevision(manifest.editor_revision.0);
     let schemas = server_editor_component_schemas();
     let mut rows = Vec::with_capacity(query.iter().count());
 
@@ -1285,4 +1701,11 @@ fn qtransform(transform: &Transform) -> QuantizedTransform3 {
             transform.rotation.w,
         ]),
     }
+}
+
+fn unix_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
 }

@@ -2,16 +2,18 @@ use crate::{
     CURRENT_EDITOR_PROTOCOL_VERSION, EDITOR_PROTOCOL_VERSION, EDITOR_WIRE_ENVELOPE_HEADER_LEN,
     EditorAuth, EditorAuthRequired, EditorBindMode, EditorBuildId, EditorCapability,
     EditorCommandPacket, EditorCommandPayload, EditorComponentSchema, EditorControlConfig,
-    EditorDiagnosticBatch, EditorDiagnosticPacket, EditorEntityPage, EditorEntityQuery,
-    EditorEntityRow, EditorEventPacket, EditorEventPayload, EditorHandshakePacket,
-    EditorHandshakePayload, EditorPacketHeader, EditorPageCursor, EditorProtocolPacket,
+    EditorDiagnosticBatch, EditorDiagnosticEvent, EditorDiagnosticPacket, EditorEntityPage,
+    EditorEntityQuery, EditorEntityRow, EditorEventPacket, EditorEventPayload,
+    EditorHandshakePacket, EditorHandshakePayload, EditorMutationAck, EditorMutationStatus,
+    EditorMutationTransaction, EditorPacketHeader, EditorPageCursor, EditorProtocolPacket,
     EditorProtocolValidationContext, EditorRequestId, EditorSchemaRevision, EditorSessionId,
-    EditorSizeBudget, EditorTargetKind, EditorWelcome, EditorWorldRevision, PacketSequence,
-    RuntimeDiagnosticSinks, decode_editor_packet, editor_wire_envelope_len, encode_editor_packet,
-    parse_editor_capability, validate_editor_packet,
+    EditorSizeBudget, EditorTargetKind, EditorTransactionId, EditorWelcome, EditorWorldRevision,
+    PacketSequence, RuntimeDiagnosticSinks, decode_editor_packet, editor_wire_envelope_len,
+    encode_editor_packet, parse_editor_capability, validate_editor_packet,
 };
 use ring::hmac;
 use std::{
+    collections::VecDeque,
     env, fmt,
     io::{self, Read, Write},
     net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs},
@@ -31,6 +33,7 @@ const EDITOR_SERVER_BIND_ENABLE_ENV: &str = "FUN_EDITOR_ENABLE_SERVER_INSPECTOR_
 const EDITOR_CLIENT_BIND_ENABLE_ENV: &str = "FUN_EDITOR_ENABLE_CLIENT_INSPECTOR_BIND";
 const EDITOR_SERVER_BIND_ADDR_ENV: &str = "FUN_EDITOR_SERVER_INSPECTOR_ADDR";
 const EDITOR_CLIENT_BIND_ADDR_ENV: &str = "FUN_EDITOR_CLIENT_INSPECTOR_ADDR";
+const EDITOR_MUTATION_RESULT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct EditorInspectorServiceConfig {
@@ -123,6 +126,15 @@ pub struct EditorInspectorSnapshot {
     pub entities: Vec<EditorEntityRow>,
     pub diagnostics: RuntimeDiagnosticSinks,
     pub editor_attached: bool,
+    pending_mutations: VecDeque<EditorMutationTransaction>,
+    mutation_results: VecDeque<EditorInspectorMutationResult>,
+}
+
+#[derive(Debug, Clone)]
+struct EditorInspectorMutationResult {
+    transaction_id: EditorTransactionId,
+    world_revision: EditorWorldRevision,
+    events: Vec<EditorEventPayload>,
 }
 
 impl Default for EditorInspectorRuntimeState {
@@ -143,6 +155,8 @@ impl Default for EditorInspectorSnapshot {
             entities: Vec::new(),
             diagnostics: RuntimeDiagnosticSinks::disabled(),
             editor_attached: false,
+            pending_mutations: VecDeque::new(),
+            mutation_results: VecDeque::new(),
         }
     }
 }
@@ -268,6 +282,51 @@ impl EditorInspectorRuntimeState {
             world_revision,
             packets,
         }
+    }
+
+    pub fn queue_mutation(&self, transaction: EditorMutationTransaction) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.pending_mutations.push_back(transaction);
+        }
+    }
+
+    #[must_use]
+    pub fn drain_mutations(&self, max_transactions: usize) -> Vec<EditorMutationTransaction> {
+        let Ok(mut snapshot) = self.inner.lock() else {
+            return Vec::new();
+        };
+        let take = max_transactions.min(snapshot.pending_mutations.len());
+        snapshot.pending_mutations.drain(..take).collect()
+    }
+
+    pub fn complete_mutation(
+        &self,
+        transaction_id: EditorTransactionId,
+        world_revision: EditorWorldRevision,
+        events: Vec<EditorEventPayload>,
+    ) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot
+                .mutation_results
+                .push_back(EditorInspectorMutationResult {
+                    transaction_id,
+                    world_revision,
+                    events,
+                });
+        }
+    }
+
+    #[must_use]
+    fn take_mutation_result(
+        &self,
+        transaction_id: EditorTransactionId,
+    ) -> Option<EditorInspectorMutationResult> {
+        let mut snapshot = self.inner.lock().ok()?;
+        let index = snapshot
+            .mutation_results
+            .iter()
+            .position(|result| result.transaction_id == transaction_id)?;
+        snapshot.mutation_results.remove(index)
     }
 
     #[must_use]
@@ -600,9 +659,92 @@ fn handle_editor_command_packet(
                 },
             )
         }
-        EditorCommandPayload::Mutate { .. }
-        | EditorCommandPayload::Exec { .. }
-        | EditorCommandPayload::Persist { .. } => Ok(()),
+        EditorCommandPayload::Mutate { transaction } => {
+            let transaction_id = transaction.transaction_id;
+            config.runtime_state.queue_mutation(transaction);
+            let result = wait_for_mutation_result(config, transaction_id)
+                .unwrap_or_else(|| mutation_timeout_result(&packet.header, transaction_id));
+            for event in result.events {
+                write_editor_protocol_packet(
+                    stream,
+                    &EditorProtocolPacket::Event {
+                        packet: EditorEventPacket {
+                            header: response_header(&packet.header, result.world_revision),
+                            payload: event,
+                        },
+                    },
+                )?;
+            }
+            Ok(())
+        }
+        EditorCommandPayload::Exec { .. } | EditorCommandPayload::Persist { .. } => Ok(()),
+    }
+}
+
+fn wait_for_mutation_result(
+    config: &EditorInspectorServiceConfig,
+    transaction_id: EditorTransactionId,
+) -> Option<EditorInspectorMutationResult> {
+    let started = std::time::Instant::now();
+    while started.elapsed() < EDITOR_MUTATION_RESULT_TIMEOUT {
+        if let Some(result) = config.runtime_state.take_mutation_result(transaction_id) {
+            return Some(result);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    None
+}
+
+fn mutation_timeout_result(
+    request: &EditorPacketHeader,
+    transaction_id: EditorTransactionId,
+) -> EditorInspectorMutationResult {
+    let world_revision = request.base_world_revision.unwrap_or_default();
+    let diagnostic = mutation_diagnostic_event(
+        "mutation_apply_timeout",
+        transaction_id,
+        world_revision,
+        "runtime did not apply editor mutation before the inspector timeout",
+        crate::DiagnosticLevel::Warn,
+    );
+    let ack = EditorMutationAck {
+        header: response_header(request, world_revision),
+        transaction_id,
+        status: EditorMutationStatus::Failed,
+        world_revision,
+        applied_ops: 0,
+        conflict_count: 0,
+        diagnostics: vec![diagnostic],
+    };
+
+    EditorInspectorMutationResult {
+        transaction_id,
+        world_revision,
+        events: vec![EditorEventPayload::MutationAck { ack }],
+    }
+}
+
+fn mutation_diagnostic_event(
+    code: &str,
+    transaction_id: EditorTransactionId,
+    world_revision: EditorWorldRevision,
+    message: &str,
+    level: crate::DiagnosticLevel,
+) -> EditorDiagnosticEvent {
+    crate::DiagnosticEvent {
+        target: "server".to_owned(),
+        level,
+        timestamp_or_tick: crate::DiagnosticTimestampOrTick::TimestampNs { ns: unix_ns() },
+        fields: vec![
+            crate::DiagnosticField::text("stream", "mutation_transactions"),
+            crate::DiagnosticField::text("code", code),
+            crate::DiagnosticField::u64("transaction_id", transaction_id.0),
+            crate::DiagnosticField::u64("world_revision", world_revision.0),
+            crate::DiagnosticField::text("message", message),
+        ],
+        source: crate::DiagnosticSource::static_location(file!(), line!(), module_path!()),
+        frame_index: None,
+        span_id: None,
     }
 }
 
@@ -811,6 +953,13 @@ fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+fn unix_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
         .unwrap_or_default()
 }
 

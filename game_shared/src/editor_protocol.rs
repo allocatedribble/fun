@@ -4,6 +4,7 @@
 //! client, and game server should all speak these typed packets instead of
 //! inventing per-surface command shapes.
 
+use thunder::physics::{Quantization, QuantizedQuat, QuantizedTransform3, QuantizedVec3};
 pub use thunder::protocol::{
     ChangeMask, ComponentKind, NetClientId, NetEntity, PacketSequence,
     WorldRevision as EditorWorldRevision,
@@ -660,6 +661,51 @@ pub struct PatchResource {
 pub struct EditorComponentPayload {
     pub component: ComponentKind,
     pub payload: Vec<u8>,
+}
+
+/// Compact transform patch payload for the first server-authoritative editor mutation path.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub struct EditorTransformPatch {
+    pub transform: QuantizedTransform3,
+    pub scale: QuantizedVec3,
+}
+
+impl EditorTransformPatch {
+    #[must_use]
+    pub fn from_parts(translation: [f32; 3], rotation_xyzw: [f32; 4], scale: [f32; 3]) -> Self {
+        Self {
+            transform: QuantizedTransform3 {
+                translation: QuantizedVec3::from_f32(translation, Quantization::MILLIMETERS),
+                rotation: QuantizedQuat::from_f32(rotation_xyzw),
+            },
+            scale: QuantizedVec3::from_f32(scale, Quantization::MILLIMETERS),
+        }
+    }
+
+    #[must_use]
+    pub fn translation(self) -> [f32; 3] {
+        self.transform.translation.to_f32(Quantization::MILLIMETERS)
+    }
+
+    #[must_use]
+    pub fn rotation_xyzw(self) -> [f32; 4] {
+        self.transform.rotation.to_f32()
+    }
+
+    #[must_use]
+    pub fn scale(self) -> [f32; 3] {
+        self.scale.to_f32(Quantization::MILLIMETERS)
+    }
+}
+
+#[must_use]
+pub fn encode_editor_transform_patch(patch: EditorTransformPatch) -> Vec<u8> {
+    compactly::v1::encode(&patch)
+}
+
+#[must_use]
+pub fn decode_editor_transform_patch(bytes: &[u8]) -> Option<EditorTransformPatch> {
+    compactly::v1::decode(bytes)
 }
 
 /// Spawn an entity from a registered archetype.
