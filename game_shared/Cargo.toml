@@ -12,4 +12,4 @@ diagnostics = []
 
 [dependencies]
 compactly.workspace = true
-thunder.workspace = true
+thunder = { path = "../../thunder", default-features = false }
