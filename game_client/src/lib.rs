@@ -85,6 +85,171 @@ use tracing::{debug, error, info, warn};
 const DLSS_PROJECT_ID: &str = "7f2c56d9-bbd1-40e6-aeea-ad1cde733e2e";
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
+const FUN_CLIENT_RENDER_PATH_SIGNATURE_ID: &str = "fun-client-render-path-v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientRuntimeMode {
+    JoinedGame,
+    StandaloneClient,
+    EditorHostedClient,
+    EditorPreview,
+}
+
+impl ClientRuntimeMode {
+    fn from_env() -> Self {
+        let Ok(value) = std::env::var("FUN_CLIENT_RUNTIME_MODE") else {
+            return Self::JoinedGame;
+        };
+        Self::parse(&value).unwrap_or_else(|| {
+            warn!(
+                target: "fun::client",
+                runtime_mode = value,
+                "unknown FUN_CLIENT_RUNTIME_MODE; using joined_game"
+            );
+            Self::JoinedGame
+        })
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("joined_game")
+            || value.eq_ignore_ascii_case("joined-game")
+            || value.eq_ignore_ascii_case("joined")
+        {
+            return Some(Self::JoinedGame);
+        }
+        if value.eq_ignore_ascii_case("standalone_client")
+            || value.eq_ignore_ascii_case("standalone-client")
+            || value.eq_ignore_ascii_case("standalone")
+        {
+            return Some(Self::StandaloneClient);
+        }
+        if value.eq_ignore_ascii_case("editor_hosted_client")
+            || value.eq_ignore_ascii_case("editor-hosted-client")
+            || value.eq_ignore_ascii_case("editor_hosted")
+        {
+            return Some(Self::EditorHostedClient);
+        }
+        if value.eq_ignore_ascii_case("editor_preview")
+            || value.eq_ignore_ascii_case("editor-preview")
+            || value.eq_ignore_ascii_case("preview")
+        {
+            return Some(Self::EditorPreview);
+        }
+        None
+    }
+
+    fn should_connect_to_game_server(self) -> bool {
+        matches!(self, Self::JoinedGame | Self::EditorHostedClient)
+    }
+
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::JoinedGame => "joined_game",
+            Self::StandaloneClient => "standalone_client",
+            Self::EditorHostedClient => "editor_hosted_client",
+            Self::EditorPreview => "editor_preview",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientRenderProfile {
+    Default,
+    Diagnostics,
+}
+
+impl ClientRenderProfile {
+    fn from_env() -> Self {
+        let Ok(value) = std::env::var("FUN_CLIENT_RENDER_PROFILE") else {
+            return Self::Default;
+        };
+        Self::parse(&value).unwrap_or_else(|| {
+            warn!(
+                target: "fun::render",
+                render_profile = value,
+                "unknown FUN_CLIENT_RENDER_PROFILE; using default"
+            );
+            Self::Default
+        })
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("default") || value.eq_ignore_ascii_case("debug") {
+            return Some(Self::Default);
+        }
+        if value.eq_ignore_ascii_case("diagnostics")
+            || value.eq_ignore_ascii_case("debug_diagnostics")
+            || value.eq_ignore_ascii_case("debug+diagnostics")
+        {
+            return Some(Self::Diagnostics);
+        }
+        None
+    }
+
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Diagnostics => "diagnostics",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Resource)]
+pub struct ClientAppOptions {
+    pub mode: ClientRuntimeMode,
+    pub render_profile: ClientRenderProfile,
+    pub server_addr: Option<String>,
+    pub project_id: Option<String>,
+    pub scene_id: Option<String>,
+    pub hosted_by_editor: bool,
+}
+
+impl ClientAppOptions {
+    pub fn from_env() -> Self {
+        let mode = ClientRuntimeMode::from_env();
+        Self {
+            mode,
+            render_profile: ClientRenderProfile::from_env(),
+            server_addr: env_non_empty_string("FUN_SERVER_ADDR"),
+            project_id: env_non_empty_string("FUN_PROJECT_ID"),
+            scene_id: env_non_empty_string("FUN_SCENE_ID"),
+            hosted_by_editor: env_flag("FUN_CLIENT_HOSTED_BY_EDITOR")
+                || matches!(
+                    mode,
+                    ClientRuntimeMode::EditorHostedClient | ClientRuntimeMode::EditorPreview
+                ),
+        }
+    }
+}
+
+impl Default for ClientAppOptions {
+    fn default() -> Self {
+        Self {
+            mode: ClientRuntimeMode::JoinedGame,
+            render_profile: ClientRenderProfile::Default,
+            server_addr: None,
+            project_id: None,
+            scene_id: None,
+            hosted_by_editor: false,
+        }
+    }
+}
+
+fn env_non_empty_string(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn env_flag(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+                || value.eq_ignore_ascii_case("on")
+        }
+        Err(_) => false,
+    }
+}
 
 #[derive(Debug, Clone, Copy, Resource)]
 pub(crate) struct ClientRenderConfig {
@@ -118,7 +283,7 @@ impl ClientRenderConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RenderGeometryPolicy {
+pub enum RenderGeometryPolicy {
     Hybrid,
     AllMeshlet,
     AllRaster,
@@ -483,102 +648,321 @@ impl ClientScheduleProfiler {
     }
 }
 
-pub struct GameClientPlugin;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RenderPathSignature {
+    pub id: &'static str,
+    pub render_profile: ClientRenderProfile,
+    pub solari_enabled: bool,
+    pub dlss_rr_enabled: bool,
+    pub meshlets_enabled: bool,
+    pub geometry_policy: RenderGeometryPolicy,
+    pub meshlet_min_triangles: usize,
+    pub opaque_renderer: ClientOpaqueRenderer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientOpaqueRenderer {
+    Deferred,
+    Forward,
+}
+
+impl ClientOpaqueRenderer {
+    fn method(self) -> DefaultOpaqueRendererMethod {
+        match self {
+            Self::Deferred => DefaultOpaqueRendererMethod::deferred(),
+            Self::Forward => DefaultOpaqueRendererMethod::forward(),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Deferred => "deferred",
+            Self::Forward => "forward",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FunClientRenderPlugin {
+    options: ClientAppOptions,
+}
+
+impl FunClientRenderPlugin {
+    pub fn new(options: ClientAppOptions) -> Self {
+        Self { options }
+    }
+}
+
+impl Plugin for FunClientRenderPlugin {
+    fn build(&self, app: &mut App) {
+        let render_backend = selected_render_backend();
+        let present_mode = selected_present_mode();
+        let window_config = ClientWindowConfig::from_env();
+
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        app.insert_resource(DlssProjectId(
+            Uuid::parse_str(DLSS_PROJECT_ID).expect("DLSS project ID should be a valid UUID"),
+        ));
+
+        info!(
+            target: "fun::render",
+            runtime_mode = self.options.mode.as_env_value(),
+            render_profile = self.options.render_profile.as_env_value(),
+            backend = ?render_backend,
+            present_mode = ?present_mode,
+            vsync = false,
+            max_frame_latency = 3,
+            maximized = window_config.maximized,
+            "client window/render backend selected"
+        );
+
+        let title = match self.options.mode {
+            ClientRuntimeMode::EditorPreview => format!("{GAME_TITLE} Preview"),
+            _ => format!("{GAME_TITLE} Client"),
+        };
+        let default_plugins = DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title,
+                present_mode,
+                resolution: window_config.resolution(),
+                desired_maximum_frame_latency: NonZeroU32::new(3),
+                ..default()
+            }),
+            ..default()
+        });
+        let default_plugins = default_plugins.set(RenderPlugin {
+            render_creation: client_render_creation(render_backend),
+            ..default()
+        });
+
+        app.add_plugins(default_plugins)
+            .insert_resource(window_config)
+            .insert_resource(RenderErrorHandler(recover_render_device))
+            .insert_resource(WinitSettings::continuous());
+
+        install_fun_client_render_path(app, &self.options);
+    }
+}
+
+pub fn install_fun_client_render_path(app: &mut App, options: &ClientAppOptions) {
+    let (render_config, solari_settings, solari_runtime_params) = render_path_config_from_env();
+    log_client_render_path(&render_config, &solari_settings, &solari_runtime_params);
+    let opaque_renderer = selected_opaque_renderer(&render_config);
+    let signature = render_path_signature_for_options(options, &render_config, opaque_renderer);
+    emit_render_path_signature(options, &signature);
+
+    let solari_enabled = render_config.solari_enabled;
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    let fps_overlay_enabled = render_config.fps_overlay_enabled;
+
+    app.insert_resource(opaque_renderer.method())
+        .insert_resource(signature)
+        .insert_resource(render_config)
+        .insert_resource(solari_settings)
+        .insert_resource(solari_runtime_params)
+        .add_message::<SolariResetEvent>()
+        .add_plugins(MeshletPlugin {
+            cluster_buffer_slots: 1 << 14,
+        })
+        .add_systems(
+            Startup,
+            (setup_lighting, prewarm_world_render_catalog).chain(),
+        );
+
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    if fps_overlay_enabled {
+        app.add_plugins(FpsOverlayPlugin {
+            config: FpsOverlayConfig {
+                refresh_interval: Duration::from_secs(1),
+                text_config: bevy::text::TextFont {
+                    font_size: bevy::text::FontSize::Px(12.0),
+                    ..default()
+                },
+                ..default()
+            },
+        });
+    }
+
+    if solari_enabled {
+        app.add_plugins(SolariPlugins);
+    }
+
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    {
+        if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some() {
+            game_shared::fun_diag_info!("[client render] GPU render diagnostics enabled");
+            app.add_plugins((
+                RenderDiagnosticsPlugin,
+                bevy::diagnostic::SystemInformationDiagnosticsPlugin,
+            ));
+        }
+    }
+    #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
+    {
+        if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some()
+            || std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some()
+            || std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some()
+        {
+            warn!(
+                target: "fun::render",
+                "render diagnostics requested but game_client/render_diagnostics is not enabled"
+            );
+        }
+    }
+}
+
+fn render_path_config_from_env() -> (ClientRenderConfig, SolariSettings, SolariRuntimeParams) {
+    let mut render_config = ClientRenderConfig::from_env();
+    let solari_settings = solari_settings_from_env();
+    let solari_runtime_params = solari_runtime_params_from_env(&solari_settings);
+    if solari_settings.denoise_mode != SolariDenoiseMode::DlssRayReconstruction {
+        render_config.dlss_rr_disabled_by_denoise_mode = render_config.dlss_rr_enabled;
+        render_config.dlss_rr_enabled = false;
+    }
+    (render_config, solari_settings, solari_runtime_params)
+}
+
+fn log_client_render_path(
+    render_config: &ClientRenderConfig,
+    solari_settings: &SolariSettings,
+    solari_runtime_params: &SolariRuntimeParams,
+) {
+    if render_config.solari_enabled {
+        info!("[client render] Solari lighting will start after the streamed world is ready");
+    } else {
+        info!("[client render] Solari lighting disabled by FUN_DISABLE_SOLARI");
+    }
+    if render_config.meshlets_enabled {
+        info!("[client render] streamed world will use meshlet meshes");
+    } else {
+        info!("[client render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
+    }
+    info!(
+        "[client render] Solari denoise mode: {:?}",
+        solari_settings.denoise_mode
+    );
+    info!(
+        "[client render] Solari internal GI scale: {:?}",
+        solari_settings.internal_scale
+    );
+    info!(
+        "[client render] Solari world-cache: {} entries, {} updates/frame soft cap, {} frame slices, camera tiers {}m/{}m/{}m",
+        solari_settings.world_cache_size,
+        solari_settings.world_cache_cell_updates_soft_cap,
+        solari_settings.world_cache_frame_slice_count,
+        solari_settings.world_cache_near_camera_distance_meters,
+        solari_settings.world_cache_mid_camera_distance_meters,
+        solari_settings.world_cache_far_camera_distance_meters
+    );
+    info!(
+        "[client render] Solari architecture: {:?}, visual target: {:?}, target_fps={}, frame_budget_ns={}, gpu_budget_ns={}",
+        solari_runtime_params.architecture,
+        solari_runtime_params.visual_target,
+        solari_runtime_params.target_fps,
+        solari_runtime_params.frame_budget_ns,
+        solari_runtime_params.gpu_budget_ns
+    );
+    info!(
+        target: "fun::render",
+        solari_enabled = render_config.solari_enabled,
+        meshlets_enabled = render_config.meshlets_enabled,
+        dlss_rr_enabled = render_config.dlss_rr_enabled,
+        denoise_mode = ?solari_settings.denoise_mode,
+        internal_scale = ?solari_settings.internal_scale,
+        world_cache_size = solari_settings.world_cache_size,
+        world_cache_updates_soft_cap = solari_settings.world_cache_cell_updates_soft_cap,
+        world_cache_frame_slice_count = solari_settings.world_cache_frame_slice_count,
+        world_cache_near_meters = solari_settings.world_cache_near_camera_distance_meters,
+        world_cache_mid_meters = solari_settings.world_cache_mid_camera_distance_meters,
+        world_cache_far_meters = solari_settings.world_cache_far_camera_distance_meters,
+        solari_architecture = ?solari_runtime_params.architecture,
+        solari_visual_target = ?solari_runtime_params.visual_target,
+        solari_target_fps = solari_runtime_params.target_fps,
+        solari_frame_budget_ns = solari_runtime_params.frame_budget_ns,
+        solari_gpu_budget_ns = solari_runtime_params.gpu_budget_ns,
+        solari_quality_level = solari_runtime_params.quality_level,
+        solari_cache_update_budget = solari_runtime_params.cache_update_budget,
+        solari_specular_refresh_budget = solari_runtime_params.specular_refresh_budget,
+        solari_debug_overlay = ?solari_runtime_params.debug_overlay,
+        geometry_policy = ?render_config.geometry_policy,
+        meshlet_min_triangles = render_config.meshlet_min_triangles,
+        "client render configuration"
+    );
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    game_shared::fun_diag_info!(
+        target: "fun::render",
+        render_profile_verbose = render_config.render_profile_verbose,
+        fps_overlay_enabled = render_config.fps_overlay_enabled,
+        "client render diagnostic configuration"
+    );
+}
+
+fn selected_opaque_renderer(render_config: &ClientRenderConfig) -> ClientOpaqueRenderer {
+    if render_config.solari_enabled {
+        info!("[client render] default opaque renderer: deferred");
+        ClientOpaqueRenderer::Deferred
+    } else {
+        info!("[client render] default opaque renderer: forward");
+        ClientOpaqueRenderer::Forward
+    }
+}
+
+fn render_path_signature_for_options(
+    options: &ClientAppOptions,
+    render_config: &ClientRenderConfig,
+    opaque_renderer: ClientOpaqueRenderer,
+) -> RenderPathSignature {
+    RenderPathSignature {
+        id: FUN_CLIENT_RENDER_PATH_SIGNATURE_ID,
+        render_profile: options.render_profile,
+        solari_enabled: render_config.solari_enabled,
+        dlss_rr_enabled: render_config.dlss_rr_enabled,
+        meshlets_enabled: render_config.meshlets_enabled,
+        geometry_policy: render_config.geometry_policy,
+        meshlet_min_triangles: render_config.meshlet_min_triangles,
+        opaque_renderer,
+    }
+}
+
+fn emit_render_path_signature(options: &ClientAppOptions, signature: &RenderPathSignature) {
+    info!(
+        target: "fun::render",
+        signature_id = signature.id,
+        runtime_mode = options.mode.as_env_value(),
+        render_profile = signature.render_profile.as_env_value(),
+        hosted_by_editor = options.hosted_by_editor,
+        solari_enabled = signature.solari_enabled,
+        meshlets_enabled = signature.meshlets_enabled,
+        dlss_rr_enabled = signature.dlss_rr_enabled,
+        geometry_policy = ?signature.geometry_policy,
+        meshlet_min_triangles = signature.meshlet_min_triangles,
+        opaque_renderer = signature.opaque_renderer.as_str(),
+        "RenderPathSignature"
+    );
+}
+
+#[derive(Debug, Clone)]
+pub struct GameClientPlugin {
+    options: ClientAppOptions,
+}
+
+impl GameClientPlugin {
+    pub fn new(options: ClientAppOptions) -> Self {
+        Self { options }
+    }
+}
+
+impl Default for GameClientPlugin {
+    fn default() -> Self {
+        Self::new(ClientAppOptions::default())
+    }
+}
 
 impl Plugin for GameClientPlugin {
     fn build(&self, app: &mut App) {
-        let mut render_config = ClientRenderConfig::from_env();
-        let solari_settings = solari_settings_from_env();
-        let solari_runtime_params = solari_runtime_params_from_env(&solari_settings);
-        if solari_settings.denoise_mode != SolariDenoiseMode::DlssRayReconstruction {
-            render_config.dlss_rr_disabled_by_denoise_mode = render_config.dlss_rr_enabled;
-            render_config.dlss_rr_enabled = false;
-        }
-        if render_config.solari_enabled {
-            info!("[client render] Solari lighting will start after the streamed world is ready");
-        } else {
-            info!("[client render] Solari lighting disabled by FUN_DISABLE_SOLARI");
-        }
-        if render_config.meshlets_enabled {
-            info!("[client render] streamed world will use meshlet meshes");
-        } else {
-            info!("[client render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
-        }
-        info!(
-            "[client render] Solari denoise mode: {:?}",
-            solari_settings.denoise_mode
-        );
-        info!(
-            "[client render] Solari internal GI scale: {:?}",
-            solari_settings.internal_scale
-        );
-        info!(
-            "[client render] Solari world-cache: {} entries, {} updates/frame soft cap, {} frame slices, camera tiers {}m/{}m/{}m",
-            solari_settings.world_cache_size,
-            solari_settings.world_cache_cell_updates_soft_cap,
-            solari_settings.world_cache_frame_slice_count,
-            solari_settings.world_cache_near_camera_distance_meters,
-            solari_settings.world_cache_mid_camera_distance_meters,
-            solari_settings.world_cache_far_camera_distance_meters
-        );
-        info!(
-            "[client render] Solari architecture: {:?}, visual target: {:?}, target_fps={}, frame_budget_ns={}, gpu_budget_ns={}",
-            solari_runtime_params.architecture,
-            solari_runtime_params.visual_target,
-            solari_runtime_params.target_fps,
-            solari_runtime_params.frame_budget_ns,
-            solari_runtime_params.gpu_budget_ns
-        );
-        info!(
-            target: "fun::render",
-            solari_enabled = render_config.solari_enabled,
-            meshlets_enabled = render_config.meshlets_enabled,
-            dlss_rr_enabled = render_config.dlss_rr_enabled,
-            denoise_mode = ?solari_settings.denoise_mode,
-            internal_scale = ?solari_settings.internal_scale,
-            world_cache_size = solari_settings.world_cache_size,
-            world_cache_updates_soft_cap = solari_settings.world_cache_cell_updates_soft_cap,
-            world_cache_frame_slice_count = solari_settings.world_cache_frame_slice_count,
-            world_cache_near_meters = solari_settings.world_cache_near_camera_distance_meters,
-            world_cache_mid_meters = solari_settings.world_cache_mid_camera_distance_meters,
-            world_cache_far_meters = solari_settings.world_cache_far_camera_distance_meters,
-            solari_architecture = ?solari_runtime_params.architecture,
-            solari_visual_target = ?solari_runtime_params.visual_target,
-            solari_target_fps = solari_runtime_params.target_fps,
-            solari_frame_budget_ns = solari_runtime_params.frame_budget_ns,
-            solari_gpu_budget_ns = solari_runtime_params.gpu_budget_ns,
-            solari_quality_level = solari_runtime_params.quality_level,
-            solari_cache_update_budget = solari_runtime_params.cache_update_budget,
-            solari_specular_refresh_budget = solari_runtime_params.specular_refresh_budget,
-            solari_debug_overlay = ?solari_runtime_params.debug_overlay,
-            geometry_policy = ?render_config.geometry_policy,
-            meshlet_min_triangles = render_config.meshlet_min_triangles,
-            "client render configuration"
-        );
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        game_shared::fun_diag_info!(
-            target: "fun::render",
-            render_profile_verbose = render_config.render_profile_verbose,
-            fps_overlay_enabled = render_config.fps_overlay_enabled,
-            "client render diagnostic configuration"
-        );
-
-        let opaque_renderer_method = if render_config.solari_enabled {
-            info!("[client render] default opaque renderer: deferred");
-            DefaultOpaqueRendererMethod::deferred()
-        } else {
-            info!("[client render] default opaque renderer: forward");
-            DefaultOpaqueRendererMethod::forward()
-        };
-
-        app.insert_resource(opaque_renderer_method)
-            .insert_resource(render_config)
+        app.insert_resource(self.options.clone())
             .insert_resource(ClientLogConfig::from_env())
             .insert_resource(Time::<Fixed>::from_hz(DEFAULT_TICK_RATE_HZ))
-            .insert_resource(solari_settings)
-            .insert_resource(solari_runtime_params)
-            .add_message::<SolariResetEvent>()
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
             .init_resource::<ClientEditorInspectorState>()
@@ -586,9 +970,6 @@ impl Plugin for GameClientPlugin {
                 PhysicsPlugins::default(),
                 QuinnetClientPlugin::default(),
                 ThunderPlugin::default(),
-                MeshletPlugin {
-                    cluster_buffer_slots: 1 << 14,
-                },
                 FirstPersonControllerPlugin,
             ));
 
@@ -601,29 +982,9 @@ impl Plugin for GameClientPlugin {
             .init_resource::<ClientScheduleProfiler>()
             .init_resource::<ClientDiagnostics>();
 
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        if render_config.fps_overlay_enabled {
-            app.add_plugins(FpsOverlayPlugin {
-                config: FpsOverlayConfig {
-                    refresh_interval: Duration::from_secs(1),
-                    text_config: bevy::text::TextFont {
-                        font_size: bevy::text::FontSize::Px(12.0),
-                        ..default()
-                    },
-                    ..default()
-                },
-            });
-        }
-
         app.add_systems(
             Startup,
-            (
-                setup_lighting,
-                prewarm_world_render_catalog,
-                start_client_editor_inspector,
-                connect_to_game_server,
-            )
-                .chain(),
+            (start_client_editor_inspector, connect_to_game_server).chain(),
         )
         .add_systems(
             Update,
@@ -641,33 +1002,6 @@ impl Plugin for GameClientPlugin {
         {
             install_detailed_frame_profiler(app);
             app.add_systems(Update, log_client_diagnostics);
-        }
-
-        if render_config.solari_enabled {
-            app.add_plugins(SolariPlugins);
-        }
-
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        {
-            if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some() {
-                game_shared::fun_diag_info!("[client render] GPU render diagnostics enabled");
-                app.add_plugins((
-                    RenderDiagnosticsPlugin,
-                    bevy::diagnostic::SystemInformationDiagnosticsPlugin,
-                ));
-            }
-        }
-        #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
-        {
-            if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some()
-                || std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some()
-                || std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some()
-            {
-                warn!(
-                    target: "fun::render",
-                    "render diagnostics requested but game_client/render_diagnostics is not enabled"
-                );
-            }
         }
     }
 }
@@ -1245,46 +1579,25 @@ pub fn benchmark_parse_solari_denoise_mode(
 }
 
 pub fn build_client_app() -> App {
+    build_client_app_with_options(ClientAppOptions::from_env())
+}
+
+pub fn build_client_app_with_options(options: ClientAppOptions) -> App {
     let mut app = App::new();
-    let render_backend = selected_render_backend();
-    let present_mode = selected_present_mode();
-    let window_config = ClientWindowConfig::from_env();
-
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    app.insert_resource(DlssProjectId(
-        Uuid::parse_str(DLSS_PROJECT_ID).expect("DLSS project ID should be a valid UUID"),
-    ));
-
     info!(
-        target: "fun::render",
-        backend = ?render_backend,
-        present_mode = ?present_mode,
-        vsync = false,
-        max_frame_latency = 3,
-        maximized = window_config.maximized,
-        "client window/render backend selected"
+        target: "fun::client",
+        runtime_mode = options.mode.as_env_value(),
+        render_profile = options.render_profile.as_env_value(),
+        hosted_by_editor = options.hosted_by_editor,
+        has_project_id = options.project_id.is_some(),
+        has_scene_id = options.scene_id.is_some(),
+        has_server_addr = options.server_addr.is_some(),
+        "building Fun client app"
     );
-
-    let default_plugins = DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: format!("{GAME_TITLE} Client"),
-            present_mode,
-            resolution: window_config.resolution(),
-            desired_maximum_frame_latency: NonZeroU32::new(3),
-            ..default()
-        }),
-        ..default()
-    });
-    let default_plugins = default_plugins.set(RenderPlugin {
-        render_creation: client_render_creation(render_backend),
-        ..default()
-    });
-
-    app.add_plugins(default_plugins)
-        .insert_resource(window_config)
-        .insert_resource(RenderErrorHandler(recover_render_device))
-        .insert_resource(WinitSettings::continuous())
-        .add_plugins(GameClientPlugin);
+    app.add_plugins((
+        FunClientRenderPlugin::new(options.clone()),
+        GameClientPlugin::new(options),
+    ));
 
     app
 }
@@ -1295,6 +1608,39 @@ fn client_render_creation(render_backend: Backends) -> RenderCreation {
         instance_flags: InstanceFlags::empty().with_env(),
         ..default()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn joined_game_and_editor_preview_share_render_path_signature() {
+        let joined_options = ClientAppOptions {
+            mode: ClientRuntimeMode::JoinedGame,
+            ..Default::default()
+        };
+        let preview_options = ClientAppOptions {
+            mode: ClientRuntimeMode::EditorPreview,
+            hosted_by_editor: true,
+            ..Default::default()
+        };
+
+        let render_config = ClientRenderConfig::from_env();
+        let joined_signature = render_path_signature_for_options(
+            &joined_options,
+            &render_config,
+            ClientOpaqueRenderer::Deferred,
+        );
+        let preview_signature = render_path_signature_for_options(
+            &preview_options,
+            &render_config,
+            ClientOpaqueRenderer::Deferred,
+        );
+
+        assert_ne!(joined_options.mode, preview_options.mode);
+        assert_eq!(joined_signature, preview_signature);
+    }
 }
 
 fn recover_render_device(
@@ -1464,18 +1810,28 @@ fn apply_startup_window_config(
     );
 }
 
-fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
+fn connect_to_game_server(options: Res<ClientAppOptions>, mut client: ResMut<QuinnetClient>) {
+    if !options.mode.should_connect_to_game_server() {
+        info!(
+            target: "fun::net",
+            runtime_mode = options.mode.as_env_value(),
+            "client runtime mode does not open a game-server connection"
+        );
+        return;
+    }
+
     if !client.is_disconnected() {
         info!("[client net] Quinnet already has an active connection");
         debug!(target: "fun::net", "quinnet already has an active connection");
         return;
     }
 
-    info!("[client net] opening connection to {GAME_SERVER_ADDR}");
-    info!(target: "fun::net", server_addr = GAME_SERVER_ADDR, "opening game server connection");
+    let server_addr = options.server_addr.as_deref().unwrap_or(GAME_SERVER_ADDR);
+    info!("[client net] opening connection to {server_addr}");
+    info!(target: "fun::net", server_addr, "opening game server connection");
     let limits = ChannelLimits::default();
     let config = ClientConnectionConfiguration {
-        addr_config: ClientAddrConfiguration::from_strings(GAME_SERVER_ADDR, "0.0.0.0:0")
+        addr_config: ClientAddrConfiguration::from_strings(server_addr, "0.0.0.0:0")
             .expect("game server address should be valid"),
         cert_mode: CertificateVerificationMode::SkipVerification,
         defaultables: ClientConnectionConfigurationDefaultables {
@@ -1486,19 +1842,17 @@ fn connect_to_game_server(mut client: ResMut<QuinnetClient>) {
 
     match client.open_connection(config) {
         Ok(connection_id) => {
-            info!(
-                "[client net] connecting to {GAME_SERVER_ADDR} with local connection {connection_id}"
-            );
+            info!("[client net] connecting to {server_addr} with local connection {connection_id}");
             info!(
                 target: "fun::net",
-                server_addr = GAME_SERVER_ADDR,
+                server_addr,
                 connection_id,
                 "connecting to game server"
             );
         }
         Err(error) => {
             info!("[client net] failed to start game server connection: {error}");
-            error!(target: "fun::net", server_addr = GAME_SERVER_ADDR, %error, "failed to start game server connection");
+            error!(target: "fun::net", server_addr, %error, "failed to start game server connection");
         }
     }
 }
