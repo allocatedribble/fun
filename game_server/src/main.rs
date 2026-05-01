@@ -46,6 +46,7 @@ fn main() {
         ThunderPlugin::default(),
     ))
     .init_resource::<ServerWorldStream>()
+    .init_resource::<ServerEditorSchema>()
     .insert_resource(ServerLogConfig::from_env())
     .init_resource::<ConnectedClients>()
     .init_resource::<PendingWorldStreams>()
@@ -65,7 +66,10 @@ fn main() {
     app.init_resource::<ServerWorldDiagnostics>()
         .init_resource::<ServerProfiler>()
         .init_resource::<ServerEditorControlPlane>()
-        .add_systems(Startup, log_server_editor_control_plane)
+        .add_systems(
+            Startup,
+            (log_server_editor_control_plane, log_server_editor_schema),
+        )
         .add_systems(PreUpdate, begin_server_profiler_tick)
         .add_systems(Update, log_streamable_inventory);
 
@@ -170,6 +174,192 @@ impl StreamedWorldEntity {
             collider: None,
             color: None,
         }
+    }
+}
+
+#[derive(Resource)]
+struct ServerEditorSchema {
+    #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
+    registry: game_shared::EditorSchemaRegistry<'static>,
+}
+
+impl Default for ServerEditorSchema {
+    fn default() -> Self {
+        Self {
+            registry: game_shared::EditorSchemaRegistry::new(
+                server_editor_components(),
+                server_editor_resources(),
+            ),
+        }
+    }
+}
+
+fn server_editor_components() -> &'static [game_shared::EditorComponentRegistration] {
+    game_shared::editor_component_registry! {
+        transform => {
+            kind: game_shared::EDITOR_COMPONENT_KIND_TRANSFORM,
+            type: Transform,
+            reflect: "bevy_transform::components::transform::Transform",
+            serializer: "fun.editor.transform.encode.v1",
+            deserializer: "fun.editor.transform.decode.v1",
+            validator: game_shared::validate_non_empty_payload,
+            capability: game_shared::EditorCapability::MutateEntities,
+            mutability: game_shared::EditorMutability::RuntimeMutable,
+            serialization: game_shared::EditorSerializationPolicy::Compactly,
+            replication: game_shared::EditorReplicationPolicy::ServerAuthoritative,
+            ui: game_shared::EditorUiHints::new(
+                "Transform",
+                "Transform",
+                game_shared::EditorSchemaWidget::Transform3d,
+                game_shared::EditorSchemaImportance::Primary,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_transform",
+            ),
+            max_payload_bytes: 128,
+        },
+        name => {
+            kind: game_shared::EDITOR_COMPONENT_KIND_NAME,
+            type: Name,
+            reflect: "bevy_ecs::name::Name",
+            serializer: "fun.editor.name.encode.v1",
+            deserializer: "fun.editor.name.decode.v1",
+            validator: game_shared::validate_non_empty_payload,
+            capability: game_shared::EditorCapability::MutateEntities,
+            mutability: game_shared::EditorMutability::RuntimeMutable,
+            serialization: game_shared::EditorSerializationPolicy::Compactly,
+            replication: game_shared::EditorReplicationPolicy::ServerAuthoritative,
+            ui: game_shared::EditorUiHints::new(
+                "Name",
+                "Identity",
+                game_shared::EditorSchemaWidget::Text,
+                game_shared::EditorSchemaImportance::Secondary,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_name",
+            ),
+            max_payload_bytes: 256,
+        },
+        network_identity => {
+            kind: game_shared::EDITOR_COMPONENT_KIND_NETWORK_IDENTITY,
+            type: NetworkIdentity,
+            reflect: "thunder::bevy_integration::NetworkIdentity",
+            serializer: "fun.editor.network_identity.encode.v1",
+            deserializer: "fun.editor.network_identity.decode.v1",
+            validator: game_shared::reject_editor_mutation,
+            capability: game_shared::EditorCapability::MutateEntities,
+            mutability: game_shared::EditorMutability::ReadOnly,
+            serialization: game_shared::EditorSerializationPolicy::Compactly,
+            replication: game_shared::EditorReplicationPolicy::ServerAuthoritative,
+            ui: game_shared::EditorUiHints::new(
+                "Network Identity",
+                "Network",
+                game_shared::EditorSchemaWidget::ReadOnlyStruct,
+                game_shared::EditorSchemaImportance::Diagnostic,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_network_identity",
+            ),
+            max_payload_bytes: 64,
+        },
+        network_authority => {
+            kind: game_shared::EDITOR_COMPONENT_KIND_NETWORK_AUTHORITY,
+            type: NetworkAuthority,
+            reflect: "thunder::bevy_integration::NetworkAuthority",
+            serializer: "fun.editor.network_authority.encode.v1",
+            deserializer: "fun.editor.network_authority.decode.v1",
+            validator: game_shared::reject_editor_mutation,
+            capability: game_shared::EditorCapability::MutateEntities,
+            mutability: game_shared::EditorMutability::ReadOnly,
+            serialization: game_shared::EditorSerializationPolicy::Compactly,
+            replication: game_shared::EditorReplicationPolicy::ServerAuthoritative,
+            ui: game_shared::EditorUiHints::new(
+                "Authority",
+                "Network",
+                game_shared::EditorSchemaWidget::ReadOnlyStruct,
+                game_shared::EditorSchemaImportance::Diagnostic,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_network_authority",
+            ),
+            max_payload_bytes: 32,
+        },
+        streamed_world => {
+            kind: game_shared::EDITOR_COMPONENT_KIND_WORLD_CATALOG_REF,
+            type: StreamedWorldEntity,
+            reflect: "game_server::StreamedWorldEntity",
+            serializer: "fun.editor.streamed_world.encode.v1",
+            deserializer: "fun.editor.streamed_world.decode.v1",
+            validator: game_shared::validate_non_empty_payload,
+            capability: game_shared::EditorCapability::ApplyScenePatch,
+            mutability: game_shared::EditorMutability::PersistentMutable,
+            serialization: game_shared::EditorSerializationPolicy::Compactly,
+            replication: game_shared::EditorReplicationPolicy::ServerAuthoritative,
+            ui: game_shared::EditorUiHints::new(
+                "World Catalog",
+                "World",
+                game_shared::EditorSchemaWidget::ReadOnlyStruct,
+                game_shared::EditorSchemaImportance::Advanced,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_streamed_world",
+            ),
+            max_payload_bytes: 128,
+        },
+    }
+}
+
+fn server_editor_resources() -> &'static [game_shared::EditorResourceRegistration] {
+    game_shared::editor_resource_registry! {
+        diagnostics => {
+            kind: game_shared::EDITOR_RESOURCE_KIND_RUNTIME_DIAGNOSTICS,
+            type: ServerLogConfig,
+            reflect: "game_server::ServerLogConfig",
+            serializer: "fun.editor.server_log_config.encode.v1",
+            deserializer: "fun.editor.server_log_config.decode.v1",
+            validator: game_shared::validate_non_empty_payload,
+            capability: game_shared::EditorCapability::ControlRuntime,
+            mutability: game_shared::EditorMutability::RuntimeMutable,
+            policy: game_shared::EditorResourcePolicy::VisualRuntimeSetting,
+            ui: game_shared::EditorUiHints::new(
+                "Runtime Diagnostics",
+                "Diagnostics",
+                game_shared::EditorSchemaWidget::Toggle,
+                game_shared::EditorSchemaImportance::Advanced,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_runtime_diagnostics",
+            ),
+            max_payload_bytes: 16,
+        },
+        match_state => {
+            kind: game_shared::EDITOR_RESOURCE_KIND_MATCH_STATE,
+            type: ServerWorldStream,
+            reflect: "game_server::ServerWorldStream",
+            serializer: "fun.editor.server_world_stream.encode.v1",
+            deserializer: "fun.editor.server_world_stream.decode.v1",
+            validator: game_shared::reject_editor_mutation,
+            capability: game_shared::EditorCapability::PersistIteration,
+            mutability: game_shared::EditorMutability::ReadOnly,
+            policy: game_shared::EditorResourcePolicy::CriticalServerState,
+            ui: game_shared::EditorUiHints::new(
+                "Match World Stream",
+                "Server",
+                game_shared::EditorSchemaWidget::ResourcePanel,
+                game_shared::EditorSchemaImportance::Diagnostic,
+            ),
+            diagnostics: game_shared::EditorDiagnosticLabels::new(
+                "fun::editor::schema",
+                "server_match_state",
+            ),
+            max_payload_bytes: 0,
+        },
     }
 }
 
@@ -283,6 +473,29 @@ fn log_server_editor_control_plane(control: Res<ServerEditorControlPlane>) {
         granted_capabilities = control.granted_capabilities.len(),
         diagnostic_streams = control.diagnostic_streams.len(),
         "server editor control plane ready"
+    );
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn log_server_editor_schema(schema: Res<ServerEditorSchema>) {
+    let critical_resources = schema
+        .registry
+        .resources
+        .iter()
+        .filter(|resource| {
+            matches!(
+                resource.policy,
+                game_shared::EditorResourcePolicy::CriticalServerState
+            )
+        })
+        .count();
+
+    game_shared::fun_diag_info!(
+        target: "fun::editor::schema",
+        components = schema.registry.components.len(),
+        resources = schema.registry.resources.len(),
+        critical_resources,
+        "server editor schema registered"
     );
 }
 
@@ -408,14 +621,21 @@ fn rebuild_world_stream(
         if !identity.entity.is_valid() {
             return;
         }
+        let editor_identity = game_shared::EditorVisibleEntityIdentity::from_network_identity(
+            identity.entity,
+            identity.class,
+            authority.mode,
+            name.map(|name| name.as_str()),
+            game_shared::EditorEntityMutability::PersistentMutable,
+        );
 
         specs.push(WorldEntitySpec {
-            entity: identity.entity,
-            name: name
-                .map(|name| name.as_str().to_owned())
-                .unwrap_or_else(|| format!("NetEntity-{}", identity.entity.0)),
-            class: identity.class,
-            authority: authority.mode,
+            entity: editor_identity.entity,
+            name: editor_identity
+                .name
+                .unwrap_or_else(|| format!("NetEntity-{}", editor_identity.entity.0)),
+            class: editor_identity.replication_class,
+            authority: editor_identity.authority,
             transform: qtransform(transform),
             catalog: streamed.catalog,
             render: streamed.render,
@@ -521,12 +741,12 @@ fn receive_client_control(
 
     for client_id in endpoint.clients() {
         while let Some(payload) = endpoint.try_receive_payload(client_id, ClientChannel::Control) {
-            let bytes_len = payload.as_ref().len();
+            let _bytes_len = payload.as_ref().len();
             game_shared::fun_diag_info_if!(
                 _log_config.net_verbose(),
                 target: "fun::server::net",
                 client_id,
-                bytes = bytes_len,
+                bytes = _bytes_len,
                 "received control payload"
             );
             #[cfg(all(feature = "diagnostics", debug_assertions))]
@@ -543,7 +763,7 @@ fn receive_client_control(
                             world_revision: None,
                             chunk_index: None,
                             chunk_count: None,
-                            bytes: bytes_len,
+                            bytes: _bytes_len,
                             duration_ns: elapsed_ns(decode_started),
                         },
                     );
@@ -565,7 +785,7 @@ fn receive_client_control(
                             world_revision: Some(_ack.revision.0),
                             chunk_index: None,
                             chunk_count: None,
-                            bytes: bytes_len,
+                            bytes: _bytes_len,
                             duration_ns: elapsed_ns(decode_started),
                         },
                     );
@@ -589,7 +809,7 @@ fn receive_client_control(
                             world_revision: None,
                             chunk_index: None,
                             chunk_count: None,
-                            bytes: bytes_len,
+                            bytes: _bytes_len,
                             duration_ns: elapsed_ns(decode_started),
                         },
                     );
@@ -612,7 +832,7 @@ fn receive_client_control(
                             world_revision: None,
                             chunk_index: None,
                             chunk_count: None,
-                            bytes: bytes_len,
+                            bytes: _bytes_len,
                             duration_ns: elapsed_ns(decode_started),
                         },
                     );
