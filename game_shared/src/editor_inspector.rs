@@ -1,15 +1,16 @@
 use crate::{
     CURRENT_EDITOR_PROTOCOL_VERSION, EDITOR_PROTOCOL_VERSION, EDITOR_WIRE_ENVELOPE_HEADER_LEN,
-    EditorAuth, EditorAuthRequired, EditorBindMode, EditorBuildId, EditorCapability,
-    EditorCommandPacket, EditorCommandPayload, EditorComponentSchema, EditorControlConfig,
-    EditorDiagnosticBatch, EditorDiagnosticEvent, EditorDiagnosticPacket, EditorEntityPage,
-    EditorEntityQuery, EditorEntityRow, EditorEventPacket, EditorEventPayload,
+    EditorAuditEvent, EditorAuth, EditorAuthRequired, EditorBindMode, EditorBuildId,
+    EditorCapability, EditorCommandPacket, EditorCommandPayload, EditorComponentSchema,
+    EditorControlConfig, EditorDiagnosticBatch, EditorDiagnosticEvent, EditorDiagnosticPacket,
+    EditorEntityPage, EditorEntityQuery, EditorEntityRow, EditorEventPacket, EditorEventPayload,
     EditorHandshakePacket, EditorHandshakePayload, EditorMutationAck, EditorMutationStatus,
     EditorMutationTransaction, EditorPacketHeader, EditorPageCursor, EditorProtocolPacket,
-    EditorProtocolValidationContext, EditorRequestId, EditorSchemaRevision, EditorSessionId,
-    EditorSizeBudget, EditorTargetKind, EditorTransactionId, EditorWelcome, EditorWorldRevision,
-    PacketSequence, RuntimeDiagnosticSinks, decode_editor_packet, editor_wire_envelope_len,
-    encode_editor_packet, parse_editor_capability, validate_editor_packet,
+    EditorProtocolValidationContext, EditorRequestId, EditorRuntimeControlCommand,
+    EditorSchemaRevision, EditorSessionId, EditorSizeBudget, EditorTargetKind, EditorTransactionId,
+    EditorWelcome, EditorWorldRevision, PacketSequence, RuntimeDiagnosticSinks,
+    decode_editor_packet, editor_wire_envelope_len, encode_editor_packet, parse_editor_capability,
+    validate_editor_packet,
 };
 use ring::hmac;
 use std::{
@@ -128,6 +129,7 @@ pub struct EditorInspectorSnapshot {
     pub editor_attached: bool,
     pending_mutations: VecDeque<EditorMutationTransaction>,
     mutation_results: VecDeque<EditorInspectorMutationResult>,
+    pending_runtime_controls: VecDeque<EditorRuntimeControlCommand>,
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +159,7 @@ impl Default for EditorInspectorSnapshot {
             editor_attached: false,
             pending_mutations: VecDeque::new(),
             mutation_results: VecDeque::new(),
+            pending_runtime_controls: VecDeque::new(),
         }
     }
 }
@@ -327,6 +330,21 @@ impl EditorInspectorRuntimeState {
             .iter()
             .position(|result| result.transaction_id == transaction_id)?;
         snapshot.mutation_results.remove(index)
+    }
+
+    pub fn queue_runtime_control(&self, command: EditorRuntimeControlCommand) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.pending_runtime_controls.push_back(command);
+        }
+    }
+
+    #[must_use]
+    pub fn drain_runtime_controls(&self, max_commands: usize) -> Vec<EditorRuntimeControlCommand> {
+        let Ok(mut snapshot) = self.inner.lock() else {
+            return Vec::new();
+        };
+        let take = max_commands.min(snapshot.pending_runtime_controls.len());
+        snapshot.pending_runtime_controls.drain(..take).collect()
     }
 
     #[must_use]
@@ -677,6 +695,29 @@ fn handle_editor_command_packet(
             }
             Ok(())
         }
+        EditorCommandPayload::RuntimeControl { command } => {
+            let command_id = command.command_id();
+            config.runtime_state.queue_runtime_control(command);
+            let world_revision = config.runtime_state.metadata().world_revision;
+            write_editor_protocol_packet(
+                stream,
+                &EditorProtocolPacket::Event {
+                    packet: EditorEventPacket {
+                        header: response_header(&packet.header, world_revision),
+                        payload: EditorEventPayload::Audit {
+                            event: EditorAuditEvent {
+                                sequence: packet.header.sequence,
+                                capability: EditorCapability::ControlRuntime,
+                                target_kind: packet.header.target,
+                                message: format!(
+                                    "queued authenticated runtime control command `{command_id}`"
+                                ),
+                            },
+                        },
+                    },
+                },
+            )
+        }
         EditorCommandPayload::Exec { .. } | EditorCommandPayload::Persist { .. } => Ok(()),
     }
 }
@@ -999,5 +1040,28 @@ mod tests {
         );
 
         assert_eq!(granted, vec![EditorCapability::ReadEntities]);
+    }
+
+    #[test]
+    fn runtime_control_commands_are_queued_for_runtime_systems() {
+        let state = EditorInspectorRuntimeState::default();
+        state.queue_runtime_control(EditorRuntimeControlCommand::InputSetOwner {
+            owner: crate::EditorInputOwner::Editor,
+        });
+        state.queue_runtime_control(EditorRuntimeControlCommand::WindowSetEmbedded {
+            embedded: true,
+        });
+
+        assert_eq!(
+            state.drain_runtime_controls(1),
+            vec![EditorRuntimeControlCommand::InputSetOwner {
+                owner: crate::EditorInputOwner::Editor
+            }]
+        );
+        assert_eq!(
+            state.drain_runtime_controls(8),
+            vec![EditorRuntimeControlCommand::WindowSetEmbedded { embedded: true }]
+        );
+        assert!(state.drain_runtime_controls(8).is_empty());
     }
 }

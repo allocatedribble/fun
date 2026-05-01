@@ -125,6 +125,38 @@ pub enum EditorActivationMode {
     EditorShell,
 }
 
+/// Runtime process input ownership as directed by the authenticated editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum EditorInputOwner {
+    Editor,
+    Game,
+}
+
+/// Authenticated runtime lifecycle/control commands.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum EditorRuntimeControlCommand {
+    InputSetOwner { owner: EditorInputOwner },
+    WindowSetEmbedded { embedded: bool },
+    SimulationPauseVisualOnly,
+    SimulationResume,
+    SceneLoadPreview { scene_id: String },
+    ShutdownRequest,
+}
+
+impl EditorRuntimeControlCommand {
+    #[must_use]
+    pub const fn command_id(&self) -> &'static str {
+        match self {
+            Self::InputSetOwner { .. } => "runtime.input.set_owner",
+            Self::WindowSetEmbedded { .. } => "runtime.window.set_embedded",
+            Self::SimulationPauseVisualOnly => "runtime.simulation.pause_visual_only",
+            Self::SimulationResume => "runtime.simulation.resume",
+            Self::SceneLoadPreview { .. } => "runtime.scene.load_preview",
+            Self::ShutdownRequest => "runtime.shutdown.request",
+        }
+    }
+}
+
 /// Request sent by a focused game client to the launcher/editor host.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub struct EditorActivationRequested {
@@ -922,6 +954,9 @@ pub enum EditorCommandPayload {
     SubscribeDiagnostics {
         subscription: EditorDiagnosticSubscription,
     },
+    RuntimeControl {
+        command: EditorRuntimeControlCommand,
+    },
     Ping,
 }
 
@@ -1244,6 +1279,9 @@ fn validate_command_packet(
         EditorCommandPayload::SubscribeDiagnostics { .. } => {
             require_capability(context, EditorCapability::ReadDiagnostics)
         }
+        EditorCommandPayload::RuntimeControl { .. } => {
+            require_capability(context, EditorCapability::ControlRuntime)
+        }
         EditorCommandPayload::Ping => Ok(()),
     }
 }
@@ -1493,6 +1531,19 @@ mod tests {
         }
     }
 
+    fn runtime_control_packet() -> EditorProtocolPacket {
+        EditorProtocolPacket::Command {
+            packet: EditorCommandPacket {
+                header: header(78, EditorTargetKind::Client, 8, None),
+                payload: EditorCommandPayload::RuntimeControl {
+                    command: EditorRuntimeControlCommand::InputSetOwner {
+                        owner: EditorInputOwner::Editor,
+                    },
+                },
+            },
+        }
+    }
+
     fn validation_context() -> EditorProtocolValidationContext {
         EditorProtocolValidationContext::local_development(EditorTargetKind::Server)
             .with_component_schema(transform_schema())
@@ -1556,6 +1607,7 @@ mod tests {
         };
 
         let command = mutation_command_packet(EditorWorldRevision(0));
+        let runtime_control = runtime_control_packet();
 
         let event = EditorProtocolPacket::Event {
             packet: EditorEventPacket {
@@ -1601,11 +1653,31 @@ mod tests {
 
         let activation = activation_packet();
 
-        for packet in [handshake, command, event, diagnostic, activation] {
+        for packet in [
+            handshake,
+            command,
+            runtime_control,
+            event,
+            diagnostic,
+            activation,
+        ] {
             let bytes = encode_editor_packet(&packet).expect("packet should encode");
             let decoded = decode_editor_packet(&bytes).expect("packet should decode");
             assert_eq!(decoded, packet);
         }
+    }
+
+    #[test]
+    fn runtime_control_requires_control_runtime_capability() {
+        let mut context = validation_context();
+        context
+            .granted_capabilities
+            .retain(|capability| *capability != EditorCapability::ControlRuntime);
+
+        assert_eq!(
+            validate_editor_packet(&runtime_control_packet(), &context),
+            Err(EditorProtocolValidationError::MissingCapability)
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::f32::consts::FRAC_PI_2;
 
-use crate::ClientWorldStatus;
+use crate::{ClientHostControlState, ClientWorldStatus};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use crate::{ClientScheduleProfiler, ClientScheduleSystem, frame_profile::DetailedFrameProfiler};
 use avian3d::{
@@ -325,6 +325,7 @@ fn base_camera_scene() -> impl BsnScene {
 
 fn cache_movement_input(
     keys: Res<ButtonInput<KeyCode>>,
+    host_control: Option<Res<ClientHostControlState>>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
         ClientScheduleProfiler,
     >,
@@ -340,6 +341,16 @@ fn cache_movement_input(
         schedule_profiler.record_elapsed(ClientScheduleSystem::MovementInput, started);
         return;
     };
+
+    if host_control.as_deref().is_some_and(|control| {
+        control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
+    }) {
+        input_state.movement = Vec2::ZERO;
+        input_state.jump_queued = false;
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        schedule_profiler.record_elapsed(ClientScheduleSystem::MovementInput, started);
+        return;
+    }
 
     input_state.movement = movement_input(&keys);
     input_state.jump_queued |= keys.just_pressed(KeyCode::Space);
@@ -366,6 +377,7 @@ fn update_cursor_grab(
 fn apply_look(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     cursor_options: Single<&CursorOptions>,
+    host_control: Option<Res<ClientHostControlState>>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
         ClientScheduleProfiler,
     >,
@@ -378,6 +390,14 @@ fn apply_look(
 ) {
     crate::frame_profile_start!(started);
     crate::frame_profile_scope!(_scope, frame_profiler, "Update", "apply_look");
+    if host_control.as_deref().is_some_and(|control| {
+        control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
+    }) {
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
+        return;
+    }
+
     if cursor_options.grab_mode == CursorGrabMode::None {
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);

@@ -45,6 +45,7 @@ use bevy::{
     asset::uuid::Uuid,
 };
 use bevy::{
+    app::AppExit,
     camera::CameraMainTextureUsages,
     ecs::world::World,
     pbr::{
@@ -79,7 +80,7 @@ use editor_hotkey::EditorHotkeyPlugin;
 use first_person::FirstPersonControllerPlugin;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use game_shared::DEFAULT_RENDER_TARGET_RATE_HZ;
-use game_shared::{DEFAULT_TICK_RATE_HZ, GAME_SERVER_ADDR, GAME_TITLE};
+use game_shared::{DEFAULT_TICK_RATE_HZ, EditorInputOwner, GAME_SERVER_ADDR, GAME_TITLE};
 use thunder::prelude::*;
 use tracing::{debug, error, info, warn};
 
@@ -99,14 +100,21 @@ pub enum ClientRuntimeMode {
 
 impl ClientRuntimeMode {
     fn from_env() -> Self {
-        let Ok(value) = std::env::var("FUN_CLIENT_RUNTIME_MODE") else {
+        let Some((env_name, value)) = env_non_empty_string("FUN_CLIENT_MODE")
+            .map(|value| ("FUN_CLIENT_MODE", value))
+            .or_else(|| {
+                env_non_empty_string("FUN_CLIENT_RUNTIME_MODE")
+                    .map(|value| ("FUN_CLIENT_RUNTIME_MODE", value))
+            })
+        else {
             return Self::JoinedGame;
         };
         Self::parse(&value).unwrap_or_else(|| {
             warn!(
                 target: "fun::client",
+                env_name,
                 runtime_mode = value,
-                "unknown FUN_CLIENT_RUNTIME_MODE; using joined_game"
+                "unknown client runtime mode; using joined_game"
             );
             Self::JoinedGame
         })
@@ -217,6 +225,8 @@ pub struct ClientAppOptions {
     pub game_session_id: Option<String>,
     pub scene_id: Option<String>,
     pub hosted_by_editor: bool,
+    pub host_instance_id: Option<String>,
+    pub host_parent_pid: Option<u32>,
 }
 
 impl ClientAppOptions {
@@ -229,11 +239,14 @@ impl ClientAppOptions {
             project_id: env_non_empty_string("FUN_PROJECT_ID"),
             game_session_id: env_non_empty_string("FUN_GAME_SESSION_ID"),
             scene_id: env_non_empty_string("FUN_SCENE_ID"),
-            hosted_by_editor: env_flag("FUN_CLIENT_HOSTED_BY_EDITOR")
+            hosted_by_editor: env_flag("FUN_HOSTED_BY_EDITOR")
+                || env_flag("FUN_CLIENT_HOSTED_BY_EDITOR")
                 || matches!(
                     mode,
                     ClientRuntimeMode::EditorHostedClient | ClientRuntimeMode::EditorPreview
                 ),
+            host_instance_id: env_non_empty_string("FUN_HOST_INSTANCE_ID"),
+            host_parent_pid: env_host_parent_pid(),
         }
     }
 }
@@ -248,6 +261,8 @@ impl Default for ClientAppOptions {
             game_session_id: None,
             scene_id: None,
             hosted_by_editor: false,
+            host_instance_id: None,
+            host_parent_pid: None,
         }
     }
 }
@@ -265,6 +280,22 @@ fn env_flag(name: &str) -> bool {
                 || value.eq_ignore_ascii_case("on")
         }
         Err(_) => false,
+    }
+}
+
+fn env_host_parent_pid() -> Option<u32> {
+    let raw = std::env::var("FUN_HOST_PARENT_PID").ok()?;
+    match raw.parse::<u32>() {
+        Ok(pid) => Some(pid),
+        Err(error) => {
+            warn!(
+                target: "fun::client::host",
+                value = raw,
+                %error,
+                "ignored invalid FUN_HOST_PARENT_PID"
+            );
+            None
+        }
     }
 }
 
@@ -444,6 +475,29 @@ struct ClientEditorControlPlane {
 #[derive(Debug, Clone, Resource, Default)]
 struct ClientEditorInspectorState {
     state: game_shared::EditorInspectorRuntimeState,
+}
+
+#[derive(Debug, Clone, Resource)]
+pub(crate) struct ClientHostControlState {
+    pub(crate) input_owner: EditorInputOwner,
+    pub(crate) embedded: bool,
+    pub(crate) visual_paused: bool,
+    pub(crate) shutdown_requested: bool,
+    host_parent_pid: Option<u32>,
+    parent_exit_requested: bool,
+}
+
+impl ClientHostControlState {
+    fn from_options(options: &ClientAppOptions) -> Self {
+        Self {
+            input_owner: EditorInputOwner::Game,
+            embedded: options.hosted_by_editor,
+            visual_paused: false,
+            shutdown_requested: false,
+            host_parent_pid: options.host_parent_pid,
+            parent_exit_requested: false,
+        }
+    }
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
@@ -979,6 +1033,7 @@ impl Plugin for GameClientPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.options.clone())
             .insert_resource(ClientLogConfig::from_env())
+            .insert_resource(ClientHostControlState::from_options(&self.options))
             .insert_resource(Time::<Fixed>::from_hz(DEFAULT_TICK_RATE_HZ))
             .init_resource::<LoadedWorldState>()
             .init_resource::<ClientWorldStatus>()
@@ -1011,6 +1066,10 @@ impl Plugin for GameClientPlugin {
             .init_resource::<ClientDiagnostics>();
 
         app.add_systems(Startup, start_client_editor_inspector);
+        app.add_systems(
+            Update,
+            (watch_host_parent_liveness, apply_editor_runtime_controls),
+        );
         if self.options.mode.runs_gameplay_runtime() {
             app.add_systems(Startup, connect_to_game_server)
                 .add_systems(
@@ -1060,6 +1119,12 @@ impl StaticPreviewWorldStream {
         }
     }
 
+    fn load_scene(&mut self, scene_id: String) {
+        self.scene_id = Some(scene_id);
+        self.chunks = game_scene::default_scene_world_stream_chunks(WorldRevision(1));
+        self.applied = false;
+    }
+
     #[cfg(test)]
     fn from_chunks(chunks: Vec<WorldStreamChunk>) -> Self {
         Self {
@@ -1068,6 +1133,108 @@ impl StaticPreviewWorldStream {
             applied: false,
         }
     }
+}
+
+fn watch_host_parent_liveness(
+    mut host_control: ResMut<ClientHostControlState>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if host_control.parent_exit_requested {
+        return;
+    }
+    let Some(parent_pid) = host_control.host_parent_pid else {
+        return;
+    };
+    if process_is_alive(parent_pid) {
+        return;
+    }
+
+    host_control.parent_exit_requested = true;
+    host_control.shutdown_requested = true;
+    warn!(
+        target: "fun::client::host",
+        parent_pid,
+        "editor host parent process exited; shutting down managed client"
+    );
+    exit.write(AppExit::Success);
+}
+
+fn apply_editor_runtime_controls(
+    inspector: Res<ClientEditorInspectorState>,
+    mut host_control: ResMut<ClientHostControlState>,
+    mut preview_stream: Option<ResMut<StaticPreviewWorldStream>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for command in inspector.state.drain_runtime_controls(32) {
+        let command_id = command.command_id();
+        match command {
+            game_shared::EditorRuntimeControlCommand::InputSetOwner { owner } => {
+                host_control.input_owner = owner;
+            }
+            game_shared::EditorRuntimeControlCommand::WindowSetEmbedded { embedded } => {
+                host_control.embedded = embedded;
+            }
+            game_shared::EditorRuntimeControlCommand::SimulationPauseVisualOnly => {
+                host_control.visual_paused = true;
+            }
+            game_shared::EditorRuntimeControlCommand::SimulationResume => {
+                host_control.visual_paused = false;
+            }
+            game_shared::EditorRuntimeControlCommand::SceneLoadPreview { scene_id } => {
+                if let Some(stream) = preview_stream.as_mut() {
+                    stream.load_scene(scene_id);
+                }
+            }
+            game_shared::EditorRuntimeControlCommand::ShutdownRequest => {
+                host_control.shutdown_requested = true;
+                exit.write(AppExit::Success);
+            }
+        }
+        info!(
+            target: "fun::client::host",
+            command_id,
+            input_owner = ?host_control.input_owner,
+            embedded = host_control.embedded,
+            visual_paused = host_control.visual_paused,
+            "applied authenticated editor runtime control command"
+        );
+    }
+}
+
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_TIMEOUT},
+        System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForSingleObject,
+        },
+    };
+
+    // SAFETY: OpenProcess only requests query/synchronize rights for the PID supplied
+    // by the trusted launcher environment; the returned handle is checked before use.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        return false;
+    }
+    // SAFETY: The handle came from a successful OpenProcess call and is closed below.
+    let wait_result = unsafe { WaitForSingleObject(handle, 0) };
+    // SAFETY: The handle came from OpenProcess and is no longer used after this call.
+    unsafe {
+        CloseHandle(handle);
+    }
+    wait_result == WAIT_TIMEOUT
+}
+
+#[cfg(not(windows))]
+fn process_is_alive(_pid: u32) -> bool {
+    true
 }
 
 #[allow(
@@ -1757,6 +1924,8 @@ pub fn build_client_app_with_options(options: ClientAppOptions) -> App {
         runtime_mode = options.mode.as_env_value(),
         render_profile = options.render_profile.as_env_value(),
         hosted_by_editor = options.hosted_by_editor,
+        has_host_instance_id = options.host_instance_id.is_some(),
+        has_host_parent_pid = options.host_parent_pid.is_some(),
         has_project_id = options.project_id.is_some(),
         has_scene_id = options.scene_id.is_some(),
         has_server_addr = options.server_addr.is_some(),

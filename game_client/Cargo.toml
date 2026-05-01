@@ -30,6 +30,7 @@ game_shared = { path = "../game_shared" }
 log.workspace = true
 thunder.workspace = true
 tracing.workspace = true
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 criterion.workspace = true
