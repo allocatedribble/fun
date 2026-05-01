@@ -47,6 +47,7 @@ fn main() {
     ))
     .init_resource::<ServerWorldStream>()
     .init_resource::<ServerEditorSchema>()
+    .init_resource::<ServerEditorInspectorState>()
     .insert_resource(ServerLogConfig::from_env())
     .init_resource::<ConnectedClients>()
     .init_resource::<PendingWorldStreams>()
@@ -64,6 +65,7 @@ fn main() {
         (
             receive_client_control,
             rebuild_world_stream,
+            update_server_editor_inspector_snapshot,
             queue_world_stream_for_new_clients,
             send_pending_world_streams,
         )
@@ -189,6 +191,19 @@ impl StreamedWorldEntity {
 struct ServerEditorSchema {
     #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     registry: game_shared::EditorSchemaRegistry<'static>,
+}
+
+#[derive(Debug, Clone, Resource)]
+struct ServerEditorInspectorState {
+    state: game_shared::EditorInspectorRuntimeState,
+}
+
+impl Default for ServerEditorInspectorState {
+    fn default() -> Self {
+        Self {
+            state: game_shared::EditorInspectorRuntimeState::default(),
+        }
+    }
 }
 
 impl Default for ServerEditorSchema {
@@ -381,8 +396,15 @@ fn server_editor_component_schemas() -> Vec<game_shared::EditorComponentSchema> 
         .collect()
 }
 
-fn start_server_editor_inspector() {
+fn start_server_editor_inspector(inspector: Res<ServerEditorInspectorState>) {
     let execute_server_code_enabled = std::env::var_os("FUN_EDITOR_ENABLE_SERVER_EXEC").is_some();
+    let component_schemas = server_editor_component_schemas();
+    inspector.state.replace_entities(
+        game_shared::EditorWorldRevision(0),
+        game_shared::EditorSchemaRevision(1),
+        component_schemas.clone(),
+        Vec::new(),
+    );
     let mut config = game_shared::EditorInspectorServiceConfig::local_development(
         game_shared::EditorTargetKind::Server,
         "fun",
@@ -392,7 +414,8 @@ fn start_server_editor_inspector() {
         ),
     );
     config.tick_rate_hz = DEFAULT_TICK_RATE_HZ.round() as u32;
-    config.component_schemas = server_editor_component_schemas();
+    config.component_schemas = component_schemas;
+    config.runtime_state = inspector.state.clone();
 
     match game_shared::spawn_editor_inspector_service(config) {
         Ok(summary) => {
@@ -893,6 +916,149 @@ fn receive_client_control(
             }
         }
     }
+}
+
+fn update_server_editor_inspector_snapshot(
+    inspector: Res<ServerEditorInspectorState>,
+    manifest: Res<ServerWorldStream>,
+    query: Query<(
+        &NetworkIdentity,
+        &NetworkAuthority,
+        Option<&Name>,
+        Option<&Transform>,
+        Option<&StreamedWorldEntity>,
+    )>,
+    mut last_diagnostic_revision: Local<u64>,
+) {
+    let schema_revision = game_shared::EditorSchemaRevision(1);
+    let world_revision = game_shared::EditorWorldRevision(manifest.revision.0);
+    let schemas = server_editor_component_schemas();
+    let mut rows = Vec::with_capacity(query.iter().count());
+
+    for (identity, authority, name, transform, streamed) in &query {
+        if !identity.entity.is_valid() {
+            continue;
+        }
+
+        let mut components = Vec::with_capacity(5);
+        if let Some(transform) = transform {
+            components.push(editor_component_value(
+                game_shared::EDITOR_COMPONENT_KIND_TRANSFORM,
+                schema_revision,
+                transform_preview(transform),
+            ));
+        }
+        if let Some(name) = name {
+            components.push(editor_component_value(
+                game_shared::EDITOR_COMPONENT_KIND_NAME,
+                schema_revision,
+                name.as_str().to_owned(),
+            ));
+        }
+        components.push(editor_component_value(
+            game_shared::EDITOR_COMPONENT_KIND_NETWORK_IDENTITY,
+            schema_revision,
+            format!(
+                "net={} shard={} local={} class={:?}",
+                identity.entity.0,
+                identity.entity.shard(),
+                identity.entity.local(),
+                identity.class
+            ),
+        ));
+        components.push(editor_component_value(
+            game_shared::EDITOR_COMPONENT_KIND_NETWORK_AUTHORITY,
+            schema_revision,
+            format!("{:?}", authority.mode),
+        ));
+        if let Some(streamed) = streamed {
+            components.push(editor_component_value(
+                game_shared::EDITOR_COMPONENT_KIND_WORLD_CATALOG_REF,
+                schema_revision,
+                streamed_world_preview(streamed),
+            ));
+        }
+
+        rows.push(game_shared::EditorEntityRow {
+            entity: identity.entity,
+            target: game_shared::EditorTargetKind::Server,
+            display_label: name
+                .map(|name| name.as_str().to_owned())
+                .unwrap_or_else(|| format!("NetEntity-{}", identity.entity.0)),
+            component_count: components.len().min(u16::MAX as usize) as u16,
+            schema_revision,
+            components,
+        });
+    }
+
+    inspector
+        .state
+        .replace_entities(world_revision, schema_revision, schemas, rows);
+
+    if inspector.state.editor_attached() && *last_diagnostic_revision != world_revision.0 {
+        *last_diagnostic_revision = world_revision.0;
+        inspector
+            .state
+            .emit_diagnostic(game_shared::DiagnosticPacket::Counter {
+                counter: game_shared::DiagnosticCounter {
+                    target: "server".to_owned(),
+                    name: "world_revision".to_owned(),
+                    value: game_shared::DiagnosticValue::U64 {
+                        value: world_revision.0,
+                    },
+                    unit: game_shared::DiagnosticUnit::Count,
+                    window: game_shared::DiagnosticWindow {
+                        sample_count: 1,
+                        duration_ns: 0,
+                    },
+                },
+            });
+    }
+}
+
+fn editor_component_value(
+    component_kind: ComponentKind,
+    schema_revision: game_shared::EditorSchemaRevision,
+    value_preview: String,
+) -> game_shared::EditorEntityComponentValue {
+    game_shared::EditorEntityComponentValue {
+        component_kind,
+        schema_revision,
+        value_preview,
+        raw_payload: Vec::new(),
+    }
+}
+
+fn transform_preview(transform: &Transform) -> String {
+    format!(
+        "translation=({:.2},{:.2},{:.2}) rotation=({:.3},{:.3},{:.3},{:.3}) scale=({:.2},{:.2},{:.2})",
+        transform.translation.x,
+        transform.translation.y,
+        transform.translation.z,
+        transform.rotation.x,
+        transform.rotation.y,
+        transform.rotation.z,
+        transform.rotation.w,
+        transform.scale.x,
+        transform.scale.y,
+        transform.scale.z
+    )
+}
+
+fn streamed_world_preview(streamed: &StreamedWorldEntity) -> String {
+    format!(
+        "catalog={} render={:?} collider={:?} color={:?}",
+        streamed
+            .catalog
+            .map(|catalog| format!(
+                "asset={} material={} collider={}",
+                catalog.asset_id, catalog.material_id, catalog.collider_id
+            ))
+            .unwrap_or_else(|| "none".to_owned()),
+        streamed.render,
+        streamed.collider,
+        streamed.color
+    )
 }
 
 fn send_pending_world_streams(

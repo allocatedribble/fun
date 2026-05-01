@@ -172,6 +172,7 @@ pub struct EditorWelcome {
     pub tick_rate_hz: u32,
     pub schema_revision: EditorSchemaRevision,
     pub diagnostic_schema_revision: EditorSchemaRevision,
+    pub component_schemas: Vec<EditorComponentSchema>,
 }
 
 /// Only packet an unauthenticated runtime endpoint may return.
@@ -554,8 +555,18 @@ pub struct EditorDiagnosticSubscription {
 pub struct EditorEntityQuery {
     pub cursor: Option<EditorPageCursor>,
     pub limit: u16,
+    pub entity: Option<NetEntity>,
     pub component_filter: Option<ComponentKind>,
     pub include_components: bool,
+}
+
+/// One editor-visible component value attached to an entity row.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorEntityComponentValue {
+    pub component_kind: ComponentKind,
+    pub schema_revision: EditorSchemaRevision,
+    pub value_preview: String,
+    pub raw_payload: Vec<u8>,
 }
 
 /// One row in an editor entity page.
@@ -566,6 +577,7 @@ pub struct EditorEntityRow {
     pub display_label: String,
     pub component_count: u16,
     pub schema_revision: EditorSchemaRevision,
+    pub components: Vec<EditorEntityComponentValue>,
 }
 
 /// Paged entity query result.
@@ -611,6 +623,10 @@ pub struct EditorComponentSchema {
     pub mutability: EditorMutability,
     pub serialization_policy: EditorSerializationPolicy,
     pub replication_policy: EditorReplicationPolicy,
+    pub ui_group: String,
+    pub ui_widget: String,
+    pub importance: String,
+    pub diagnostic_label: String,
 }
 
 /// Begin an authoritative editor transaction.
@@ -1334,6 +1350,10 @@ mod tests {
             mutability: EditorMutability::RuntimeMutable,
             serialization_policy: EditorSerializationPolicy::Compactly,
             replication_policy: EditorReplicationPolicy::ServerAuthoritative,
+            ui_group: "Transform".to_owned(),
+            ui_widget: "transform3d".to_owned(),
+            importance: "primary".to_owned(),
+            diagnostic_label: "fun::editor::schema:transform".to_owned(),
         }
     }
 

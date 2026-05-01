@@ -256,6 +256,10 @@ impl EditorComponentRegistration {
             mutability: self.mutability,
             serialization_policy: self.serialization_policy,
             replication_policy: self.replication_policy,
+            ui_group: self.ui_hints.group.to_owned(),
+            ui_widget: schema_widget_label(self.ui_hints.widget).to_owned(),
+            importance: schema_importance_label(self.ui_hints.importance).to_owned(),
+            diagnostic_label: format!("{}:{}", self.diagnostics.target, self.diagnostics.event),
         }
     }
 }
@@ -458,6 +462,29 @@ pub fn validate_non_empty_payload(
         Err(EditorMutationError::ValidationFailed)
     } else {
         Ok(())
+    }
+}
+
+#[must_use]
+pub const fn schema_widget_label(widget: EditorSchemaWidget) -> &'static str {
+    match widget {
+        EditorSchemaWidget::Transform3d => "transform3d",
+        EditorSchemaWidget::Text => "text",
+        EditorSchemaWidget::Number => "number",
+        EditorSchemaWidget::Toggle => "toggle",
+        EditorSchemaWidget::Bytes => "bytes",
+        EditorSchemaWidget::ReadOnlyStruct => "read_only_struct",
+        EditorSchemaWidget::ResourcePanel => "resource_panel",
+    }
+}
+
+#[must_use]
+pub const fn schema_importance_label(importance: EditorSchemaImportance) -> &'static str {
+    match importance {
+        EditorSchemaImportance::Primary => "primary",
+        EditorSchemaImportance::Secondary => "secondary",
+        EditorSchemaImportance::Advanced => "advanced",
+        EditorSchemaImportance::Diagnostic => "diagnostic",
     }
 }
 

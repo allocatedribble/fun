@@ -1,17 +1,21 @@
 use crate::{
     CURRENT_EDITOR_PROTOCOL_VERSION, EDITOR_PROTOCOL_VERSION, EDITOR_WIRE_ENVELOPE_HEADER_LEN,
     EditorAuth, EditorAuthRequired, EditorBindMode, EditorBuildId, EditorCapability,
-    EditorComponentSchema, EditorControlConfig, EditorHandshakePacket, EditorHandshakePayload,
-    EditorPacketHeader, EditorProtocolPacket, EditorProtocolValidationContext, EditorRequestId,
-    EditorSchemaRevision, EditorSessionId, EditorSizeBudget, EditorTargetKind, EditorWelcome,
-    EditorWorldRevision, PacketSequence, decode_editor_packet, editor_wire_envelope_len,
-    encode_editor_packet, parse_editor_capability, validate_editor_packet,
+    EditorCommandPacket, EditorCommandPayload, EditorComponentSchema, EditorControlConfig,
+    EditorDiagnosticBatch, EditorDiagnosticPacket, EditorEntityPage, EditorEntityQuery,
+    EditorEntityRow, EditorEventPacket, EditorEventPayload, EditorHandshakePacket,
+    EditorHandshakePayload, EditorPacketHeader, EditorPageCursor, EditorProtocolPacket,
+    EditorProtocolValidationContext, EditorRequestId, EditorSchemaRevision, EditorSessionId,
+    EditorSizeBudget, EditorTargetKind, EditorWelcome, EditorWorldRevision, PacketSequence,
+    RuntimeDiagnosticSinks, decode_editor_packet, editor_wire_envelope_len, encode_editor_packet,
+    parse_editor_capability, validate_editor_packet,
 };
 use ring::hmac;
 use std::{
     env, fmt,
     io::{self, Read, Write},
     net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -39,6 +43,7 @@ pub struct EditorInspectorServiceConfig {
     pub diagnostic_schema_revision: EditorSchemaRevision,
     pub granted_capabilities: Vec<EditorCapability>,
     pub component_schemas: Vec<EditorComponentSchema>,
+    pub runtime_state: EditorInspectorRuntimeState,
 }
 
 impl EditorInspectorServiceConfig {
@@ -58,6 +63,7 @@ impl EditorInspectorServiceConfig {
             diagnostic_schema_revision: EditorSchemaRevision(1),
             granted_capabilities,
             component_schemas: Vec::new(),
+            runtime_state: EditorInspectorRuntimeState::default(),
         }
     }
 }
@@ -101,6 +107,189 @@ impl std::error::Error for EditorInspectorServiceError {}
 pub struct EditorInspectorServiceSummary {
     pub callback_started: bool,
     pub bind_addr: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EditorInspectorRuntimeState {
+    inner: Arc<Mutex<EditorInspectorSnapshot>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EditorInspectorSnapshot {
+    pub world_revision: EditorWorldRevision,
+    pub schema_revision: EditorSchemaRevision,
+    pub diagnostic_schema_revision: EditorSchemaRevision,
+    pub component_schemas: Vec<EditorComponentSchema>,
+    pub entities: Vec<EditorEntityRow>,
+    pub diagnostics: RuntimeDiagnosticSinks,
+    pub editor_attached: bool,
+}
+
+impl Default for EditorInspectorRuntimeState {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(EditorInspectorSnapshot::default())),
+        }
+    }
+}
+
+impl Default for EditorInspectorSnapshot {
+    fn default() -> Self {
+        Self {
+            world_revision: EditorWorldRevision(0),
+            schema_revision: EditorSchemaRevision(1),
+            diagnostic_schema_revision: EditorSchemaRevision(1),
+            component_schemas: Vec::new(),
+            entities: Vec::new(),
+            diagnostics: RuntimeDiagnosticSinks::disabled(),
+            editor_attached: false,
+        }
+    }
+}
+
+impl EditorInspectorRuntimeState {
+    pub fn replace_entities(
+        &self,
+        world_revision: EditorWorldRevision,
+        schema_revision: EditorSchemaRevision,
+        component_schemas: Vec<EditorComponentSchema>,
+        mut entities: Vec<EditorEntityRow>,
+    ) {
+        entities.sort_by_key(|row| row.entity);
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.world_revision = world_revision;
+            snapshot.schema_revision = schema_revision;
+            snapshot.component_schemas = component_schemas;
+            snapshot.entities = entities;
+        }
+    }
+
+    pub fn set_diagnostic_schema_revision(&self, revision: EditorSchemaRevision) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.diagnostic_schema_revision = revision;
+        }
+    }
+
+    #[must_use]
+    pub fn editor_attached(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|snapshot| snapshot.editor_attached)
+            .unwrap_or(false)
+    }
+
+    pub fn mark_editor_attached(&self, attached: bool) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.editor_attached = attached;
+            snapshot.diagnostics = if attached {
+                RuntimeDiagnosticSinks::editor_attached(512, 512)
+            } else {
+                RuntimeDiagnosticSinks::disabled()
+            };
+        }
+    }
+
+    pub fn emit_diagnostic(&self, packet: crate::DiagnosticPacket) {
+        if let Ok(mut snapshot) = self.inner.lock()
+            && snapshot.editor_attached
+        {
+            let _ = snapshot.diagnostics.emit(packet);
+        }
+    }
+
+    #[must_use]
+    pub fn query_entities(
+        &self,
+        request_id: EditorRequestId,
+        query: &EditorEntityQuery,
+    ) -> EditorEntityPage {
+        let Ok(snapshot) = self.inner.lock() else {
+            return EditorEntityPage {
+                request_id,
+                world_revision: EditorWorldRevision(0),
+                cursor: None,
+                rows: Vec::new(),
+                has_more: false,
+            };
+        };
+
+        let start = query.cursor.map_or(0usize, |cursor| cursor.0 as usize);
+        let limit = usize::from(query.limit.max(1));
+        let filtered = snapshot
+            .entities
+            .iter()
+            .filter(|row| {
+                if query.entity.map_or(false, |entity| row.entity != entity) {
+                    return false;
+                }
+                query.component_filter.map_or(true, |component| {
+                    row.components
+                        .iter()
+                        .any(|value| value.component_kind == component)
+                })
+            })
+            .collect::<Vec<_>>();
+        let end = start.saturating_add(limit).min(filtered.len());
+        let rows = if start >= filtered.len() {
+            Vec::new()
+        } else {
+            filtered[start..end]
+                .iter()
+                .map(|row| {
+                    let mut row = (*row).clone();
+                    if !query.include_components {
+                        row.components.clear();
+                    }
+                    row
+                })
+                .collect()
+        };
+
+        EditorEntityPage {
+            request_id,
+            world_revision: snapshot.world_revision,
+            cursor: (end < filtered.len()).then_some(EditorPageCursor(end as u64)),
+            rows,
+            has_more: end < filtered.len(),
+        }
+    }
+
+    #[must_use]
+    pub fn drain_diagnostics(&self, max_packets: usize) -> EditorDiagnosticBatch {
+        let Ok(mut snapshot) = self.inner.lock() else {
+            return EditorDiagnosticBatch {
+                world_revision: EditorWorldRevision(0),
+                packets: Vec::new(),
+            };
+        };
+        let world_revision = snapshot.world_revision;
+        let packets = snapshot.diagnostics.editor_live_stream.drain(max_packets);
+        EditorDiagnosticBatch {
+            world_revision,
+            packets,
+        }
+    }
+
+    #[must_use]
+    pub fn metadata(&self) -> EditorInspectorSnapshotMetadata {
+        self.inner
+            .lock()
+            .map(|snapshot| EditorInspectorSnapshotMetadata {
+                world_revision: snapshot.world_revision,
+                schema_revision: snapshot.schema_revision,
+                diagnostic_schema_revision: snapshot.diagnostic_schema_revision,
+                component_schemas: snapshot.component_schemas.clone(),
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EditorInspectorSnapshotMetadata {
+    pub world_revision: EditorWorldRevision,
+    pub schema_revision: EditorSchemaRevision,
+    pub diagnostic_schema_revision: EditorSchemaRevision,
+    pub component_schemas: Vec<EditorComponentSchema>,
 }
 
 pub fn spawn_editor_inspector_service(
@@ -311,13 +500,14 @@ fn handle_runtime_editor_connection(
         &auth.allowed_capabilities,
         &config.granted_capabilities,
     );
+    let metadata = config.runtime_state.metadata();
     let welcome = EditorProtocolPacket::Handshake {
         packet: EditorHandshakePacket {
             header: EditorPacketHeader::new(
                 EditorRequestId(2),
                 config.control.target_kind,
                 PacketSequence(2),
-                Some(config.world_revision),
+                Some(metadata.world_revision),
                 EditorSizeBudget {
                     max_bytes: 16 * 1024,
                 },
@@ -326,15 +516,109 @@ fn handle_runtime_editor_connection(
                 welcome: EditorWelcome {
                     granted_capabilities,
                     target_build_id: config.target_build_id,
-                    world_revision: config.world_revision,
+                    world_revision: metadata.world_revision,
                     tick_rate_hz: config.tick_rate_hz,
-                    schema_revision: config.schema_revision,
-                    diagnostic_schema_revision: config.diagnostic_schema_revision,
+                    schema_revision: metadata.schema_revision,
+                    diagnostic_schema_revision: metadata.diagnostic_schema_revision,
+                    component_schemas: metadata.component_schemas,
                 },
             },
         },
     };
-    write_editor_protocol_packet(&mut stream, &welcome)
+    write_editor_protocol_packet(&mut stream, &welcome)?;
+
+    config.runtime_state.mark_editor_attached(true);
+    let result = serve_authenticated_editor_connection(&mut stream, &config, &auth);
+    config.runtime_state.mark_editor_attached(false);
+    result
+}
+
+fn serve_authenticated_editor_connection(
+    stream: &mut TcpStream,
+    config: &EditorInspectorServiceConfig,
+    auth: &RuntimeEditorAuth,
+) -> Result<(), EditorInspectorServiceError> {
+    stream.set_read_timeout(None).map_err(io_error)?;
+    loop {
+        let packet = match read_editor_protocol_packet(stream) {
+            Ok(packet) => packet,
+            Err(EditorInspectorServiceError::Io(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let context = validation_context(config, auth);
+        validate_editor_packet(&packet, &context)
+            .map_err(|error| EditorInspectorServiceError::Protocol(format!("{error:?}")))?;
+
+        let EditorProtocolPacket::Command { packet } = packet else {
+            continue;
+        };
+        handle_editor_command_packet(stream, config, packet)?;
+    }
+}
+
+fn handle_editor_command_packet(
+    stream: &mut TcpStream,
+    config: &EditorInspectorServiceConfig,
+    packet: EditorCommandPacket,
+) -> Result<(), EditorInspectorServiceError> {
+    match packet.payload {
+        EditorCommandPayload::QueryEntities { query } => {
+            let page = config
+                .runtime_state
+                .query_entities(packet.header.request_id, &query);
+            write_editor_protocol_packet(
+                stream,
+                &EditorProtocolPacket::Event {
+                    packet: EditorEventPacket {
+                        header: response_header(&packet.header, page.world_revision),
+                        payload: EditorEventPayload::EntityPage { page },
+                    },
+                },
+            )
+        }
+        EditorCommandPayload::SubscribeDiagnostics { .. } => {
+            let batch = config.runtime_state.drain_diagnostics(256);
+            write_editor_protocol_packet(
+                stream,
+                &EditorProtocolPacket::Diagnostic {
+                    packet: EditorDiagnosticPacket {
+                        header: response_header(&packet.header, batch.world_revision),
+                        batch,
+                    },
+                },
+            )
+        }
+        EditorCommandPayload::Ping => {
+            let world_revision = config.runtime_state.metadata().world_revision;
+            write_editor_protocol_packet(
+                stream,
+                &EditorProtocolPacket::Event {
+                    packet: EditorEventPacket {
+                        header: response_header(&packet.header, world_revision),
+                        payload: EditorEventPayload::Pong { world_revision },
+                    },
+                },
+            )
+        }
+        EditorCommandPayload::Mutate { .. }
+        | EditorCommandPayload::Exec { .. }
+        | EditorCommandPayload::Persist { .. } => Ok(()),
+    }
+}
+
+fn response_header(
+    request: &EditorPacketHeader,
+    world_revision: EditorWorldRevision,
+) -> EditorPacketHeader {
+    EditorPacketHeader::new(
+        request.request_id,
+        request.target,
+        PacketSequence(request.sequence.0.saturating_add(1)),
+        Some(world_revision),
+        EditorSizeBudget {
+            max_bytes: request.size_budget.max_bytes,
+        },
+    )
 }
 
 fn validate_auth_packet(
@@ -382,12 +666,13 @@ fn validation_context(
     config: &EditorInspectorServiceConfig,
     auth: &RuntimeEditorAuth,
 ) -> EditorProtocolValidationContext {
+    let metadata = config.runtime_state.metadata();
     let mut context = EditorProtocolValidationContext {
         protocol_version: CURRENT_EDITOR_PROTOCOL_VERSION,
         granted_capabilities: auth.allowed_capabilities.clone(),
-        world_revision: config.world_revision,
+        world_revision: metadata.world_revision,
         max_payload_bytes: 256 * 1024,
-        component_schemas: config.component_schemas.clone(),
+        component_schemas: metadata.component_schemas,
     };
     if context.component_schemas.is_empty() {
         context.max_payload_bytes = 64 * 1024;
