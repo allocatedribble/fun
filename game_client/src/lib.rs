@@ -15,14 +15,15 @@ use frame_profile::install_detailed_frame_profiler;
 use render_catalog::catalog_ref_summary;
 use render_catalog::{WorldRenderCatalog, prewarm_world_render_catalog, warn_missing_catalog_ref};
 
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    num::NonZeroU32,
+};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
-};
-use std::{
-    collections::{HashMap, HashSet},
-    num::NonZeroU32,
 };
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
@@ -195,6 +196,15 @@ impl ClientWindowConfig {
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+const GPU_SAMPLE_STATUS_CODE_PATH: &str = "render/gpu_sample_status_code";
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+const RENDER_FRAME_INDEX_PATH: &str = "render/render_frame_index";
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+const GPU_QUERY_FRAME_INDEX_PATH: &str = "render/gpu_query_frame_index";
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+const SAMPLE_LATENCY_FRAMES_PATH: &str = "render/sample_latency_frames";
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 #[derive(Debug, Default, Resource)]
 struct ClientPerfCounters {
     network_receive_cpu_ns: u64,
@@ -203,6 +213,7 @@ struct ClientPerfCounters {
     meshlet_path_instance_count: u64,
     raster_path_instance_count: u64,
     ray_proxy_only_count: u64,
+    last_gpu_sample_render_frame_index: Option<u64>,
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -228,6 +239,15 @@ impl ClientPerfCounters {
         self.meshlet_path_instance_count = meshlet_path_instance_count;
         self.raster_path_instance_count = raster_path_instance_count;
         self.ray_proxy_only_count = ray_proxy_only_count;
+    }
+
+    fn mark_gpu_sample_frame(&mut self, render_frame_index: Option<u64>) -> bool {
+        let Some(render_frame_index) = render_frame_index else {
+            return false;
+        };
+        let is_new = self.last_gpu_sample_render_frame_index != Some(render_frame_index);
+        self.last_gpu_sample_render_frame_index = Some(render_frame_index);
+        is_new
     }
 }
 
@@ -481,6 +501,7 @@ impl Plugin for GameClientPlugin {
             meshlet_min_triangles = render_config.meshlet_min_triangles,
             "client render configuration"
         );
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         game_shared::fun_diag_info!(
             target: "fun::render",
@@ -1440,6 +1461,20 @@ fn receive_world_stream(
             bytes = payload_len,
             "applying streamed world chunk"
         );
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        game_shared::fun_diag_info!(
+            target: "fun::client::profiler",
+            server_tick = tracing::field::Empty,
+            client_id = tracing::field::Empty,
+            packet_type = "world_stream",
+            world_revision = packet.revision.0,
+            chunk_index = packet.chunk_index.saturating_add(1),
+            chunk_count = packet.chunk_count,
+            bytes = payload_len,
+            stage = "receive_world_stream",
+            duration_ns = receive_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            "client profiler event"
+        );
 
         crate::frame_profile_start!(apply_started);
         let world_revision_changed = apply_world_stream_chunk(
@@ -1466,6 +1501,19 @@ fn receive_world_stream(
         runtime
             .schedule_profiler
             .record_ns(ClientScheduleSystem::WorldStreamApply, apply_ns);
+        game_shared::fun_diag_info!(
+            target: "fun::client::profiler",
+            server_tick = tracing::field::Empty,
+            client_id = tracing::field::Empty,
+            packet_type = "world_stream",
+            world_revision = packet.revision.0,
+            chunk_index = packet.chunk_index.saturating_add(1),
+            chunk_count = packet.chunk_count,
+            bytes = payload_len,
+            stage = "apply_world_stream",
+            duration_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            "client profiler event"
+        );
         crate::frame_profile_ns!(
             runtime.frame_profiler,
             apply_ns,
@@ -1624,13 +1672,23 @@ fn request_solari_lighting_history_reset(
     solari_reset_events: &mut MessageWriter<SolariResetEvent>,
     solari_lighting: &mut Query<&mut SolariLighting>,
 ) {
-    solari_reset_events.write_default();
+    solari_reset_events.write(SolariResetEvent {
+        reason: Cow::Owned(reason.to_owned()),
+    });
     info!("[client render] requested Solari temporal history reset: {reason}");
-    info!(target: "fun::solari", %reason, "requested Solari temporal history reset");
-    reset_solari_lighting_history(solari_lighting);
+    let reset_count = reset_solari_lighting_history(solari_lighting);
+    info!(
+        target: "fun::solari",
+        render_solari_reset_requested = true,
+        render_solari_reset_reason = reason,
+        render_solari_reset_view_count = reset_count,
+        render_solari_reset_resource_generation_before = tracing::field::Empty,
+        render_solari_reset_resource_generation_after = tracing::field::Empty,
+        "requested Solari temporal history reset"
+    );
 }
 
-fn reset_solari_lighting_history(solari_lighting: &mut Query<&mut SolariLighting>) {
+fn reset_solari_lighting_history(solari_lighting: &mut Query<&mut SolariLighting>) -> usize {
     let mut reset_count = 0usize;
     for mut lighting in solari_lighting.iter_mut() {
         lighting.reset = true;
@@ -1641,10 +1699,16 @@ fn reset_solari_lighting_history(solari_lighting: &mut Query<&mut SolariLighting
         info!("[client render] reset Solari temporal history for {reset_count} view(s)");
         info!(
             target: "fun::solari",
+            render_solari_reset_applied = true,
+            render_solari_reset_reason = "direct_component_reset",
+            render_solari_reset_view_count = reset_count,
+            render_solari_reset_resource_generation_before = tracing::field::Empty,
+            render_solari_reset_resource_generation_after = tracing::field::Empty,
             reset_views = reset_count,
             "reset Solari temporal history"
         );
     }
+    reset_count
 }
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -2165,6 +2229,11 @@ fn log_client_diagnostics(
 ) {
     crate::frame_profile_start!(system_started);
     if !diagnostics.timer.tick(time.delta()).just_finished() {
+        let log_client_ns = system_started
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
+        frame_profiler.record_diagnostics_ns(&["log_client_diagnostics_ns"], log_client_ns);
         crate::frame_profile_elapsed!(
             frame_profiler,
             system_started,
@@ -2337,16 +2406,26 @@ fn log_client_diagnostics(
             .ok()
             .map(ClientWindowProfile::from_window),
     );
-    crate::frame_profile_elapsed!(
+    let render_perf_ns = render_perf_started
+        .elapsed()
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64;
+    frame_profiler.record_diagnostics_ns(&["log_render_performance_ns"], render_perf_ns);
+    crate::frame_profile_ns!(
         frame_profiler,
-        render_perf_started,
+        render_perf_ns,
         "Update",
         "log_client_diagnostics",
         "log_render_performance",
     );
-    crate::frame_profile_elapsed!(
+    let log_client_ns = system_started
+        .elapsed()
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64;
+    frame_profiler.record_diagnostics_ns(&["log_client_diagnostics_ns"], log_client_ns);
+    crate::frame_profile_ns!(
         frame_profiler,
-        system_started,
+        log_client_ns,
         "Update",
         "log_client_diagnostics",
     );
@@ -2414,6 +2493,24 @@ fn log_render_performance(
     let frame_ms = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
         .and_then(|diagnostic| diagnostic.value());
+    let app_frame_index =
+        diagnostic_value_path(diagnostics, &FrameTimeDiagnosticsPlugin::FRAME_COUNT)
+            .map(|value| value as u64);
+    let render_frame_index =
+        diagnostic_value(diagnostics, RENDER_FRAME_INDEX_PATH).map(|value| value as u64);
+    let gpu_query_frame_index =
+        diagnostic_value(diagnostics, GPU_QUERY_FRAME_INDEX_PATH).map(|value| value as u64);
+    let sample_latency_frames =
+        diagnostic_value(diagnostics, SAMPLE_LATENCY_FRAMES_PATH).map(|value| value as u64);
+    let raw_gpu_sample_status = diagnostic_value(diagnostics, GPU_SAMPLE_STATUS_CODE_PATH)
+        .and_then(gpu_sample_status_from_code);
+    let gpu_sample_status = classify_gpu_sample_status(
+        raw_gpu_sample_status,
+        app_frame_index,
+        render_frame_index,
+        render_recovery,
+        perf_counters,
+    );
 
     let solari_presample = diagnostic_average(
         diagnostics,
@@ -2601,6 +2698,23 @@ fn log_render_performance(
         diagnostic_average(diagnostics, "meshlet_view_reset_cpu_queue_writes_per_view");
     let meshlet_view_count =
         diagnostic_average(diagnostics, "meshlet_view_count").map(|value| value as u64);
+    let material_bind_group_reused_count =
+        diagnostic_average(diagnostics, "render/cpu/material_bind_group_reused_count")
+            .map(|value| value as u64);
+    let material_bind_group_recreated_count = diagnostic_average(
+        diagnostics,
+        "render/cpu/material_bind_group_recreated_count",
+    )
+    .map(|value| value as u64);
+    let material_buffer_only_update_count =
+        diagnostic_average(diagnostics, "render/cpu/material_buffer_only_update_count")
+            .map(|value| value as u64);
+    let material_bind_group_recreate_ns =
+        diagnostic_average(diagnostics, "render/cpu/material_bind_group_recreate_ns")
+            .map(|value| value as u64);
+    let material_buffer_update_ns =
+        diagnostic_average(diagnostics, "render/cpu/material_buffer_update_ns")
+            .map(|value| value as u64);
     let dlss_rr = diagnostic_average(diagnostics, "render/dlss_ray_reconstruction/elapsed_gpu");
     let standard_raster = diagnostic_average(diagnostics, "render/main_opaque_pass_3d/elapsed_gpu");
     let post_process = sum_optional_ms([
@@ -2725,6 +2839,11 @@ fn log_render_performance(
         meshlet_visibility_gpu_ns = ?ms_to_ns(meshlet_visibility),
         dlss_rr_gpu_ms = ?dlss_rr,
         dlss_rr_gpu_ns = ?ms_to_ns(dlss_rr),
+        gpu_sample_status,
+        app_frame_index = ?app_frame_index,
+        render_frame_index = ?render_frame_index,
+        gpu_query_frame_index = ?gpu_query_frame_index,
+        sample_latency_frames = ?sample_latency_frames,
         render_pixels = ?pixel_count,
         render_mpix = ?mpixels,
         "client render performance sample"
@@ -2754,6 +2873,11 @@ fn log_render_performance(
         meshlet_view_reset_cpu_queue_writes = ?meshlet_view_reset_cpu_queue_writes,
         meshlet_view_reset_cpu_queue_writes_per_view = ?meshlet_view_reset_cpu_queue_writes_per_view,
         meshlet_view_count = ?meshlet_view_count,
+        render_cpu_material_bind_group_reused_count = ?material_bind_group_reused_count,
+        render_cpu_material_bind_group_recreated_count = ?material_bind_group_recreated_count,
+        render_cpu_material_buffer_only_update_count = ?material_buffer_only_update_count,
+        render_cpu_material_bind_group_recreate_ns = ?material_bind_group_recreate_ns,
+        render_cpu_material_buffer_update_ns = ?material_buffer_update_ns,
         meshlet_path_instance_count,
         raster_path_instance_count,
         ray_proxy_only_count,
@@ -2774,6 +2898,14 @@ fn log_render_performance(
         format_optional_number(solari_total),
         format_optional_number(meshlet_visibility),
         format_optional_number(dlss_rr),
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] gpu_sample_status={} app_frame_index={} render_frame_index={} gpu_query_frame_index={} sample_latency_frames={}",
+        gpu_sample_status,
+        format_optional_u64(app_frame_index),
+        format_optional_u64(render_frame_index),
+        format_optional_u64(gpu_query_frame_index),
+        format_optional_u64(sample_latency_frames),
     );
     game_shared::fun_diag_info!(
         "[client perf] non_solari gpu_ms: meshlet_visibility_gpu_ms={} meshlet_first_pass_gpu_ms={} meshlet_depth_pyramid_first_gpu_ms={} meshlet_second_pass_gpu_ms={} meshlet_depth_resolve_gpu_ms={} meshlet_material_depth_gpu_ms={} meshlet_depth_pyramid_second_gpu_ms={} standard_raster_gpu_ms={} post_process_gpu_ms={}",
@@ -2817,6 +2949,23 @@ fn log_render_performance(
         format_optional_u64(meshlet_view_reset_cpu_queue_writes),
         format_optional_number(meshlet_view_reset_cpu_queue_writes_per_view),
         format_optional_u64(meshlet_view_count),
+    );
+    game_shared::fun_diag_info!(
+        target: "fun::perf::material",
+        render_cpu_material_bind_group_reused_count = ?material_bind_group_reused_count,
+        render_cpu_material_bind_group_recreated_count = ?material_bind_group_recreated_count,
+        render_cpu_material_buffer_only_update_count = ?material_buffer_only_update_count,
+        render_cpu_material_bind_group_recreate_ns = ?material_bind_group_recreate_ns,
+        render_cpu_material_buffer_update_ns = ?material_buffer_update_ns,
+        "material bind group performance sample"
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] material bind groups: reused={} recreated={} buffer_only_updates={} recreate_ns={} buffer_update_ns={}",
+        format_optional_u64(material_bind_group_reused_count),
+        format_optional_u64(material_bind_group_recreated_count),
+        format_optional_u64(material_buffer_only_update_count),
+        format_optional_u64(material_bind_group_recreate_ns),
+        format_optional_u64(material_buffer_update_ns),
     );
     log_schedule_heatmap(schedule_profiler);
 
@@ -3365,10 +3514,55 @@ fn diagnostic_value(diagnostics: &DiagnosticsStore, path: &'static str) -> Optio
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+fn diagnostic_value_path(diagnostics: &DiagnosticsStore, path: &DiagnosticPath) -> Option<f64> {
+    diagnostics
+        .get(path)
+        .and_then(|diagnostic| diagnostic.value().or_else(|| diagnostic.average()))
+}
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn diagnostic_average_path(diagnostics: &DiagnosticsStore, path: &DiagnosticPath) -> Option<f64> {
     diagnostics
         .get(path)
         .and_then(|diagnostic| diagnostic.average())
+}
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+fn gpu_sample_status_from_code(code: f64) -> Option<&'static str> {
+    match code.round() as u64 {
+        1 => Some("ready"),
+        2 => Some("query_pending"),
+        3 => Some("warming_up"),
+        4 => Some("not_rendered"),
+        5 => Some("unsupported"),
+        6 => Some("device_lost"),
+        7 => Some("correlation_missing"),
+        _ => None,
+    }
+}
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+fn classify_gpu_sample_status(
+    raw_status: Option<&'static str>,
+    app_frame_index: Option<u64>,
+    render_frame_index: Option<u64>,
+    render_recovery: Option<&RenderRecoveryStatus>,
+    perf_counters: &mut ClientPerfCounters,
+) -> &'static str {
+    if render_recovery.is_some_and(|status| status.last_error_type == Some(ErrorType::DeviceLost)) {
+        return "device_lost";
+    }
+    if render_recovery.is_some_and(|status| status.frames_without_rendering > 0) {
+        return "not_rendered";
+    }
+
+    match raw_status {
+        Some("ready") if perf_counters.mark_gpu_sample_frame(render_frame_index) => "ready",
+        Some("ready") => "query_pending",
+        Some(status) => status,
+        None if app_frame_index.is_some_and(|frame| frame < 3) => "warming_up",
+        None => "query_pending",
+    }
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]

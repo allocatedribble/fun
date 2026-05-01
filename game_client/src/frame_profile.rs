@@ -60,13 +60,18 @@ mod enabled {
 
     use bevy::{
         app::{FixedMainScheduleOrder, MainScheduleOrder, SpawnScene},
-        diagnostic::DiagnosticsStore,
+        diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
         ecs::schedule::{Schedule, ScheduleLabel},
         prelude::*,
     };
 
     const MAIN_THREAD_NAME: &str = "main-thread";
     const GPU_RENDER_THREAD_NAME: &str = "gpu-render";
+    const DIAGNOSTICS_THREAD_NAME: &str = "diagnostics";
+    const GPU_SAMPLE_STATUS_CODE_PATH: &str = "render/gpu_sample_status_code";
+    const RENDER_FRAME_INDEX_PATH: &str = "render/render_frame_index";
+    const GPU_QUERY_FRAME_INDEX_PATH: &str = "render/gpu_query_frame_index";
+    const SAMPLE_LATENCY_FRAMES_PATH: &str = "render/sample_latency_frames";
     const DEFAULT_INTERVAL_FRAMES: u64 = 60;
     const DEFAULT_MAX_DEPTH: usize = 10;
     const DEFAULT_TOP_CHILDREN: usize = 16;
@@ -207,12 +212,19 @@ mod enabled {
         top_children: usize,
         top_spans: usize,
         row_events: bool,
+        text_reports: bool,
         startup_logged: bool,
         frame_started: Instant,
         schedule_starts: BTreeMap<&'static str, Instant>,
         markers: Vec<FrameMarker>,
         spans: Vec<FrameSpan>,
         threads: BTreeMap<String, ThreadProfile>,
+        profiler_record_ns: u64,
+        gpu_sample_status: &'static str,
+        app_frame_index: Option<u64>,
+        render_frame_index: Option<u64>,
+        gpu_query_frame_index: Option<u64>,
+        sample_latency_frames: Option<u64>,
     }
 
     impl Default for DetailedFrameProfiler {
@@ -223,6 +235,9 @@ mod enabled {
 
     impl DetailedFrameProfiler {
         fn from_env() -> Self {
+            let row_events = std::env::var_os("FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS").is_some();
+            let text_reports =
+                !row_events || std::env::var_os("FUN_FRAME_TIME_DIAGNOSTIC_TEXT_REPORTS").is_some();
             Self {
                 enabled: std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some(),
                 frame_index: 0,
@@ -241,13 +256,20 @@ mod enabled {
                 .max(1),
                 top_spans: env_usize("FUN_FRAME_TIME_DIAGNOSTIC_TOP_SPANS", DEFAULT_TOP_SPANS)
                     .max(1),
-                row_events: std::env::var_os("FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS").is_some(),
+                row_events,
+                text_reports,
                 startup_logged: false,
                 frame_started: Instant::now(),
                 schedule_starts: BTreeMap::new(),
                 markers: Vec::new(),
                 spans: Vec::new(),
                 threads: BTreeMap::new(),
+                profiler_record_ns: 0,
+                gpu_sample_status: "warming_up",
+                app_frame_index: None,
+                render_frame_index: None,
+                gpu_query_frame_index: None,
+                sample_latency_frames: None,
             }
         }
 
@@ -262,6 +284,12 @@ mod enabled {
             self.markers.clear();
             self.spans.clear();
             self.threads.clear();
+            self.profiler_record_ns = 0;
+            self.gpu_sample_status = "query_pending";
+            self.app_frame_index = None;
+            self.render_frame_index = None;
+            self.gpu_query_frame_index = None;
+            self.sample_latency_frames = None;
             if self.enabled && !self.startup_logged {
                 self.startup_logged = true;
                 game_shared::fun_diag_info!(
@@ -272,6 +300,7 @@ mod enabled {
                     top_children = self.top_children,
                     top_spans = self.top_spans,
                     row_events = self.row_events,
+                    text_reports = self.text_reports,
                     "detailed frame profiler enabled"
                 );
             }
@@ -289,19 +318,71 @@ mod enabled {
                 return;
             }
 
+            let profiler_record_ns = self.profiler_record_ns;
+            self.record_diagnostics_ns(&["frame_profiler", "record_ns"], profiler_record_ns);
             let summary = self.summary(frame_ns);
-            let report = self.format_report(frame_ns, summary);
+            let serialize_started = Instant::now();
+            let report = self
+                .text_reports
+                .then(|| self.format_report(frame_ns, summary));
+            let profiler_serialize_ns = elapsed_ns(serialize_started);
+            self.record_diagnostics_ns(&["frame_profiler", "serialize_ns"], profiler_serialize_ns);
+            let emit_started = Instant::now();
+            if let Some(report) = report.as_deref() {
+                game_shared::fun_diag_info!(
+                    target: "fun::frame_time",
+                    frame = self.frame_index,
+                    frame_ns,
+                    main_profiled_ns = summary.main_profiled_ns,
+                    main_unattributed_ns = summary.main_unattributed_ns,
+                    gpu_render_ns = summary.gpu_render_ns,
+                    render_cpu_ns = summary.render_cpu_ns,
+                    total_profiled_ns = summary.total_profiled_ns,
+                    thread_count = summary.thread_count,
+                    gpu_sample_status = summary.gpu_sample_status,
+                    app_frame_index = ?summary.app_frame_index,
+                    render_frame_index = ?summary.render_frame_index,
+                    gpu_query_frame_index = ?summary.gpu_query_frame_index,
+                    sample_latency_frames = ?summary.sample_latency_frames,
+                    diagnostics_frame_profiler_record_ns = profiler_record_ns,
+                    diagnostics_frame_profiler_serialize_ns = profiler_serialize_ns,
+                    "{report}"
+                );
+            } else {
+                game_shared::fun_diag_info!(
+                    target: "fun::frame_time",
+                    frame = self.frame_index,
+                    frame_ns,
+                    main_profiled_ns = summary.main_profiled_ns,
+                    main_unattributed_ns = summary.main_unattributed_ns,
+                    gpu_render_ns = summary.gpu_render_ns,
+                    render_cpu_ns = summary.render_cpu_ns,
+                    total_profiled_ns = summary.total_profiled_ns,
+                    thread_count = summary.thread_count,
+                    gpu_sample_status = summary.gpu_sample_status,
+                    app_frame_index = ?summary.app_frame_index,
+                    render_frame_index = ?summary.render_frame_index,
+                    gpu_query_frame_index = ?summary.gpu_query_frame_index,
+                    sample_latency_frames = ?summary.sample_latency_frames,
+                    diagnostics_frame_profiler_record_ns = profiler_record_ns,
+                    diagnostics_frame_profiler_serialize_ns = profiler_serialize_ns,
+                    "frame profiler sampled frame"
+                );
+            }
+            let profiler_emit_ns = elapsed_ns(emit_started);
+            self.record_diagnostics_ns(&["frame_profiler", "emit_ns"], profiler_emit_ns);
             game_shared::fun_diag_info!(
-                target: "fun::frame_time",
+                target: "fun::frame_time::diagnostics",
                 frame = self.frame_index,
-                frame_ns,
-                main_profiled_ns = summary.main_profiled_ns,
-                main_unattributed_ns = summary.main_unattributed_ns,
-                gpu_render_ns = summary.gpu_render_ns,
-                render_cpu_ns = summary.render_cpu_ns,
-                total_profiled_ns = summary.total_profiled_ns,
-                thread_count = summary.thread_count,
-                "{report}"
+                gpu_sample_status = summary.gpu_sample_status,
+                app_frame_index = ?summary.app_frame_index,
+                render_frame_index = ?summary.render_frame_index,
+                gpu_query_frame_index = ?summary.gpu_query_frame_index,
+                sample_latency_frames = ?summary.sample_latency_frames,
+                diagnostics_frame_profiler_record_ns = profiler_record_ns,
+                diagnostics_frame_profiler_serialize_ns = profiler_serialize_ns,
+                diagnostics_frame_profiler_emit_ns = profiler_emit_ns,
+                "frame profiler diagnostics overhead"
             );
 
             if self.row_events {
@@ -372,6 +453,29 @@ mod enabled {
                 return;
             }
 
+            let record_started = Instant::now();
+            self.record_thread_ns_inner(thread, path, source, ns, start_ns);
+            self.profiler_record_ns = self
+                .profiler_record_ns
+                .saturating_add(elapsed_ns(record_started));
+        }
+
+        pub(crate) fn record_diagnostics_ns(&mut self, path: &[&'static str], ns: u64) {
+            self.record_thread_ns_inner(DIAGNOSTICS_THREAD_NAME, path, None, ns, None);
+        }
+
+        fn record_thread_ns_inner(
+            &mut self,
+            thread: &str,
+            path: &[&str],
+            source: Option<ProfileSource>,
+            ns: u64,
+            start_ns: Option<u64>,
+        ) {
+            if !self.enabled || ns == 0 || path.is_empty() {
+                return;
+            }
+
             let normalized_path = normalized_thread_path(thread, path);
             let path = normalized_path.as_slice();
             self.threads
@@ -419,6 +523,25 @@ mod enabled {
             self.record_thread_ns(thread_name, &pieces, None, ns, None);
         }
 
+        pub(crate) fn record_gpu_sample_metadata(
+            &mut self,
+            gpu_sample_status: &'static str,
+            app_frame_index: Option<u64>,
+            render_frame_index: Option<u64>,
+            gpu_query_frame_index: Option<u64>,
+            sample_latency_frames: Option<u64>,
+        ) {
+            if !self.enabled {
+                return;
+            }
+
+            self.gpu_sample_status = gpu_sample_status;
+            self.app_frame_index = app_frame_index;
+            self.render_frame_index = render_frame_index;
+            self.gpu_query_frame_index = gpu_query_frame_index;
+            self.sample_latency_frames = sample_latency_frames;
+        }
+
         fn offset_ns(&self, instant: Instant) -> Option<u64> {
             instant
                 .checked_duration_since(self.frame_started)
@@ -454,13 +577,18 @@ mod enabled {
                 render_cpu_ns,
                 total_profiled_ns,
                 thread_count: self.threads.len(),
+                gpu_sample_status: self.gpu_sample_status,
+                app_frame_index: self.app_frame_index,
+                render_frame_index: self.render_frame_index,
+                gpu_query_frame_index: self.gpu_query_frame_index,
+                sample_latency_frames: self.sample_latency_frames,
             }
         }
 
         fn format_report(&self, frame_ns: u64, summary: FrameProfileSummary) -> String {
             let mut output = format!("GAME FRAME {}: {} ns", self.frame_index, frame_ns);
             output.push_str(&format!(
-                "\nsummary: main_profiled_ns={} main_unattributed_ns={} gpu_render_ns={} render_cpu_ns={} total_profiled_ns={} thread_count={} span_count={} marker_count={}",
+                "\nsummary: main_profiled_ns={} main_unattributed_ns={} gpu_render_ns={} render_cpu_ns={} total_profiled_ns={} thread_count={} span_count={} marker_count={} gpu_sample_status={} app_frame_index={} render_frame_index={} gpu_query_frame_index={} sample_latency_frames={}",
                 summary.main_profiled_ns,
                 summary.main_unattributed_ns,
                 summary.gpu_render_ns,
@@ -469,6 +597,11 @@ mod enabled {
                 summary.thread_count,
                 self.spans.len(),
                 self.markers.len(),
+                summary.gpu_sample_status,
+                format_optional_u64(summary.app_frame_index),
+                format_optional_u64(summary.render_frame_index),
+                format_optional_u64(summary.gpu_query_frame_index),
+                format_optional_u64(summary.sample_latency_frames),
             ));
 
             self.append_timeline(&mut output);
@@ -626,6 +759,11 @@ mod enabled {
                 render_cpu_ns = summary.render_cpu_ns,
                 total_profiled_ns = summary.total_profiled_ns,
                 thread_count = summary.thread_count,
+                gpu_sample_status = summary.gpu_sample_status,
+                app_frame_index = ?summary.app_frame_index,
+                render_frame_index = ?summary.render_frame_index,
+                gpu_query_frame_index = ?summary.gpu_query_frame_index,
+                sample_latency_frames = ?summary.sample_latency_frames,
                 span_count = self.spans.len(),
                 marker_count = self.markers.len(),
                 "frame profiler summary row"
@@ -641,6 +779,11 @@ mod enabled {
         render_cpu_ns: u64,
         total_profiled_ns: u64,
         thread_count: usize,
+        gpu_sample_status: &'static str,
+        app_frame_index: Option<u64>,
+        render_frame_index: Option<u64>,
+        gpu_query_frame_index: Option<u64>,
+        sample_latency_frames: Option<u64>,
     }
 
     pub(crate) struct FrameScope<'a> {
@@ -806,6 +949,37 @@ mod enabled {
             (ns as f64 / total_ns as f64) * 100.0
         } else {
             0.0
+        }
+    }
+
+    fn format_optional_u64(value: Option<u64>) -> String {
+        value
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "pending".to_owned())
+    }
+
+    fn diagnostic_value(diagnostics: &DiagnosticsStore, path: &'static str) -> Option<f64> {
+        diagnostics
+            .get(&DiagnosticPath::new(path))
+            .and_then(|diagnostic| diagnostic.value().or_else(|| diagnostic.average()))
+    }
+
+    fn diagnostic_value_path(diagnostics: &DiagnosticsStore, path: &DiagnosticPath) -> Option<f64> {
+        diagnostics
+            .get(path)
+            .and_then(|diagnostic| diagnostic.value().or_else(|| diagnostic.average()))
+    }
+
+    fn gpu_sample_status_from_code(code: f64) -> Option<&'static str> {
+        match code.round() as u64 {
+            1 => Some("ready"),
+            2 => Some("query_pending"),
+            3 => Some("warming_up"),
+            4 => Some("not_rendered"),
+            5 => Some("unsupported"),
+            6 => Some("device_lost"),
+            7 => Some("correlation_missing"),
+            _ => None,
         }
     }
 
@@ -975,6 +1149,7 @@ mod enabled {
         }
 
         let started = Instant::now();
+        let drain_started = Instant::now();
         for diagnostic in render_diagnostics.iter() {
             let path = diagnostic.path().as_str();
             let Some(value) = diagnostic.value().or_else(|| diagnostic.average()) else {
@@ -982,6 +1157,37 @@ mod enabled {
             };
             profiler.record_gpu_render_diagnostic(path, value);
         }
+        let app_frame_index = diagnostic_value_path(
+            &render_diagnostics,
+            &FrameTimeDiagnosticsPlugin::FRAME_COUNT,
+        )
+        .map(|value| value as u64);
+        let render_frame_index = diagnostic_value(&render_diagnostics, RENDER_FRAME_INDEX_PATH)
+            .map(|value| value as u64);
+        let gpu_query_frame_index =
+            diagnostic_value(&render_diagnostics, GPU_QUERY_FRAME_INDEX_PATH)
+                .map(|value| value as u64);
+        let sample_latency_frames =
+            diagnostic_value(&render_diagnostics, SAMPLE_LATENCY_FRAMES_PATH)
+                .map(|value| value as u64);
+        let gpu_sample_status = diagnostic_value(&render_diagnostics, GPU_SAMPLE_STATUS_CODE_PATH)
+            .and_then(gpu_sample_status_from_code)
+            .unwrap_or_else(|| {
+                if app_frame_index.is_some_and(|frame| frame < 3) {
+                    "warming_up"
+                } else {
+                    "query_pending"
+                }
+            });
+        profiler.record_gpu_sample_metadata(
+            gpu_sample_status,
+            app_frame_index,
+            render_frame_index,
+            gpu_query_frame_index,
+            sample_latency_frames,
+        );
+        let drain_ns = elapsed_ns(drain_started);
+        profiler.record_diagnostics_ns(&["render_diagnostics", "drain_ns"], drain_ns);
         profiler.record_elapsed(&["Last", "record_render_diagnostics_for_frame"], started);
     }
 

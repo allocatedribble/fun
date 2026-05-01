@@ -1,3 +1,5 @@
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+use std::time::Instant;
 use std::{collections::HashSet, time::Duration};
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
@@ -61,6 +63,8 @@ fn main() {
 
     #[cfg(all(feature = "diagnostics", debug_assertions))]
     app.init_resource::<ServerWorldDiagnostics>()
+        .init_resource::<ServerProfiler>()
+        .add_systems(PreUpdate, begin_server_profiler_tick)
         .add_systems(Update, log_streamable_inventory);
 
     app.run();
@@ -226,6 +230,65 @@ struct ServerWorldDiagnostics {
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
+#[derive(Debug, Default, Resource)]
+struct ServerProfiler {
+    server_tick: u64,
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn begin_server_profiler_tick(mut profiler: ResMut<ServerProfiler>) {
+    profiler.server_tick = profiler.server_tick.saturating_add(1);
+    game_shared::fun_diag_trace!(
+        target: "fun::server::profiler",
+        server_tick = profiler.server_tick,
+        client_id = tracing::field::Empty,
+        packet_type = "server_tick",
+        world_revision = tracing::field::Empty,
+        chunk_index = tracing::field::Empty,
+        chunk_count = tracing::field::Empty,
+        bytes = 0usize,
+        stage = "fixed_rate_update",
+        duration_ns = 0u64,
+        "server profiler event"
+    );
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+#[derive(Debug, Clone, Copy)]
+struct ServerProfilerEvent {
+    stage: &'static str,
+    packet_type: &'static str,
+    client_id: Option<u64>,
+    world_revision: Option<u64>,
+    chunk_index: Option<u16>,
+    chunk_count: Option<u16>,
+    bytes: usize,
+    duration_ns: u64,
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn server_profiler_event(profiler: &ServerProfiler, event: ServerProfilerEvent) {
+    game_shared::fun_diag_info!(
+        target: "fun::server::profiler",
+        server_tick = profiler.server_tick,
+        client_id = ?event.client_id,
+        packet_type = event.packet_type,
+        world_revision = ?event.world_revision,
+        chunk_index = ?event.chunk_index,
+        chunk_count = ?event.chunk_count,
+        bytes = event.bytes,
+        stage = event.stage,
+        duration_ns = event.duration_ns,
+        "server profiler event"
+    );
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn elapsed_ns(started: Instant) -> u64 {
+    started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
 fn log_streamable_inventory(
     mut diagnostics: ResMut<ServerWorldDiagnostics>,
     log_config: Res<ServerLogConfig>,
@@ -273,6 +336,7 @@ fn rebuild_world_stream(
     mut pending: ResMut<PendingWorldStreams>,
     connected: Res<ConnectedClients>,
     _log_config: Res<ServerLogConfig>,
+    #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
     query: Query<(
         &NetworkIdentity,
         &NetworkAuthority,
@@ -286,6 +350,8 @@ fn rebuild_world_stream(
         return;
     }
 
+    #[cfg(all(feature = "diagnostics", debug_assertions))]
+    let rebuild_started = Instant::now();
     let mut specs = Vec::with_capacity(entity_count);
     for (identity, authority, transform, streamed, name) in &query {
         if !identity.entity.is_valid() {
@@ -328,6 +394,38 @@ fn rebuild_world_stream(
         pending_clients = pending.ids.len(),
         "built world stream"
     );
+    #[cfg(all(feature = "diagnostics", debug_assertions))]
+    {
+        let duration_ns = elapsed_ns(rebuild_started);
+        server_profiler_event(
+            &profiler,
+            ServerProfilerEvent {
+                stage: "world_stream_rebuild",
+                packet_type: "world_stream_manifest",
+                client_id: None,
+                world_revision: Some(manifest.revision.0),
+                chunk_index: None,
+                chunk_count: Some(manifest.chunks.len().min(u16::MAX as usize) as u16),
+                bytes: 0,
+                duration_ns,
+            },
+        );
+        for chunk in &manifest.chunks {
+            server_profiler_event(
+                &profiler,
+                ServerProfilerEvent {
+                    stage: "world_stream_chunk_ready",
+                    packet_type: "world_stream",
+                    client_id: None,
+                    world_revision: Some(chunk.revision.0),
+                    chunk_index: Some(chunk.chunk_index.saturating_add(1)),
+                    chunk_count: Some(chunk.chunk_count),
+                    bytes: 0,
+                    duration_ns: 0,
+                },
+            );
+        }
+    }
     game_shared::fun_diag_block_if!(_log_config.stream_verbose(), {
         for chunk in &manifest.chunks {
             game_shared::fun_diag_info!(
@@ -361,22 +459,43 @@ fn queue_world_stream_for_new_clients(
     }
 }
 
-fn receive_client_control(mut server: ResMut<QuinnetServer>, _log_config: Res<ServerLogConfig>) {
+fn receive_client_control(
+    mut server: ResMut<QuinnetServer>,
+    _log_config: Res<ServerLogConfig>,
+    #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
+) {
     let Some(endpoint) = server.get_endpoint_mut() else {
         return;
     };
 
     for client_id in endpoint.clients() {
         while let Some(payload) = endpoint.try_receive_payload(client_id, ClientChannel::Control) {
+            let bytes_len = payload.as_ref().len();
             game_shared::fun_diag_info_if!(
                 _log_config.net_verbose(),
                 target: "fun::server::net",
                 client_id,
-                bytes = payload.as_ref().len(),
+                bytes = bytes_len,
                 "received control payload"
             );
+            #[cfg(all(feature = "diagnostics", debug_assertions))]
+            let decode_started = Instant::now();
             match decode_client_packet(payload.as_ref()) {
                 Ok(ClientPacket::Hello { hello: _hello }) => {
+                    #[cfg(all(feature = "diagnostics", debug_assertions))]
+                    server_profiler_event(
+                        &profiler,
+                        ServerProfilerEvent {
+                            stage: "receive_decode",
+                            packet_type: "client_hello",
+                            client_id: Some(client_id),
+                            world_revision: None,
+                            chunk_index: None,
+                            chunk_count: None,
+                            bytes: bytes_len,
+                            duration_ns: elapsed_ns(decode_started),
+                        },
+                    );
                     game_shared::fun_diag_info_if!(
                         _log_config.net_verbose(),
                         target: "fun::server::net",
@@ -385,6 +504,20 @@ fn receive_client_control(mut server: ResMut<QuinnetServer>, _log_config: Res<Se
                     );
                 }
                 Ok(ClientPacket::WorldReady { ack: _ack }) => {
+                    #[cfg(all(feature = "diagnostics", debug_assertions))]
+                    server_profiler_event(
+                        &profiler,
+                        ServerProfilerEvent {
+                            stage: "receive_decode",
+                            packet_type: "client_world_ready",
+                            client_id: Some(client_id),
+                            world_revision: Some(_ack.revision.0),
+                            chunk_index: None,
+                            chunk_count: None,
+                            bytes: bytes_len,
+                            duration_ns: elapsed_ns(decode_started),
+                        },
+                    );
                     game_shared::fun_diag_info_if!(
                         _log_config.net_verbose(),
                         target: "fun::server::net",
@@ -395,6 +528,20 @@ fn receive_client_control(mut server: ResMut<QuinnetServer>, _log_config: Res<Se
                     );
                 }
                 Ok(_packet) => {
+                    #[cfg(all(feature = "diagnostics", debug_assertions))]
+                    server_profiler_event(
+                        &profiler,
+                        ServerProfilerEvent {
+                            stage: "receive_decode",
+                            packet_type: "client_control",
+                            client_id: Some(client_id),
+                            world_revision: None,
+                            chunk_index: None,
+                            chunk_count: None,
+                            bytes: bytes_len,
+                            duration_ns: elapsed_ns(decode_started),
+                        },
+                    );
                     game_shared::fun_diag_debug_if!(
                         _log_config.net_verbose(),
                         target: "fun::server::net",
@@ -404,6 +551,20 @@ fn receive_client_control(mut server: ResMut<QuinnetServer>, _log_config: Res<Se
                     );
                 }
                 Err(error) => {
+                    #[cfg(all(feature = "diagnostics", debug_assertions))]
+                    server_profiler_event(
+                        &profiler,
+                        ServerProfilerEvent {
+                            stage: "receive_decode_error",
+                            packet_type: "client_control_invalid",
+                            client_id: Some(client_id),
+                            world_revision: None,
+                            chunk_index: None,
+                            chunk_count: None,
+                            bytes: bytes_len,
+                            duration_ns: elapsed_ns(decode_started),
+                        },
+                    );
                     error!(target: "fun::server::net", client_id, %error, "failed to decode client control packet");
                 }
             }
@@ -416,6 +577,7 @@ fn send_pending_world_streams(
     mut pending: ResMut<PendingWorldStreams>,
     manifest: Res<ServerWorldStream>,
     _log_config: Res<ServerLogConfig>,
+    #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
 ) {
     if manifest.chunks.is_empty() || pending.ids.is_empty() {
         return;
@@ -444,10 +606,26 @@ fn send_pending_world_streams(
             },
         };
 
+        #[cfg(all(feature = "diagnostics", debug_assertions))]
+        let welcome_started = Instant::now();
         match encode_server_packet(&welcome) {
             Ok(bytes) => {
                 let _byte_len = bytes.len();
                 endpoint.try_send_payload_on(client_id, ServerChannel::Control, bytes);
+                #[cfg(all(feature = "diagnostics", debug_assertions))]
+                server_profiler_event(
+                    &profiler,
+                    ServerProfilerEvent {
+                        stage: "send_world_stream",
+                        packet_type: "server_welcome",
+                        client_id: Some(client_id),
+                        world_revision: Some(manifest.revision.0),
+                        chunk_index: None,
+                        chunk_count: Some(manifest.chunks.len().min(u16::MAX as usize) as u16),
+                        bytes: _byte_len,
+                        duration_ns: elapsed_ns(welcome_started),
+                    },
+                );
                 game_shared::fun_diag_info_if!(
                     _log_config.stream_verbose(),
                     target: "fun::server::stream",
@@ -457,6 +635,20 @@ fn send_pending_world_streams(
                 );
             }
             Err(error) => {
+                #[cfg(all(feature = "diagnostics", debug_assertions))]
+                server_profiler_event(
+                    &profiler,
+                    ServerProfilerEvent {
+                        stage: "send_world_stream_error",
+                        packet_type: "server_welcome",
+                        client_id: Some(client_id),
+                        world_revision: Some(manifest.revision.0),
+                        chunk_index: None,
+                        chunk_count: Some(manifest.chunks.len().min(u16::MAX as usize) as u16),
+                        bytes: 0,
+                        duration_ns: elapsed_ns(welcome_started),
+                    },
+                );
                 error!(target: "fun::server::stream", client_id, %error, "failed to encode welcome");
                 continue;
             }
@@ -466,10 +658,26 @@ fn send_pending_world_streams(
             let packet = ServerPacket::WorldStream {
                 chunk: chunk.clone(),
             };
+            #[cfg(all(feature = "diagnostics", debug_assertions))]
+            let chunk_started = Instant::now();
             match encode_server_packet(&packet) {
                 Ok(bytes) => {
                     let _byte_len = bytes.len();
                     endpoint.try_send_payload_on(client_id, ServerChannel::Stream, bytes);
+                    #[cfg(all(feature = "diagnostics", debug_assertions))]
+                    server_profiler_event(
+                        &profiler,
+                        ServerProfilerEvent {
+                            stage: "send_world_stream",
+                            packet_type: "world_stream",
+                            client_id: Some(client_id),
+                            world_revision: Some(chunk.revision.0),
+                            chunk_index: Some(chunk.chunk_index.saturating_add(1)),
+                            chunk_count: Some(chunk.chunk_count),
+                            bytes: _byte_len,
+                            duration_ns: elapsed_ns(chunk_started),
+                        },
+                    );
                     game_shared::fun_diag_info_if!(
                         _log_config.stream_verbose(),
                         target: "fun::server::stream",
@@ -482,6 +690,20 @@ fn send_pending_world_streams(
                     );
                 }
                 Err(error) => {
+                    #[cfg(all(feature = "diagnostics", debug_assertions))]
+                    server_profiler_event(
+                        &profiler,
+                        ServerProfilerEvent {
+                            stage: "send_world_stream_error",
+                            packet_type: "world_stream",
+                            client_id: Some(client_id),
+                            world_revision: Some(chunk.revision.0),
+                            chunk_index: Some(chunk.chunk_index.saturating_add(1)),
+                            chunk_count: Some(chunk.chunk_count),
+                            bytes: 0,
+                            duration_ns: elapsed_ns(chunk_started),
+                        },
+                    );
                     error!(target: "fun::server::stream", client_id, %error, "failed to encode world stream");
                     continue;
                 }
