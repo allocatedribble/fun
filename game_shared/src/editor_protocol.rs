@@ -119,6 +119,22 @@ pub enum EditorTargetKind {
     ClientId(NetClientId),
 }
 
+/// Visible editor surface requested by an authorized game runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum EditorActivationMode {
+    EditorShell,
+}
+
+/// Request sent by a focused game client to the launcher/editor host.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorActivationRequested {
+    pub project_id: String,
+    pub game_session_id: String,
+    pub client_pid: u32,
+    pub focused_window: bool,
+    pub requested_mode: EditorActivationMode,
+}
+
 impl EditorTargetKind {
     #[must_use]
     pub const fn runtime_class(self) -> Self {
@@ -942,6 +958,13 @@ pub struct EditorDiagnosticPacket {
     pub batch: EditorDiagnosticBatch,
 }
 
+/// Client-to-launcher request to reveal the editor for a managed game runtime.
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct EditorActivationPacket {
+    pub header: EditorPacketHeader,
+    pub request: EditorActivationRequested,
+}
+
 /// One typed editor runtime protocol, independent of the transport lane.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub enum EditorProtocolPacket {
@@ -949,6 +972,7 @@ pub enum EditorProtocolPacket {
     Command { packet: EditorCommandPacket },
     Event { packet: EditorEventPacket },
     Diagnostic { packet: EditorDiagnosticPacket },
+    Activation { packet: EditorActivationPacket },
 }
 
 impl EditorProtocolPacket {
@@ -959,6 +983,7 @@ impl EditorProtocolPacket {
             Self::Command { packet } => &packet.header,
             Self::Event { packet } => &packet.header,
             Self::Diagnostic { packet } => &packet.header,
+            Self::Activation { packet } => &packet.header,
         }
     }
 }
@@ -1123,6 +1148,7 @@ pub fn validate_editor_packet(
         EditorProtocolPacket::Diagnostic { .. } => {
             require_capability(context, EditorCapability::ReadDiagnostics)
         }
+        EditorProtocolPacket::Activation { packet } => validate_activation_packet(packet, context),
     }
 }
 
@@ -1245,6 +1271,14 @@ fn validate_event_packet(
         }
         EditorEventPayload::Audit { .. } | EditorEventPayload::Pong { .. } => Ok(()),
     }
+}
+
+fn validate_activation_packet(
+    packet: &EditorActivationPacket,
+    context: &EditorProtocolValidationContext,
+) -> Result<(), EditorProtocolValidationError> {
+    validate_header_revision(&packet.header, context)?;
+    require_capability(context, EditorCapability::ControlRuntime)
 }
 
 fn validate_mutation_components(
@@ -1444,6 +1478,21 @@ mod tests {
         }
     }
 
+    fn activation_packet() -> EditorProtocolPacket {
+        EditorProtocolPacket::Activation {
+            packet: EditorActivationPacket {
+                header: header(77, EditorTargetKind::Client, 7, None),
+                request: EditorActivationRequested {
+                    project_id: "project-fun".to_owned(),
+                    game_session_id: "session-1".to_owned(),
+                    client_pid: 1234,
+                    focused_window: true,
+                    requested_mode: EditorActivationMode::EditorShell,
+                },
+            },
+        }
+    }
+
     fn validation_context() -> EditorProtocolValidationContext {
         EditorProtocolValidationContext::local_development(EditorTargetKind::Server)
             .with_component_schema(transform_schema())
@@ -1550,7 +1599,9 @@ mod tests {
             },
         };
 
-        for packet in [handshake, command, event, diagnostic] {
+        let activation = activation_packet();
+
+        for packet in [handshake, command, event, diagnostic, activation] {
             let bytes = encode_editor_packet(&packet).expect("packet should encode");
             let decoded = decode_editor_packet(&bytes).expect("packet should decode");
             assert_eq!(decoded, packet);

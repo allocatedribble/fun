@@ -1,4 +1,5 @@
 mod compiled_world;
+mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
 mod render_catalog;
@@ -74,6 +75,7 @@ use bevy_quinnet::client::{
     certificate::CertificateVerificationMode,
     connection::{ClientAddrConfiguration, ConnectionEvent},
 };
+use editor_hotkey::EditorHotkeyPlugin;
 use first_person::FirstPersonControllerPlugin;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use game_shared::DEFAULT_RENDER_TARGET_RATE_HZ;
@@ -150,7 +152,11 @@ impl ClientRuntimeMode {
         !self.uses_static_preview_stream()
     }
 
-    fn as_env_value(self) -> &'static str {
+    pub(crate) const fn supports_editor_activation(self) -> bool {
+        matches!(self, Self::JoinedGame | Self::EditorHostedClient)
+    }
+
+    pub(crate) fn as_env_value(self) -> &'static str {
         match self {
             Self::JoinedGame => "joined_game",
             Self::StandaloneClient => "standalone_client",
@@ -208,6 +214,7 @@ pub struct ClientAppOptions {
     pub render_profile: ClientRenderProfile,
     pub server_addr: Option<String>,
     pub project_id: Option<String>,
+    pub game_session_id: Option<String>,
     pub scene_id: Option<String>,
     pub hosted_by_editor: bool,
 }
@@ -220,6 +227,7 @@ impl ClientAppOptions {
             render_profile: ClientRenderProfile::from_env(),
             server_addr: env_non_empty_string("FUN_SERVER_ADDR"),
             project_id: env_non_empty_string("FUN_PROJECT_ID"),
+            game_session_id: env_non_empty_string("FUN_GAME_SESSION_ID"),
             scene_id: env_non_empty_string("FUN_SCENE_ID"),
             hosted_by_editor: env_flag("FUN_CLIENT_HOSTED_BY_EDITOR")
                 || matches!(
@@ -237,6 +245,7 @@ impl Default for ClientAppOptions {
             render_profile: ClientRenderProfile::Default,
             server_addr: None,
             project_id: None,
+            game_session_id: None,
             scene_id: None,
             hosted_by_editor: false,
         }
@@ -982,6 +991,9 @@ impl Plugin for GameClientPlugin {
                 ThunderPlugin::default(),
                 FirstPersonControllerPlugin::gameplay(),
             ));
+            if self.options.mode.supports_editor_activation() {
+                app.add_plugins(EditorHotkeyPlugin);
+            }
         } else {
             app.insert_resource(StaticPreviewWorldStream::new(
                 self.options.scene_id.as_deref(),
