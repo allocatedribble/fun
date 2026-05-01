@@ -2988,6 +2988,10 @@ dependencies = [
 [[package]]
 name = "game_shared"
 version = "0.1.0"
+dependencies = [
+ "compactly",
+ "thunder",
+]
 
 [[package]]
 name = "gethostname"

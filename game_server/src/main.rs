@@ -64,6 +64,8 @@ fn main() {
     #[cfg(all(feature = "diagnostics", debug_assertions))]
     app.init_resource::<ServerWorldDiagnostics>()
         .init_resource::<ServerProfiler>()
+        .init_resource::<ServerEditorControlPlane>()
+        .add_systems(Startup, log_server_editor_control_plane)
         .add_systems(PreUpdate, begin_server_profiler_tick)
         .add_systems(Update, log_streamable_inventory);
 
@@ -233,6 +235,55 @@ struct ServerWorldDiagnostics {
 #[derive(Debug, Default, Resource)]
 struct ServerProfiler {
     server_tick: u64,
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+#[derive(Debug, Resource)]
+struct ServerEditorControlPlane {
+    config: game_shared::EditorControlConfig,
+    granted_capabilities: Vec<game_shared::EditorCapability>,
+    diagnostic_streams: Vec<game_shared::EditorDiagnosticStream>,
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+impl Default for ServerEditorControlPlane {
+    fn default() -> Self {
+        let execute_server_code_enabled =
+            std::env::var_os("FUN_EDITOR_ENABLE_SERVER_EXEC").is_some();
+
+        Self {
+            config: game_shared::EditorControlConfig::local_development(
+                game_shared::EditorTargetKind::Server,
+            ),
+            granted_capabilities: game_shared::local_development_capabilities(
+                game_shared::EditorTargetKind::Server,
+                execute_server_code_enabled,
+            ),
+            diagnostic_streams: game_shared::default_editor_diagnostic_subscriptions(),
+        }
+    }
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn log_server_editor_control_plane(control: Res<ServerEditorControlPlane>) {
+    let execute_server_code_enabled = control
+        .granted_capabilities
+        .contains(&game_shared::EditorCapability::ExecuteServerCode);
+
+    game_shared::fun_diag_info!(
+        target: "fun::editor::control",
+        protocol_version = game_shared::EDITOR_PROTOCOL_VERSION,
+        target_kind = ?control.config.target_kind,
+        bind_mode = ?control.config.bind_mode,
+        bind_addr = control.config.bind_addr.as_str(),
+        enabled = control.config.enabled,
+        remote_control_permitted = control.config.permits_remote_editor_control(),
+        execute_server_code_enabled = execute_server_code_enabled,
+        command_apply_stage = game_shared::EDITOR_COMMAND_APPLY_STAGE,
+        granted_capabilities = control.granted_capabilities.len(),
+        diagnostic_streams = control.diagnostic_streams.len(),
+        "server editor control plane ready"
+    );
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]

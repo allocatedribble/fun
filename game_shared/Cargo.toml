@@ -9,3 +9,7 @@ path = "src/lib.rs"
 [features]
 default = []
 diagnostics = []
+
+[dependencies]
+compactly.workspace = true
+thunder.workspace = true

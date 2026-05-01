@@ -251,6 +251,55 @@ impl ClientPerfCounters {
     }
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+#[derive(Debug, Resource)]
+struct ClientEditorControlPlane {
+    config: game_shared::EditorControlConfig,
+    granted_capabilities: Vec<game_shared::EditorCapability>,
+    diagnostic_streams: Vec<game_shared::EditorDiagnosticStream>,
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+impl Default for ClientEditorControlPlane {
+    fn default() -> Self {
+        let execute_client_code_enabled =
+            std::env::var_os("FUN_EDITOR_ENABLE_CLIENT_EXEC").is_some();
+
+        Self {
+            config: game_shared::EditorControlConfig::local_development(
+                game_shared::EditorTargetKind::Client,
+            ),
+            granted_capabilities: game_shared::local_development_capabilities(
+                game_shared::EditorTargetKind::Client,
+                execute_client_code_enabled,
+            ),
+            diagnostic_streams: game_shared::default_editor_diagnostic_subscriptions(),
+        }
+    }
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn log_client_editor_control_plane(control: Res<ClientEditorControlPlane>) {
+    let execute_client_code_enabled = control
+        .granted_capabilities
+        .contains(&game_shared::EditorCapability::ExecuteClientCode);
+
+    game_shared::fun_diag_info!(
+        target: "fun::editor::control",
+        protocol_version = game_shared::EDITOR_PROTOCOL_VERSION,
+        target_kind = ?control.config.target_kind,
+        bind_mode = ?control.config.bind_mode,
+        bind_addr = control.config.bind_addr.as_str(),
+        enabled = control.config.enabled,
+        remote_control_permitted = control.config.permits_remote_editor_control(),
+        execute_client_code_enabled = execute_client_code_enabled,
+        command_apply_stage = game_shared::EDITOR_COMMAND_APPLY_STAGE,
+        granted_capabilities = control.granted_capabilities.len(),
+        diagnostic_streams = control.diagnostic_streams.len(),
+        "client editor control plane ready"
+    );
+}
+
 #[derive(bevy::ecs::system::SystemParam)]
 struct ClientRuntimeProfiler<'w> {
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -536,6 +585,10 @@ impl Plugin for GameClientPlugin {
                 },
                 FirstPersonControllerPlugin,
             ));
+
+        #[cfg(all(feature = "diagnostics", debug_assertions))]
+        app.init_resource::<ClientEditorControlPlane>()
+            .add_systems(Startup, log_client_editor_control_plane);
 
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         app.init_resource::<ClientPerfCounters>()
@@ -1476,6 +1529,8 @@ fn receive_world_stream(
             "client profiler event"
         );
 
+        #[cfg(all(feature = "diagnostics", debug_assertions))]
+        let apply_diagnostic_started = std::time::Instant::now();
         crate::frame_profile_start!(apply_started);
         let world_revision_changed = apply_world_stream_chunk(
             &mut commands,
@@ -1501,6 +1556,11 @@ fn receive_world_stream(
         runtime
             .schedule_profiler
             .record_ns(ClientScheduleSystem::WorldStreamApply, apply_ns);
+        #[cfg(all(feature = "diagnostics", debug_assertions))]
+        let apply_diagnostic_ns = apply_diagnostic_started
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
         game_shared::fun_diag_info!(
             target: "fun::client::profiler",
             server_tick = tracing::field::Empty,
@@ -1511,7 +1571,7 @@ fn receive_world_stream(
             chunk_count = packet.chunk_count,
             bytes = payload_len,
             stage = "apply_world_stream",
-            duration_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            duration_ns = apply_diagnostic_ns,
             "client profiler event"
         );
         crate::frame_profile_ns!(
