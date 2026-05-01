@@ -9,6 +9,10 @@ pub use thunder::protocol::{
     WorldRevision as EditorWorldRevision,
 };
 
+pub use crate::{
+    DiagnosticEvent as EditorDiagnosticEvent, DiagnosticLevel as EditorDiagnosticSeverity,
+};
+
 const EDITOR_WIRE_MAGIC: [u8; 4] = *b"FED1";
 const EDITOR_WIRE_VERSION: u8 = 1;
 const EDITOR_WIRE_HEADER_LEN: usize = 13;
@@ -400,73 +404,139 @@ pub enum EditorOutputStream {
 /// Diagnostic streams auto-subscribed when an editor attaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub enum EditorDiagnosticStream {
+    ServerTickDuration,
     ServerTickBudget,
+    ConnectedClients,
     NetworkChannelPressure,
+    PacketBytes,
+    WorldRevision,
+    MutationCost,
     SnapshotBudget,
+    SnapshotBudgetExhaustion,
     RelevanceDecisions,
     WorldStreamRevisions,
+    StreamChunks,
     MutationTransactions,
+    ClientFps,
+    ClientFrameNs,
     ClientFrameTime,
+    FrameProfilerSummary,
+    GpuSampleStatus,
+    RenderCpuMaterialCounters,
+    MeshletPathCounts,
     ScheduleHeatmap,
     RenderPathCounts,
+    SolariTimings,
     SolariBudget,
     SolariQueue,
     SolariRadianceCachePressure,
+    RenderRecovery,
+    CameraCount,
+    WorldStreamApplyCost,
     AvianPhysicsStepTiming,
     AvianCollisionDiagnostics,
     AvianControllerDiagnostics,
 }
 
-/// Core editor diagnostics requested on attachment.
-pub const DEFAULT_EDITOR_DIAGNOSTIC_STREAMS: &[EditorDiagnosticStream] = &[
+/// Server diagnostics requested by default when an editor attaches to a server.
+pub const DEFAULT_SERVER_EDITOR_DIAGNOSTIC_STREAMS: &[EditorDiagnosticStream] = &[
+    EditorDiagnosticStream::ServerTickDuration,
     EditorDiagnosticStream::ServerTickBudget,
+    EditorDiagnosticStream::ConnectedClients,
     EditorDiagnosticStream::NetworkChannelPressure,
+    EditorDiagnosticStream::PacketBytes,
+    EditorDiagnosticStream::WorldRevision,
+    EditorDiagnosticStream::MutationCost,
     EditorDiagnosticStream::SnapshotBudget,
+    EditorDiagnosticStream::SnapshotBudgetExhaustion,
     EditorDiagnosticStream::RelevanceDecisions,
     EditorDiagnosticStream::WorldStreamRevisions,
+    EditorDiagnosticStream::StreamChunks,
     EditorDiagnosticStream::MutationTransactions,
-    EditorDiagnosticStream::ClientFrameTime,
-    EditorDiagnosticStream::ScheduleHeatmap,
-    EditorDiagnosticStream::RenderPathCounts,
-    EditorDiagnosticStream::SolariBudget,
-    EditorDiagnosticStream::SolariQueue,
-    EditorDiagnosticStream::SolariRadianceCachePressure,
     EditorDiagnosticStream::AvianPhysicsStepTiming,
     EditorDiagnosticStream::AvianCollisionDiagnostics,
     EditorDiagnosticStream::AvianControllerDiagnostics,
 ];
 
-/// Owned list of default editor diagnostic subscriptions.
+/// Client diagnostics requested by default when an editor attaches to a client.
+pub const DEFAULT_CLIENT_EDITOR_DIAGNOSTIC_STREAMS: &[EditorDiagnosticStream] = &[
+    EditorDiagnosticStream::ClientFps,
+    EditorDiagnosticStream::ClientFrameNs,
+    EditorDiagnosticStream::ClientFrameTime,
+    EditorDiagnosticStream::FrameProfilerSummary,
+    EditorDiagnosticStream::GpuSampleStatus,
+    EditorDiagnosticStream::RenderCpuMaterialCounters,
+    EditorDiagnosticStream::MeshletPathCounts,
+    EditorDiagnosticStream::ScheduleHeatmap,
+    EditorDiagnosticStream::RenderPathCounts,
+    EditorDiagnosticStream::SolariTimings,
+    EditorDiagnosticStream::SolariBudget,
+    EditorDiagnosticStream::SolariQueue,
+    EditorDiagnosticStream::SolariRadianceCachePressure,
+    EditorDiagnosticStream::RenderRecovery,
+    EditorDiagnosticStream::CameraCount,
+    EditorDiagnosticStream::WorldStreamApplyCost,
+];
+
+/// Core editor diagnostics requested on attachment.
+pub const DEFAULT_EDITOR_DIAGNOSTIC_STREAMS: &[EditorDiagnosticStream] = &[
+    EditorDiagnosticStream::ServerTickDuration,
+    EditorDiagnosticStream::ServerTickBudget,
+    EditorDiagnosticStream::ConnectedClients,
+    EditorDiagnosticStream::NetworkChannelPressure,
+    EditorDiagnosticStream::PacketBytes,
+    EditorDiagnosticStream::WorldRevision,
+    EditorDiagnosticStream::MutationCost,
+    EditorDiagnosticStream::SnapshotBudget,
+    EditorDiagnosticStream::SnapshotBudgetExhaustion,
+    EditorDiagnosticStream::RelevanceDecisions,
+    EditorDiagnosticStream::WorldStreamRevisions,
+    EditorDiagnosticStream::StreamChunks,
+    EditorDiagnosticStream::MutationTransactions,
+    EditorDiagnosticStream::AvianPhysicsStepTiming,
+    EditorDiagnosticStream::AvianCollisionDiagnostics,
+    EditorDiagnosticStream::AvianControllerDiagnostics,
+    EditorDiagnosticStream::ClientFps,
+    EditorDiagnosticStream::ClientFrameNs,
+    EditorDiagnosticStream::ClientFrameTime,
+    EditorDiagnosticStream::FrameProfilerSummary,
+    EditorDiagnosticStream::GpuSampleStatus,
+    EditorDiagnosticStream::RenderCpuMaterialCounters,
+    EditorDiagnosticStream::MeshletPathCounts,
+    EditorDiagnosticStream::ScheduleHeatmap,
+    EditorDiagnosticStream::RenderPathCounts,
+    EditorDiagnosticStream::SolariTimings,
+    EditorDiagnosticStream::SolariBudget,
+    EditorDiagnosticStream::SolariQueue,
+    EditorDiagnosticStream::SolariRadianceCachePressure,
+    EditorDiagnosticStream::RenderRecovery,
+    EditorDiagnosticStream::CameraCount,
+    EditorDiagnosticStream::WorldStreamApplyCost,
+];
+
+/// Owned list of all default editor diagnostic subscriptions.
 #[must_use]
 pub fn default_editor_diagnostic_subscriptions() -> Vec<EditorDiagnosticStream> {
     DEFAULT_EDITOR_DIAGNOSTIC_STREAMS.to_vec()
 }
 
-/// Runtime diagnostic severity for editor display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
-pub enum EditorDiagnosticSeverity {
-    Trace,
-    Info,
-    Warn,
-    Error,
+/// Owned list of server default editor diagnostic subscriptions.
+#[must_use]
+pub fn default_server_editor_diagnostic_subscriptions() -> Vec<EditorDiagnosticStream> {
+    DEFAULT_SERVER_EDITOR_DIAGNOSTIC_STREAMS.to_vec()
 }
 
-/// Runtime diagnostic event sent to an attached editor.
-#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
-pub struct EditorDiagnosticEvent {
-    pub sequence: PacketSequence,
-    pub stream: EditorDiagnosticStream,
-    pub severity: EditorDiagnosticSeverity,
-    pub source: String,
-    pub message: String,
-    pub payload: Vec<u8>,
+/// Owned list of client default editor diagnostic subscriptions.
+#[must_use]
+pub fn default_client_editor_diagnostic_subscriptions() -> Vec<EditorDiagnosticStream> {
+    DEFAULT_CLIENT_EDITOR_DIAGNOSTIC_STREAMS.to_vec()
 }
 
 /// Batch of diagnostic events sent over the editor control plane.
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub struct EditorDiagnosticBatch {
     pub world_revision: EditorWorldRevision,
-    pub events: Vec<EditorDiagnosticEvent>,
+    pub packets: Vec<crate::RecordedDiagnosticPacket>,
 }
 
 /// Diagnostic stream subscription request.
@@ -1217,12 +1287,33 @@ mod tests {
 
     fn diagnostic_event(sequence: u32) -> EditorDiagnosticEvent {
         EditorDiagnosticEvent {
-            sequence: PacketSequence(sequence),
-            stream: EditorDiagnosticStream::MutationTransactions,
-            severity: EditorDiagnosticSeverity::Info,
-            source: "editor_protocol_test".to_owned(),
-            message: "mutation queued".to_owned(),
-            payload: vec![1, 2, 3],
+            target: "fun::editor::protocol".to_owned(),
+            level: EditorDiagnosticSeverity::Info,
+            timestamp_or_tick: crate::DiagnosticTimestampOrTick::Tick {
+                tick: u64::from(sequence),
+            },
+            fields: vec![
+                crate::DiagnosticField::text("stream", "mutation_transactions"),
+                crate::DiagnosticField::text("message", "mutation queued"),
+                crate::DiagnosticField {
+                    name: "payload".to_owned(),
+                    value: crate::DiagnosticValue::Bytes {
+                        value: vec![1, 2, 3],
+                    },
+                },
+            ],
+            source: crate::DiagnosticSource::static_location(file!(), line!(), module_path!()),
+            frame_index: None,
+            span_id: None,
+        }
+    }
+
+    fn recorded_diagnostic(sequence: u64) -> crate::RecordedDiagnosticPacket {
+        crate::RecordedDiagnosticPacket {
+            sequence: crate::DiagnosticSequence(sequence),
+            packet: crate::DiagnosticPacket::Event {
+                event: diagnostic_event(sequence as u32),
+            },
         }
     }
 
@@ -1336,7 +1427,7 @@ mod tests {
                 ),
                 batch: EditorDiagnosticBatch {
                     world_revision: EditorWorldRevision(1),
-                    events: vec![diagnostic_event(44)],
+                    packets: vec![recorded_diagnostic(44)],
                 },
             },
         };
@@ -1505,8 +1596,26 @@ mod tests {
         let streams = default_editor_diagnostic_subscriptions();
 
         assert!(streams.contains(&EditorDiagnosticStream::ServerTickBudget));
+        assert!(streams.contains(&EditorDiagnosticStream::ConnectedClients));
         assert!(streams.contains(&EditorDiagnosticStream::ClientFrameTime));
+        assert!(streams.contains(&EditorDiagnosticStream::GpuSampleStatus));
         assert!(streams.contains(&EditorDiagnosticStream::SolariRadianceCachePressure));
         assert!(streams.contains(&EditorDiagnosticStream::AvianPhysicsStepTiming));
+    }
+
+    #[test]
+    fn target_specific_default_diagnostics_do_not_cross_runtime_roles() {
+        let server = default_server_editor_diagnostic_subscriptions();
+        let client = default_client_editor_diagnostic_subscriptions();
+
+        assert!(server.contains(&EditorDiagnosticStream::ServerTickDuration));
+        assert!(server.contains(&EditorDiagnosticStream::StreamChunks));
+        assert!(server.contains(&EditorDiagnosticStream::AvianControllerDiagnostics));
+        assert!(!server.contains(&EditorDiagnosticStream::GpuSampleStatus));
+
+        assert!(client.contains(&EditorDiagnosticStream::ClientFps));
+        assert!(client.contains(&EditorDiagnosticStream::WorldStreamApplyCost));
+        assert!(client.contains(&EditorDiagnosticStream::RenderRecovery));
+        assert!(!client.contains(&EditorDiagnosticStream::ConnectedClients));
     }
 }

@@ -449,7 +449,7 @@ impl Default for ServerEditorControlPlane {
                 game_shared::EditorTargetKind::Server,
                 execute_server_code_enabled,
             ),
-            diagnostic_streams: game_shared::default_editor_diagnostic_subscriptions(),
+            diagnostic_streams: game_shared::default_server_editor_diagnostic_subscriptions(),
         }
     }
 }

@@ -4,6 +4,7 @@ pub mod editor_protocol;
 pub mod editor_schema;
 pub mod render_catalog;
 
+pub use diagnostics::*;
 pub use editor_protocol::*;
 pub use editor_schema::*;
 pub use render_catalog::*;

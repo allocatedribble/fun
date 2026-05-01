@@ -273,7 +273,7 @@ impl Default for ClientEditorControlPlane {
                 game_shared::EditorTargetKind::Client,
                 execute_client_code_enabled,
             ),
-            diagnostic_streams: game_shared::default_editor_diagnostic_subscriptions(),
+            diagnostic_streams: game_shared::default_client_editor_diagnostic_subscriptions(),
         }
     }
 }
