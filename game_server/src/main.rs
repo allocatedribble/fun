@@ -28,10 +28,15 @@ use tracing::{error, info};
 const GAME_PROTOCOL_VERSION: u32 = 1;
 const MAX_CLIENT_CONTROL_PACKET_BYTES: usize = 64 * 1024;
 const MAX_SESSION_TOKEN_BYTES: usize = 1024;
+const MAX_WARDEN_ADMISSION_TICKET_BYTES: usize = 4096;
 const GAME_SERVER_TLS_MODE_ENV: &str = "FUN_GAME_SERVER_TLS_MODE";
 const GAME_SERVER_TLS_MODE_DEVELOPMENT: &str = "development";
 const GAME_SERVER_TLS_MODE_PRODUCTION: &str = "production";
 const GAME_SERVER_DEV_TICKET_ENV: &str = "FUN_GAME_SERVER_DEV_SESSION_TOKEN";
+const GAME_SERVER_WARDEN_GATE_ENV: &str = "FUN_WARDEN_SERVER_GATE";
+const GAME_SERVER_WARDEN_GATE_OBSERVE: &str = "observe";
+const GAME_SERVER_WARDEN_GATE_REQUIRE_ADMISSION: &str = "require_admission_ticket";
+const GAME_SERVER_DEV_WARDEN_ADMISSION_TICKET_ENV: &str = "FUN_WARDEN_DEV_ADMISSION_TICKET";
 
 fn main() {
     let mut app = App::new();
@@ -118,6 +123,7 @@ fn start_endpoint(mut server: ResMut<QuinnetServer>, security: Res<GameServerSec
 struct GameServerSecurityConfig {
     tls_mode: GameServerTlsMode,
     ticket_verifier: ClientTicketVerifier,
+    warden_gate: WardenAdmissionGate,
 }
 
 impl GameServerSecurityConfig {
@@ -127,6 +133,7 @@ impl GameServerSecurityConfig {
         Self {
             tls_mode,
             ticket_verifier: ClientTicketVerifier::from_env(tls_mode),
+            warden_gate: WardenAdmissionGate::from_env(tls_mode),
         }
     }
 
@@ -498,6 +505,10 @@ enum ClientHelloRejection {
     SessionTokenTooLarge,
     TicketVerificationUnavailable,
     DevelopmentTicketMismatch,
+    MissingWardenAdmissionTicket,
+    WardenAdmissionTicketTooLarge,
+    WardenAdmissionVerifierUnavailable,
+    DevelopmentWardenAdmissionMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -516,6 +527,20 @@ enum WorldReadyRejection {
 enum ClientTicketVerifier {
     FailClosed,
     DevelopmentToken { token: Vec<u8> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WardenAdmissionGate {
+    Observe,
+    RequireAdmissionTicket {
+        verifier: WardenAdmissionTicketVerifier,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WardenAdmissionTicketVerifier {
+    FailClosed,
+    DevelopmentTicket { ticket: Vec<u8> },
 }
 
 impl ClientTicketVerifier {
@@ -539,9 +564,67 @@ impl ClientTicketVerifier {
     }
 }
 
+impl WardenAdmissionGate {
+    fn from_env(tls_mode: GameServerTlsMode) -> Self {
+        match env::var(GAME_SERVER_WARDEN_GATE_ENV) {
+            Ok(value) if value.eq_ignore_ascii_case(GAME_SERVER_WARDEN_GATE_REQUIRE_ADMISSION) => {
+                Self::RequireAdmissionTicket {
+                    verifier: WardenAdmissionTicketVerifier::from_env(tls_mode),
+                }
+            }
+            Ok(value) if value.eq_ignore_ascii_case(GAME_SERVER_WARDEN_GATE_OBSERVE) => {
+                Self::Observe
+            }
+            _ => Self::Observe,
+        }
+    }
+
+    fn validate(&self, hello: &ClientHello) -> Result<(), ClientHelloRejection> {
+        match self {
+            Self::Observe => Ok(()),
+            Self::RequireAdmissionTicket { verifier } => {
+                if hello.session_token.is_empty() {
+                    return Err(ClientHelloRejection::MissingWardenAdmissionTicket);
+                }
+                if hello.session_token.len() > MAX_WARDEN_ADMISSION_TICKET_BYTES {
+                    return Err(ClientHelloRejection::WardenAdmissionTicketTooLarge);
+                }
+                verifier.verify(&hello.session_token)
+            }
+        }
+    }
+}
+
+impl WardenAdmissionTicketVerifier {
+    fn from_env(tls_mode: GameServerTlsMode) -> Self {
+        match (
+            tls_mode,
+            env::var(GAME_SERVER_DEV_WARDEN_ADMISSION_TICKET_ENV),
+        ) {
+            (GameServerTlsMode::DevelopmentSelfSigned, Ok(ticket)) if !ticket.is_empty() => {
+                Self::DevelopmentTicket {
+                    ticket: ticket.into_bytes(),
+                }
+            }
+            _ => Self::FailClosed,
+        }
+    }
+
+    fn verify(&self, ticket: &[u8]) -> Result<(), ClientHelloRejection> {
+        match self {
+            Self::FailClosed => Err(ClientHelloRejection::WardenAdmissionVerifierUnavailable),
+            Self::DevelopmentTicket { ticket: expected } if ticket == expected.as_slice() => Ok(()),
+            Self::DevelopmentTicket { .. } => {
+                Err(ClientHelloRejection::DevelopmentWardenAdmissionMismatch)
+            }
+        }
+    }
+}
+
 fn validate_client_hello(
     hello: &ClientHello,
     ticket_verifier: &ClientTicketVerifier,
+    warden_gate: &WardenAdmissionGate,
 ) -> Result<(), ClientHelloRejection> {
     if hello.protocol_version != GAME_PROTOCOL_VERSION {
         return Err(ClientHelloRejection::WrongProtocolVersion);
@@ -553,6 +636,7 @@ fn validate_client_hello(
         return Err(ClientHelloRejection::SessionTokenTooLarge);
     }
     ticket_verifier.verify(&hello.session_token)?;
+    warden_gate.validate(hello)?;
     Ok(())
 }
 
@@ -1113,8 +1197,11 @@ fn receive_client_control(
                         );
                         continue;
                     }
-                    if let Err(rejection) = validate_client_hello(&hello, &security.ticket_verifier)
-                    {
+                    if let Err(rejection) = validate_client_hello(
+                        &hello,
+                        &security.ticket_verifier,
+                        &security.warden_gate,
+                    ) {
                         error!(target: "fun::server::net", client_id, ?rejection, "rejecting invalid client hello");
                         endpoint.try_disconnect_client(client_id);
                         clear_client_state(
@@ -2060,32 +2147,92 @@ mod tests {
             feature_bits: 0,
             oldest_input_sequence: PacketSequence(0),
         };
-        assert_eq!(validate_client_hello(&valid, &verifier), Ok(()));
+        assert_eq!(
+            validate_client_hello(&valid, &verifier, &WardenAdmissionGate::Observe),
+            Ok(())
+        );
 
         let mut missing_token = valid.clone();
         missing_token.session_token.clear();
         assert_eq!(
-            validate_client_hello(&missing_token, &verifier),
+            validate_client_hello(&missing_token, &verifier, &WardenAdmissionGate::Observe),
             Err(ClientHelloRejection::MissingSessionToken)
         );
 
         let mut wrong_version = valid.clone();
         wrong_version.protocol_version = GAME_PROTOCOL_VERSION + 1;
         assert_eq!(
-            validate_client_hello(&wrong_version, &verifier),
+            validate_client_hello(&wrong_version, &verifier, &WardenAdmissionGate::Observe),
             Err(ClientHelloRejection::WrongProtocolVersion)
         );
 
         let mut wrong_ticket = valid;
         wrong_ticket.session_token = b"wrong-ticket".to_vec();
         assert_eq!(
-            validate_client_hello(&wrong_ticket, &verifier),
+            validate_client_hello(&wrong_ticket, &verifier, &WardenAdmissionGate::Observe),
             Err(ClientHelloRejection::DevelopmentTicketMismatch)
         );
 
         assert_eq!(
-            validate_client_hello(&wrong_ticket, &ClientTicketVerifier::FailClosed),
+            validate_client_hello(
+                &wrong_ticket,
+                &ClientTicketVerifier::FailClosed,
+                &WardenAdmissionGate::Observe,
+            ),
             Err(ClientHelloRejection::TicketVerificationUnavailable)
+        );
+    }
+
+    #[test]
+    fn warden_admission_gate_fails_closed_until_backend_ticket_verifier_exists() {
+        let verifier = ClientTicketVerifier::DevelopmentToken {
+            token: b"dev-ticket".to_vec(),
+        };
+        let hello = ClientHello {
+            protocol_version: GAME_PROTOCOL_VERSION,
+            session_token: b"dev-ticket".to_vec(),
+            feature_bits: 0,
+            oldest_input_sequence: PacketSequence(0),
+        };
+        let required_gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::FailClosed,
+        };
+
+        assert_eq!(
+            validate_client_hello(&hello, &verifier, &required_gate),
+            Err(ClientHelloRejection::WardenAdmissionVerifierUnavailable)
+        );
+    }
+
+    #[test]
+    fn warden_development_admission_gate_requires_exact_backend_ticket() {
+        let verifier = ClientTicketVerifier::DevelopmentToken {
+            token: b"dev-ticket".to_vec(),
+        };
+        let hello = ClientHello {
+            protocol_version: GAME_PROTOCOL_VERSION,
+            session_token: b"dev-ticket".to_vec(),
+            feature_bits: 0,
+            oldest_input_sequence: PacketSequence(0),
+        };
+        let matching_gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::DevelopmentTicket {
+                ticket: b"dev-ticket".to_vec(),
+            },
+        };
+        let wrong_gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::DevelopmentTicket {
+                ticket: b"other-ticket".to_vec(),
+            },
+        };
+
+        assert_eq!(
+            validate_client_hello(&hello, &verifier, &matching_gate),
+            Ok(())
+        );
+        assert_eq!(
+            validate_client_hello(&hello, &verifier, &wrong_gate),
+            Err(ClientHelloRejection::DevelopmentWardenAdmissionMismatch)
         );
     }
 

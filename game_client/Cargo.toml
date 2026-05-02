@@ -28,6 +28,9 @@ avian3d.workspace = true
 bevy.workspace = true
 bevy_quinnet.workspace = true
 fun_render = { path = "../fun_render", default-features = false, features = ["winit_presentation"] }
+fun-warden-client = { path = "../../fun-warden/crates/fun-warden-client" }
+fun-warden-core = { path = "../../fun-warden/crates/fun-warden-core" }
+fun-warden-protocol = { path = "../../fun-warden/crates/fun-warden-protocol" }
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
 log.workspace = true

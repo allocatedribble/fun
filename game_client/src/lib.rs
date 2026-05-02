@@ -1,6 +1,7 @@
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
+pub mod warden;
 
 pub(crate) use frame_profile::{
     frame_profile_elapsed, frame_profile_ns, frame_profile_scope, frame_profile_start,
@@ -60,6 +61,7 @@ use game_shared::{
 };
 use thunder::prelude::*;
 use tracing::{debug, error, info, warn};
+use warden::ClientWardenPlugin;
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
@@ -591,6 +593,7 @@ impl Plugin for GameClientPlugin {
                 QuinnetClientPlugin::default(),
                 ThunderPlugin::default(),
                 FirstPersonControllerPlugin::gameplay(),
+                ClientWardenPlugin,
             ));
             if self.options.mode.supports_editor_activation() {
                 app.add_plugins(EditorHotkeyPlugin);
