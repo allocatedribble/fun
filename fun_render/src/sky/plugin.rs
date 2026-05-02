@@ -2,7 +2,9 @@ use bevy::{
     core_pipeline::{Core3d, Core3dSystems},
     prelude::*,
     render::{
-        Render, RenderApp, RenderStartup, RenderSystems, extract_resource::ExtractResourcePlugin,
+        Render, RenderApp, RenderStartup, RenderSystems,
+        extract_resource::ExtractResourcePlugin,
+        render_resource::{SpecializedRenderPipelines, TextureUsages},
     },
 };
 use tracing::{info, warn};
@@ -10,8 +12,11 @@ use tracing::{info, warn};
 use super::{
     config::FunCloudSettings,
     render::{
-        node::run_cloud_compute_passes,
-        pipelines::{init_cloud_pipelines, load_cloud_shader_assets},
+        node::{render_clouds_to_view, run_cloud_compute_passes},
+        pipelines::{
+            FunCloudViewCompositePipeline, init_cloud_pipelines, load_cloud_shader_assets,
+            prepare_cloud_view_pipelines,
+        },
         prepare::{FunCloudGpuTextures, prepare_cloud_textures},
     },
     weather::{FunWeatherProfileId, FunWeatherState},
@@ -75,16 +80,26 @@ impl Plugin for FunSkyPlugin {
 
         render_app
             .init_resource::<FunCloudGpuTextures>()
+            .init_resource::<SpecializedRenderPipelines<FunCloudViewCompositePipeline>>()
             .add_systems(RenderStartup, init_cloud_pipelines)
             .add_systems(
                 Render,
-                prepare_cloud_textures.in_set(RenderSystems::PrepareResources),
+                (
+                    configure_cloud_camera_depth_usages.in_set(RenderSystems::PrepareViews),
+                    prepare_cloud_view_pipelines.in_set(RenderSystems::Prepare),
+                    prepare_cloud_textures.in_set(RenderSystems::PrepareResources),
+                ),
             )
             .add_systems(
                 Core3d,
-                run_cloud_compute_passes
-                    .in_set(Core3dSystems::MainPass)
-                    .after(Core3dSystems::Prepass),
+                (
+                    run_cloud_compute_passes
+                        .in_set(Core3dSystems::EarlyPostProcess)
+                        .after(Core3dSystems::MainPass),
+                    render_clouds_to_view
+                        .in_set(Core3dSystems::EarlyPostProcess)
+                        .after(run_cloud_compute_passes),
+                ),
             );
     }
 }
@@ -152,6 +167,22 @@ fn log_cloud_startup(settings: Res<FunCloudSettings>, state: Res<FunWeatherState
         cloud_density = state.profile.cloud_density,
         "Fun cloud configuration"
     );
+}
+
+fn configure_cloud_camera_depth_usages(
+    settings: Option<Res<FunCloudSettings>>,
+    mut cameras: Query<&mut Camera3d>,
+) {
+    let Some(settings) = settings.as_deref() else {
+        return;
+    };
+    if !settings.enabled || settings.quality == super::config::FunCloudQuality::Off {
+        return;
+    }
+
+    for mut camera in &mut cameras {
+        camera.depth_texture_usages.0 |= TextureUsages::TEXTURE_BINDING.bits();
+    }
 }
 
 #[cfg(test)]

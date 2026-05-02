@@ -2234,6 +2234,7 @@ fn log_client_diagnostics(
         solari_runtime_params.as_mut(),
         perf_counters.as_mut(),
         schedule_profiler.as_mut(),
+        render_config.as_ref(),
         render_config.render_profile_verbose,
         primary_window
             .single()
@@ -2318,6 +2319,7 @@ fn log_render_performance(
     solari_runtime_params: &mut SolariRuntimeParams,
     perf_counters: &mut ClientPerfCounters,
     schedule_profiler: &mut ClientScheduleProfiler,
+    render_config: &ClientRenderConfig,
     verbose_profile: bool,
     window: Option<ClientWindowProfile>,
 ) {
@@ -2557,6 +2559,25 @@ fn log_render_performance(
         diagnostic_average(diagnostics, "render/bloom/elapsed_gpu"),
         diagnostic_average(diagnostics, "render/anti_aliasing/elapsed_gpu"),
     ]);
+    let cloud_weather_update =
+        diagnostic_average(diagnostics, "render/clouds/weather_update/elapsed_gpu");
+    let cloud_shape_noise =
+        diagnostic_average(diagnostics, "render/clouds/shape_noise/elapsed_gpu");
+    let cloud_raymarch = diagnostic_average(diagnostics, "render/clouds/raymarch/elapsed_gpu");
+    let cloud_temporal = diagnostic_average(diagnostics, "render/clouds/temporal/elapsed_gpu");
+    let cloud_resolve = diagnostic_average(diagnostics, "render/clouds/resolve/elapsed_gpu");
+    let cloud_composite = diagnostic_average(diagnostics, "render/clouds/composite/elapsed_gpu");
+    let cloud_total = sum_optional_ms([
+        cloud_weather_update,
+        cloud_shape_noise,
+        cloud_raymarch,
+        cloud_temporal,
+        cloud_resolve,
+        cloud_composite,
+    ]);
+    let cloud_weather_update_cpu_ns =
+        diagnostic_average(diagnostics, "render/clouds/weather_update/elapsed_cpu")
+            .map(ms_to_ns_from_value);
     let ui_overlay_cpu_ns =
         diagnostic_average(diagnostics, "render/ui/elapsed_cpu").map(ms_to_ns_from_value);
     let present_wait_ns =
@@ -2571,6 +2592,17 @@ fn log_render_performance(
     let ray_proxy_only_count = perf_counters.ray_proxy_only_count;
     let pixel_count = window.map(ClientWindowProfile::physical_pixels);
     let mpixels = pixel_count.map(|pixels| pixels as f64 / 1_000_000.0);
+    let cloud_internal_size = window.map(|window| {
+        render_config
+            .cloud_internal_scale
+            .scale_size(UVec2::new(window.physical_width, window.physical_height))
+    });
+    let cloud_internal_width = cloud_internal_size.map(|size| u64::from(size.x));
+    let cloud_internal_height = cloud_internal_size.map(|size| u64::from(size.y));
+    let cloud_vram_bytes = cloud_internal_size
+        .map(|size| estimate_cloud_vram_bytes(render_config.cloud_quality, size));
+    let cloud_enabled =
+        render_config.clouds_enabled && render_config.cloud_quality.primary_step_count() > 0;
     let configured_budget_pressure =
         diagnostic_average(diagnostics, "render/solari_lighting/solari_budget_pressure");
     let measured_budget_pressure = solari_total
@@ -2726,6 +2758,29 @@ fn log_render_performance(
         "non-Solari performance budget sample"
     );
     game_shared::fun_diag_info!(
+        target: "fun::perf::clouds",
+        cloud_enabled,
+        cloud_quality = render_config.cloud_quality.as_env_value(),
+        cloud_weather_profile_id = render_config.cloud_profile_id.as_str(),
+        cloud_raymarch_gpu_ms = ?cloud_raymarch,
+        cloud_raymarch_gpu_ns = ?ms_to_ns(cloud_raymarch),
+        cloud_temporal_gpu_ms = ?cloud_temporal,
+        cloud_temporal_gpu_ns = ?ms_to_ns(cloud_temporal),
+        cloud_composite_gpu_ms = ?cloud_composite,
+        cloud_composite_gpu_ns = ?ms_to_ns(cloud_composite),
+        cloud_total_gpu_ms = ?cloud_total,
+        cloud_total_gpu_ns = ?ms_to_ns(cloud_total),
+        cloud_weather_update_cpu_ns = ?cloud_weather_update_cpu_ns,
+        cloud_internal_width = ?cloud_internal_width,
+        cloud_internal_height = ?cloud_internal_height,
+        cloud_primary_steps = render_config.cloud_quality.primary_step_count(),
+        cloud_light_steps = render_config.cloud_quality.light_step_count(),
+        cloud_temporal_enabled = render_config.cloud_temporal_enabled,
+        cloud_shadows_enabled = render_config.cloud_shadows_enabled,
+        cloud_vram_bytes = ?cloud_vram_bytes,
+        "cloud performance budget sample"
+    );
+    game_shared::fun_diag_info!(
         "[client perf] fps={} frame_ms={} solari_gpu_ms={} meshlet_visibility_gpu_ms={} dlss_rr_gpu_ms={}",
         format_optional_number(fps),
         format_optional_number(frame_ms),
@@ -2752,6 +2807,33 @@ fn log_render_performance(
         format_optional_number(meshlet_visibility_depth_pyramid_2),
         format_optional_number(standard_raster),
         format_optional_number(post_process),
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] clouds gpu_ms: weather_update_gpu_ms={} shape_noise_gpu_ms={} raymarch_gpu_ms={} temporal_gpu_ms={} resolve_gpu_ms={} composite_gpu_ms={} total_gpu_ms={}",
+        format_optional_number(cloud_weather_update),
+        format_optional_number(cloud_shape_noise),
+        format_optional_number(cloud_raymarch),
+        format_optional_number(cloud_temporal),
+        format_optional_number(cloud_resolve),
+        format_optional_number(cloud_composite),
+        format_optional_number(cloud_total),
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] clouds cpu_ns: weather_update_cpu_ns={}",
+        format_optional_u64(cloud_weather_update_cpu_ns),
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] clouds state: enabled={} profile_id={} quality={} internal_width={} internal_height={} primary_steps={} light_steps={} temporal={} shadows={} history_accept_rate=pending history_reset_count=pending vram_bytes={}",
+        u8::from(cloud_enabled),
+        render_config.cloud_profile_id.as_str(),
+        render_config.cloud_quality.as_env_value(),
+        format_optional_u64(cloud_internal_width),
+        format_optional_u64(cloud_internal_height),
+        render_config.cloud_quality.primary_step_count(),
+        render_config.cloud_quality.light_step_count(),
+        u8::from(render_config.cloud_temporal_enabled),
+        u8::from(render_config.cloud_shadows_enabled),
+        format_optional_u64(cloud_vram_bytes),
     );
     game_shared::fun_diag_info!(
         "[client perf] render paths: meshlet_path_instance_count={} raster_path_instance_count={} ray_proxy_only_count={}",
@@ -3429,6 +3511,28 @@ fn sum_optional_ms(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64>
         .fold(None, |total: Option<f64>, value| {
             Some(total.unwrap_or_default() + value)
         })
+}
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+fn estimate_cloud_vram_bytes(quality: fun_render::FunCloudQuality, internal_size: UVec2) -> u64 {
+    let weather_map_size = match quality {
+        fun_render::FunCloudQuality::Off => 1,
+        fun_render::FunCloudQuality::Cheap => 256,
+        fun_render::FunCloudQuality::Balanced => 512,
+        fun_render::FunCloudQuality::Cinematic => 1024,
+    };
+    let shape_noise_size = match quality {
+        fun_render::FunCloudQuality::Off => 1,
+        fun_render::FunCloudQuality::Cheap => 32,
+        fun_render::FunCloudQuality::Balanced | fun_render::FunCloudQuality::Cinematic => 64,
+    };
+
+    let lowres_texels = u64::from(internal_size.x) * u64::from(internal_size.y);
+    let weather_texels = u64::from(weather_map_size) * u64::from(weather_map_size);
+    let noise_texels =
+        u64::from(shape_noise_size) * u64::from(shape_noise_size) * u64::from(shape_noise_size);
+
+    (lowres_texels * 5 + weather_texels + noise_texels) * 8
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
