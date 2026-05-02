@@ -7,8 +7,9 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["offscreen"]
+default = ["offscreen", "volumetric_clouds"]
 benchmarks = []
+cloud_diagnostics = ["render_diagnostics"]
 diagnostics = ["game_shared/diagnostics"]
 dlss = ["bevy/dlss"]
 force_disable_dlss = ["bevy/force_disable_dlss"]
@@ -20,6 +21,7 @@ render_diagnostics = [
     "bevy/pbr_debug_diagnostics",
     "bevy/meshlet_debug_diagnostics",
 ]
+volumetric_clouds = []
 winit_presentation = []
 
 [dependencies]

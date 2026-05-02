@@ -7,9 +7,15 @@ use bevy::{
         extract_resource::ExtractResource,
         settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
     },
+    solari::prelude::{SolariFeaturePolicy, SolariGeometryMode, SolariHairMode, SolariOpacityMode},
     window::{PresentMode, WindowResolution},
 };
 use tracing::{info, warn};
+
+use crate::{
+    FunCloudDebugOverlay, FunCloudInternalScale, FunCloudQuality, FunCloudSettings,
+    FunWeatherProfileId,
+};
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -61,6 +67,13 @@ pub struct ClientRenderConfig {
     pub solari_enabled: bool,
     pub dlss_rr_enabled: bool,
     pub meshlets_enabled: bool,
+    pub clouds_enabled: bool,
+    pub cloud_quality: FunCloudQuality,
+    pub cloud_internal_scale: FunCloudInternalScale,
+    pub cloud_temporal_enabled: bool,
+    pub cloud_shadows_enabled: bool,
+    pub cloud_profile_id: FunWeatherProfileId,
+    pub cloud_debug_overlay: FunCloudDebugOverlay,
     pub dlss_rr_disabled_by_denoise_mode: bool,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     pub render_profile_verbose: bool,
@@ -73,10 +86,18 @@ pub struct ClientRenderConfig {
 
 impl ClientRenderConfig {
     pub fn from_env() -> Self {
+        let cloud_settings = FunCloudSettings::from_env();
         Self {
             solari_enabled: std::env::var_os("FUN_DISABLE_SOLARI").is_none(),
             dlss_rr_enabled: std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
             meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
+            clouds_enabled: cloud_settings.enabled,
+            cloud_quality: cloud_settings.quality,
+            cloud_internal_scale: cloud_settings.internal_scale,
+            cloud_temporal_enabled: cloud_settings.temporal_enabled,
+            cloud_shadows_enabled: cloud_settings.shadows_enabled,
+            cloud_profile_id: cloud_settings.profile_id,
+            cloud_debug_overlay: cloud_settings.debug_overlay,
             dlss_rr_disabled_by_denoise_mode: false,
             #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             render_profile_verbose: std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some(),
@@ -85,6 +106,18 @@ impl ClientRenderConfig {
             rt_features: FunRenderRtFeatures::from_env(),
             #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             fps_overlay_enabled: std::env::var_os("FUN_DISABLE_FPS_OVERLAY").is_none(),
+        }
+    }
+
+    pub const fn cloud_settings(self) -> FunCloudSettings {
+        FunCloudSettings {
+            enabled: self.clouds_enabled,
+            quality: self.cloud_quality,
+            internal_scale: self.cloud_internal_scale,
+            temporal_enabled: self.cloud_temporal_enabled,
+            shadows_enabled: self.cloud_shadows_enabled,
+            profile_id: self.cloud_profile_id,
+            debug_overlay: self.cloud_debug_overlay,
         }
     }
 }
@@ -105,27 +138,59 @@ pub struct FunRenderRtFeatures {
 
 impl FunRenderRtFeatures {
     pub fn from_env() -> Self {
-        let vendor_emulation = if env_bool("FUN_RENDER_UNKNOWN_VENDOR", false) {
+        Self::from_env_reader(|name| std::env::var(name).ok())
+    }
+
+    pub fn from_env_reader(mut read: impl FnMut(&'static str) -> Option<String>) -> Self {
+        let vendor_emulation = if env_bool_value(
+            "FUN_RENDER_UNKNOWN_VENDOR",
+            read("FUN_RENDER_UNKNOWN_VENDOR").as_deref(),
+            false,
+        ) {
             RtVendorEmulation::Unknown
         } else {
-            RtVendorEmulation::from_env()
+            RtVendorEmulation::from_env_value(read("FUN_RENDER_VENDOR_EMULATION").as_deref())
         };
 
         Self {
-            sample_direct: env_bool("FUN_RT_SAMPLE_DIRECT", true),
-            sample_indirect: env_bool("FUN_RT_SAMPLE_INDIRECT", true),
-            sample_reflections: env_bool("FUN_RT_SAMPLE_REFLECTIONS", true),
-            surface_cache: env_bool("FUN_RT_SURFACE_CACHE", true),
-            megageom: RtMegaGeometryMode::from_env(),
-            opacity_mask: RtOpacityMaskMode::from_env(),
-            hair: RtHairMode::from_env(),
-            async_readback: env_bool("FUN_RT_ASYNC_READBACK", false),
-            validation: env_bool("FUN_RT_VALIDATION", false),
+            sample_direct: env_bool_value(
+                "FUN_RT_SAMPLE_DIRECT",
+                read("FUN_RT_SAMPLE_DIRECT").as_deref(),
+                true,
+            ),
+            sample_indirect: env_bool_value(
+                "FUN_RT_SAMPLE_INDIRECT",
+                read("FUN_RT_SAMPLE_INDIRECT").as_deref(),
+                true,
+            ),
+            sample_reflections: env_bool_value(
+                "FUN_RT_SAMPLE_REFLECTIONS",
+                read("FUN_RT_SAMPLE_REFLECTIONS").as_deref(),
+                true,
+            ),
+            surface_cache: env_bool_value(
+                "FUN_RT_SURFACE_CACHE",
+                read("FUN_RT_SURFACE_CACHE").as_deref(),
+                true,
+            ),
+            megageom: RtMegaGeometryMode::from_env_value(read("FUN_RT_MEGAGEOM").as_deref()),
+            opacity_mask: RtOpacityMaskMode::from_env_value(read("FUN_RT_OPACITY_MASK").as_deref()),
+            hair: RtHairMode::from_env_value(read("FUN_RT_HAIR").as_deref()),
+            async_readback: env_bool_value(
+                "FUN_RT_ASYNC_READBACK",
+                read("FUN_RT_ASYNC_READBACK").as_deref(),
+                false,
+            ),
+            validation: env_bool_value(
+                "FUN_RT_VALIDATION",
+                read("FUN_RT_VALIDATION").as_deref(),
+                false,
+            ),
             vendor_emulation,
         }
     }
 
-    pub fn capability_hash(self) -> u64 {
+    pub fn rt_feature_hash(self) -> u64 {
         let mut hash = FNV_OFFSET;
         hash_bool(&mut hash, self.sample_direct);
         hash_bool(&mut hash, self.sample_indirect);
@@ -140,10 +205,41 @@ impl FunRenderRtFeatures {
         hash
     }
 
+    pub fn capability_hash(self) -> u64 {
+        self.rt_feature_hash()
+    }
+
+    pub const fn solari_feature_policy(self) -> SolariFeaturePolicy {
+        SolariFeaturePolicy {
+            direct_lighting: self.sample_direct,
+            indirect_lighting: self.sample_indirect,
+            reflections: self.sample_reflections,
+            surface_cache: self.surface_cache,
+            async_readback: self.async_readback,
+            validation: self.validation,
+            opacity_mode: match self.opacity_mask {
+                RtOpacityMaskMode::Off => SolariOpacityMode::Off,
+                RtOpacityMaskMode::Baked => SolariOpacityMode::Baked,
+                RtOpacityMaskMode::Native => SolariOpacityMode::Native,
+            },
+            hair_mode: match self.hair {
+                RtHairMode::Off => SolariHairMode::Off,
+                RtHairMode::Cards => SolariHairMode::Cards,
+                RtHairMode::Strands => SolariHairMode::Strands,
+                RtHairMode::NativeLss => SolariHairMode::NativeLinearSweptSphere,
+            },
+            geometry_mode: match self.megageom {
+                RtMegaGeometryMode::Off => SolariGeometryMode::Mesh,
+                RtMegaGeometryMode::Software => SolariGeometryMode::SoftwareCluster,
+                RtMegaGeometryMode::Native => SolariGeometryMode::NativeCluster,
+            },
+        }
+    }
+
     pub fn log_config(self) {
         info!(
             "[fun render] RT gates: hash={:016x} direct={} indirect={} reflections={} surface_cache={} megageom={} opacity_mask={} hair={} async_readback={} validation={} vendor_emulation={}",
-            self.capability_hash(),
+            self.rt_feature_hash(),
             self.sample_direct,
             self.sample_indirect,
             self.sample_reflections,
@@ -157,7 +253,7 @@ impl FunRenderRtFeatures {
         );
         info!(
             target: "fun::render",
-            rt_capability_hash = %format_args!("{:016x}", self.capability_hash()),
+            rt_feature_hash = %format_args!("{:016x}", self.rt_feature_hash()),
             rt_sample_direct = self.sample_direct,
             rt_sample_indirect = self.sample_indirect,
             rt_sample_reflections = self.sample_reflections,
@@ -248,8 +344,8 @@ pub enum RtMegaGeometryMode {
 }
 
 impl RtMegaGeometryMode {
-    fn from_env() -> Self {
-        match env_lower("FUN_RT_MEGAGEOM").as_deref() {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::to_ascii_lowercase).as_deref() {
             None | Some("") | Some("off") => Self::Off,
             Some("software") | Some("portable") => Self::Software,
             Some("native") => Self::Native,
@@ -277,8 +373,8 @@ pub enum RtOpacityMaskMode {
 }
 
 impl RtOpacityMaskMode {
-    fn from_env() -> Self {
-        match env_lower("FUN_RT_OPACITY_MASK").as_deref() {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::to_ascii_lowercase).as_deref() {
             None | Some("") | Some("off") => Self::Off,
             Some("baked") | Some("software") | Some("portable") => Self::Baked,
             Some("native") => Self::Native,
@@ -311,8 +407,8 @@ pub enum RtHairMode {
 }
 
 impl RtHairMode {
-    fn from_env() -> Self {
-        match env_lower("FUN_RT_HAIR").as_deref() {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::to_ascii_lowercase).as_deref() {
             None | Some("") | Some("off") => Self::Off,
             Some("cards") => Self::Cards,
             Some("strands") => Self::Strands,
@@ -344,8 +440,8 @@ pub enum RtVendorEmulation {
 }
 
 impl RtVendorEmulation {
-    fn from_env() -> Self {
-        match env_lower("FUN_RENDER_VENDOR_EMULATION").as_deref() {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::to_ascii_lowercase).as_deref() {
             None | Some("") | Some("auto") | Some("actual") | Some("native") => Self::Auto,
             Some("unknown") => Self::Unknown,
             Some("nvidia") | Some("nv") => Self::Nvidia,
@@ -590,8 +686,8 @@ fn env_u32_opt(name: &str) -> Option<u32> {
     }
 }
 
-fn env_bool(name: &'static str, default_value: bool) -> bool {
-    let Ok(value) = std::env::var(name) else {
+fn env_bool_value(name: &'static str, value: Option<&str>, default_value: bool) -> bool {
+    let Some(value) = value else {
         return default_value;
     };
     match value.to_ascii_lowercase().as_str() {
@@ -601,19 +697,13 @@ fn env_bool(name: &'static str, default_value: bool) -> bool {
             warn!(
                 target: "fun::render",
                 setting = name,
-                value,
+                value = value,
                 default_value,
                 "ignored invalid boolean render setting"
             );
             default_value
         }
     }
-}
-
-fn env_lower(name: &'static str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.to_ascii_lowercase())
 }
 
 fn env_usize(name: &str, default_value: usize) -> usize {
@@ -649,4 +739,95 @@ fn hash_bool(hash: &mut u64, value: bool) {
 fn hash_byte(hash: &mut u64, byte: u8) {
     *hash ^= u64::from(byte);
     *hash = hash.wrapping_mul(FNV_PRIME);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FunRenderRtFeatures, RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
+    };
+    use bevy::solari::prelude::{SolariGeometryMode, SolariHairMode, SolariOpacityMode};
+
+    fn features_from_pairs(pairs: &[(&'static str, &'static str)]) -> FunRenderRtFeatures {
+        FunRenderRtFeatures::from_env_reader(|name| {
+            pairs
+                .iter()
+                .find_map(|(key, value)| (*key == name).then_some((*value).to_owned()))
+        })
+    }
+
+    #[test]
+    fn rt_env_switches_map_to_engine_solari_policy() {
+        let features = features_from_pairs(&[
+            ("FUN_RT_SAMPLE_DIRECT", "0"),
+            ("FUN_RT_SAMPLE_INDIRECT", "1"),
+            ("FUN_RT_SAMPLE_REFLECTIONS", "0"),
+            ("FUN_RT_SURFACE_CACHE", "0"),
+            ("FUN_RT_MEGAGEOM", "software"),
+            ("FUN_RT_OPACITY_MASK", "baked"),
+            ("FUN_RT_HAIR", "strands"),
+            ("FUN_RT_ASYNC_READBACK", "1"),
+            ("FUN_RT_VALIDATION", "1"),
+            ("FUN_RENDER_VENDOR_EMULATION", "nvidia"),
+        ]);
+
+        assert!(!features.sample_direct);
+        assert!(features.sample_indirect);
+        assert!(!features.sample_reflections);
+        assert!(!features.surface_cache);
+        assert_eq!(features.megageom, RtMegaGeometryMode::Software);
+        assert_eq!(features.opacity_mask, RtOpacityMaskMode::Baked);
+        assert_eq!(features.hair, RtHairMode::Strands);
+        assert!(features.async_readback);
+        assert!(features.validation);
+        assert_eq!(features.vendor_emulation, RtVendorEmulation::Nvidia);
+
+        let policy = features.solari_feature_policy();
+        assert!(!policy.direct_lighting);
+        assert!(policy.indirect_lighting);
+        assert!(!policy.reflections);
+        assert!(!policy.surface_cache);
+        assert!(policy.async_readback);
+        assert!(policy.validation);
+        assert_eq!(policy.geometry_mode, SolariGeometryMode::SoftwareCluster);
+        assert_eq!(policy.opacity_mode, SolariOpacityMode::Baked);
+        assert_eq!(policy.hair_mode, SolariHairMode::Strands);
+    }
+
+    #[test]
+    fn native_rt_env_modes_map_to_native_engine_policy() {
+        let policy = features_from_pairs(&[
+            ("FUN_RT_MEGAGEOM", "native"),
+            ("FUN_RT_OPACITY_MASK", "native"),
+            ("FUN_RT_HAIR", "native_lss"),
+            ("FUN_RT_ASYNC_READBACK", "1"),
+        ])
+        .solari_feature_policy();
+
+        assert_eq!(policy.geometry_mode, SolariGeometryMode::NativeCluster);
+        assert_eq!(policy.opacity_mode, SolariOpacityMode::Native);
+        assert_eq!(policy.hair_mode, SolariHairMode::NativeLinearSweptSphere);
+        assert!(policy.async_readback);
+    }
+
+    #[test]
+    fn unknown_vendor_flag_overrides_vendor_emulation_value() {
+        let features = features_from_pairs(&[
+            ("FUN_RENDER_UNKNOWN_VENDOR", "1"),
+            ("FUN_RENDER_VENDOR_EMULATION", "amd"),
+        ]);
+
+        assert_eq!(features.vendor_emulation, RtVendorEmulation::Unknown);
+    }
+
+    #[test]
+    fn invalid_boolean_rt_env_switch_uses_default() {
+        let features = features_from_pairs(&[
+            ("FUN_RT_SAMPLE_DIRECT", "definitely"),
+            ("FUN_RT_ASYNC_READBACK", "definitely"),
+        ]);
+
+        assert!(features.sample_direct);
+        assert!(!features.async_readback);
+    }
 }

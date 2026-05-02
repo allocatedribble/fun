@@ -4,6 +4,7 @@ param(
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
+    [switch]$DisableClouds,
     [switch]$DisableFpsOverlay,
     [string]$RtSampleDirect = "",
     [string]$RtSampleIndirect = "",
@@ -34,6 +35,12 @@ param(
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
     [int]$SolariBlasCompactionVertices = 0,
+    [string]$CloudQuality = "balanced",
+    [string]$CloudInternalScale = "0.5",
+    [string]$CloudTemporal = "1",
+    [string]$CloudShadows = "0",
+    [string]$CloudProfile = "scattered",
+    [string]$CloudDebugOverlay = "",
     [string]$RenderGeometryPolicy = "hybrid",
     [int]$MeshletMinTriangles = 512,
     [int]$WindowWidth = 0,
@@ -134,13 +141,16 @@ function Add-KeyValueMetrics {
 }
 
 function ConvertTo-KeyValueObject {
-    param([string]$Payload)
+    param(
+        [string]$Payload,
+        [string]$HashKey = "hash"
+    )
 
     $result = [ordered]@{}
     foreach ($match in [regex]::Matches($Payload, "([A-Za-z0-9_\/]+)=([^\s,]+)")) {
         $key = ConvertTo-MetricName $match.Groups[1].Value
         if ($key -eq "hash") {
-            $key = "capability_hash"
+            $key = $HashKey
         }
         $result[$key] = $match.Groups[2].Value
     }
@@ -153,7 +163,7 @@ function Parse-RenderCapabilitiesLog {
     foreach ($line in $Lines) {
         $capabilities = [regex]::Match($line, "\[bevy render\] capabilities: (?<payload>.*)$")
         if ($capabilities.Success) {
-            $result = ConvertTo-KeyValueObject -Payload $capabilities.Groups["payload"].Value
+            $result = ConvertTo-KeyValueObject -Payload $capabilities.Groups["payload"].Value -HashKey "backend_capability_hash"
             $result["status"] = "found"
             return $result
         }
@@ -161,7 +171,25 @@ function Parse-RenderCapabilitiesLog {
 
     return [ordered]@{
         status = "not_found"
-        capability_hash = $null
+        backend_capability_hash = $null
+    }
+}
+
+function Parse-RenderFeatureGatesLog {
+    param([string[]]$Lines)
+
+    foreach ($line in $Lines) {
+        $featureGates = [regex]::Match($line, "\[fun render\] RT gates: (?<payload>.*)$")
+        if ($featureGates.Success) {
+            $result = ConvertTo-KeyValueObject -Payload $featureGates.Groups["payload"].Value -HashKey "rt_feature_hash"
+            $result["status"] = "found"
+            return $result
+        }
+    }
+
+    return [ordered]@{
+        status = "not_found"
+        rt_feature_hash = $null
     }
 }
 
@@ -214,6 +242,24 @@ function Parse-ClientPerfLog {
         $nonSolariGpu = [regex]::Match($line, "\[client perf\] non_solari gpu_ms: (?<payload>.*)$")
         if ($nonSolariGpu.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $nonSolariGpu.Groups["payload"].Value -Prefix "" -Milliseconds
+            continue
+        }
+
+        $cloudGpu = [regex]::Match($line, "\[client perf\] clouds gpu_ms: (?<payload>.*)$")
+        if ($cloudGpu.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $cloudGpu.Groups["payload"].Value -Prefix "cloud_" -Milliseconds
+            continue
+        }
+
+        $cloudCpu = [regex]::Match($line, "\[client perf\] clouds cpu_ns: (?<payload>.*)$")
+        if ($cloudCpu.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $cloudCpu.Groups["payload"].Value -Prefix "cloud_"
+            continue
+        }
+
+        $cloudState = [regex]::Match($line, "\[client perf\] clouds state: (?<payload>.*)$")
+        if ($cloudState.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $cloudState.Groups["payload"].Value -Prefix "cloud_"
             continue
         }
 
@@ -466,7 +512,9 @@ function Write-MarkdownReport {
     $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
     $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
-    $lines.Add("- RT capability hash: $($Summary.render_capabilities.capability_hash)") | Out-Null
+    $lines.Add("- Clouds: disabled=$($Summary.config.disable_clouds) profile=$($Summary.config.cloud_profile) quality=$($Summary.config.cloud_quality) internal_scale=$($Summary.config.cloud_internal_scale) temporal=$($Summary.config.cloud_temporal) shadows=$($Summary.config.cloud_shadows)") | Out-Null
+    $lines.Add("- RT feature hash: $($Summary.rt_feature_gates.rt_feature_hash)") | Out-Null
+    $lines.Add("- Backend capability hash: $($Summary.render_capabilities.backend_capability_hash)") | Out-Null
     $lines.Add("- RT gates: direct=$($Summary.config.rt_sample_direct) indirect=$($Summary.config.rt_sample_indirect) reflections=$($Summary.config.rt_sample_reflections) surface_cache=$($Summary.config.rt_surface_cache) megageom=$($Summary.config.rt_megageom) opacity_mask=$($Summary.config.rt_opacity_mask) hair=$($Summary.config.rt_hair) async_readback=$($Summary.config.rt_async_readback) validation=$($Summary.config.rt_validation)") | Out-Null
     $lines.Add("- Sample count: $($Summary.samples.count)") | Out-Null
     $lines.Add("") | Out-Null
@@ -477,6 +525,18 @@ function Write-MarkdownReport {
         "frame_ms",
         "solari_gpu_ns",
         "meshlet_visibility_gpu_ns",
+        "cloud_total_gpu_ns",
+        "cloud_raymarch_gpu_ns",
+        "cloud_temporal_gpu_ns",
+        "cloud_composite_gpu_ns",
+        "cloud_weather_update_cpu_ns",
+        "cloud_internal_width",
+        "cloud_internal_height",
+        "cloud_primary_steps",
+        "cloud_light_steps",
+        "cloud_history_accept_rate",
+        "cloud_history_reset_count",
+        "cloud_vram_bytes",
         "meshlet_path_instance_count",
         "raster_path_instance_count",
         "ray_proxy_only_count",
@@ -562,6 +622,7 @@ function Write-MarkdownReport {
 
     $budgetLedger = [ordered]@{
         "frame_ns" = 6944444
+        "cloud_total_gpu_ns" = 1200000
         "meshlet_visibility_gpu_ns" = 1200000
         "standard_raster_gpu_ns" = 600000
         "physics_fixed_update_cpu_ns" = 350000
@@ -709,6 +770,7 @@ try {
         if ($DisableDlssRr) { $runStackArgs += "-DisableDlssRr" }
         if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
         if ($DisableMeshlets) { $runStackArgs += "-DisableMeshlets" }
+        if ($DisableClouds) { $runStackArgs += "-DisableClouds" }
         if ($DisableFpsOverlay) { $runStackArgs += "-DisableFpsOverlay" }
         if (-not [string]::IsNullOrWhiteSpace($RtSampleDirect)) { $runStackArgs += @("-RtSampleDirect", $RtSampleDirect) }
         if (-not [string]::IsNullOrWhiteSpace($RtSampleIndirect)) { $runStackArgs += @("-RtSampleIndirect", $RtSampleIndirect) }
@@ -721,6 +783,12 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($RtValidation)) { $runStackArgs += @("-RtValidation", $RtValidation) }
         if ($RenderUnknownVendor) { $runStackArgs += "-RenderUnknownVendor" }
         if (-not [string]::IsNullOrWhiteSpace($RenderVendorEmulation)) { $runStackArgs += @("-RenderVendorEmulation", $RenderVendorEmulation) }
+        if (-not [string]::IsNullOrWhiteSpace($CloudQuality)) { $runStackArgs += @("-CloudQuality", $CloudQuality) }
+        if (-not [string]::IsNullOrWhiteSpace($CloudInternalScale)) { $runStackArgs += @("-CloudInternalScale", $CloudInternalScale) }
+        if (-not [string]::IsNullOrWhiteSpace($CloudTemporal)) { $runStackArgs += @("-CloudTemporal", $CloudTemporal) }
+        if (-not [string]::IsNullOrWhiteSpace($CloudShadows)) { $runStackArgs += @("-CloudShadows", $CloudShadows) }
+        if (-not [string]::IsNullOrWhiteSpace($CloudProfile)) { $runStackArgs += @("-CloudProfile", $CloudProfile) }
+        if (-not [string]::IsNullOrWhiteSpace($CloudDebugOverlay)) { $runStackArgs += @("-CloudDebugOverlay", $CloudDebugOverlay) }
         $runStackArgs += "-BenchmarkLogMinimal"
         if ($TraceDiagnostics) { $runStackArgs += "-TraceDiagnostics" }
         if ($FrameTimeDiagnostics) {
@@ -809,6 +877,7 @@ try {
     }
 
     $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
+    $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
     $gitCommit = (Get-RepoGitLines -RepoRoot $repoRoot -Arguments @("rev-parse", "HEAD") | Select-Object -First 1)
@@ -834,6 +903,7 @@ try {
             disable_dlss_rr = [bool]$DisableDlssRr
             disable_solari = [bool]$DisableSolari
             disable_meshlets = [bool]$DisableMeshlets
+            disable_clouds = [bool]$DisableClouds
             disable_fps_overlay = [bool]$DisableFpsOverlay
             rt_sample_direct = if ([string]::IsNullOrWhiteSpace($RtSampleDirect)) { "default" } else { $RtSampleDirect }
             rt_sample_indirect = if ([string]::IsNullOrWhiteSpace($RtSampleIndirect)) { "default" } else { $RtSampleIndirect }
@@ -858,6 +928,12 @@ try {
             solari_denoise_mode = if ([string]::IsNullOrWhiteSpace($SolariDenoiseMode)) { "balanced-fast" } else { $SolariDenoiseMode }
             solari_internal_scale = if ([string]::IsNullOrWhiteSpace($SolariInternalScale)) { "1.0" } else { $SolariInternalScale }
             solari_blas_compaction_vertices = $SolariBlasCompactionVertices
+            cloud_quality = if ([string]::IsNullOrWhiteSpace($CloudQuality)) { "balanced" } else { $CloudQuality }
+            cloud_internal_scale = if ([string]::IsNullOrWhiteSpace($CloudInternalScale)) { "0.5" } else { $CloudInternalScale }
+            cloud_temporal = if ([string]::IsNullOrWhiteSpace($CloudTemporal)) { "1" } else { $CloudTemporal }
+            cloud_shadows = if ([string]::IsNullOrWhiteSpace($CloudShadows)) { "0" } else { $CloudShadows }
+            cloud_profile = if ([string]::IsNullOrWhiteSpace($CloudProfile)) { "scattered" } else { $CloudProfile }
+            cloud_debug_overlay = if ([string]::IsNullOrWhiteSpace($CloudDebugOverlay)) { "none" } else { $CloudDebugOverlay }
         }
         samples = [ordered]@{
             count = $samples.Count
@@ -868,6 +944,7 @@ try {
         metrics = $stats
         comparison = $comparison
         render_capabilities = $renderCapabilities
+        rt_feature_gates = $rtFeatureGates
     }
 
     $jsonPath = Join-Path $outputRoot "summary.json"

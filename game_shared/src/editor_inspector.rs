@@ -19,7 +19,10 @@ use std::{
     env, fmt,
     io::{self, Read, Write},
     net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -35,7 +38,13 @@ const EDITOR_SERVER_BIND_ENABLE_ENV: &str = "FUN_EDITOR_ENABLE_SERVER_INSPECTOR_
 const EDITOR_CLIENT_BIND_ENABLE_ENV: &str = "FUN_EDITOR_ENABLE_CLIENT_INSPECTOR_BIND";
 const EDITOR_SERVER_BIND_ADDR_ENV: &str = "FUN_EDITOR_SERVER_INSPECTOR_ADDR";
 const EDITOR_CLIENT_BIND_ADDR_ENV: &str = "FUN_EDITOR_CLIENT_INSPECTOR_ADDR";
+const EDITOR_MAX_CONNECTIONS_ENV: &str = "FUN_EDITOR_INSPECTOR_MAX_CONNECTIONS";
+const EDITOR_IDLE_TIMEOUT_MS_ENV: &str = "FUN_EDITOR_INSPECTOR_IDLE_TIMEOUT_MS";
 const EDITOR_MUTATION_RESULT_TIMEOUT: Duration = Duration::from_secs(2);
+const EDITOR_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+const DEFAULT_EDITOR_AUTHENTICATED_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_MAX_EDITOR_INSPECTOR_CONNECTIONS: usize = 8;
+const HARD_MAX_EDITOR_INSPECTOR_CONNECTIONS: usize = 64;
 const MAX_EDITOR_ENVELOPE_BYTES: usize = 64 * 1024;
 const MAX_PENDING_EDITOR_MUTATIONS: usize = 128;
 const MAX_PENDING_MUTATION_RESULTS: usize = 128;
@@ -86,6 +95,7 @@ pub enum EditorInspectorServiceError {
     InvalidTokenProof,
     InvalidNonceResponse,
     InvalidTarget,
+    ConnectionLimitExceeded,
     Protocol(String),
     Io(String),
     RemoteBindDisabled,
@@ -101,6 +111,9 @@ impl fmt::Display for EditorInspectorServiceError {
             Self::InvalidTokenProof => f.write_str("editor auth token proof was invalid"),
             Self::InvalidNonceResponse => f.write_str("editor auth nonce response was invalid"),
             Self::InvalidTarget => f.write_str("editor handshake target did not match runtime"),
+            Self::ConnectionLimitExceeded => {
+                f.write_str("editor inspector connection limit exceeded")
+            }
             Self::Protocol(error) => write!(f, "editor protocol error: {error}"),
             Self::Io(error) => write!(f, "editor inspector IO error: {error}"),
             Self::RemoteBindDisabled => {
@@ -444,10 +457,12 @@ pub fn spawn_editor_inspector_service(
     }
 
     let auth = RuntimeEditorAuth::from_env()?;
+    let connection_limiter = EditorConnectionLimiter::from_env();
     let mut callback_started = false;
     if let Some(control_addr) = control_addr {
         let callback_config = config.clone();
         let callback_auth = auth.clone();
+        let callback_limiter = connection_limiter.clone();
         thread::Builder::new()
             .name(format!(
                 "fun-editor-{:?}-callback",
@@ -455,8 +470,12 @@ pub fn spawn_editor_inspector_service(
             ))
             .spawn(move || {
                 if let Ok(stream) = TcpStream::connect(control_addr) {
-                    let _ =
-                        handle_runtime_editor_connection(stream, callback_config, callback_auth);
+                    let _ = handle_limited_runtime_editor_connection(
+                        stream,
+                        callback_config,
+                        callback_auth,
+                        callback_limiter,
+                    );
                 }
             })
             .map_err(io_error)?;
@@ -470,6 +489,7 @@ pub fn spawn_editor_inspector_service(
         let local_addr = listener.local_addr().map_err(io_error)?.to_string();
         let listener_config = config.clone();
         let listener_auth = auth;
+        let listener_limiter = connection_limiter;
         thread::Builder::new()
             .name(format!(
                 "fun-editor-{:?}-inspector",
@@ -477,12 +497,21 @@ pub fn spawn_editor_inspector_service(
             ))
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
+                    let Some(connection_guard) = listener_limiter.try_acquire() else {
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        continue;
+                    };
                     let config = listener_config.clone();
                     let auth = listener_auth.clone();
                     let _ = thread::Builder::new()
                         .name("fun-editor-inspector-connection".to_owned())
                         .spawn(move || {
-                            let _ = handle_runtime_editor_connection(stream, config, auth);
+                            let _ = handle_runtime_editor_connection(
+                                stream,
+                                config,
+                                auth,
+                                connection_guard,
+                            );
                         });
                 }
             })
@@ -544,16 +573,83 @@ fn hmac_digest(
     context.sign().as_ref().to_vec()
 }
 
+#[derive(Debug, Clone)]
+struct EditorConnectionLimiter {
+    active: Arc<AtomicUsize>,
+    max_connections: usize,
+}
+
+impl EditorConnectionLimiter {
+    fn from_env() -> Self {
+        let max_connections = env::var(EDITOR_MAX_CONNECTIONS_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.clamp(1, HARD_MAX_EDITOR_INSPECTOR_CONNECTIONS))
+            .unwrap_or(DEFAULT_MAX_EDITOR_INSPECTOR_CONNECTIONS);
+        Self {
+            active: Arc::new(AtomicUsize::new(0)),
+            max_connections,
+        }
+    }
+
+    fn try_acquire(&self) -> Option<EditorConnectionGuard> {
+        let mut observed = self.active.load(Ordering::Acquire);
+        loop {
+            if observed >= self.max_connections {
+                return None;
+            }
+            match self.active.compare_exchange_weak(
+                observed,
+                observed + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(EditorConnectionGuard {
+                        active: Arc::clone(&self.active),
+                    });
+                }
+                Err(actual) => observed = actual,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EditorConnectionGuard {
+    active: Arc<AtomicUsize>,
+}
+
+impl Drop for EditorConnectionGuard {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn handle_limited_runtime_editor_connection(
+    stream: TcpStream,
+    config: EditorInspectorServiceConfig,
+    auth: RuntimeEditorAuth,
+    limiter: EditorConnectionLimiter,
+) -> Result<(), EditorInspectorServiceError> {
+    let Some(connection_guard) = limiter.try_acquire() else {
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+        return Err(EditorInspectorServiceError::ConnectionLimitExceeded);
+    };
+    handle_runtime_editor_connection(stream, config, auth, connection_guard)
+}
+
 fn handle_runtime_editor_connection(
     mut stream: TcpStream,
     config: EditorInspectorServiceConfig,
     auth: RuntimeEditorAuth,
+    _connection_guard: EditorConnectionGuard,
 ) -> Result<(), EditorInspectorServiceError> {
     stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
+        .set_read_timeout(Some(EDITOR_HANDSHAKE_TIMEOUT))
         .map_err(io_error)?;
     stream
-        .set_write_timeout(Some(Duration::from_secs(8)))
+        .set_write_timeout(Some(EDITOR_HANDSHAKE_TIMEOUT))
         .map_err(io_error)?;
 
     let hello_packet = read_editor_protocol_packet(&mut stream)?;
@@ -670,7 +766,9 @@ fn serve_authenticated_editor_connection(
     config: &EditorInspectorServiceConfig,
     granted_capabilities: Vec<EditorCapability>,
 ) -> Result<(), EditorInspectorServiceError> {
-    stream.set_read_timeout(None).map_err(io_error)?;
+    stream
+        .set_read_timeout(Some(authenticated_idle_timeout_from_env()))
+        .map_err(io_error)?;
     loop {
         let packet = match read_editor_protocol_packet(stream) {
             Ok(packet) => packet,
@@ -686,6 +784,15 @@ fn serve_authenticated_editor_connection(
         };
         handle_editor_command_packet(stream, config, packet)?;
     }
+}
+
+fn authenticated_idle_timeout_from_env() -> Duration {
+    env::var(EDITOR_IDLE_TIMEOUT_MS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .filter(|duration| !duration.is_zero())
+        .unwrap_or(DEFAULT_EDITOR_AUTHENTICATED_IDLE_TIMEOUT)
 }
 
 fn handle_editor_command_packet(
@@ -1418,6 +1525,20 @@ mod tests {
         let queued = state.drain_runtime_controls(MAX_PENDING_RUNTIME_CONTROLS + 1);
 
         assert_eq!(queued.len(), MAX_PENDING_RUNTIME_CONTROLS);
+    }
+
+    #[test]
+    fn inspector_connection_limiter_rejects_over_capacity() {
+        let limiter = EditorConnectionLimiter {
+            active: Arc::new(AtomicUsize::new(0)),
+            max_connections: 1,
+        };
+
+        let first = limiter.try_acquire();
+        assert!(first.is_some());
+        assert!(limiter.try_acquire().is_none());
+        drop(first);
+        assert!(limiter.try_acquire().is_some());
     }
 
     #[test]

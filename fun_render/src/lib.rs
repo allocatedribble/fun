@@ -6,6 +6,7 @@ pub mod lighting;
 #[cfg(feature = "offscreen")]
 pub mod offscreen;
 mod signature;
+pub mod sky;
 pub mod solari;
 #[cfg(feature = "winit_presentation")]
 pub mod winit;
@@ -30,6 +31,13 @@ pub use core::{
 #[cfg(feature = "offscreen")]
 pub use offscreen::{EditorOffscreenRenderTarget, FunRenderOffscreenPresentationPlugin};
 pub use signature::{RenderPathSignature, render_path_signature_for_options};
+pub use sky::{
+    FunCloudDebugOverlay, FunCloudHistoryResetEvent, FunCloudHistoryResetReason,
+    FunCloudInternalScale, FunCloudQuality, FunCloudSettings, FunCloudTypeMix, FunSkyPlugin,
+    FunWeatherPattern, FunWeatherPatternPhase, FunWeatherProfile, FunWeatherProfileId,
+    FunWeatherState, FunWeatherTransition, FunWeatherTransitionCurve, FunWeatherValidationError,
+    request_cloud_history_reset,
+};
 pub use solari::benchmark_parse_solari_denoise_mode;
 pub use solari::{
     parse_solari_denoise_mode, solari_runtime_params_from_env, solari_settings_from_env,

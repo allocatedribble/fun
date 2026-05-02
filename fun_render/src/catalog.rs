@@ -43,6 +43,11 @@ impl WorldRenderCatalog {
     pub fn len(&self) -> usize {
         self.assets.len()
     }
+
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    pub fn is_empty(&self) -> bool {
+        self.assets.is_empty()
+    }
 }
 
 pub fn prewarm_world_render_catalog(

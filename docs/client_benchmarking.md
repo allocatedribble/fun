@@ -103,6 +103,12 @@ Performance claims must include `frame_ns.mean/p95`,
 `meshlet_visibility_gpu_ns.mean/p95`, `meshlet_extract_cpu_ns`,
 `meshlet_prepare_cpu_ns`, `world_stream_apply_cpu_ns`,
 `physics_fixed_update_cpu_ns`, `post_process_gpu_ns`, `present_wait_ns`,
+`cloud_raymarch_gpu_ns.mean/p95`, `cloud_temporal_gpu_ns.mean/p95`,
+`cloud_composite_gpu_ns.mean/p95`, `cloud_total_gpu_ns.mean/p95`,
+`cloud_weather_update_cpu_ns`, `cloud_internal_width`,
+`cloud_internal_height`, `cloud_primary_steps`, `cloud_light_steps`,
+`cloud_history_accept_rate`, `cloud_history_reset_count`,
+`cloud_weather_profile_id`, `cloud_quality`, `cloud_vram_bytes`,
 `meshlet_path_instance_count`, `raster_path_instance_count`,
 `ray_proxy_only_count`, `standard_raster_gpu_ns`, transient render-resource
 request/create/reuse/alias counts, and render scheduler pressure when
@@ -168,13 +174,14 @@ For the RT/Solari capability matrix:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_rt_matrix.ps1 -RenderBackend vulkan -PresentMode immediate
 ```
 
-That matrix records the backend capability hash from the startup capability
-line into every `summary.json`, along with the RT feature gates used for the
-run. Its lanes cover baseline Solari, direct-only, GI-only, direct+GI, DLSS RR
-diagnostic, half-resolution GI reservoirs, async readback on/off, and BLAS
-compaction budget variants. Some gates are Tier-0 policy metadata until the
-matching Solari passes are wired; they are still captured so later tiers cannot
-land without before/after numbers under the same names.
+That matrix records both `rt_feature_gates.rt_feature_hash` from the requested
+Fun RT gates and `render_capabilities.backend_capability_hash` from the Bevy
+startup capability line into every `summary.json`. Its lanes cover baseline
+Solari, direct-only, GI-only, direct+GI, DLSS RR diagnostic, half-resolution GI
+reservoirs, async readback on/off, and BLAS compaction budget variants. Some
+gates are still policy metadata until the matching Solari pass is wired; they
+remain captured so later tiers cannot land without before/after numbers under
+the same names.
 
 ## Default Client Matrix
 
@@ -193,6 +200,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1
 When a change touches one of these systems, also run the matching isolation case:
 
 - Solari: add `-DisableSolari`.
+- Clouds: compare `-DisableClouds` against default scattered, then run
+  `-CloudProfile overcast` and `-CloudProfile storm_front` for dense and
+  high-motion weather stress.
+- Cloud quality: compare `-CloudQuality cheap` and `-CloudQuality balanced`.
 - Meshlets: add `-DisableMeshlets`.
 - DLSS Ray Reconstruction: run once with `-SolariDenoiseMode rr`, but record
   the known black square/rectangle and missing-shadow artifact if it appears.
@@ -235,6 +246,8 @@ Client benchmark:
   - meshlet_visibility_gpu_ns mean: ... -> ... (...%)
   - transient_texture_creates/reuses/aliases mean: ... -> ... (...%)
   - render_scheduler_pressure mean: ... -> ... (...%)
+  - cloud_total_gpu_ns mean: ... -> ... (...%)
+  - cloud_raymarch_gpu_ns mean: ... -> ... (...%)
   - schedule_physics_movement_ns mean: ... -> ... (...%)
   - schedule_world_stream_apply_ns mean: ... -> ... (...%)
   - relevant_pass_ns mean: ... -> ... (...%)

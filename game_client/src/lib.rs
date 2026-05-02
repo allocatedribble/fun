@@ -1358,7 +1358,7 @@ fn send_client_hello(
         let hello = ClientPacket::Hello {
             hello: ClientHello {
                 protocol_version: 1,
-                session_token: Vec::new(),
+                session_token: client_session_token_from_env(),
                 feature_bits: 0,
                 oldest_input_sequence: PacketSequence(0),
             },
@@ -1386,6 +1386,12 @@ fn send_client_hello(
             }
         }
     }
+}
+
+fn client_session_token_from_env() -> Vec<u8> {
+    std::env::var("FUN_GAME_CLIENT_SESSION_TOKEN")
+        .map(String::into_bytes)
+        .unwrap_or_default()
 }
 
 fn receive_server_control(

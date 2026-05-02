@@ -2,6 +2,8 @@
 use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
+    env,
+    path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -25,6 +27,10 @@ use tracing::{error, info};
 
 const GAME_PROTOCOL_VERSION: u32 = 1;
 const MAX_SESSION_TOKEN_BYTES: usize = 1024;
+const GAME_SERVER_TLS_MODE_ENV: &str = "FUN_GAME_SERVER_TLS_MODE";
+const GAME_SERVER_TLS_MODE_DEVELOPMENT: &str = "development";
+const GAME_SERVER_TLS_MODE_PRODUCTION: &str = "production";
+const GAME_SERVER_DEV_TICKET_ENV: &str = "FUN_GAME_SERVER_DEV_SESSION_TOKEN";
 
 fn main() {
     let mut app = App::new();
@@ -40,6 +46,7 @@ fn main() {
         QuinnetServerPlugin::default(),
         ThunderPlugin::default(),
     ))
+    .insert_resource(GameServerSecurityConfig::from_env())
     .init_resource::<ServerWorldStream>()
     .init_resource::<ServerEditorSchema>()
     .init_resource::<ServerEditorInspectorState>()
@@ -87,18 +94,13 @@ fn main() {
     app.run();
 }
 
-fn start_endpoint(mut server: ResMut<QuinnetServer>) {
+fn start_endpoint(mut server: ResMut<QuinnetServer>, security: Res<GameServerSecurityConfig>) {
     let limits = ChannelLimits::default();
     server
         .start_endpoint(ServerEndpointConfiguration {
             addr_config: EndpointAddrConfiguration::from_string(GAME_SERVER_BIND_ADDR)
                 .expect("game server bind address should be valid"),
-            cert_mode: CertificateRetrievalMode::LoadFromFileOrGenerateSelfSigned {
-                cert_file: GAME_SERVER_CERT_FILE.to_owned(),
-                key_file: GAME_SERVER_KEY_FILE.to_owned(),
-                save_on_disk: true,
-                server_hostname: "127.0.0.1".to_owned(),
-            },
+            cert_mode: security.certificate_mode(),
             defaultables: ServerEndpointConfigurationDefaultables {
                 send_channels_cfg: ServerChannel::channels_configuration(limits),
                 ..Default::default()
@@ -109,6 +111,76 @@ fn start_endpoint(mut server: ResMut<QuinnetServer>) {
     info!(
         "Starting {GAME_TITLE} game server at {DEFAULT_TICK_RATE_HZ:.0} Hz on {GAME_SERVER_BIND_ADDR}"
     );
+}
+
+#[derive(Debug, Clone, Resource)]
+struct GameServerSecurityConfig {
+    tls_mode: GameServerTlsMode,
+    ticket_verifier: ClientTicketVerifier,
+}
+
+impl GameServerSecurityConfig {
+    fn from_env() -> Self {
+        let tls_mode = GameServerTlsMode::from_env();
+        assert_production_tls_material(tls_mode);
+        Self {
+            tls_mode,
+            ticket_verifier: ClientTicketVerifier::from_env(tls_mode),
+        }
+    }
+
+    fn certificate_mode(&self) -> CertificateRetrievalMode {
+        certificate_mode_for_tls(self.tls_mode)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GameServerTlsMode {
+    DevelopmentSelfSigned,
+    ProductionConfigured,
+}
+
+impl GameServerTlsMode {
+    fn from_env() -> Self {
+        match env::var(GAME_SERVER_TLS_MODE_ENV) {
+            Ok(value) if value.eq_ignore_ascii_case(GAME_SERVER_TLS_MODE_DEVELOPMENT) => {
+                Self::DevelopmentSelfSigned
+            }
+            Ok(value) if value.eq_ignore_ascii_case(GAME_SERVER_TLS_MODE_PRODUCTION) => {
+                Self::ProductionConfigured
+            }
+            Ok(value) => panic!(
+                "{GAME_SERVER_TLS_MODE_ENV} must be `{GAME_SERVER_TLS_MODE_DEVELOPMENT}` or `{GAME_SERVER_TLS_MODE_PRODUCTION}`, got `{value}`"
+            ),
+            Err(_) => Self::ProductionConfigured,
+        }
+    }
+}
+
+fn assert_production_tls_material(tls_mode: GameServerTlsMode) {
+    if tls_mode == GameServerTlsMode::ProductionConfigured {
+        assert!(
+            Path::new(GAME_SERVER_CERT_FILE).is_file() && Path::new(GAME_SERVER_KEY_FILE).is_file(),
+            "{GAME_SERVER_TLS_MODE_ENV}={GAME_SERVER_TLS_MODE_PRODUCTION} requires configured cert/key files at `{GAME_SERVER_CERT_FILE}` and `{GAME_SERVER_KEY_FILE}`"
+        );
+    }
+}
+
+fn certificate_mode_for_tls(tls_mode: GameServerTlsMode) -> CertificateRetrievalMode {
+    match tls_mode {
+        GameServerTlsMode::DevelopmentSelfSigned => {
+            CertificateRetrievalMode::LoadFromFileOrGenerateSelfSigned {
+                cert_file: GAME_SERVER_CERT_FILE.to_owned(),
+                key_file: GAME_SERVER_KEY_FILE.to_owned(),
+                save_on_disk: true,
+                server_hostname: "127.0.0.1".to_owned(),
+            }
+        }
+        GameServerTlsMode::ProductionConfigured => CertificateRetrievalMode::LoadFromFile {
+            cert_file: GAME_SERVER_CERT_FILE.to_owned(),
+            key_file: GAME_SERVER_KEY_FILE.to_owned(),
+        },
+    }
 }
 
 #[derive(Resource)]
@@ -363,6 +435,21 @@ struct ServerWorldStream {
     chunks: Vec<WorldStreamChunk>,
 }
 
+impl ServerWorldStream {
+    fn clear_with_new_revision(&mut self) -> bool {
+        if self.entity_ids.is_empty() && self.chunks.is_empty() {
+            return false;
+        }
+        let next_revision = WorldRevision(self.revision.0.saturating_add(1).max(1));
+        self.revision = next_revision;
+        self.editor_revision = next_revision;
+        self.manifest_signature = game_scene::world_stream_manifest_signature(&[]);
+        self.entity_ids.clear();
+        self.chunks.clear();
+        true
+    }
+}
+
 #[derive(Debug, Default, Resource)]
 struct ConnectedClients {
     ids: HashSet<u64>,
@@ -408,6 +495,8 @@ enum ClientHelloRejection {
     WrongProtocolVersion,
     MissingSessionToken,
     SessionTokenTooLarge,
+    TicketVerificationUnavailable,
+    DevelopmentTicketMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,7 +511,37 @@ enum WorldReadyRejection {
     WrongManifestSignature,
 }
 
-fn validate_client_hello(hello: &ClientHello) -> Result<(), ClientHelloRejection> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClientTicketVerifier {
+    FailClosed,
+    DevelopmentToken { token: Vec<u8> },
+}
+
+impl ClientTicketVerifier {
+    fn from_env(tls_mode: GameServerTlsMode) -> Self {
+        match (tls_mode, env::var(GAME_SERVER_DEV_TICKET_ENV)) {
+            (GameServerTlsMode::DevelopmentSelfSigned, Ok(token)) if !token.is_empty() => {
+                Self::DevelopmentToken {
+                    token: token.into_bytes(),
+                }
+            }
+            _ => Self::FailClosed,
+        }
+    }
+
+    fn verify(&self, token: &[u8]) -> Result<(), ClientHelloRejection> {
+        match self {
+            Self::FailClosed => Err(ClientHelloRejection::TicketVerificationUnavailable),
+            Self::DevelopmentToken { token: expected } if token == expected.as_slice() => Ok(()),
+            Self::DevelopmentToken { .. } => Err(ClientHelloRejection::DevelopmentTicketMismatch),
+        }
+    }
+}
+
+fn validate_client_hello(
+    hello: &ClientHello,
+    ticket_verifier: &ClientTicketVerifier,
+) -> Result<(), ClientHelloRejection> {
     if hello.protocol_version != GAME_PROTOCOL_VERSION {
         return Err(ClientHelloRejection::WrongProtocolVersion);
     }
@@ -432,6 +551,7 @@ fn validate_client_hello(hello: &ClientHello) -> Result<(), ClientHelloRejection
     if hello.session_token.len() > MAX_SESSION_TOKEN_BYTES {
         return Err(ClientHelloRejection::SessionTokenTooLarge);
     }
+    ticket_verifier.verify(&hello.session_token)?;
     Ok(())
 }
 
@@ -709,6 +829,7 @@ fn rebuild_world_stream(
 ) {
     let entity_count = query.iter().count();
     if entity_count == 0 {
+        clear_world_stream_if_empty(&mut manifest, &mut pending, _log_config.stream_verbose());
         return;
     }
 
@@ -749,6 +870,7 @@ fn rebuild_world_stream(
 
     specs.sort_by_key(|spec| spec.entity);
     if specs.is_empty() {
+        clear_world_stream_if_empty(&mut manifest, &mut pending, _log_config.stream_verbose());
         return;
     }
     let manifest_signature = game_scene::world_stream_manifest_signature(&specs);
@@ -838,6 +960,23 @@ fn rebuild_world_stream(
     });
 }
 
+fn clear_world_stream_if_empty(
+    manifest: &mut ServerWorldStream,
+    pending: &mut PendingWorldStreams,
+    _stream_verbose: bool,
+) {
+    if manifest.clear_with_new_revision() {
+        pending.ids.clear();
+        game_shared::fun_diag_info_if!(
+            _stream_verbose,
+            target: "fun::server::stream",
+            revision = manifest.revision.0,
+            reason = "empty_world_stream",
+            "cleared world stream"
+        );
+    }
+}
+
 fn queue_world_stream_for_new_clients(
     mut events: MessageReader<ConnectionEvent>,
     mut connected: ResMut<ConnectedClients>,
@@ -906,6 +1045,10 @@ fn clear_client_state(
     admissions.stages.remove(&client_id);
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters are explicit resources for server admission and stream ownership"
+)]
 fn receive_client_control(
     mut server: ResMut<QuinnetServer>,
     mut connected: ResMut<ConnectedClients>,
@@ -914,6 +1057,7 @@ fn receive_client_control(
     mut pending: ResMut<PendingWorldStreams>,
     mut admissions: ResMut<ClientAdmissionStates>,
     manifest: Res<ServerWorldStream>,
+    security: Res<GameServerSecurityConfig>,
     _log_config: Res<ServerLogConfig>,
     #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
 ) {
@@ -968,7 +1112,8 @@ fn receive_client_control(
                         );
                         continue;
                     }
-                    if let Err(rejection) = validate_client_hello(&hello) {
+                    if let Err(rejection) = validate_client_hello(&hello, &security.ticket_verifier)
+                    {
                         error!(target: "fun::server::net", client_id, ?rejection, "rejecting invalid client hello");
                         endpoint.try_disconnect_client(client_id);
                         clear_client_state(
@@ -1654,6 +1799,10 @@ fn streamed_world_preview(streamed: &StreamedWorldEntity) -> String {
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters keep world-stream send state split by authority boundary"
+)]
 fn send_pending_world_streams(
     mut server: ResMut<QuinnetServer>,
     mut pending: ResMut<PendingWorldStreams>,
@@ -1900,28 +2049,79 @@ mod tests {
     }
 
     #[test]
-    fn client_hello_requires_protocol_and_session_token() {
+    fn client_hello_requires_protocol_session_token_and_ticket_verification() {
+        let verifier = ClientTicketVerifier::DevelopmentToken {
+            token: b"dev-ticket".to_vec(),
+        };
         let valid = ClientHello {
             protocol_version: GAME_PROTOCOL_VERSION,
-            session_token: vec![1, 2, 3],
+            session_token: b"dev-ticket".to_vec(),
             feature_bits: 0,
             oldest_input_sequence: PacketSequence(0),
         };
-        assert_eq!(validate_client_hello(&valid), Ok(()));
+        assert_eq!(validate_client_hello(&valid, &verifier), Ok(()));
 
         let mut missing_token = valid.clone();
         missing_token.session_token.clear();
         assert_eq!(
-            validate_client_hello(&missing_token),
+            validate_client_hello(&missing_token, &verifier),
             Err(ClientHelloRejection::MissingSessionToken)
         );
 
-        let mut wrong_version = valid;
+        let mut wrong_version = valid.clone();
         wrong_version.protocol_version = GAME_PROTOCOL_VERSION + 1;
         assert_eq!(
-            validate_client_hello(&wrong_version),
+            validate_client_hello(&wrong_version, &verifier),
             Err(ClientHelloRejection::WrongProtocolVersion)
         );
+
+        let mut wrong_ticket = valid;
+        wrong_ticket.session_token = b"wrong-ticket".to_vec();
+        assert_eq!(
+            validate_client_hello(&wrong_ticket, &verifier),
+            Err(ClientHelloRejection::DevelopmentTicketMismatch)
+        );
+
+        assert_eq!(
+            validate_client_hello(&wrong_ticket, &ClientTicketVerifier::FailClosed),
+            Err(ClientHelloRejection::TicketVerificationUnavailable)
+        );
+    }
+
+    #[test]
+    fn production_tls_mode_never_generates_self_signed_material() {
+        assert!(matches!(
+            certificate_mode_for_tls(GameServerTlsMode::ProductionConfigured),
+            CertificateRetrievalMode::LoadFromFile { .. }
+        ));
+        assert!(matches!(
+            certificate_mode_for_tls(GameServerTlsMode::DevelopmentSelfSigned),
+            CertificateRetrievalMode::LoadFromFileOrGenerateSelfSigned { .. }
+        ));
+    }
+
+    #[test]
+    fn production_mode_never_enables_development_ticket_bypass() {
+        assert_eq!(
+            ClientTicketVerifier::from_env(GameServerTlsMode::ProductionConfigured),
+            ClientTicketVerifier::FailClosed
+        );
+    }
+
+    #[test]
+    fn empty_world_stream_clear_tombstones_stale_manifest() {
+        let mut manifest = test_manifest();
+
+        assert!(manifest.clear_with_new_revision());
+        assert_eq!(manifest.revision, WorldRevision(10));
+        assert_eq!(manifest.editor_revision, WorldRevision(10));
+        assert_eq!(
+            manifest.manifest_signature,
+            game_scene::world_stream_manifest_signature(&[])
+        );
+        assert!(manifest.entity_ids.is_empty());
+        assert!(manifest.chunks.is_empty());
+        assert!(!manifest.clear_with_new_revision());
     }
 
     #[test]

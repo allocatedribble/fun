@@ -6,7 +6,9 @@ use bevy::{
         RenderApp, RenderStartup, backend_capabilities::RenderBackendCapabilities,
         extract_resource::ExtractResourcePlugin, init_gpu_resource, render_resource::TextureUsages,
     },
-    solari::prelude::{SolariDenoiseMode, SolariPlugins, SolariRuntimeParams, SolariSettings},
+    solari::prelude::{
+        SolariDenoiseMode, SolariFeaturePolicy, SolariPlugins, SolariRuntimeParams, SolariSettings,
+    },
 };
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use bevy::{
@@ -19,7 +21,8 @@ use tracing::warn;
 
 use crate::{
     ClientOpaqueRenderer, ClientRenderConfig, FunRenderAppOptions, FunRenderRtFeatures,
-    RenderPathSignature, lighting, prewarm_world_render_catalog, render_path_signature_for_options,
+    FunSkyPlugin, RenderPathSignature, lighting, prewarm_world_render_catalog,
+    render_path_signature_for_options,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
 };
 
@@ -54,6 +57,8 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     emit_render_path_signature(options, &signature);
 
     let solari_enabled = render_config.solari_enabled;
+    let solari_feature_policy: SolariFeaturePolicy =
+        render_config.rt_features.solari_feature_policy();
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     let fps_overlay_enabled = render_config.fps_overlay_enabled;
 
@@ -62,6 +67,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .insert_resource(render_config)
         .insert_resource(solari_settings)
         .insert_resource(solari_runtime_params)
+        .insert_resource(solari_feature_policy)
         .add_message::<bevy::solari::prelude::SolariResetEvent>()
         .add_plugins(ExtractResourcePlugin::<FunRenderRtFeatures>::default())
         .add_plugins(MeshletPlugin {
@@ -88,6 +94,9 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
 
     if solari_enabled {
         app.add_plugins(SolariPlugins);
+    }
+    if render_config.clouds_enabled {
+        app.add_plugins(FunSkyPlugin::new(render_config.cloud_settings()));
     }
 
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -149,6 +158,18 @@ fn log_fun_render_path(
     } else {
         info!("[fun render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
     }
+    if render_config.clouds_enabled {
+        info!(
+            "[fun render] volumetric clouds enabled: profile={} quality={} scale={} temporal={} shadows={}",
+            render_config.cloud_profile_id.as_str(),
+            render_config.cloud_quality.as_env_value(),
+            render_config.cloud_internal_scale.as_env_value(),
+            render_config.cloud_temporal_enabled,
+            render_config.cloud_shadows_enabled
+        );
+    } else {
+        info!("[fun render] volumetric clouds disabled");
+    }
     info!(
         "[fun render] Solari denoise mode: {:?}",
         solari_settings.denoise_mode
@@ -196,9 +217,16 @@ fn log_fun_render_path(
         solari_cache_update_budget = solari_runtime_params.cache_update_budget,
         solari_specular_refresh_budget = solari_runtime_params.specular_refresh_budget,
         solari_debug_overlay = ?solari_runtime_params.debug_overlay,
+        cloud_enabled = render_config.clouds_enabled,
+        cloud_quality = render_config.cloud_quality.as_env_value(),
+        cloud_internal_scale = render_config.cloud_internal_scale.as_env_value(),
+        cloud_temporal_enabled = render_config.cloud_temporal_enabled,
+        cloud_shadows_enabled = render_config.cloud_shadows_enabled,
+        cloud_profile_id = render_config.cloud_profile_id.as_str(),
+        cloud_debug_overlay = render_config.cloud_debug_overlay.as_env_value(),
         geometry_policy = ?render_config.geometry_policy,
         meshlet_min_triangles = render_config.meshlet_min_triangles,
-        rt_capability_hash = %format_args!("{:016x}", render_config.rt_features.capability_hash()),
+        rt_feature_hash = %format_args!("{:016x}", render_config.rt_features.rt_feature_hash()),
         rt_sample_direct = render_config.rt_features.sample_direct,
         rt_sample_indirect = render_config.rt_features.sample_indirect,
         rt_sample_reflections = render_config.rt_features.sample_reflections,
@@ -240,10 +268,18 @@ fn emit_render_path_signature(options: &FunRenderAppOptions, signature: &RenderP
         hosted_by_editor = options.hosted_by_editor,
         solari_enabled = signature.solari_enabled,
         meshlets_enabled = signature.meshlets_enabled,
+        clouds_enabled = signature.clouds_enabled,
+        cloud_quality = signature.cloud_quality,
+        cloud_internal_scale = signature.cloud_internal_scale,
+        cloud_profile_id = signature.cloud_profile_id,
+        cloud_temporal_enabled = signature.cloud_temporal_enabled,
+        cloud_shadows_enabled = signature.cloud_shadows_enabled,
+        cloud_debug_overlay = signature.cloud_debug_overlay,
+        cloud_shader_profile_flags = signature.cloud_shader_profile_flags,
         dlss_rr_enabled = signature.dlss_rr_enabled,
         geometry_policy = ?signature.geometry_policy,
         meshlet_min_triangles = signature.meshlet_min_triangles,
-        capability_hash = %format_args!("{:016x}", signature.capability_hash),
+        rt_feature_hash = %format_args!("{:016x}", signature.rt_feature_hash),
         opaque_renderer = signature.opaque_renderer.as_str(),
         render_target_format = signature.render_target_format,
         internal_scale = signature.internal_scale,

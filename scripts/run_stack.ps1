@@ -16,6 +16,7 @@ param(
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
+    [switch]$DisableClouds,
     [string]$RtSampleDirect = "",
     [string]$RtSampleIndirect = "",
     [string]$RtSampleReflections = "",
@@ -36,6 +37,12 @@ param(
     [string]$SolariInternalScale = "1.0",
     [int]$SolariBlasCompactionVertices = 0,
     [string]$SolariDebugOverlay = "",
+    [string]$CloudQuality = "",
+    [string]$CloudInternalScale = "",
+    [string]$CloudTemporal = "",
+    [string]$CloudShadows = "",
+    [string]$CloudProfile = "",
+    [string]$CloudDebugOverlay = "",
     [string]$RenderGeometryPolicy = "hybrid",
     [int]$MeshletMinTriangles = 512,
     [int]$WindowWidth = 0,
@@ -105,7 +112,7 @@ if (-not $env:RUST_BACKTRACE) {
     $env:RUST_BACKTRACE = "1"
 }
 if ($TraceDiagnostics) {
-    $traceFilter = "info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug"
+    $traceFilter = "info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun::perf::clouds=info,fun::render::clouds=debug,fun::weather=debug,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug"
     $env:RUST_LOG = $traceFilter
     $env:BEVY_LOG = $traceFilter
 }
@@ -232,6 +239,18 @@ if ($DisableMeshlets) {
 else {
     Remove-Item Env:\FUN_DISABLE_MESHLETS -ErrorAction SilentlyContinue
 }
+if ($DisableClouds) {
+    $env:FUN_DISABLE_CLOUDS = "1"
+}
+else {
+    Remove-Item Env:\FUN_DISABLE_CLOUDS -ErrorAction SilentlyContinue
+}
+Set-OptionalEnvValue -Name "FUN_CLOUD_QUALITY" -Value $CloudQuality
+Set-OptionalEnvValue -Name "FUN_CLOUD_INTERNAL_SCALE" -Value $CloudInternalScale
+Set-OptionalEnvValue -Name "FUN_CLOUD_TEMPORAL" -Value $CloudTemporal
+Set-OptionalEnvValue -Name "FUN_CLOUD_SHADOWS" -Value $CloudShadows
+Set-OptionalEnvValue -Name "FUN_CLOUD_PROFILE" -Value $CloudProfile
+Set-OptionalEnvValue -Name "FUN_CLOUD_DEBUG_OVERLAY" -Value $CloudDebugOverlay
 Set-OptionalEnvValue -Name "FUN_RT_SAMPLE_DIRECT" -Value $RtSampleDirect
 Set-OptionalEnvValue -Name "FUN_RT_SAMPLE_INDIRECT" -Value $RtSampleIndirect
 Set-OptionalEnvValue -Name "FUN_RT_SAMPLE_REFLECTIONS" -Value $RtSampleReflections

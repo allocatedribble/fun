@@ -15,7 +15,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -Rende
 tools.
 
 ```text
-RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug
+RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun::perf::clouds=info,fun::render::clouds=debug,fun::weather=debug,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug
 ```
 
 You can override `RUST_LOG` manually when you need a narrower view.
@@ -112,13 +112,20 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 
 - `fun::render`: backend, present mode, Solari, meshlets, DLSS RR, and denoiser
   mode.
+- `fun::render::clouds`: cloud configuration, render-path cloud signature
+  fields, history reset requests, and future per-view cloud render setup.
 - `fun::stream`: streamed world chunks, revisions, ready state, acks, duplicate
   entities, and world resets.
 - `fun::solari`: Solari activation and temporal-history resets.
+- `fun::weather`: validated cloud/weather profile and pattern state, including
+  profile IDs and transition classes without raw user-authored strings.
 - `fun::rr`: DLSS Ray Reconstruction availability, activation, and resets.
 - `fun::diag`: periodic world/camera/renderable inventory.
 - `fun::perf`: FPS, frame ms/ns, Solari total ns, meshlet visibility ns, and
   external RR ns.
+- `fun::perf::clouds`: cloud raymarch, temporal, composite, total GPU ns,
+  weather-update CPU ns, history accept/reset counts, internal dimensions,
+  step counts, quality/profile labels, and cloud VRAM bytes.
 - `fun::perf::schedule_heatmap`: actual client system costs gathered from the
   running Bevy schedule. It reports networking receive, streamed-world apply,
   movement input, look, first-person physics movement, diagnostics logging,
@@ -173,6 +180,10 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 - `bevy_render::capabilities`: one startup capability inventory line with the
   backend capability hash, vendor class, RT/AS support, async queue probe state,
   DLSS capability slots, native opacity/SER/LSS slots, and RT validation slot.
+- `fun::render`: one RT gate line with `rt_feature_hash` for the requested
+  renderer policy. Benchmark reports keep this separate from
+  `backend_capability_hash` so requested features and backend support do not
+  collapse into one identifier.
 - `bevy_pbr::meshlet::scheduler`: meshlet visibility budget decisions and
   async-compute policy decisions. WGPU currently runs these candidates through
   the graphics-queue fallback unless a backend-specific async path proves a p95
@@ -241,9 +252,21 @@ testing; engine-side validation clamps them to bounded GPU-safe ranges:
 - `FUN_SOLARI_WORLD_CACHE_FAR_METERS`
 - `FUN_SOLARI_LIGHT_TILE_BLOCKS`
 - `FUN_SOLARI_LIGHT_TILE_SAMPLES`
+- `FUN_SOLARI_DIRECT_INITIAL_SAMPLES`
+- `FUN_SOLARI_DIRECT_SPATIAL_SAMPLES`
+- `FUN_SOLARI_DIRECT_SPATIAL_BOOST_SAMPLES`
+- `FUN_SOLARI_DIRECT_INITIAL_VISIBILITY=none|selected`
+- `FUN_SOLARI_DIRECT_BOILING_FILTER_STRENGTH=0.0..1.0`
 - `FUN_SOLARI_BLAS_COMPACTION_VERTICES`
 - `FUN_SOLARI_INTERNAL_SCALE=1.0|0.75|0.66|0.5`
 - `FUN_SOLARI_DEBUG_OVERLAY=surface-classification|work-queues`
+- `FUN_DISABLE_CLOUDS=1`
+- `FUN_CLOUD_QUALITY=off|cheap|balanced|cinematic`
+- `FUN_CLOUD_INTERNAL_SCALE=1.0|0.75|0.5|0.33`
+- `FUN_CLOUD_TEMPORAL=0|1`
+- `FUN_CLOUD_SHADOWS=0|1`
+- `FUN_CLOUD_PROFILE=clear|scattered|overcast|storm_front|cinematic_sunset|custom`
+- `FUN_CLOUD_DEBUG_OVERLAY=none|coverage|density|steps|history|weather`
 
 `legacy` preserves the pre-budgeted control path. `budgeted` keeps Solari and
 meshlets enabled but routes adaptive runtime controls through a per-view Solari

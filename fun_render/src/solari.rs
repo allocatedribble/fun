@@ -1,17 +1,19 @@
 use bevy::prelude::default;
 use bevy::solari::prelude::{
-    SolariArchitecture, SolariDebugOverlay, SolariDenoiseMode, SolariInternalScale,
-    SolariRuntimeParams, SolariSettings, SolariVisualTarget,
+    SolariArchitecture, SolariDebugOverlay, SolariDenoiseMode, SolariDirectVisibilityMode,
+    SolariInternalScale, SolariRuntimeParams, SolariSettings, SolariVisualTarget,
 };
 use tracing::{info, warn};
 
 pub fn solari_settings_from_env() -> SolariSettings {
+    let visual_target = solari_visual_target_from_env();
     let mut settings = SolariSettings {
         denoise_mode: solari_denoise_mode_from_env(),
         internal_scale: solari_internal_scale_from_env(),
         debug_direct_visibility: std::env::var_os("FUN_SOLARI_DEBUG_DIRECT_VISIBILITY").is_some(),
         ..default()
     };
+    apply_direct_lighting_visual_target(visual_target, &mut settings);
 
     apply_u32_env(
         "FUN_SOLARI_WORLD_CACHE_SIZE",
@@ -52,6 +54,22 @@ pub fn solari_settings_from_env() -> SolariSettings {
     apply_u32_env(
         "FUN_SOLARI_BLAS_COMPACTION_VERTICES",
         &mut settings.max_blas_compaction_budget_vertices,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_DIRECT_INITIAL_SAMPLES",
+        &mut settings.direct_initial_samples,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_DIRECT_SPATIAL_SAMPLES",
+        &mut settings.direct_spatial_samples,
+    );
+    apply_u32_env(
+        "FUN_SOLARI_DIRECT_SPATIAL_BOOST_SAMPLES",
+        &mut settings.direct_spatial_samples_boost,
+    );
+    apply_direct_visibility_env(
+        "FUN_SOLARI_DIRECT_INITIAL_VISIBILITY",
+        &mut settings.direct_initial_visibility_mode,
     );
 
     settings
@@ -104,9 +122,34 @@ pub fn solari_runtime_params_from_env(settings: &SolariSettings) -> SolariRuntim
         "FUN_SOLARI_GI_CONFIDENCE_CAP",
         &mut params.gi_temporal_confidence_cap,
     );
+    apply_runtime_f32_env(
+        "FUN_SOLARI_DIRECT_BOILING_FILTER_STRENGTH",
+        &mut params.direct_boiling_filter_strength,
+    );
     params.debug_overlay = solari_debug_overlay_from_env();
 
     params.validated()
+}
+
+fn apply_direct_lighting_visual_target(
+    visual_target: SolariVisualTarget,
+    settings: &mut SolariSettings,
+) {
+    match visual_target {
+        SolariVisualTarget::Competitive => {
+            settings.direct_initial_samples = 4;
+            settings.direct_spatial_samples = 1;
+            settings.direct_spatial_samples_boost = 1;
+            settings.direct_initial_visibility_mode = SolariDirectVisibilityMode::Selected;
+        }
+        SolariVisualTarget::Balanced => {}
+        SolariVisualTarget::Cinematic => {
+            settings.direct_initial_samples = 16;
+            settings.direct_spatial_samples = 3;
+            settings.direct_spatial_samples_boost = 2;
+            settings.direct_initial_visibility_mode = SolariDirectVisibilityMode::Selected;
+        }
+    }
 }
 
 fn solari_architecture_from_env() -> SolariArchitecture {
@@ -198,6 +241,43 @@ fn apply_runtime_f32_env(name: &'static str, value: &mut f32) {
                 "ignored invalid Solari runtime float setting"
             );
         }
+    }
+}
+
+fn apply_direct_visibility_env(name: &'static str, value: &mut SolariDirectVisibilityMode) {
+    let Some(raw) = std::env::var_os(name) else {
+        return;
+    };
+    let raw = raw.to_string_lossy();
+    match parse_solari_direct_visibility_mode(Some(&raw)) {
+        Some(parsed) => {
+            *value = parsed;
+            info!(
+                target: "fun::render",
+                setting = name,
+                value = parsed.as_str(),
+                "applied Solari direct visibility setting"
+            );
+        }
+        None => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value = %raw,
+                "ignored invalid Solari direct visibility setting"
+            );
+        }
+    }
+}
+
+fn parse_solari_direct_visibility_mode(raw: Option<&str>) -> Option<SolariDirectVisibilityMode> {
+    match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("none") | Some("off") | Some("0") => Some(SolariDirectVisibilityMode::None),
+        Some("selected") | Some("selected-light") | Some("selected_light") | Some("1") => {
+            Some(SolariDirectVisibilityMode::Selected)
+        }
+        None => Some(SolariDirectVisibilityMode::Selected),
+        Some(_) => None,
     }
 }
 
@@ -310,4 +390,46 @@ pub fn benchmark_parse_solari_denoise_mode(
     dlss_ray_reconstruction_disabled: bool,
 ) -> SolariDenoiseMode {
     parse_solari_denoise_mode(mode, dlss_ray_reconstruction_disabled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SolariDirectVisibilityMode, SolariSettings, SolariVisualTarget,
+        apply_direct_lighting_visual_target, parse_solari_direct_visibility_mode,
+    };
+
+    #[test]
+    fn visual_targets_map_to_direct_lighting_quality_knobs() {
+        let mut competitive = SolariSettings::default();
+        apply_direct_lighting_visual_target(SolariVisualTarget::Competitive, &mut competitive);
+        assert_eq!(competitive.direct_initial_samples, 4);
+        assert_eq!(competitive.direct_spatial_samples, 1);
+        assert_eq!(competitive.direct_spatial_samples_boost, 1);
+
+        let mut balanced = SolariSettings::default();
+        apply_direct_lighting_visual_target(SolariVisualTarget::Balanced, &mut balanced);
+        assert_eq!(balanced.direct_initial_samples, 8);
+        assert_eq!(balanced.direct_spatial_samples, 1);
+        assert_eq!(balanced.direct_spatial_samples_boost, 0);
+
+        let mut cinematic = SolariSettings::default();
+        apply_direct_lighting_visual_target(SolariVisualTarget::Cinematic, &mut cinematic);
+        assert_eq!(cinematic.direct_initial_samples, 16);
+        assert_eq!(cinematic.direct_spatial_samples, 3);
+        assert_eq!(cinematic.direct_spatial_samples_boost, 2);
+    }
+
+    #[test]
+    fn direct_visibility_mode_parser_accepts_safe_values() {
+        assert_eq!(
+            parse_solari_direct_visibility_mode(Some("selected_light")),
+            Some(SolariDirectVisibilityMode::Selected)
+        );
+        assert_eq!(
+            parse_solari_direct_visibility_mode(Some("none")),
+            Some(SolariDirectVisibilityMode::None)
+        );
+        assert_eq!(parse_solari_direct_visibility_mode(Some("all")), None);
+    }
 }
