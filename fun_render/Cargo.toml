@@ -1,0 +1,29 @@
+[package]
+name = "fun_render"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["offscreen"]
+benchmarks = []
+diagnostics = ["game_shared/diagnostics"]
+dlss = ["bevy/dlss"]
+force_disable_dlss = ["bevy/force_disable_dlss"]
+offscreen = []
+render_diagnostics = [
+    "diagnostics",
+    "bevy/debug",
+    "bevy/track_location",
+    "bevy/pbr_debug_diagnostics",
+    "bevy/meshlet_debug_diagnostics",
+]
+winit_presentation = []
+
+[dependencies]
+bevy.workspace = true
+game_shared = { path = "../game_shared" }
+thunder.workspace = true
+tracing.workspace = true

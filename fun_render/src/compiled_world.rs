@@ -2,10 +2,10 @@ use bevy::prelude::Resource;
 use game_shared::{RenderAssetId, RenderCostClass};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct CompiledWorldPackageId(pub u64);
+pub struct CompiledWorldPackageId(pub u64);
 
 #[derive(Debug, Clone, Resource)]
-pub(crate) struct CompiledWorldPackage {
+pub struct CompiledWorldPackage {
     #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub id: CompiledWorldPackageId,
     #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
@@ -16,14 +16,14 @@ pub(crate) struct CompiledWorldPackage {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CompiledStaticAsset {
+pub struct CompiledStaticAsset {
     pub asset_id: RenderAssetId,
     pub cost_class: RenderCostClass,
     pub occlusion_cell: u32,
 }
 
 impl CompiledWorldPackage {
-    pub(crate) fn demo_package() -> Self {
+    pub fn demo_package() -> Self {
         let static_assets = game_shared::DEMO_RENDER_CATALOG
             .iter()
             .map(|entry| CompiledStaticAsset {

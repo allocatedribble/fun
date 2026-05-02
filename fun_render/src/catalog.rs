@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use avian3d::prelude::Collider;
 use bevy::{
     pbr::experimental::meshlet::{
         MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR, MeshletMesh, RenderPathArbiter,
@@ -9,48 +8,44 @@ use bevy::{
     prelude::*,
 };
 use game_shared::{
-    CatalogCollider, CatalogGeometry, DEMO_RENDER_CATALOG, LightingParticipation,
-    RenderCatalogEntry, RenderCostClass, VisualImportance, material_preset,
+    CatalogGeometry, DEMO_RENDER_CATALOG, LightingParticipation, RenderCatalogEntry,
+    RenderCostClass, VisualImportance, material_preset,
 };
 use thunder::prelude::WorldCatalogRef;
 
-use crate::{
-    ClientRenderConfig, RenderGeometryClass, RenderGeometryPolicy,
-    compiled_world::CompiledWorldPackage,
-};
+use crate::{ClientRenderConfig, CompiledWorldPackage, RenderGeometryClass, RenderGeometryPolicy};
 
 #[derive(Debug, Resource, Default)]
-pub(crate) struct WorldRenderCatalog {
+pub struct WorldRenderCatalog {
     assets: HashMap<u32, CompiledRenderAsset>,
     materials: HashMap<u32, Handle<StandardMaterial>>,
 }
 
 #[derive(Debug)]
-pub(crate) struct CompiledRenderAsset {
+pub struct CompiledRenderAsset {
     #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub entry: &'static RenderCatalogEntry,
     pub raster_mesh: Option<Handle<Mesh>>,
     pub meshlet_mesh: Option<Handle<MeshletMesh>>,
     pub ray_proxy: Option<Handle<Mesh>>,
     pub material: Option<Handle<StandardMaterial>>,
-    pub collider: Option<Collider>,
     pub geometry_class: RenderGeometryClass,
     #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
     pub triangle_count: usize,
 }
 
 impl WorldRenderCatalog {
-    pub(crate) fn lookup(&self, catalog_ref: WorldCatalogRef) -> Option<&CompiledRenderAsset> {
+    pub fn lookup(&self, catalog_ref: WorldCatalogRef) -> Option<&CompiledRenderAsset> {
         self.assets.get(&catalog_ref.asset_id)
     }
 
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.assets.len()
     }
 }
 
-pub(crate) fn prewarm_world_render_catalog(
+pub fn prewarm_world_render_catalog(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
@@ -151,10 +146,6 @@ pub(crate) fn prewarm_world_render_catalog(
             });
             meshes.add(mesh)
         });
-        let collider = entry
-            .collider
-            .map(|(_, collider)| collider_from_catalog(collider));
-
         game_shared::fun_diag_info!(
             target: "fun::render_catalog",
             asset_id = entry.asset_id.0,
@@ -169,7 +160,7 @@ pub(crate) fn prewarm_world_render_catalog(
             has_raster = raster_mesh.is_some(),
             has_meshlet = meshlet_mesh.is_some(),
             has_ray_proxy = ray_proxy.is_some(),
-            has_collider = collider.is_some(),
+            has_collider = entry.collider.is_some(),
             "prewarmed world render catalog asset"
         );
 
@@ -181,7 +172,6 @@ pub(crate) fn prewarm_world_render_catalog(
                 meshlet_mesh,
                 ray_proxy,
                 material,
-                collider,
                 geometry_class,
                 triangle_count,
             },
@@ -288,7 +278,7 @@ fn distance_band(entry: &RenderCatalogEntry) -> RenderPathDistanceBand {
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
-pub(crate) fn catalog_ref_summary(catalog_ref: Option<WorldCatalogRef>) -> String {
+pub fn catalog_ref_summary(catalog_ref: Option<WorldCatalogRef>) -> String {
     catalog_ref
         .map(|value| {
             format!(
@@ -299,7 +289,7 @@ pub(crate) fn catalog_ref_summary(catalog_ref: Option<WorldCatalogRef>) -> Strin
         .unwrap_or_else(|| "none".to_owned())
 }
 
-pub(crate) fn warn_missing_catalog_ref(_catalog_ref: WorldCatalogRef, _name: &str) {
+pub fn warn_missing_catalog_ref(_catalog_ref: WorldCatalogRef, _name: &str) {
     game_shared::fun_diag_warn!(
         target: "fun::render_catalog",
         asset_id = _catalog_ref.asset_id,
@@ -321,11 +311,5 @@ fn mesh_from_catalog_geometry(geometry: CatalogGeometry) -> Mesh {
     match geometry {
         CatalogGeometry::Plane { size } => Plane3d::default().mesh().size(size[0], size[2]).build(),
         CatalogGeometry::Cuboid { size } => Cuboid::new(size[0], size[1], size[2]).mesh().build(),
-    }
-}
-
-fn collider_from_catalog(collider: CatalogCollider) -> Collider {
-    match collider {
-        CatalogCollider::Cuboid { size } => Collider::cuboid(size[0], size[1], size[2]),
     }
 }

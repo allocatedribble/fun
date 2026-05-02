@@ -2845,6 +2845,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
+name = "fun_render"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "game_shared",
+ "thunder",
+ "tracing",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2959,6 +2969,7 @@ dependencies = [
  "bevy",
  "bevy_quinnet",
  "criterion 0.8.2",
+ "fun_render",
  "game_scene",
  "game_shared",
  "log",

@@ -8,23 +8,25 @@ workspace = true
 
 [features]
 default = ["dlss"]
-benchmarks = ["render_diagnostics"]
+benchmarks = ["render_diagnostics", "fun_render/benchmarks"]
 bevy_debug = ["bevy/debug"]
-diagnostics = ["game_shared/diagnostics"]
-dlss = ["bevy/dlss"]
-force_disable_dlss = ["bevy/force_disable_dlss"]
+diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
+dlss = ["bevy/dlss", "fun_render/dlss"]
+force_disable_dlss = ["bevy/force_disable_dlss", "fun_render/force_disable_dlss"]
 render_diagnostics = [
     "diagnostics",
     "bevy/debug",
     "bevy/track_location",
     "bevy/pbr_debug_diagnostics",
     "bevy/meshlet_debug_diagnostics",
+    "fun_render/render_diagnostics",
 ]
 
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true
 bevy_quinnet.workspace = true
+fun_render = { path = "../fun_render", default-features = false, features = ["winit_presentation"] }
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
 log.workspace = true

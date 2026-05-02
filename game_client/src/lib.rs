@@ -1,8 +1,6 @@
-mod compiled_world;
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
-mod render_catalog;
 
 pub(crate) use frame_profile::{
     frame_profile_elapsed, frame_profile_ns, frame_profile_scope, frame_profile_start,
@@ -12,64 +10,40 @@ pub(crate) use frame_profile::{
 use frame_profile::DetailedFrameProfiler;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use frame_profile::install_detailed_frame_profiler;
-#[cfg(all(feature = "diagnostics", debug_assertions))]
-use render_catalog::catalog_ref_summary;
-use render_catalog::{WorldRenderCatalog, prewarm_world_render_catalog, warn_missing_catalog_ref};
+pub(crate) use fun_render::RenderWorldStatus as ClientWorldStatus;
+#[cfg(any(test, feature = "benchmarks"))]
+pub use fun_render::benchmark_parse_solari_denoise_mode;
+use fun_render::{
+    ClientRenderConfig, ClientRenderProfile, ClientWindowConfig, FunRenderAppOptions,
+    FunRenderCorePlugin, FunRenderWinitPresentationPlugin, RenderGeometryClass,
+    RenderWorldApplyOptions, RenderWorldContext, RenderWorldStatus, WorldRenderCatalog,
+    apply_render_world_chunk, enable_solari_lighting_for_ready_world,
+    request_solari_lighting_history_reset,
+};
 
-use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    num::NonZeroU32,
-};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, time::Instant};
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
-#[cfg(all(feature = "render_diagnostics", debug_assertions))]
-use bevy::render::error_handler::RenderRecoveryStatus;
-use bevy::render::{
-    RenderPlugin,
-    error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
-    render_resource::TextureUsages,
-    settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
-};
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-use bevy::{
-    anti_alias::dlss::{
-        Dlss, DlssPerfQualityMode, DlssProjectId, DlssRayReconstructionFeature,
-        DlssRayReconstructionSupported,
-    },
-    asset::uuid::Uuid,
+use bevy::anti_alias::dlss::{
+    Dlss, DlssPerfQualityMode, DlssRayReconstructionFeature, DlssRayReconstructionSupported,
 };
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use bevy::diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use bevy::render::error_handler::{ErrorType, RenderRecoveryStatus};
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use bevy::solari::prelude::SolariRuntimeParams;
 use bevy::{
     app::AppExit,
-    camera::CameraMainTextureUsages,
-    ecs::world::World,
-    pbr::{
-        DefaultOpaqueRendererMethod,
-        experimental::meshlet::{
-            MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR, MeshletMesh, MeshletMesh3d,
-            MeshletPlugin,
-        },
-    },
+    pbr::experimental::meshlet::MeshletMesh,
     prelude::*,
-    solari::prelude::{
-        RaytracingMesh3d, SolariArchitecture, SolariDebugOverlay, SolariDenoiseMode,
-        SolariInternalScale, SolariLighting, SolariPlugins, SolariResetEvent, SolariRuntimeParams,
-        SolariSettings, SolariVisualTarget,
-    },
-    window::{PresentMode, PrimaryWindow, WindowResolution},
-    winit::WinitSettings,
+    solari::prelude::{SolariLighting, SolariResetEvent},
+    window::PrimaryWindow,
 };
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-use bevy::{
-    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
-    diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    render::diagnostic::RenderDiagnosticsPlugin,
-};
+use bevy::{pbr::experimental::meshlet::MeshletMesh3d, solari::prelude::RaytracingMesh3d};
 use bevy_quinnet::client::{
     ClientConnectionConfiguration, ClientConnectionConfigurationDefaultables, QuinnetClient,
     QuinnetClientPlugin,
@@ -80,15 +54,12 @@ use editor_hotkey::EditorHotkeyPlugin;
 use first_person::FirstPersonControllerPlugin;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use game_shared::DEFAULT_RENDER_TARGET_RATE_HZ;
-use game_shared::{DEFAULT_TICK_RATE_HZ, EditorInputOwner, GAME_SERVER_ADDR, GAME_TITLE};
+use game_shared::{CatalogCollider, DEFAULT_TICK_RATE_HZ, EditorInputOwner, GAME_SERVER_ADDR};
 use thunder::prelude::*;
 use tracing::{debug, error, info, warn};
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-const DLSS_PROJECT_ID: &str = "7f2c56d9-bbd1-40e6-aeea-ad1cde733e2e";
-#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
-const FUN_CLIENT_RENDER_PATH_SIGNATURE_ID: &str = "fun-client-render-path-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientRuntimeMode {
@@ -174,48 +145,6 @@ impl ClientRuntimeMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientRenderProfile {
-    Default,
-    Diagnostics,
-}
-
-impl ClientRenderProfile {
-    fn from_env() -> Self {
-        let Ok(value) = std::env::var("FUN_CLIENT_RENDER_PROFILE") else {
-            return Self::Default;
-        };
-        Self::parse(&value).unwrap_or_else(|| {
-            warn!(
-                target: "fun::render",
-                render_profile = value,
-                "unknown FUN_CLIENT_RENDER_PROFILE; using default"
-            );
-            Self::Default
-        })
-    }
-
-    fn parse(value: &str) -> Option<Self> {
-        if value.eq_ignore_ascii_case("default") || value.eq_ignore_ascii_case("debug") {
-            return Some(Self::Default);
-        }
-        if value.eq_ignore_ascii_case("diagnostics")
-            || value.eq_ignore_ascii_case("debug_diagnostics")
-            || value.eq_ignore_ascii_case("debug+diagnostics")
-        {
-            return Some(Self::Diagnostics);
-        }
-        None
-    }
-
-    fn as_env_value(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Diagnostics => "diagnostics",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Resource)]
 pub struct ClientAppOptions {
     pub mode: ClientRuntimeMode,
@@ -295,115 +224,6 @@ fn env_host_parent_pid() -> Option<u32> {
                 "ignored invalid FUN_HOST_PARENT_PID"
             );
             None
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Resource)]
-pub(crate) struct ClientRenderConfig {
-    solari_enabled: bool,
-    dlss_rr_enabled: bool,
-    meshlets_enabled: bool,
-    dlss_rr_disabled_by_denoise_mode: bool,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    render_profile_verbose: bool,
-    pub(crate) geometry_policy: RenderGeometryPolicy,
-    pub(crate) meshlet_min_triangles: usize,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    fps_overlay_enabled: bool,
-}
-
-impl ClientRenderConfig {
-    fn from_env() -> Self {
-        Self {
-            solari_enabled: std::env::var_os("FUN_DISABLE_SOLARI").is_none(),
-            dlss_rr_enabled: std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
-            meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
-            dlss_rr_disabled_by_denoise_mode: false,
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            render_profile_verbose: std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some(),
-            geometry_policy: RenderGeometryPolicy::from_env(),
-            meshlet_min_triangles: env_usize("FUN_MESHLET_MIN_TRIANGLES", 512),
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            fps_overlay_enabled: std::env::var_os("FUN_DISABLE_FPS_OVERLAY").is_none(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderGeometryPolicy {
-    Hybrid,
-    AllMeshlet,
-    AllRaster,
-}
-
-impl RenderGeometryPolicy {
-    fn from_env() -> Self {
-        match std::env::var("FUN_RENDER_GEOMETRY_POLICY")
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Ok("all_meshlet") | Ok("all-meshlet") | Ok("meshlet") => Self::AllMeshlet,
-            Ok("all_raster") | Ok("all-raster") | Ok("raster") => Self::AllRaster,
-            Ok("hybrid") | Ok("") | Err(_) => Self::Hybrid,
-            Ok(other) => {
-                warn!(
-                    target: "fun::render",
-                    policy = other,
-                    "unknown FUN_RENDER_GEOMETRY_POLICY; using hybrid"
-                );
-                Self::Hybrid
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub(crate) enum RenderGeometryClass {
-    SimpleRaster,
-    MeshletStaticDense,
-    MeshletDynamicDense,
-    RayProxyOnly,
-    Viewmodel,
-}
-
-impl RenderGeometryClass {
-    pub(crate) fn uses_meshlet(self) -> bool {
-        matches!(
-            self,
-            RenderGeometryClass::MeshletStaticDense | RenderGeometryClass::MeshletDynamicDense
-        )
-    }
-
-    pub(crate) fn uses_raster_mesh(self) -> bool {
-        matches!(
-            self,
-            RenderGeometryClass::SimpleRaster | RenderGeometryClass::Viewmodel
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, Resource)]
-struct ClientWindowConfig {
-    maximized: bool,
-    width: Option<u32>,
-    height: Option<u32>,
-}
-
-impl ClientWindowConfig {
-    fn from_env() -> Self {
-        Self {
-            maximized: std::env::var_os("FUN_WINDOW_MAXIMIZED").is_some(),
-            width: env_u32_opt("FUN_WINDOW_WIDTH"),
-            height: env_u32_opt("FUN_WINDOW_HEIGHT"),
-        }
-    }
-
-    fn resolution(&self) -> WindowResolution {
-        match (self.width, self.height) {
-            (Some(width), Some(height)) => WindowResolution::new(width, height),
-            _ => WindowResolution::default(),
         }
     }
 }
@@ -500,6 +320,11 @@ impl ClientHostControlState {
     }
 }
 
+#[derive(Debug, Default, Resource)]
+struct ClientWorldStreamAckState {
+    sent: bool,
+}
+
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 impl Default for ClientEditorControlPlane {
     fn default() -> Self {
@@ -550,6 +375,13 @@ struct ClientRuntimeProfiler<'w> {
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     frame_profiler: ResMut<'w, DetailedFrameProfiler>,
     log_config: Res<'w, ClientLogConfig>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct ClientRenderWorldParam<'w> {
+    render_world: ResMut<'w, RenderWorldContext>,
+    status: ResMut<'w, RenderWorldStatus>,
+    ack_state: ResMut<'w, ClientWorldStreamAckState>,
 }
 
 #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
@@ -719,299 +551,6 @@ impl ClientScheduleProfiler {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
-pub struct RenderPathSignature {
-    pub id: &'static str,
-    pub render_profile: ClientRenderProfile,
-    pub solari_enabled: bool,
-    pub dlss_rr_enabled: bool,
-    pub meshlets_enabled: bool,
-    pub geometry_policy: RenderGeometryPolicy,
-    pub meshlet_min_triangles: usize,
-    pub opaque_renderer: ClientOpaqueRenderer,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientOpaqueRenderer {
-    Deferred,
-    Forward,
-}
-
-impl ClientOpaqueRenderer {
-    fn method(self) -> DefaultOpaqueRendererMethod {
-        match self {
-            Self::Deferred => DefaultOpaqueRendererMethod::deferred(),
-            Self::Forward => DefaultOpaqueRendererMethod::forward(),
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Deferred => "deferred",
-            Self::Forward => "forward",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct FunClientRenderPlugin {
-    options: ClientAppOptions,
-}
-
-impl FunClientRenderPlugin {
-    pub fn new(options: ClientAppOptions) -> Self {
-        Self { options }
-    }
-}
-
-impl Plugin for FunClientRenderPlugin {
-    fn build(&self, app: &mut App) {
-        let render_backend = selected_render_backend();
-        let present_mode = selected_present_mode();
-        let window_config = ClientWindowConfig::from_env();
-
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        app.insert_resource(DlssProjectId(
-            Uuid::parse_str(DLSS_PROJECT_ID).expect("DLSS project ID should be a valid UUID"),
-        ));
-
-        info!(
-            target: "fun::render",
-            runtime_mode = self.options.mode.as_env_value(),
-            render_profile = self.options.render_profile.as_env_value(),
-            backend = ?render_backend,
-            present_mode = ?present_mode,
-            vsync = false,
-            max_frame_latency = 3,
-            maximized = window_config.maximized,
-            "client window/render backend selected"
-        );
-
-        let title = match self.options.mode {
-            ClientRuntimeMode::EditorPreview => format!("{GAME_TITLE} Preview"),
-            _ => format!("{GAME_TITLE} Client"),
-        };
-        let default_plugins = DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title,
-                present_mode,
-                resolution: window_config.resolution(),
-                desired_maximum_frame_latency: NonZeroU32::new(3),
-                ..default()
-            }),
-            ..default()
-        });
-        let default_plugins = default_plugins.set(RenderPlugin {
-            render_creation: client_render_creation(render_backend),
-            ..default()
-        });
-
-        app.add_plugins(default_plugins)
-            .insert_resource(window_config)
-            .insert_resource(RenderErrorHandler(recover_render_device))
-            .insert_resource(WinitSettings::continuous());
-
-        install_fun_client_render_path(app, &self.options);
-    }
-}
-
-pub fn install_fun_client_render_path(app: &mut App, options: &ClientAppOptions) {
-    let (render_config, solari_settings, solari_runtime_params) = render_path_config_from_env();
-    log_client_render_path(&render_config, &solari_settings, &solari_runtime_params);
-    let opaque_renderer = selected_opaque_renderer(&render_config);
-    let signature = render_path_signature_for_options(options, &render_config, opaque_renderer);
-    emit_render_path_signature(options, &signature);
-
-    let solari_enabled = render_config.solari_enabled;
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    let fps_overlay_enabled = render_config.fps_overlay_enabled;
-
-    app.insert_resource(opaque_renderer.method())
-        .insert_resource(signature)
-        .insert_resource(render_config)
-        .insert_resource(solari_settings)
-        .insert_resource(solari_runtime_params)
-        .add_message::<SolariResetEvent>()
-        .add_plugins(MeshletPlugin {
-            cluster_buffer_slots: 1 << 14,
-        })
-        .add_systems(
-            Startup,
-            (setup_lighting, prewarm_world_render_catalog).chain(),
-        );
-
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    if fps_overlay_enabled {
-        app.add_plugins(FpsOverlayPlugin {
-            config: FpsOverlayConfig {
-                refresh_interval: Duration::from_secs(1),
-                text_config: bevy::text::TextFont {
-                    font_size: bevy::text::FontSize::Px(12.0),
-                    ..default()
-                },
-                ..default()
-            },
-        });
-    }
-
-    if solari_enabled {
-        app.add_plugins(SolariPlugins);
-    }
-
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    {
-        if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some() {
-            game_shared::fun_diag_info!("[client render] GPU render diagnostics enabled");
-            app.add_plugins((
-                RenderDiagnosticsPlugin,
-                bevy::diagnostic::SystemInformationDiagnosticsPlugin,
-            ));
-        }
-    }
-    #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
-    {
-        if std::env::var_os("FUN_RENDER_DIAGNOSTICS").is_some()
-            || std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some()
-            || std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some()
-        {
-            warn!(
-                target: "fun::render",
-                "render diagnostics requested but game_client/render_diagnostics is not enabled"
-            );
-        }
-    }
-}
-
-fn render_path_config_from_env() -> (ClientRenderConfig, SolariSettings, SolariRuntimeParams) {
-    let mut render_config = ClientRenderConfig::from_env();
-    let solari_settings = solari_settings_from_env();
-    let solari_runtime_params = solari_runtime_params_from_env(&solari_settings);
-    if solari_settings.denoise_mode != SolariDenoiseMode::DlssRayReconstruction {
-        render_config.dlss_rr_disabled_by_denoise_mode = render_config.dlss_rr_enabled;
-        render_config.dlss_rr_enabled = false;
-    }
-    (render_config, solari_settings, solari_runtime_params)
-}
-
-fn log_client_render_path(
-    render_config: &ClientRenderConfig,
-    solari_settings: &SolariSettings,
-    solari_runtime_params: &SolariRuntimeParams,
-) {
-    if render_config.solari_enabled {
-        info!("[client render] Solari lighting will start after the streamed world is ready");
-    } else {
-        info!("[client render] Solari lighting disabled by FUN_DISABLE_SOLARI");
-    }
-    if render_config.meshlets_enabled {
-        info!("[client render] streamed world will use meshlet meshes");
-    } else {
-        info!("[client render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
-    }
-    info!(
-        "[client render] Solari denoise mode: {:?}",
-        solari_settings.denoise_mode
-    );
-    info!(
-        "[client render] Solari internal GI scale: {:?}",
-        solari_settings.internal_scale
-    );
-    info!(
-        "[client render] Solari world-cache: {} entries, {} updates/frame soft cap, {} frame slices, camera tiers {}m/{}m/{}m",
-        solari_settings.world_cache_size,
-        solari_settings.world_cache_cell_updates_soft_cap,
-        solari_settings.world_cache_frame_slice_count,
-        solari_settings.world_cache_near_camera_distance_meters,
-        solari_settings.world_cache_mid_camera_distance_meters,
-        solari_settings.world_cache_far_camera_distance_meters
-    );
-    info!(
-        "[client render] Solari architecture: {:?}, visual target: {:?}, target_fps={}, frame_budget_ns={}, gpu_budget_ns={}",
-        solari_runtime_params.architecture,
-        solari_runtime_params.visual_target,
-        solari_runtime_params.target_fps,
-        solari_runtime_params.frame_budget_ns,
-        solari_runtime_params.gpu_budget_ns
-    );
-    info!(
-        target: "fun::render",
-        solari_enabled = render_config.solari_enabled,
-        meshlets_enabled = render_config.meshlets_enabled,
-        dlss_rr_enabled = render_config.dlss_rr_enabled,
-        denoise_mode = ?solari_settings.denoise_mode,
-        internal_scale = ?solari_settings.internal_scale,
-        world_cache_size = solari_settings.world_cache_size,
-        world_cache_updates_soft_cap = solari_settings.world_cache_cell_updates_soft_cap,
-        world_cache_frame_slice_count = solari_settings.world_cache_frame_slice_count,
-        world_cache_near_meters = solari_settings.world_cache_near_camera_distance_meters,
-        world_cache_mid_meters = solari_settings.world_cache_mid_camera_distance_meters,
-        world_cache_far_meters = solari_settings.world_cache_far_camera_distance_meters,
-        solari_architecture = ?solari_runtime_params.architecture,
-        solari_visual_target = ?solari_runtime_params.visual_target,
-        solari_target_fps = solari_runtime_params.target_fps,
-        solari_frame_budget_ns = solari_runtime_params.frame_budget_ns,
-        solari_gpu_budget_ns = solari_runtime_params.gpu_budget_ns,
-        solari_quality_level = solari_runtime_params.quality_level,
-        solari_cache_update_budget = solari_runtime_params.cache_update_budget,
-        solari_specular_refresh_budget = solari_runtime_params.specular_refresh_budget,
-        solari_debug_overlay = ?solari_runtime_params.debug_overlay,
-        geometry_policy = ?render_config.geometry_policy,
-        meshlet_min_triangles = render_config.meshlet_min_triangles,
-        "client render configuration"
-    );
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    game_shared::fun_diag_info!(
-        target: "fun::render",
-        render_profile_verbose = render_config.render_profile_verbose,
-        fps_overlay_enabled = render_config.fps_overlay_enabled,
-        "client render diagnostic configuration"
-    );
-}
-
-fn selected_opaque_renderer(render_config: &ClientRenderConfig) -> ClientOpaqueRenderer {
-    if render_config.solari_enabled {
-        info!("[client render] default opaque renderer: deferred");
-        ClientOpaqueRenderer::Deferred
-    } else {
-        info!("[client render] default opaque renderer: forward");
-        ClientOpaqueRenderer::Forward
-    }
-}
-
-fn render_path_signature_for_options(
-    options: &ClientAppOptions,
-    render_config: &ClientRenderConfig,
-    opaque_renderer: ClientOpaqueRenderer,
-) -> RenderPathSignature {
-    RenderPathSignature {
-        id: FUN_CLIENT_RENDER_PATH_SIGNATURE_ID,
-        render_profile: options.render_profile,
-        solari_enabled: render_config.solari_enabled,
-        dlss_rr_enabled: render_config.dlss_rr_enabled,
-        meshlets_enabled: render_config.meshlets_enabled,
-        geometry_policy: render_config.geometry_policy,
-        meshlet_min_triangles: render_config.meshlet_min_triangles,
-        opaque_renderer,
-    }
-}
-
-fn emit_render_path_signature(options: &ClientAppOptions, signature: &RenderPathSignature) {
-    info!(
-        target: "fun::render",
-        signature_id = signature.id,
-        runtime_mode = options.mode.as_env_value(),
-        render_profile = signature.render_profile.as_env_value(),
-        hosted_by_editor = options.hosted_by_editor,
-        solari_enabled = signature.solari_enabled,
-        meshlets_enabled = signature.meshlets_enabled,
-        dlss_rr_enabled = signature.dlss_rr_enabled,
-        geometry_policy = ?signature.geometry_policy,
-        meshlet_min_triangles = signature.meshlet_min_triangles,
-        opaque_renderer = signature.opaque_renderer.as_str(),
-        "RenderPathSignature"
-    );
-}
-
 #[derive(Debug, Clone)]
 pub struct GameClientPlugin {
     options: ClientAppOptions,
@@ -1035,8 +574,9 @@ impl Plugin for GameClientPlugin {
             .insert_resource(ClientLogConfig::from_env())
             .insert_resource(ClientHostControlState::from_options(&self.options))
             .insert_resource(Time::<Fixed>::from_hz(DEFAULT_TICK_RATE_HZ))
-            .init_resource::<LoadedWorldState>()
-            .init_resource::<ClientWorldStatus>()
+            .init_resource::<RenderWorldContext>()
+            .init_resource::<RenderWorldStatus>()
+            .init_resource::<ClientWorldStreamAckState>()
             .init_resource::<ClientEditorInspectorState>();
 
         if self.options.mode.runs_gameplay_runtime() {
@@ -1245,8 +785,8 @@ fn apply_static_preview_world_stream(
     mut commands: Commands,
     render_config: Res<ClientRenderConfig>,
     mut preview_stream: ResMut<StaticPreviewWorldStream>,
-    mut loaded_world: ResMut<LoadedWorldState>,
-    mut world_status: ResMut<ClientWorldStatus>,
+    mut render_world: ResMut<RenderWorldContext>,
+    mut world_status: ResMut<RenderWorldStatus>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1285,22 +825,26 @@ fn apply_static_preview_world_stream(
     );
     let mut world_revision_changed = false;
     for chunk in &preview_stream.chunks {
-        world_revision_changed |= apply_world_stream_chunk(
+        let outcome = apply_render_world_chunk(
             &mut commands,
-            &mut loaded_world,
+            &mut render_world,
             &mut world_status,
             &mut meshes,
             &mut meshlet_meshes,
             &mut materials,
             &catalog,
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            runtime.perf_counters.as_mut(),
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            runtime.frame_profiler.as_mut(),
             &render_config,
-            &runtime.log_config,
+            RenderWorldApplyOptions {
+                stream_verbose: runtime.log_config.stream_verbose(),
+                render_verbose: runtime.log_config.render_verbose(),
+            },
             chunk,
         );
+        world_revision_changed |= outcome.world_revision_changed;
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime
+            .perf_counters
+            .add_catalog_lookup_ns(outcome.catalog_lookup_ns);
     }
     preview_stream.applied = true;
 
@@ -1314,7 +858,7 @@ fn apply_static_preview_world_stream(
         reset_dlss_ray_reconstruction_history(&mut dlss_rr);
     }
 
-    if loaded_world.is_complete() {
+    if render_world.is_complete() {
         world_status.ready = true;
         enable_solari_lighting_for_ready_world(
             &mut commands,
@@ -1334,8 +878,8 @@ fn apply_static_preview_world_stream(
         info!(
             target: "fun::preview",
             scene_id = scene_id.as_str(),
-            spawned_entities = loaded_world.spawned_entities.len(),
-            revision = loaded_world.revision.map(|revision| revision.0).unwrap_or_default(),
+            spawned_entities = render_world.spawned_entities.len(),
+            revision = render_world.revision.map(|revision| revision.0).unwrap_or_default(),
             "static editor preview stream ready"
         );
     }
@@ -1472,7 +1016,7 @@ fn client_component_schema(
 )]
 fn update_client_editor_inspector_snapshot(
     inspector: Res<ClientEditorInspectorState>,
-    loaded_world: Res<LoadedWorldState>,
+    render_world: Res<RenderWorldContext>,
     query: Query<(
         &NetworkIdentity,
         &NetworkAuthority,
@@ -1484,7 +1028,7 @@ fn update_client_editor_inspector_snapshot(
 ) {
     let schema_revision = game_shared::EditorSchemaRevision(1);
     let world_revision = game_shared::EditorWorldRevision(
-        loaded_world
+        render_world
             .revision
             .map(|revision| revision.0)
             .unwrap_or_default(),
@@ -1605,314 +1149,6 @@ fn client_transform_preview(transform: &Transform) -> String {
     )
 }
 
-fn solari_settings_from_env() -> SolariSettings {
-    let mut settings = SolariSettings {
-        denoise_mode: solari_denoise_mode_from_env(),
-        internal_scale: solari_internal_scale_from_env(),
-        debug_direct_visibility: std::env::var_os("FUN_SOLARI_DEBUG_DIRECT_VISIBILITY").is_some(),
-        ..default()
-    };
-
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_SIZE",
-        &mut settings.world_cache_size,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_UPDATES",
-        &mut settings.world_cache_cell_updates_soft_cap,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_LIGHT_SAMPLES",
-        &mut settings.world_cache_direct_light_sample_count,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_FRAME_SLICES",
-        &mut settings.world_cache_frame_slice_count,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_NEAR_METERS",
-        &mut settings.world_cache_near_camera_distance_meters,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_MID_METERS",
-        &mut settings.world_cache_mid_camera_distance_meters,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_WORLD_CACHE_FAR_METERS",
-        &mut settings.world_cache_far_camera_distance_meters,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_LIGHT_TILE_BLOCKS",
-        &mut settings.light_tile_blocks,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_LIGHT_TILE_SAMPLES",
-        &mut settings.light_tile_samples_per_block,
-    );
-    apply_u32_env(
-        "FUN_SOLARI_BLAS_COMPACTION_VERTICES",
-        &mut settings.max_blas_compaction_budget_vertices,
-    );
-
-    settings
-}
-
-fn solari_runtime_params_from_env(settings: &SolariSettings) -> SolariRuntimeParams {
-    let architecture = solari_architecture_from_env();
-    let visual_target = solari_visual_target_from_env();
-    let target_fps = env_u32("FUN_SOLARI_TARGET_FPS").unwrap_or(144);
-    let frame_budget_ns = env_u32("FUN_SOLARI_FRAME_BUDGET_NS")
-        .unwrap_or_else(|| 1_000_000_000u32.saturating_div(target_fps.max(1)));
-    let gpu_budget_ns = env_u32("FUN_SOLARI_GPU_BUDGET_NS").unwrap_or(3_000_000);
-
-    let mut params = match architecture {
-        SolariArchitecture::Legacy => SolariRuntimeParams::legacy_from_settings(settings),
-        SolariArchitecture::Budgeted => SolariRuntimeParams::budgeted(
-            settings,
-            visual_target,
-            target_fps,
-            frame_budget_ns,
-            gpu_budget_ns,
-        ),
-    };
-
-    apply_runtime_f32_env(
-        "FUN_SOLARI_RECONSTRUCTION_STRENGTH",
-        &mut params.reconstruction_strength,
-    );
-    apply_runtime_u32_env(
-        "FUN_SOLARI_CACHE_UPDATE_BUDGET",
-        &mut params.cache_update_budget,
-    );
-    apply_runtime_u32_env(
-        "FUN_SOLARI_SPECULAR_REFRESH_BUDGET",
-        &mut params.specular_refresh_budget,
-    );
-    apply_runtime_f32_env(
-        "FUN_SOLARI_DI_REUSE_RADIUS",
-        &mut params.di_spatial_reuse_radius_pixels,
-    );
-    apply_runtime_f32_env(
-        "FUN_SOLARI_GI_REUSE_RADIUS",
-        &mut params.gi_spatial_reuse_radius_pixels,
-    );
-    apply_runtime_f32_env(
-        "FUN_SOLARI_DI_CONFIDENCE_CAP",
-        &mut params.di_temporal_confidence_cap,
-    );
-    apply_runtime_f32_env(
-        "FUN_SOLARI_GI_CONFIDENCE_CAP",
-        &mut params.gi_temporal_confidence_cap,
-    );
-    params.debug_overlay = solari_debug_overlay_from_env();
-
-    params.validated()
-}
-
-fn solari_architecture_from_env() -> SolariArchitecture {
-    match std::env::var("FUN_SOLARI_ARCH")
-        .ok()
-        .map(|value| value.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("budgeted") | Some("budget") | Some("v3") => SolariArchitecture::Budgeted,
-        Some("legacy") | None => SolariArchitecture::Legacy,
-        Some(unknown) => {
-            warn!(
-                target: "fun::render",
-                value = unknown,
-                "unknown FUN_SOLARI_ARCH; using legacy Solari architecture"
-            );
-            SolariArchitecture::Legacy
-        }
-    }
-}
-
-fn solari_visual_target_from_env() -> SolariVisualTarget {
-    match std::env::var("FUN_SOLARI_VISUAL_TARGET")
-        .ok()
-        .map(|value| value.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("competitive") | Some("comp") | Some("fps") => SolariVisualTarget::Competitive,
-        Some("cinematic") | Some("quality") => SolariVisualTarget::Cinematic,
-        Some("balanced") | None => SolariVisualTarget::Balanced,
-        Some(unknown) => {
-            warn!(
-                target: "fun::render",
-                value = unknown,
-                "unknown FUN_SOLARI_VISUAL_TARGET; using balanced Solari visual target"
-            );
-            SolariVisualTarget::Balanced
-        }
-    }
-}
-
-fn solari_debug_overlay_from_env() -> SolariDebugOverlay {
-    match std::env::var("FUN_SOLARI_DEBUG_OVERLAY")
-        .ok()
-        .map(|value| value.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("surface")
-        | Some("surface-classification")
-        | Some("surface_classification")
-        | Some("classification") => SolariDebugOverlay::SurfaceClassification,
-        Some("queue") | Some("queues") | Some("work-queue") | Some("work_queue")
-        | Some("work-queues") | Some("work_queues") => SolariDebugOverlay::WorkQueues,
-        Some("none") | Some("off") | None => SolariDebugOverlay::None,
-        Some(unknown) => {
-            warn!(
-                target: "fun::render",
-                value = unknown,
-                "unknown FUN_SOLARI_DEBUG_OVERLAY; debug overlay disabled"
-            );
-            SolariDebugOverlay::None
-        }
-    }
-}
-
-fn apply_runtime_u32_env(name: &'static str, value: &mut u32) {
-    if let Some(parsed) = env_u32(name) {
-        *value = parsed;
-        info!(target: "fun::render", setting = name, value = parsed, "applied Solari runtime integer setting");
-    }
-}
-
-fn apply_runtime_f32_env(name: &'static str, value: &mut f32) {
-    let Some(raw) = std::env::var_os(name) else {
-        return;
-    };
-    let raw = raw.to_string_lossy();
-    match raw.parse::<f32>() {
-        Ok(parsed) => {
-            *value = parsed;
-            info!(target: "fun::render", setting = name, value = parsed, "applied Solari runtime float setting");
-        }
-        Err(error) => {
-            warn!(
-                target: "fun::render",
-                setting = name,
-                value = %raw,
-                %error,
-                "ignored invalid Solari runtime float setting"
-            );
-        }
-    }
-}
-
-fn env_u32(name: &'static str) -> Option<u32> {
-    let raw = std::env::var_os(name)?;
-    let raw = raw.to_string_lossy();
-    match raw.parse::<u32>() {
-        Ok(parsed) => Some(parsed),
-        Err(error) => {
-            warn!(
-                target: "fun::render",
-                setting = name,
-                value = %raw,
-                %error,
-                "ignored invalid Solari integer setting"
-            );
-            None
-        }
-    }
-}
-
-fn solari_internal_scale_from_env() -> SolariInternalScale {
-    let Some(raw) = std::env::var("FUN_SOLARI_INTERNAL_SCALE")
-        .ok()
-        .map(|value| value.to_ascii_lowercase())
-    else {
-        return SolariInternalScale::Full;
-    };
-
-    match raw.as_str() {
-        "1" | "1.0" | "full" | "native" => SolariInternalScale::Full,
-        "0.75" | ".75" | "75" | "3/4" | "three-quarter" | "three_quarter" => {
-            SolariInternalScale::ThreeQuarter
-        }
-        "0.66" | "0.666" | "0.67" | ".66" | ".666" | ".67" | "66" | "2/3" | "two-thirds"
-        | "two_thirds" => SolariInternalScale::TwoThirds,
-        "0.5" | ".5" | "50" | "1/2" | "half" => SolariInternalScale::Half,
-        unknown => {
-            warn!(
-                "Unknown FUN_SOLARI_INTERNAL_SCALE={unknown}; using full-resolution Solari GI reservoirs"
-            );
-            SolariInternalScale::Full
-        }
-    }
-}
-
-fn apply_u32_env(name: &'static str, value: &mut u32) {
-    let Some(raw) = std::env::var_os(name) else {
-        return;
-    };
-    let raw = raw.to_string_lossy();
-    match raw.parse::<u32>() {
-        Ok(parsed) => {
-            *value = parsed;
-            info!(target: "fun::render", setting = name, value = parsed, "applied Solari numeric setting");
-        }
-        Err(error) => {
-            warn!(
-                target: "fun::render",
-                setting = name,
-                value = %raw,
-                %error,
-                "ignored invalid Solari numeric setting"
-            );
-        }
-    }
-}
-
-fn solari_denoise_mode_from_env() -> SolariDenoiseMode {
-    let mode = std::env::var("FUN_SOLARI_DENOISE_MODE")
-        .ok()
-        .map(|mode| mode.to_ascii_lowercase());
-
-    parse_solari_denoise_mode(
-        mode.as_deref(),
-        std::env::var_os("FUN_DISABLE_DLSS_RR").is_some(),
-    )
-}
-
-fn parse_solari_denoise_mode(
-    mode: Option<&str>,
-    _dlss_ray_reconstruction_disabled: bool,
-) -> SolariDenoiseMode {
-    let Some(mode) = mode else {
-        return SolariDenoiseMode::BalancedFast;
-    };
-
-    match mode {
-        "off" | "raw" => SolariDenoiseMode::Off,
-        "cheap" | "cheap-temporal" | "cheap_temporal" => SolariDenoiseMode::CheapTemporal,
-        "fast" | "balanced-fast" | "balanced_fast" | "balancedfast" => {
-            SolariDenoiseMode::BalancedFast
-        }
-        "balanced" | "svgf" | "svgf-lite" | "svgf_lite" => SolariDenoiseMode::Balanced,
-        "quality" | "svgf-quality" | "svgf_quality" => SolariDenoiseMode::Quality,
-        "rr" | "dlss" | "dlss-rr" | "dlss_rr" | "ray-reconstruction" => {
-            SolariDenoiseMode::DlssRayReconstruction
-        }
-        unknown => {
-            warn!(
-                "Unknown FUN_SOLARI_DENOISE_MODE={unknown}; falling back to balanced-fast Solari denoising"
-            );
-            SolariDenoiseMode::BalancedFast
-        }
-    }
-}
-
-#[cfg(any(test, feature = "benchmarks"))]
-pub fn benchmark_parse_solari_denoise_mode(
-    mode: Option<&str>,
-    dlss_ray_reconstruction_disabled: bool,
-) -> SolariDenoiseMode {
-    parse_solari_denoise_mode(mode, dlss_ray_reconstruction_disabled)
-}
-
 pub fn build_client_app() -> App {
     build_client_app_with_options(ClientAppOptions::from_env())
 }
@@ -1931,231 +1167,18 @@ pub fn build_client_app_with_options(options: ClientAppOptions) -> App {
         has_server_addr = options.server_addr.is_some(),
         "building Fun client app"
     );
+    let render_options = FunRenderAppOptions::winit_client(
+        options.mode.as_env_value(),
+        options.render_profile,
+        options.hosted_by_editor,
+    );
     app.add_plugins((
-        FunClientRenderPlugin::new(options.clone()),
+        FunRenderWinitPresentationPlugin::new(render_options),
+        FunRenderCorePlugin::new(render_options),
         GameClientPlugin::new(options),
     ));
 
     app
-}
-
-fn client_render_creation(render_backend: Backends) -> RenderCreation {
-    RenderCreation::Automatic(Box::new(WgpuSettings {
-        backends: Some(render_backend),
-        instance_flags: InstanceFlags::empty().with_env(),
-        ..default()
-    }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn joined_game_and_editor_preview_share_render_path_signature() {
-        let joined_options = ClientAppOptions {
-            mode: ClientRuntimeMode::JoinedGame,
-            ..Default::default()
-        };
-        let preview_options = ClientAppOptions {
-            mode: ClientRuntimeMode::EditorPreview,
-            hosted_by_editor: true,
-            ..Default::default()
-        };
-
-        let render_config = ClientRenderConfig::from_env();
-        let joined_signature = render_path_signature_for_options(
-            &joined_options,
-            &render_config,
-            ClientOpaqueRenderer::Deferred,
-        );
-        let preview_signature = render_path_signature_for_options(
-            &preview_options,
-            &render_config,
-            ClientOpaqueRenderer::Deferred,
-        );
-
-        assert_ne!(joined_options.mode, preview_options.mode);
-        assert_eq!(joined_signature, preview_signature);
-    }
-
-    #[test]
-    fn editor_preview_mode_disables_gameplay_runtime() {
-        assert!(!ClientRuntimeMode::EditorPreview.runs_gameplay_runtime());
-        assert!(!ClientRuntimeMode::EditorPreview.should_connect_to_game_server());
-        assert!(ClientRuntimeMode::JoinedGame.runs_gameplay_runtime());
-        assert!(ClientRuntimeMode::JoinedGame.should_connect_to_game_server());
-    }
-
-    #[test]
-    fn editor_preview_static_stream_keeps_transforms_stable_across_frames() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_message::<SolariResetEvent>()
-            .insert_resource(ClientRenderConfig::from_env())
-            .insert_resource(ClientLogConfig {
-                stream_verbose: false,
-                net_verbose: false,
-                render_verbose: false,
-                benchmark_minimal: true,
-            })
-            .insert_resource(WorldRenderCatalog::default())
-            .insert_resource(Assets::<Mesh>::default())
-            .insert_resource(Assets::<MeshletMesh>::default())
-            .insert_resource(Assets::<StandardMaterial>::default())
-            .insert_resource(StaticPreviewWorldStream::from_chunks(vec![
-                preview_test_chunk(),
-            ]))
-            .init_resource::<LoadedWorldState>()
-            .init_resource::<ClientWorldStatus>()
-            .add_systems(Update, apply_static_preview_world_stream);
-
-        app.update();
-        let before = preview_streamed_transforms(&mut app);
-        for _ in 0..5 {
-            app.update();
-        }
-        let after = preview_streamed_transforms(&mut app);
-
-        assert_eq!(before, after);
-        assert_eq!(before.len(), 1);
-        assert!(app.world().resource::<ClientWorldStatus>().ready);
-    }
-
-    fn preview_test_chunk() -> WorldStreamChunk {
-        WorldStreamChunk {
-            level_id: WorldLevelId("preview-test".to_owned()),
-            revision: WorldRevision(1),
-            chunk_index: 0,
-            chunk_count: 1,
-            entities: vec![WorldEntitySpec {
-                entity: NetEntity(10_001),
-                name: "PreviewStaticProbe".to_owned(),
-                class: ReplicationClass::World,
-                authority: AuthorityMode::StaticServer,
-                transform: game_scene::qtransform(&Transform::from_xyz(1.0, 2.0, 3.0)),
-                catalog: None,
-                render: None,
-                collider: None,
-                color: None,
-            }],
-        }
-    }
-
-    fn preview_streamed_transforms(app: &mut App) -> Vec<(u64, [f32; 3])> {
-        let mut query = app.world_mut().query::<(&NetworkIdentity, &Transform)>();
-        let mut transforms = query
-            .iter(app.world())
-            .map(|(identity, transform)| (identity.entity.0, transform.translation.to_array()))
-            .collect::<Vec<_>>();
-        transforms.sort_by_key(|(entity, _)| *entity);
-        transforms
-    }
-}
-
-fn recover_render_device(
-    error: &RenderError,
-    _main_world: &mut World,
-    _render_world: &mut World,
-) -> RenderErrorPolicy {
-    info!(
-        "[client render] renderer reported {:?}: {}; recreating renderer with the same profile",
-        error.ty, error.description
-    );
-
-    match error.ty {
-        ErrorType::DeviceLost | ErrorType::OutOfMemory | ErrorType::Internal => {
-            RenderErrorPolicy::Recover(client_render_creation(selected_render_backend()))
-        }
-        ErrorType::Validation => {
-            info!(
-                "[client render] validation error may be fallout from a lost GPU device; attempting immediate renderer recovery"
-            );
-            RenderErrorPolicy::Recover(client_render_creation(selected_render_backend()))
-        }
-    }
-}
-
-fn selected_render_backend() -> Backends {
-    match std::env::var("FUN_RENDER_BACKEND")
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Ok("dx12") | Ok("d3d12") | Ok("directx12") => Backends::DX12,
-        Ok("auto") => Backends::VULKAN | Backends::DX12,
-        Ok("vulkan") | Ok("vk") | Ok("") | Err(_) => Backends::VULKAN,
-        Ok(other) => {
-            info!("[client render] unknown FUN_RENDER_BACKEND={other}; using Vulkan");
-            Backends::VULKAN
-        }
-    }
-}
-
-fn selected_present_mode() -> PresentMode {
-    match std::env::var("FUN_PRESENT_MODE")
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Ok("auto_no_vsync") | Ok("autonovsync") | Ok("auto-no-vsync") => PresentMode::AutoNoVsync,
-        Ok("auto_vsync") | Ok("autovsync") | Ok("auto-vsync") => PresentMode::AutoVsync,
-        Ok("fifo") | Ok("vsync") => PresentMode::Fifo,
-        Ok("fifo_relaxed") | Ok("fifo-relaxed") => PresentMode::FifoRelaxed,
-        Ok("mailbox") => PresentMode::Mailbox,
-        Ok("immediate") | Ok("") | Err(_) => PresentMode::Immediate,
-        Ok(other) => {
-            info!("[client render] unknown FUN_PRESENT_MODE={other}; using Immediate");
-            PresentMode::Immediate
-        }
-    }
-}
-
-fn env_u32_opt(name: &str) -> Option<u32> {
-    let value = std::env::var(name).ok()?;
-    match value.parse::<u32>() {
-        Ok(parsed) if parsed > 0 => Some(parsed),
-        _ => {
-            warn!(
-                target: "fun::render",
-                setting = name,
-                value,
-                "ignored invalid positive integer setting"
-            );
-            None
-        }
-    }
-}
-
-fn env_usize(name: &str, default_value: usize) -> usize {
-    let Ok(value) = std::env::var(name) else {
-        return default_value;
-    };
-    match value.parse::<usize>() {
-        Ok(parsed) if parsed > 0 => parsed,
-        _ => {
-            warn!(
-                target: "fun::render",
-                setting = name,
-                value,
-                default_value,
-                "ignored invalid positive integer setting"
-            );
-            default_value
-        }
-    }
-}
-
-fn setup_lighting(mut commands: Commands) {
-    info!("[client render] spawning directional light");
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 15_000.0,
-            shadow_maps_enabled: false,
-            ..default()
-        },
-        Transform::from_xyz(8.0, 16.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
 }
 
 fn apply_startup_window_config(
@@ -2443,7 +1466,7 @@ fn receive_server_control(
 
 fn receive_server_snapshots(
     mut client: ResMut<QuinnetClient>,
-    loaded_world: Res<LoadedWorldState>,
+    render_world: Res<RenderWorldContext>,
     mut transforms: Query<&mut Transform>,
     _log_config: Res<ClientLogConfig>,
 ) {
@@ -2480,7 +1503,7 @@ fn receive_server_snapshots(
             let Some(transform_delta) = delta.transform else {
                 continue;
             };
-            let Some(entity) = loaded_world.spawned_entities.get(&delta.entity).copied() else {
+            let Some(entity) = render_world.spawned_entities.get(&delta.entity).copied() else {
                 continue;
             };
             let Ok(mut transform) = transforms.get_mut(entity) else {
@@ -2511,8 +1534,7 @@ fn receive_world_stream(
     mut commands: Commands,
     mut client: ResMut<QuinnetClient>,
     render_config: Res<ClientRenderConfig>,
-    mut loaded_world: ResMut<LoadedWorldState>,
-    mut world_status: ResMut<ClientWorldStatus>,
+    mut render_world: ClientRenderWorldParam,
     mut meshes: ResMut<Assets<Mesh>>,
     mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -2635,26 +1657,38 @@ fn receive_world_stream(
         #[cfg(all(feature = "diagnostics", debug_assertions))]
         let apply_diagnostic_started = std::time::Instant::now();
         crate::frame_profile_start!(apply_started);
-        let world_revision_changed = apply_world_stream_chunk(
+        let outcome = apply_render_world_chunk(
             &mut commands,
-            &mut loaded_world,
-            &mut world_status,
+            &mut render_world.render_world,
+            &mut render_world.status,
             &mut meshes,
             &mut meshlet_meshes,
             &mut materials,
             &catalog,
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            runtime.perf_counters.as_mut(),
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            runtime.frame_profiler.as_mut(),
             &render_config,
-            &runtime.log_config,
+            RenderWorldApplyOptions {
+                stream_verbose: runtime.log_config.stream_verbose(),
+                render_verbose: runtime.log_config.render_verbose(),
+            },
+            &packet,
+        );
+        if outcome.world_revision_changed {
+            render_world.ack_state.sent = false;
+        }
+        insert_gameplay_colliders_for_chunk(
+            &mut commands,
+            &render_world.render_world,
+            &catalog,
             &packet,
         );
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         let apply_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime.perf_counters.add_world_stream_apply_ns(apply_ns);
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime
+            .perf_counters
+            .add_catalog_lookup_ns(outcome.catalog_lookup_ns);
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime
             .schedule_profiler
@@ -2684,7 +1718,7 @@ fn receive_world_stream(
             "receive_world_stream",
             "apply_world_stream_chunk",
         );
-        if world_revision_changed {
+        if outcome.world_revision_changed {
             crate::frame_profile_start!(reset_started);
             request_solari_lighting_history_reset(
                 "streamed world revision changed",
@@ -2702,19 +1736,19 @@ fn receive_world_stream(
             );
         }
 
-        if loaded_world.is_complete() {
-            let became_ready = !world_status.ready;
+        if render_world.render_world.is_complete() {
+            let became_ready = !render_world.status.ready;
             if became_ready {
                 info!(
                     target: "fun::stream",
-                    level = ?loaded_world.level_id,
-                    revision = ?loaded_world.revision.map(|revision| revision.0),
-                    spawned_entities = loaded_world.spawned_entities.len(),
-                    chunks_received = loaded_world.received_chunks.len(),
+                    level = ?render_world.render_world.level_id,
+                    revision = ?render_world.render_world.revision.map(|revision| revision.0),
+                    spawned_entities = render_world.render_world.spawned_entities.len(),
+                    chunks_received = render_world.render_world.received_chunks.len(),
                     "streamed world is ready"
                 );
             }
-            world_status.ready = true;
+            render_world.status.ready = true;
             if became_ready {
                 crate::frame_profile_start!(ready_started);
                 enable_solari_lighting_for_ready_world(
@@ -2744,12 +1778,18 @@ fn receive_world_stream(
             }
         }
 
-        if loaded_world.is_complete() && !loaded_world.ack_sent {
+        if render_world.render_world.is_complete() && !render_world.ack_state.sent {
             crate::frame_profile_start!(ack_started);
             let ack = ClientPacket::WorldReady {
                 ack: WorldStreamAck {
-                    level_id: WorldLevelId(loaded_world.level_id.clone().unwrap_or_default()),
-                    revision: loaded_world.revision.unwrap_or_default(),
+                    level_id: WorldLevelId(
+                        render_world
+                            .render_world
+                            .level_id
+                            .clone()
+                            .unwrap_or_default(),
+                    ),
+                    revision: render_world.render_world.revision.unwrap_or_default(),
                 },
             };
 
@@ -2757,12 +1797,12 @@ fn receive_world_stream(
                 Ok(bytes) => {
                     let _byte_len = bytes.len();
                     connection.try_send_payload_on(ClientChannel::Control, bytes);
-                    loaded_world.ack_sent = true;
+                    render_world.ack_state.sent = true;
                     game_shared::fun_diag_info_if!(
                         runtime.log_config.stream_verbose(),
                         target: "fun::stream",
-                        level = %loaded_world.level_id.as_deref().unwrap_or_default(),
-                        revision = loaded_world.revision.unwrap_or_default().0,
+                        level = %render_world.render_world.level_id.as_deref().unwrap_or_default(),
+                        revision = render_world.render_world.revision.unwrap_or_default().0,
                         bytes = _byte_len,
                         "sent world-ready ack"
                     );
@@ -2790,88 +1830,6 @@ fn receive_world_stream(
         "Update",
         "receive_world_stream",
     );
-}
-
-fn enable_solari_lighting_for_ready_world(
-    commands: &mut Commands,
-    render_config: &ClientRenderConfig,
-    solari_cameras: &Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
-    solari_lighting: &mut Query<&mut SolariLighting>,
-    solari_reset_events: &mut MessageWriter<SolariResetEvent>,
-) {
-    if !render_config.solari_enabled {
-        info!("[client render] streamed world ready; Solari remains disabled");
-        info!(target: "fun::solari", "streamed world ready; Solari remains disabled");
-        return;
-    }
-
-    let mut enabled_count = 0usize;
-    for camera_entity in solari_cameras.iter() {
-        commands.entity(camera_entity).insert((
-            CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING),
-            SolariLighting::default(),
-        ));
-        enabled_count += 1;
-    }
-
-    if enabled_count > 0 {
-        info!("[client render] enabled Solari lighting for {enabled_count} ready camera view(s)");
-        info!(
-            target: "fun::solari",
-            enabled_views = enabled_count,
-            "enabled Solari lighting for ready world"
-        );
-    }
-
-    request_solari_lighting_history_reset(
-        "streamed world became ready",
-        solari_reset_events,
-        solari_lighting,
-    );
-}
-
-fn request_solari_lighting_history_reset(
-    reason: &str,
-    solari_reset_events: &mut MessageWriter<SolariResetEvent>,
-    solari_lighting: &mut Query<&mut SolariLighting>,
-) {
-    solari_reset_events.write(SolariResetEvent {
-        reason: Cow::Owned(reason.to_owned()),
-    });
-    info!("[client render] requested Solari temporal history reset: {reason}");
-    let reset_count = reset_solari_lighting_history(solari_lighting);
-    info!(
-        target: "fun::solari",
-        render_solari_reset_requested = true,
-        render_solari_reset_reason = reason,
-        render_solari_reset_view_count = reset_count,
-        render_solari_reset_resource_generation_before = tracing::field::Empty,
-        render_solari_reset_resource_generation_after = tracing::field::Empty,
-        "requested Solari temporal history reset"
-    );
-}
-
-fn reset_solari_lighting_history(solari_lighting: &mut Query<&mut SolariLighting>) -> usize {
-    let mut reset_count = 0usize;
-    for mut lighting in solari_lighting.iter_mut() {
-        lighting.reset = true;
-        reset_count += 1;
-    }
-
-    if reset_count > 0 {
-        info!("[client render] reset Solari temporal history for {reset_count} view(s)");
-        info!(
-            target: "fun::solari",
-            render_solari_reset_applied = true,
-            render_solari_reset_reason = "direct_component_reset",
-            render_solari_reset_view_count = reset_count,
-            render_solari_reset_resource_generation_before = tracing::field::Empty,
-            render_solari_reset_resource_generation_after = tracing::field::Empty,
-            reset_views = reset_count,
-            "reset Solari temporal history"
-        );
-    }
-    reset_count
 }
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -2957,349 +1915,6 @@ fn reset_dlss_ray_reconstruction_history(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "world-stream application threads explicit mutable stores through one deterministic baseline update path"
-)]
-fn apply_world_stream_chunk(
-    commands: &mut Commands,
-    loaded_world: &mut LoadedWorldState,
-    world_status: &mut ClientWorldStatus,
-    meshes: &mut Assets<Mesh>,
-    meshlet_meshes: &mut Assets<MeshletMesh>,
-    materials: &mut Assets<StandardMaterial>,
-    catalog: &WorldRenderCatalog,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    perf_counters: &mut ClientPerfCounters,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    frame_profiler: &mut DetailedFrameProfiler,
-    render_config: &ClientRenderConfig,
-    _log_config: &ClientLogConfig,
-    chunk: &WorldStreamChunk,
-) -> bool {
-    let mut world_revision_changed = false;
-    if loaded_world.revision != Some(chunk.revision)
-        || loaded_world.level_id.as_deref() != Some(chunk.level_id.0.as_str())
-    {
-        crate::frame_profile_start!(reset_started);
-        world_revision_changed = true;
-        game_shared::fun_diag_info_if!(
-            _log_config.stream_verbose(),
-            target: "fun::stream",
-            old_level = ?loaded_world.level_id,
-            old_revision = ?loaded_world.revision.map(|revision| revision.0),
-            old_spawned_entities = loaded_world.spawned_entities.len(),
-            new_level = %chunk.level_id.0,
-            new_revision = chunk.revision.0,
-            expected_chunks = chunk.chunk_count,
-            "resetting streamed world"
-        );
-        for entity in loaded_world.spawned_entities.values().copied() {
-            commands.entity(entity).despawn();
-        }
-
-        loaded_world.level_id = Some(chunk.level_id.0.clone());
-        loaded_world.revision = Some(chunk.revision);
-        loaded_world.expected_chunks = chunk.chunk_count;
-        loaded_world.received_chunks.clear();
-        loaded_world.spawned_entities.clear();
-        loaded_world.ack_sent = false;
-        world_status.ready = false;
-        game_shared::fun_diag_info_if!(
-            _log_config.stream_verbose(),
-            target: "fun::stream",
-            level = %chunk.level_id.0,
-            revision = chunk.revision.0,
-            chunk_count = chunk.chunk_count,
-            "receiving streamed world"
-        );
-        crate::frame_profile_elapsed!(
-            frame_profiler,
-            reset_started,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-            "reset_streamed_world",
-        );
-    }
-
-    for spec in &chunk.entities {
-        if loaded_world.spawned_entities.contains_key(&spec.entity) {
-            game_shared::fun_diag_warn!(
-                target: "fun::stream",
-                net_entity = spec.entity.0,
-                name = %spec.name,
-                "skipping duplicate streamed entity"
-            );
-            continue;
-        }
-
-        crate::frame_profile_start!(spawn_started);
-        let entity = spawn_streamed_entity(
-            commands,
-            meshes,
-            meshlet_meshes,
-            materials,
-            catalog,
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            perf_counters,
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            frame_profiler,
-            render_config,
-            _log_config,
-            spec,
-        );
-        crate::frame_profile_elapsed!(
-            frame_profiler,
-            spawn_started,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-            "spawn_streamed_entity",
-        );
-        game_shared::fun_diag_debug_if!(
-            _log_config.stream_verbose(),
-            target: "fun::stream",
-            ecs_entity = ?entity,
-            net_entity = spec.entity.0,
-            name = %spec.name,
-            "spawned streamed entity"
-        );
-        loaded_world.spawned_entities.insert(spec.entity, entity);
-    }
-
-    loaded_world.received_chunks.insert(chunk.chunk_index);
-    game_shared::fun_diag_info_if!(
-        _log_config.stream_verbose(),
-        target: "fun::stream",
-        received_chunks = loaded_world.received_chunks.len(),
-        expected_chunks = loaded_world.expected_chunks,
-        spawned_entities = loaded_world.spawned_entities.len(),
-        "streamed world chunk complete"
-    );
-
-    world_revision_changed
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "spawn wiring keeps Bevy asset stores explicit while catalog-driven construction is still local"
-)]
-fn spawn_streamed_entity(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    meshlet_meshes: &mut Assets<MeshletMesh>,
-    materials: &mut Assets<StandardMaterial>,
-    catalog: &WorldRenderCatalog,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    perf_counters: &mut ClientPerfCounters,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-    frame_profiler: &mut DetailedFrameProfiler,
-    render_config: &ClientRenderConfig,
-    _log_config: &ClientLogConfig,
-    spec: &WorldEntitySpec,
-) -> Entity {
-    let _translation = vec3_from_quantized(spec.transform.translation);
-    let mut entity_commands = commands.spawn((
-        Name::new(spec.name.clone()),
-        NetworkIdentity {
-            entity: spec.entity,
-            class: spec.class,
-        },
-        NetworkAuthority {
-            mode: spec.authority,
-        },
-        transform_from_quantized(spec.transform),
-    ));
-
-    game_shared::fun_diag_debug_if!(
-        _log_config.stream_verbose(),
-        target: "fun::stream::entity",
-        net_entity = spec.entity.0,
-        name = %spec.name,
-        class = ?spec.class,
-        authority = ?spec.authority,
-        translation_x = _translation.x,
-        translation_y = _translation.y,
-        translation_z = _translation.z,
-        catalog = catalog_ref_summary(spec.catalog),
-        render = ?spec.render,
-        collider = ?spec.collider,
-        color = ?spec.color,
-        "streamed entity spawn spec"
-    );
-
-    if let Some(catalog_ref) = spec.catalog {
-        crate::frame_profile_start!(lookup_started);
-        let compiled = catalog.lookup(catalog_ref);
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        perf_counters.add_catalog_lookup_ns(
-            lookup_started
-                .elapsed()
-                .as_nanos()
-                .min(u128::from(u64::MAX)) as u64,
-        );
-        crate::frame_profile_elapsed!(
-            frame_profiler,
-            lookup_started,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-            "spawn_streamed_entity",
-            "catalog_lookup",
-        );
-
-        if let Some(compiled) = compiled {
-            crate::frame_profile_start!(render_insert_started);
-            entity_commands.insert(compiled.geometry_class);
-            if compiled.geometry_class.uses_meshlet() {
-                if let (Some(meshlet_mesh), Some(material)) =
-                    (compiled.meshlet_mesh.as_ref(), compiled.material.as_ref())
-                {
-                    entity_commands.insert((
-                        MeshletMesh3d(meshlet_mesh.clone()),
-                        MeshMaterial3d::<StandardMaterial>(material.clone()),
-                    ));
-                }
-            } else if compiled.geometry_class.uses_raster_mesh()
-                && let (Some(mesh), Some(material)) =
-                    (compiled.raster_mesh.as_ref(), compiled.material.as_ref())
-            {
-                entity_commands.insert((
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d::<StandardMaterial>(material.clone()),
-                ));
-            }
-
-            if render_config.solari_enabled
-                && let Some(ray_proxy) = compiled.ray_proxy.as_ref()
-            {
-                entity_commands.insert(RaytracingMesh3d(ray_proxy.clone()));
-            }
-
-            if let Some(collider) = compiled.collider.as_ref() {
-                entity_commands.insert((RigidBody::Static, collider.clone()));
-            }
-            crate::frame_profile_elapsed!(
-                frame_profiler,
-                render_insert_started,
-                "Update",
-                "receive_world_stream",
-                "apply_world_stream_chunk",
-                "spawn_streamed_entity",
-                "insert_catalog_render_components",
-            );
-
-            game_shared::fun_diag_info_if!(
-                _log_config.render_verbose(),
-                target: "fun::render_catalog",
-                name = %spec.name,
-                asset_id = catalog_ref.asset_id,
-                material_id = catalog_ref.material_id,
-                collider_id = catalog_ref.collider_id,
-                catalog_asset = compiled.entry.name,
-                geometry_class = ?compiled.geometry_class,
-                triangles = compiled.triangle_count,
-                meshlet = compiled.geometry_class.uses_meshlet(),
-                raster = compiled.geometry_class.uses_raster_mesh(),
-                raytracing = render_config.solari_enabled && compiled.ray_proxy.is_some(),
-                "inserted catalog-backed streamed render components"
-            );
-        } else {
-            warn_missing_catalog_ref(catalog_ref, &spec.name);
-        }
-    } else if let Some(primitive) = spec.render {
-        crate::frame_profile_start!(primitive_started);
-        let mesh = mesh_from_primitive(primitive);
-        let (raytracing_mesh, meshlet_mesh) = add_scene_mesh_assets(
-            meshes,
-            meshlet_meshes,
-            mesh,
-            &spec.name,
-            render_config,
-            _log_config,
-        );
-        let material = materials.add(color_from_packed(spec.color));
-        crate::frame_profile_elapsed!(
-            frame_profiler,
-            primitive_started,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-            "spawn_streamed_entity",
-            "build_primitive_mesh_assets",
-        );
-
-        crate::frame_profile_start!(render_insert_started);
-        if render_config.meshlets_enabled {
-            entity_commands.insert((
-                MeshletMesh3d(meshlet_mesh.expect("meshlet handle should exist when enabled")),
-                MeshMaterial3d::<StandardMaterial>(material),
-            ));
-        } else if let Some(mesh) = raytracing_mesh.as_ref() {
-            entity_commands.insert((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d::<StandardMaterial>(material),
-            ));
-        }
-
-        if render_config.solari_enabled
-            && let Some(raytracing_mesh) = raytracing_mesh
-        {
-            entity_commands.insert(RaytracingMesh3d(raytracing_mesh));
-        }
-        crate::frame_profile_elapsed!(
-            frame_profiler,
-            render_insert_started,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-            "spawn_streamed_entity",
-            "insert_primitive_render_components",
-        );
-
-        game_shared::fun_diag_debug_if!(
-            _log_config.render_verbose(),
-            target: "fun::render::entity",
-            name = %spec.name,
-            meshlet = render_config.meshlets_enabled,
-            raytracing = render_config.solari_enabled,
-            "inserted streamed render components"
-        );
-    }
-
-    if spec.catalog.is_none()
-        && let Some(collider) = spec.collider
-    {
-        crate::frame_profile_start!(collider_started);
-        entity_commands.insert((RigidBody::Static, collider_from_stream(collider)));
-        crate::frame_profile_elapsed!(
-            frame_profiler,
-            collider_started,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-            "spawn_streamed_entity",
-            "insert_collider",
-        );
-    }
-
-    entity_commands.id()
-}
-
-fn mesh_from_primitive(primitive: WorldPrimitive) -> Mesh {
-    match primitive {
-        WorldPrimitive::Plane { size } => {
-            let size = vec3_from_quantized(size);
-            Plane3d::default().mesh().size(size.x, size.z).build()
-        }
-        WorldPrimitive::Cuboid { size } => {
-            let size = vec3_from_quantized(size);
-            Cuboid::new(size.x, size.y, size.z).mesh().build()
-        }
-    }
-}
-
 fn collider_from_stream(collider: WorldCollider) -> Collider {
     match collider {
         WorldCollider::Cuboid { size } => {
@@ -3309,45 +1924,38 @@ fn collider_from_stream(collider: WorldCollider) -> Collider {
     }
 }
 
-fn add_scene_mesh_assets(
-    meshes: &mut Assets<Mesh>,
-    meshlet_meshes: &mut Assets<MeshletMesh>,
-    mesh: Mesh,
-    name: &str,
-    render_config: &ClientRenderConfig,
-    _log_config: &ClientLogConfig,
-) -> (Option<Handle<Mesh>>, Option<Handle<MeshletMesh>>) {
-    let _vertex_count = mesh.count_vertices();
-    let meshlet_handle = if render_config.meshlets_enabled {
-        let meshlet_mesh =
-            MeshletMesh::from_mesh(&mesh, MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR)
-                .unwrap_or_else(|error| panic!("failed to build {name} meshlet mesh: {error}"));
-        Some(meshlet_meshes.add(meshlet_mesh))
-    } else {
-        None
-    };
-    let raytracing_handle = if render_config.solari_enabled || !render_config.meshlets_enabled {
-        let raytracing_mesh = mesh.with_generated_tangents().unwrap_or_else(|error| {
-            panic!("failed to generate {name} raytracing tangents: {error}")
-        });
-        Some(meshes.add(raytracing_mesh))
-    } else {
-        None
-    };
+fn collider_from_catalog(collider: CatalogCollider) -> Collider {
+    match collider {
+        CatalogCollider::Cuboid { size } => Collider::cuboid(size[0], size[1], size[2]),
+    }
+}
 
-    game_shared::fun_diag_debug_if!(
-        _log_config.render_verbose(),
-        target: "fun::render::mesh",
-        name,
-        vertices = _vertex_count,
-        meshlets_enabled = render_config.meshlets_enabled,
-        solari_enabled = render_config.solari_enabled,
-        raytracing_handle = ?raytracing_handle,
-        meshlet_handle = ?meshlet_handle,
-        "built streamed mesh assets"
-    );
-
-    (raytracing_handle, meshlet_handle)
+fn insert_gameplay_colliders_for_chunk(
+    commands: &mut Commands,
+    render_world: &RenderWorldContext,
+    catalog: &WorldRenderCatalog,
+    chunk: &WorldStreamChunk,
+) {
+    for spec in &chunk.entities {
+        let Some(entity) = render_world.spawned_entities.get(&spec.entity).copied() else {
+            continue;
+        };
+        if let Some(catalog_ref) = spec.catalog {
+            if let Some(compiled) = catalog.lookup(catalog_ref)
+                && let Some((_, collider)) = compiled.entry.collider
+            {
+                commands
+                    .entity(entity)
+                    .insert((RigidBody::Static, collider_from_catalog(collider)));
+            }
+            continue;
+        }
+        if let Some(collider) = spec.collider {
+            commands
+                .entity(entity)
+                .insert((RigidBody::Static, collider_from_stream(collider)));
+        }
+    }
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -3368,7 +1976,8 @@ fn log_client_diagnostics(
     log_config: Res<ClientLogConfig>,
     catalog: Option<Res<WorldRenderCatalog>>,
     render_recovery: Option<Res<RenderRecoveryStatus>>,
-    loaded_world: Res<LoadedWorldState>,
+    render_world: Res<RenderWorldContext>,
+    ack_state: Res<ClientWorldStreamAckState>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<
         (
@@ -3501,12 +2110,12 @@ fn log_client_diagnostics(
     if log_config.diagnostics_verbose() {
         game_shared::fun_diag_info!(
             target: "fun::diag",
-            level = ?loaded_world.level_id,
-            revision = ?loaded_world.revision.map(|revision| revision.0),
-            chunks_received = loaded_world.received_chunks.len(),
-            chunks_expected = loaded_world.expected_chunks,
-            spawned_entities = loaded_world.spawned_entities.len(),
-            ack_sent = loaded_world.ack_sent,
+            level = ?render_world.level_id,
+            revision = ?render_world.revision.map(|revision| revision.0),
+            chunks_received = render_world.received_chunks.len(),
+            chunks_expected = render_world.expected_chunks,
+            spawned_entities = render_world.spawned_entities.len(),
+            ack_sent = ack_state.sent,
             cameras = camera_count,
             active_cameras = active_camera_count,
             renderables = renderable_count,
@@ -4792,11 +3401,6 @@ fn take_counter(counter: &mut u64) -> u64 {
     value
 }
 
-fn color_from_packed(color: Option<PackedColorRgba8>) -> StandardMaterial {
-    let color = color.unwrap_or_else(|| PackedColorRgba8::srgb(180, 180, 180));
-    Color::srgba_u8(color.r, color.g, color.b, color.a).into()
-}
-
 fn transform_from_quantized(transform: QuantizedTransform3) -> Transform {
     let rotation = transform.rotation.to_f32();
     Transform::from_translation(vec3_from_quantized(transform.translation)).with_rotation(
@@ -4806,21 +3410,6 @@ fn transform_from_quantized(transform: QuantizedTransform3) -> Transform {
 
 fn vec3_from_quantized(value: QuantizedVec3) -> Vec3 {
     Vec3::from_array(value.to_f32(Quantization::MILLIMETERS))
-}
-
-#[derive(Debug, Default, Resource)]
-struct LoadedWorldState {
-    level_id: Option<String>,
-    revision: Option<WorldRevision>,
-    expected_chunks: u16,
-    received_chunks: HashSet<u16>,
-    spawned_entities: HashMap<NetEntity, Entity>,
-    ack_sent: bool,
-}
-
-#[derive(Debug, Default, Resource)]
-pub(crate) struct ClientWorldStatus {
-    pub ready: bool,
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -4838,8 +3427,118 @@ impl Default for ClientDiagnostics {
     }
 }
 
-impl LoadedWorldState {
-    fn is_complete(&self) -> bool {
-        self.expected_chunks > 0 && self.received_chunks.len() >= self.expected_chunks as usize
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn game_client_default_render_signature_matches_editor_preview() {
+        let joined_options = ClientAppOptions {
+            mode: ClientRuntimeMode::JoinedGame,
+            ..Default::default()
+        };
+        let preview_options = ClientAppOptions {
+            mode: ClientRuntimeMode::EditorPreview,
+            hosted_by_editor: true,
+            ..Default::default()
+        };
+        let joined_render_options = FunRenderAppOptions::winit_client(
+            joined_options.mode.as_env_value(),
+            joined_options.render_profile,
+            joined_options.hosted_by_editor,
+        );
+        let preview_render_options =
+            FunRenderAppOptions::editor_offscreen(preview_options.render_profile);
+
+        let render_config = ClientRenderConfig::from_env();
+        let solari_settings = fun_render::solari_settings_from_env();
+        let joined_signature = fun_render::render_path_signature_for_options(
+            &joined_render_options,
+            &render_config,
+            &solari_settings,
+            fun_render::ClientOpaqueRenderer::Deferred,
+        );
+        let preview_signature = fun_render::render_path_signature_for_options(
+            &preview_render_options,
+            &render_config,
+            &solari_settings,
+            fun_render::ClientOpaqueRenderer::Deferred,
+        );
+
+        assert_ne!(joined_options.mode, preview_options.mode);
+        assert_eq!(joined_signature, preview_signature);
+    }
+
+    #[test]
+    fn editor_preview_mode_disables_gameplay_runtime() {
+        assert!(!ClientRuntimeMode::EditorPreview.runs_gameplay_runtime());
+        assert!(!ClientRuntimeMode::EditorPreview.should_connect_to_game_server());
+        assert!(ClientRuntimeMode::JoinedGame.runs_gameplay_runtime());
+        assert!(ClientRuntimeMode::JoinedGame.should_connect_to_game_server());
+    }
+
+    #[test]
+    fn editor_preview_static_stream_keeps_transforms_stable_across_frames() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<SolariResetEvent>()
+            .insert_resource(ClientRenderConfig::from_env())
+            .insert_resource(ClientLogConfig {
+                stream_verbose: false,
+                net_verbose: false,
+                render_verbose: false,
+                benchmark_minimal: true,
+            })
+            .insert_resource(WorldRenderCatalog::default())
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<MeshletMesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(StaticPreviewWorldStream::from_chunks(vec![
+                preview_test_chunk(),
+            ]))
+            .init_resource::<RenderWorldContext>()
+            .init_resource::<RenderWorldStatus>()
+            .add_systems(Update, apply_static_preview_world_stream);
+
+        app.update();
+        let before = preview_streamed_transforms(&mut app);
+        for _ in 0..5 {
+            app.update();
+        }
+        let after = preview_streamed_transforms(&mut app);
+
+        assert_eq!(before, after);
+        assert_eq!(before.len(), 1);
+        assert!(app.world().resource::<RenderWorldStatus>().ready);
+    }
+
+    fn preview_test_chunk() -> WorldStreamChunk {
+        WorldStreamChunk {
+            level_id: WorldLevelId("preview-test".to_owned()),
+            revision: WorldRevision(1),
+            chunk_index: 0,
+            chunk_count: 1,
+            entities: vec![WorldEntitySpec {
+                entity: NetEntity(10_001),
+                name: "PreviewStaticProbe".to_owned(),
+                class: ReplicationClass::World,
+                authority: AuthorityMode::StaticServer,
+                transform: game_scene::qtransform(&Transform::from_xyz(1.0, 2.0, 3.0)),
+                catalog: None,
+                render: None,
+                collider: None,
+                color: None,
+            }],
+        }
+    }
+
+    fn preview_streamed_transforms(app: &mut App) -> Vec<(u64, [f32; 3])> {
+        let mut query = app.world_mut().query::<(&NetworkIdentity, &Transform)>();
+        let mut transforms = query
+            .iter(app.world())
+            .map(|(identity, transform)| (identity.entity.0, transform.translation.to_array()))
+            .collect::<Vec<_>>();
+        transforms.sort_by_key(|(entity, _)| *entity);
+        transforms
     }
 }

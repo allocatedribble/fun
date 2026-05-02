@@ -14,6 +14,8 @@ use game_shared::{
 use thunder::prelude::*;
 
 pub const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
+pub const DEFAULT_SCENE_ID: SceneId = SceneId("arena-blockout");
+const DEFAULT_SCENE_FUNCTION_NAME: &str = "spawn_default_scene";
 const FLOOR_ENTITY: NetEntity = NetEntity(1);
 const FLOOR_COLLIDER_ENTITY: NetEntity = NetEntity(2);
 const WALL_ENTITY: NetEntity = NetEntity(3);
@@ -21,6 +23,65 @@ const RAMP_ENTITY: NetEntity = NetEntity(4);
 const COVER_A_ENTITY: NetEntity = NetEntity(5);
 const COVER_B_ENTITY: NetEntity = NetEntity(6);
 const COVER_C_ENTITY: NetEntity = NetEntity(7);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SceneId(pub &'static str);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SceneManifestSignature(pub u64);
+
+#[derive(Debug, Clone, Copy)]
+pub struct SceneDescriptor {
+    pub id: SceneId,
+    pub display_name: &'static str,
+    pub scene_function_name: &'static str,
+    pub signature: SceneManifestSignature,
+}
+
+#[derive(Debug, Clone)]
+pub struct SceneRenderManifest {
+    pub descriptor: SceneDescriptor,
+    pub entities: Vec<SceneRenderEntity>,
+    pub preview_camera: ScenePreviewCamera,
+    pub lighting: SceneLightingDescriptor,
+    pub world_stream_chunks: Vec<WorldStreamChunk>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SceneRenderEntity {
+    pub stable_identity: NetEntity,
+    pub name: String,
+    pub transform: QuantizedTransform3,
+    pub catalog: Option<WorldCatalogRef>,
+    pub render: Option<WorldPrimitive>,
+    pub material_color: Option<PackedColorRgba8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScenePreviewCamera {
+    pub transform: QuantizedTransform3,
+    pub vertical_fov_radians: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SceneLightingDescriptor {
+    pub sun_direction: [f32; 3],
+    pub sun_illuminance_lux: f32,
+    pub ambient_rgb: [f32; 3],
+}
+
+pub trait SceneRenderManifestProvider {
+    fn scene_render_manifest(&self, revision: WorldRevision) -> SceneRenderManifest;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DefaultSceneRenderManifestProvider;
+
+impl SceneRenderManifestProvider for DefaultSceneRenderManifestProvider {
+    fn scene_render_manifest(&self, revision: WorldRevision) -> SceneRenderManifest {
+        default_scene_render_manifest(revision)
+    }
+}
 
 #[derive(Debug, Default, Clone, Component)]
 pub struct StreamedWorldEntity {
@@ -156,8 +217,68 @@ pub fn apply_scene_stable_identities(
 }
 
 #[must_use]
+pub fn scene_render_descriptors() -> [SceneDescriptor; 1] {
+    [default_scene_descriptor()]
+}
+
+#[must_use]
+pub fn scene_render_manifest(
+    scene_id: SceneId,
+    revision: WorldRevision,
+) -> Option<SceneRenderManifest> {
+    if scene_id == DEFAULT_SCENE_ID {
+        return Some(default_scene_render_manifest(revision));
+    }
+    None
+}
+
+#[must_use]
+pub fn default_scene_descriptor() -> SceneDescriptor {
+    SceneDescriptor {
+        id: DEFAULT_SCENE_ID,
+        display_name: "Arena Blockout",
+        scene_function_name: DEFAULT_SCENE_FUNCTION_NAME,
+        signature: default_scene_manifest_signature(),
+    }
+}
+
+#[must_use]
+pub fn default_scene_render_manifest(revision: WorldRevision) -> SceneRenderManifest {
+    let specs = default_scene_world_specs();
+    let entities = specs
+        .iter()
+        .map(|spec| SceneRenderEntity {
+            stable_identity: spec.entity,
+            name: spec.name.clone(),
+            transform: spec.transform,
+            catalog: spec.catalog,
+            render: spec.render,
+            material_color: spec.color,
+        })
+        .collect::<Vec<_>>();
+    let world_stream_chunks = chunk_world_specs(DEMO_LEVEL_ID, revision, specs);
+    SceneRenderManifest {
+        descriptor: default_scene_descriptor(),
+        entities,
+        preview_camera: ScenePreviewCamera {
+            transform: qtransform(
+                &Transform::from_xyz(-8.0, 5.0, 10.0)
+                    .looking_at(Vec3::new(1.0, 1.0, -1.0), Vec3::Y),
+            ),
+            vertical_fov_radians: 65.0_f32.to_radians(),
+        },
+        lighting: SceneLightingDescriptor {
+            sun_direction: [-0.4, -1.0, -0.35],
+            sun_illuminance_lux: 25_000.0,
+            ambient_rgb: [0.03, 0.035, 0.04],
+        },
+        world_stream_chunks,
+    }
+}
+
+#[must_use]
 pub fn default_scene_world_stream_chunks(revision: WorldRevision) -> Vec<WorldStreamChunk> {
-    chunk_world_specs(DEMO_LEVEL_ID, revision, default_scene_world_specs())
+    default_scene_render_manifest(revision).world_stream_chunks
 }
 
 #[must_use]
@@ -270,6 +391,21 @@ fn default_scene_entities() -> [SceneEntity; 7] {
     ]
 }
 
+fn default_scene_manifest_signature() -> SceneManifestSignature {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for entity in default_scene_entities() {
+        hash = fnv1a_u64(hash, entity.entity.0);
+        hash = fnv1a(hash, entity.catalog.asset_id);
+        hash = fnv1a(hash, entity.catalog.material_id);
+        hash = fnv1a(hash, entity.catalog.collider_id);
+        for value in entity.translation.to_array() {
+            hash = fnv1a(hash, value.to_bits());
+        }
+        hash = fnv1a(hash, entity.rotation_z_radians.to_bits());
+    }
+    SceneManifestSignature(hash)
+}
+
 const fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> WorldCatalogRef {
     WorldCatalogRef {
         asset_id,
@@ -280,6 +416,22 @@ const fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> World
 
 fn qvec(value: Vec3) -> QuantizedVec3 {
     QuantizedVec3::from_f32(value.to_array(), Quantization::MILLIMETERS)
+}
+
+fn fnv1a(mut hash: u64, value: u32) -> u64 {
+    for byte in value.to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn fnv1a_u64(mut hash: u64, value: u64) -> u64 {
+    for byte in value.to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -298,6 +450,22 @@ mod tests {
         let first = default_scene_world_stream_chunks(WorldRevision(1));
         let second = default_scene_world_stream_chunks(WorldRevision(1));
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn default_scene_manifest_exposes_render_structure() {
+        let manifest = default_scene_render_manifest(WorldRevision(7));
+        assert_eq!(manifest.descriptor.id, DEFAULT_SCENE_ID);
+        assert_eq!(manifest.entities.len(), 7);
+        assert_eq!(manifest.world_stream_chunks.len(), 1);
+        assert_eq!(manifest.world_stream_chunks[0].revision, WorldRevision(7));
+        assert_eq!(manifest.entities[0].stable_identity, FLOOR_ENTITY);
+        assert!(
+            manifest
+                .entities
+                .iter()
+                .all(|entity| entity.catalog.is_some())
+        );
     }
 
     #[test]

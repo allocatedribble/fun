@@ -45,6 +45,20 @@ on first-person movement, collision, rendering, networking foundations, and the
 technical groundwork needed for meshlet rendering, raytraced lighting, and future
 large-match simulation.
 
+## Rendering Architecture
+
+`fun_render` is the shared render substrate for the game client and the editor.
+Its core plugin owns render configuration, Solari settings, meshlet setup,
+render catalogs, material and mesh hydration from world-stream specs,
+diagnostics, and render path signatures without creating a Winit window.
+
+Presentation is split by caller. `game_client` enables
+`fun_render/winit_presentation` and adds the Winit presentation plugin for the
+real game window. Fun Editor depends on the default offscreen `fun_render`
+feature surface and uses its own editor preview renderer crate to render static
+scene manifests into editor-owned targets without Winit, HWND embedding,
+networking, physics, prediction, gameplay, or server systems.
+
 ## Client Benchmarking
 
 Client changes must be measurable. Use Criterion through
