@@ -2,7 +2,10 @@ use bevy::{
     camera::CameraMainTextureUsages,
     pbr::experimental::meshlet::MeshletPlugin,
     prelude::*,
-    render::render_resource::TextureUsages,
+    render::{
+        RenderApp, RenderStartup, backend_capabilities::RenderBackendCapabilities,
+        extract_resource::ExtractResourcePlugin, init_gpu_resource, render_resource::TextureUsages,
+    },
     solari::prelude::{SolariDenoiseMode, SolariPlugins, SolariRuntimeParams, SolariSettings},
 };
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -15,8 +18,8 @@ use tracing::info;
 use tracing::warn;
 
 use crate::{
-    ClientOpaqueRenderer, ClientRenderConfig, FunRenderAppOptions, RenderPathSignature, lighting,
-    prewarm_world_render_catalog, render_path_signature_for_options,
+    ClientOpaqueRenderer, ClientRenderConfig, FunRenderAppOptions, FunRenderRtFeatures,
+    RenderPathSignature, lighting, prewarm_world_render_catalog, render_path_signature_for_options,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
 };
 
@@ -40,6 +43,7 @@ impl Plugin for FunRenderCorePlugin {
 pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     let (render_config, solari_settings, solari_runtime_params) = render_path_config_from_env();
     log_fun_render_path(&render_config, &solari_settings, &solari_runtime_params);
+    render_config.rt_features.log_config();
     let opaque_renderer = selected_opaque_renderer(&render_config);
     let signature = render_path_signature_for_options(
         options,
@@ -59,6 +63,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .insert_resource(solari_settings)
         .insert_resource(solari_runtime_params)
         .add_message::<bevy::solari::prelude::SolariResetEvent>()
+        .add_plugins(ExtractResourcePlugin::<FunRenderRtFeatures>::default())
         .add_plugins(MeshletPlugin {
             cluster_buffer_slots: 1 << 14,
         })
@@ -106,6 +111,15 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
                 "render diagnostics requested but fun_render/render_diagnostics is not enabled"
             );
         }
+    }
+
+    if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+        render_app.add_systems(
+            RenderStartup,
+            log_rt_backend_fallbacks
+                .after(init_gpu_resource::<RenderBackendCapabilities>)
+                .ambiguous_with_all(),
+        );
     }
 }
 
@@ -184,6 +198,17 @@ fn log_fun_render_path(
         solari_debug_overlay = ?solari_runtime_params.debug_overlay,
         geometry_policy = ?render_config.geometry_policy,
         meshlet_min_triangles = render_config.meshlet_min_triangles,
+        rt_capability_hash = %format_args!("{:016x}", render_config.rt_features.capability_hash()),
+        rt_sample_direct = render_config.rt_features.sample_direct,
+        rt_sample_indirect = render_config.rt_features.sample_indirect,
+        rt_sample_reflections = render_config.rt_features.sample_reflections,
+        rt_surface_cache = render_config.rt_features.surface_cache,
+        rt_megageom = render_config.rt_features.megageom.as_env_value(),
+        rt_opacity_mask = render_config.rt_features.opacity_mask.as_env_value(),
+        rt_hair = render_config.rt_features.hair.as_env_value(),
+        rt_async_readback = render_config.rt_features.async_readback,
+        rt_validation = render_config.rt_features.validation,
+        rt_vendor_emulation = render_config.rt_features.vendor_emulation.as_env_value(),
         "Fun render configuration"
     );
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -218,12 +243,20 @@ fn emit_render_path_signature(options: &FunRenderAppOptions, signature: &RenderP
         dlss_rr_enabled = signature.dlss_rr_enabled,
         geometry_policy = ?signature.geometry_policy,
         meshlet_min_triangles = signature.meshlet_min_triangles,
+        capability_hash = %format_args!("{:016x}", signature.capability_hash),
         opaque_renderer = signature.opaque_renderer.as_str(),
         render_target_format = signature.render_target_format,
         internal_scale = signature.internal_scale,
         catalog_version = signature.catalog_version,
         "FunRenderPathSignature"
     );
+}
+
+fn log_rt_backend_fallbacks(
+    rt_features: Res<FunRenderRtFeatures>,
+    capabilities: Res<RenderBackendCapabilities>,
+) {
+    rt_features.log_backend_fallbacks(&capabilities);
 }
 
 pub fn enable_solari_lighting_for_ready_world(

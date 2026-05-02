@@ -3,14 +3,15 @@ use crate::{
     EditorAuditEvent, EditorAuth, EditorAuthRequired, EditorBindMode, EditorBuildId,
     EditorCapability, EditorCommandPacket, EditorCommandPayload, EditorComponentSchema,
     EditorControlConfig, EditorDiagnosticBatch, EditorDiagnosticEvent, EditorDiagnosticPacket,
-    EditorEntityPage, EditorEntityQuery, EditorEntityRow, EditorEventPacket, EditorEventPayload,
+    EditorDiagnosticStream, EditorDiagnosticSubscription, EditorEntityPage, EditorEntityQuery,
+    EditorEntityRow, EditorEventPacket, EditorEventPayload, EditorExecResult, EditorExecStatus,
     EditorHandshakePacket, EditorHandshakePayload, EditorMutationAck, EditorMutationStatus,
-    EditorMutationTransaction, EditorPacketHeader, EditorPageCursor, EditorProtocolPacket,
-    EditorProtocolValidationContext, EditorRequestId, EditorRuntimeControlCommand,
-    EditorSchemaRevision, EditorSessionId, EditorSizeBudget, EditorTargetKind, EditorTransactionId,
-    EditorWelcome, EditorWorldRevision, PacketSequence, RuntimeDiagnosticSinks,
-    decode_editor_packet, editor_wire_envelope_len, encode_editor_packet, parse_editor_capability,
-    validate_editor_packet,
+    EditorMutationTransaction, EditorPacketHeader, EditorPageCursor, EditorPersistenceAck,
+    EditorPersistenceStatus, EditorProtocolPacket, EditorProtocolValidationContext,
+    EditorRequestId, EditorRuntimeControlCommand, EditorSchemaRevision, EditorSessionId,
+    EditorSizeBudget, EditorTargetKind, EditorTransactionId, EditorWelcome, EditorWorldRevision,
+    PacketSequence, RuntimeDiagnosticSinks, decode_editor_packet, editor_wire_envelope_len,
+    encode_editor_packet, parse_editor_capability, validate_editor_packet,
 };
 use ring::hmac;
 use std::{
@@ -35,6 +36,10 @@ const EDITOR_CLIENT_BIND_ENABLE_ENV: &str = "FUN_EDITOR_ENABLE_CLIENT_INSPECTOR_
 const EDITOR_SERVER_BIND_ADDR_ENV: &str = "FUN_EDITOR_SERVER_INSPECTOR_ADDR";
 const EDITOR_CLIENT_BIND_ADDR_ENV: &str = "FUN_EDITOR_CLIENT_INSPECTOR_ADDR";
 const EDITOR_MUTATION_RESULT_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_EDITOR_ENVELOPE_BYTES: usize = 64 * 1024;
+const MAX_PENDING_EDITOR_MUTATIONS: usize = 128;
+const MAX_PENDING_MUTATION_RESULTS: usize = 128;
+const MAX_PENDING_RUNTIME_CONTROLS: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct EditorInspectorServiceConfig {
@@ -127,6 +132,7 @@ pub struct EditorInspectorSnapshot {
     pub entities: Vec<EditorEntityRow>,
     pub diagnostics: RuntimeDiagnosticSinks,
     pub editor_attached: bool,
+    editor_attachment_count: usize,
     pending_mutations: VecDeque<EditorMutationTransaction>,
     mutation_results: VecDeque<EditorInspectorMutationResult>,
     pending_runtime_controls: VecDeque<EditorRuntimeControlCommand>,
@@ -157,6 +163,7 @@ impl Default for EditorInspectorSnapshot {
             entities: Vec::new(),
             diagnostics: RuntimeDiagnosticSinks::disabled(),
             editor_attached: false,
+            editor_attachment_count: 0,
             pending_mutations: VecDeque::new(),
             mutation_results: VecDeque::new(),
             pending_runtime_controls: VecDeque::new(),
@@ -197,8 +204,19 @@ impl EditorInspectorRuntimeState {
 
     pub fn mark_editor_attached(&self, attached: bool) {
         if let Ok(mut snapshot) = self.inner.lock() {
-            snapshot.editor_attached = attached;
-            snapshot.diagnostics = if attached {
+            if attached {
+                snapshot.editor_attachment_count =
+                    snapshot.editor_attachment_count.saturating_add(1);
+            } else {
+                snapshot.editor_attachment_count =
+                    snapshot.editor_attachment_count.saturating_sub(1);
+            }
+            let now_attached = snapshot.editor_attachment_count > 0;
+            if snapshot.editor_attached == now_attached {
+                return;
+            }
+            snapshot.editor_attached = now_attached;
+            snapshot.diagnostics = if now_attached {
                 RuntimeDiagnosticSinks::editor_attached(512, 512)
             } else {
                 RuntimeDiagnosticSinks::disabled()
@@ -287,8 +305,39 @@ impl EditorInspectorRuntimeState {
         }
     }
 
+    #[must_use]
+    pub fn drain_diagnostics_for_subscription(
+        &self,
+        subscription: &EditorDiagnosticSubscription,
+        max_packets: usize,
+    ) -> EditorDiagnosticBatch {
+        let Ok(mut snapshot) = self.inner.lock() else {
+            return EditorDiagnosticBatch {
+                world_revision: EditorWorldRevision(0),
+                packets: Vec::new(),
+            };
+        };
+        let world_revision = snapshot.world_revision;
+        let source_packets = if let Some(sequence) = subscription.since_sequence {
+            snapshot
+                .diagnostics
+                .ring
+                .packets_since(Some(crate::DiagnosticSequence(sequence.0.into())))
+        } else {
+            snapshot.diagnostics.editor_live_stream.drain(usize::MAX)
+        };
+        let packets = filter_diagnostic_packets(source_packets, &subscription.streams, max_packets);
+        EditorDiagnosticBatch {
+            world_revision,
+            packets,
+        }
+    }
+
     pub fn queue_mutation(&self, transaction: EditorMutationTransaction) {
         if let Ok(mut snapshot) = self.inner.lock() {
+            if snapshot.pending_mutations.len() >= MAX_PENDING_EDITOR_MUTATIONS {
+                let _ = snapshot.pending_mutations.pop_front();
+            }
             snapshot.pending_mutations.push_back(transaction);
         }
     }
@@ -309,6 +358,9 @@ impl EditorInspectorRuntimeState {
         events: Vec<EditorEventPayload>,
     ) {
         if let Ok(mut snapshot) = self.inner.lock() {
+            if snapshot.mutation_results.len() >= MAX_PENDING_MUTATION_RESULTS {
+                let _ = snapshot.mutation_results.pop_front();
+            }
             snapshot
                 .mutation_results
                 .push_back(EditorInspectorMutationResult {
@@ -334,6 +386,9 @@ impl EditorInspectorRuntimeState {
 
     pub fn queue_runtime_control(&self, command: EditorRuntimeControlCommand) {
         if let Ok(mut snapshot) = self.inner.lock() {
+            if snapshot.pending_runtime_controls.len() >= MAX_PENDING_RUNTIME_CONTROLS {
+                let _ = snapshot.pending_runtime_controls.pop_front();
+            }
             snapshot.pending_runtime_controls.push_back(command);
         }
     }
@@ -591,7 +646,7 @@ fn handle_runtime_editor_connection(
             ),
             payload: EditorHandshakePayload::Welcome {
                 welcome: EditorWelcome {
-                    granted_capabilities,
+                    granted_capabilities: granted_capabilities.clone(),
                     target_build_id: config.target_build_id,
                     world_revision: metadata.world_revision,
                     tick_rate_hz: config.tick_rate_hz,
@@ -605,7 +660,7 @@ fn handle_runtime_editor_connection(
     write_editor_protocol_packet(&mut stream, &welcome)?;
 
     config.runtime_state.mark_editor_attached(true);
-    let result = serve_authenticated_editor_connection(&mut stream, &config, &auth);
+    let result = serve_authenticated_editor_connection(&mut stream, &config, granted_capabilities);
     config.runtime_state.mark_editor_attached(false);
     result
 }
@@ -613,7 +668,7 @@ fn handle_runtime_editor_connection(
 fn serve_authenticated_editor_connection(
     stream: &mut TcpStream,
     config: &EditorInspectorServiceConfig,
-    auth: &RuntimeEditorAuth,
+    granted_capabilities: Vec<EditorCapability>,
 ) -> Result<(), EditorInspectorServiceError> {
     stream.set_read_timeout(None).map_err(io_error)?;
     loop {
@@ -622,7 +677,7 @@ fn serve_authenticated_editor_connection(
             Err(EditorInspectorServiceError::Io(_)) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let context = validation_context(config, auth);
+        let context = validation_context_with_capabilities(config, granted_capabilities.clone());
         validate_editor_packet(&packet, &context)
             .map_err(|error| EditorInspectorServiceError::Protocol(format!("{error:?}")))?;
 
@@ -653,8 +708,10 @@ fn handle_editor_command_packet(
                 },
             )
         }
-        EditorCommandPayload::SubscribeDiagnostics { .. } => {
-            let batch = config.runtime_state.drain_diagnostics(256);
+        EditorCommandPayload::SubscribeDiagnostics { subscription } => {
+            let batch = config
+                .runtime_state
+                .drain_diagnostics_for_subscription(&subscription, 256);
             write_editor_protocol_packet(
                 stream,
                 &EditorProtocolPacket::Diagnostic {
@@ -718,8 +775,202 @@ fn handle_editor_command_packet(
                 },
             )
         }
-        EditorCommandPayload::Exec { .. } | EditorCommandPayload::Persist { .. } => Ok(()),
+        EditorCommandPayload::Exec { request } => {
+            let world_revision = config.runtime_state.metadata().world_revision;
+            write_editor_protocol_packet(
+                stream,
+                &EditorProtocolPacket::Event {
+                    packet: EditorEventPacket {
+                        header: response_header(&packet.header, world_revision),
+                        payload: EditorEventPayload::ExecResult {
+                            result: EditorExecResult {
+                                header: response_header(&request.header, world_revision),
+                                request_id: request.request_id,
+                                status: EditorExecStatus::Rejected,
+                                stdout_events: Vec::new(),
+                                diagnostic_events: Vec::new(),
+                                mutations: Vec::new(),
+                                duration_ns: 0,
+                                error: Some(
+                                    "runtime execution is not implemented for this target"
+                                        .to_owned(),
+                                ),
+                            },
+                        },
+                    },
+                },
+            )
+        }
+        EditorCommandPayload::Persist { request } => {
+            let world_revision = config.runtime_state.metadata().world_revision;
+            write_editor_protocol_packet(
+                stream,
+                &EditorProtocolPacket::Event {
+                    packet: EditorEventPacket {
+                        header: response_header(&packet.header, world_revision),
+                        payload: EditorEventPayload::PersistenceAck {
+                            ack: EditorPersistenceAck {
+                                header: response_header(&request.header, world_revision),
+                                transaction_id: request.transaction_id,
+                                status: EditorPersistenceStatus::Rejected,
+                                world_revision,
+                                diagnostics: vec![mutation_diagnostic_event(
+                                    "persistence_not_implemented",
+                                    request.transaction_id,
+                                    world_revision,
+                                    "runtime persistence is not implemented for this target",
+                                    crate::DiagnosticLevel::Warn,
+                                )],
+                            },
+                        },
+                    },
+                },
+            )
+        }
     }
+}
+
+fn filter_diagnostic_packets(
+    packets: Vec<crate::RecordedDiagnosticPacket>,
+    streams: &[EditorDiagnosticStream],
+    max_packets: usize,
+) -> Vec<crate::RecordedDiagnosticPacket> {
+    let mut filtered = Vec::with_capacity(max_packets.min(packets.len()));
+    if streams.is_empty() || max_packets == 0 {
+        return filtered;
+    }
+
+    for packet in packets {
+        if diagnostic_packet_matches_streams(&packet.packet, streams) {
+            filtered.push(packet);
+            if filtered.len() == max_packets {
+                break;
+            }
+        }
+    }
+    filtered
+}
+
+fn diagnostic_packet_matches_streams(
+    packet: &crate::DiagnosticPacket,
+    streams: &[EditorDiagnosticStream],
+) -> bool {
+    streams
+        .iter()
+        .copied()
+        .any(|stream| diagnostic_packet_matches_stream(packet, stream))
+}
+
+fn diagnostic_packet_matches_stream(
+    packet: &crate::DiagnosticPacket,
+    stream: EditorDiagnosticStream,
+) -> bool {
+    match packet {
+        crate::DiagnosticPacket::Event { event } => {
+            event
+                .fields
+                .iter()
+                .filter(|field| field.name.eq_ignore_ascii_case("stream"))
+                .any(|field| match &field.value {
+                    crate::DiagnosticValue::Text { value } => {
+                        diagnostic_label_matches_stream(value, stream)
+                    }
+                    _ => false,
+                })
+                || diagnostic_label_matches_stream(&event.target, stream)
+                || event.fields.iter().any(|field| match &field.value {
+                    crate::DiagnosticValue::Text { value } => {
+                        diagnostic_label_matches_stream(value, stream)
+                    }
+                    _ => false,
+                })
+        }
+        crate::DiagnosticPacket::Counter { counter } => {
+            diagnostic_label_matches_stream(&counter.name, stream)
+                || diagnostic_label_matches_stream(&counter.target, stream)
+        }
+        crate::DiagnosticPacket::Span { span } => {
+            diagnostic_label_matches_stream(&span.name, stream)
+                || diagnostic_label_matches_stream(&span.target, stream)
+        }
+        crate::DiagnosticPacket::FrameProfile { profile } => {
+            matches!(stream, EditorDiagnosticStream::FrameProfilerSummary)
+                || profile.rows.iter().any(|row| {
+                    diagnostic_label_matches_stream(&row.name, stream)
+                        || diagnostic_label_matches_stream(&row.target, stream)
+                })
+        }
+    }
+}
+
+fn diagnostic_label_matches_stream(label: &str, stream: EditorDiagnosticStream) -> bool {
+    normalized_label_matches(label, diagnostic_stream_key(stream))
+        || diagnostic_stream_aliases(stream)
+            .iter()
+            .any(|alias| normalized_label_matches(label, alias))
+}
+
+fn diagnostic_stream_key(stream: EditorDiagnosticStream) -> &'static str {
+    match stream {
+        EditorDiagnosticStream::ServerTickDuration => "servertickduration",
+        EditorDiagnosticStream::ServerTickBudget => "servertickbudget",
+        EditorDiagnosticStream::ConnectedClients => "connectedclients",
+        EditorDiagnosticStream::NetworkChannelPressure => "networkchannelpressure",
+        EditorDiagnosticStream::PacketBytes => "packetbytes",
+        EditorDiagnosticStream::WorldRevision => "worldrevision",
+        EditorDiagnosticStream::MutationCost => "mutationcost",
+        EditorDiagnosticStream::SnapshotBudget => "snapshotbudget",
+        EditorDiagnosticStream::SnapshotBudgetExhaustion => "snapshotbudgetexhaustion",
+        EditorDiagnosticStream::RelevanceDecisions => "relevancedecisions",
+        EditorDiagnosticStream::WorldStreamRevisions => "worldstreamrevisions",
+        EditorDiagnosticStream::StreamChunks => "streamchunks",
+        EditorDiagnosticStream::MutationTransactions => "mutationtransactions",
+        EditorDiagnosticStream::ClientFps => "clientfps",
+        EditorDiagnosticStream::ClientFrameNs => "clientframens",
+        EditorDiagnosticStream::ClientFrameTime => "clientframetime",
+        EditorDiagnosticStream::FrameProfilerSummary => "frameprofilersummary",
+        EditorDiagnosticStream::GpuSampleStatus => "gpusamplestatus",
+        EditorDiagnosticStream::RenderCpuMaterialCounters => "rendercpumaterialcounters",
+        EditorDiagnosticStream::MeshletPathCounts => "meshletpathcounts",
+        EditorDiagnosticStream::ScheduleHeatmap => "scheduleheatmap",
+        EditorDiagnosticStream::RenderPathCounts => "renderpathcounts",
+        EditorDiagnosticStream::SolariTimings => "solaritimings",
+        EditorDiagnosticStream::SolariBudget => "solaribudget",
+        EditorDiagnosticStream::SolariQueue => "solariqueue",
+        EditorDiagnosticStream::SolariRadianceCachePressure => "solariradiancecachepressure",
+        EditorDiagnosticStream::RenderRecovery => "renderrecovery",
+        EditorDiagnosticStream::CameraCount => "cameracount",
+        EditorDiagnosticStream::WorldStreamApplyCost => "worldstreamapplycost",
+        EditorDiagnosticStream::AvianPhysicsStepTiming => "avianphysicssteptiming",
+        EditorDiagnosticStream::AvianCollisionDiagnostics => "aviancollisiondiagnostics",
+        EditorDiagnosticStream::AvianControllerDiagnostics => "aviancontrollerdiagnostics",
+    }
+}
+
+fn diagnostic_stream_aliases(stream: EditorDiagnosticStream) -> &'static [&'static str] {
+    match stream {
+        EditorDiagnosticStream::ClientFps => &["fps"],
+        EditorDiagnosticStream::FrameProfilerSummary => &["frameprofile", "profile"],
+        EditorDiagnosticStream::GpuSampleStatus => &["gpusample"],
+        EditorDiagnosticStream::MutationTransactions => &["mutationtransaction"],
+        EditorDiagnosticStream::PacketBytes => &["packet"],
+        EditorDiagnosticStream::StreamChunks => &["worldstream", "chunk"],
+        EditorDiagnosticStream::WorldStreamRevisions => &["worldstreamrevision"],
+        _ => &[],
+    }
+}
+
+fn normalized_label_matches(label: &str, expected: &str) -> bool {
+    let mut expected = expected.bytes();
+    for byte in label.bytes() {
+        if !byte.is_ascii_alphanumeric() {
+            continue;
+        }
+        if expected.next() != Some(byte.to_ascii_lowercase()) {
+            return false;
+        }
+    }
+    expected.next().is_none()
 }
 
 fn wait_for_mutation_result(
@@ -816,7 +1067,7 @@ fn validate_auth_packet(
         editor_nonce,
         runtime_nonce,
     );
-    if packet.token_proof != expected_proof {
+    if !constant_time_bytes_eq(&packet.token_proof, &expected_proof) {
         return Err(EditorInspectorServiceError::InvalidTokenProof);
     }
 
@@ -826,10 +1077,21 @@ fn validate_auth_packet(
         editor_nonce,
         runtime_nonce,
     );
-    if packet.nonce_response != expected_response {
+    if !constant_time_bytes_eq(&packet.nonce_response, &expected_response) {
         return Err(EditorInspectorServiceError::InvalidNonceResponse);
     }
     Ok(())
+}
+
+fn constant_time_bytes_eq(left: &[u8], right: &[u8]) -> bool {
+    let max_len = left.len().max(right.len());
+    let mut diff = left.len() ^ right.len();
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+    diff == 0
 }
 
 fn negotiated_capabilities(
@@ -849,10 +1111,17 @@ fn validation_context(
     config: &EditorInspectorServiceConfig,
     auth: &RuntimeEditorAuth,
 ) -> EditorProtocolValidationContext {
+    validation_context_with_capabilities(config, auth.allowed_capabilities.clone())
+}
+
+fn validation_context_with_capabilities(
+    config: &EditorInspectorServiceConfig,
+    granted_capabilities: Vec<EditorCapability>,
+) -> EditorProtocolValidationContext {
     let metadata = config.runtime_state.metadata();
     let mut context = EditorProtocolValidationContext {
         protocol_version: CURRENT_EDITOR_PROTOCOL_VERSION,
-        granted_capabilities: auth.allowed_capabilities.clone(),
+        granted_capabilities,
         world_revision: metadata.world_revision,
         max_payload_bytes: 256 * 1024,
         component_schemas: metadata.component_schemas,
@@ -870,6 +1139,11 @@ fn read_editor_protocol_packet(
     stream.read_exact(&mut header).map_err(io_error)?;
     let envelope_len = editor_wire_envelope_len(&header)
         .map_err(|error| EditorInspectorServiceError::Protocol(format!("{error:?}")))?;
+    if envelope_len > MAX_EDITOR_ENVELOPE_BYTES {
+        return Err(EditorInspectorServiceError::Protocol(
+            "PayloadTooLarge".to_owned(),
+        ));
+    }
     let payload_len = envelope_len.saturating_sub(EDITOR_WIRE_ENVELOPE_HEADER_LEN);
     let mut bytes = Vec::with_capacity(envelope_len);
     bytes.extend_from_slice(&header);
@@ -1043,6 +1317,58 @@ mod tests {
     }
 
     #[test]
+    fn post_handshake_validation_uses_negotiated_capabilities() {
+        let config = EditorInspectorServiceConfig::local_development(
+            EditorTargetKind::Server,
+            "fun",
+            vec![EditorCapability::ReadEntities],
+        );
+        config.runtime_state.replace_entities(
+            EditorWorldRevision(1),
+            EditorSchemaRevision(1),
+            Vec::new(),
+            Vec::new(),
+        );
+        let context =
+            validation_context_with_capabilities(&config, vec![EditorCapability::ReadEntities]);
+        let packet = EditorProtocolPacket::Command {
+            packet: EditorCommandPacket {
+                header: EditorPacketHeader::new(
+                    EditorRequestId(7),
+                    EditorTargetKind::Server,
+                    PacketSequence(7),
+                    Some(EditorWorldRevision(1)),
+                    EditorSizeBudget { max_bytes: 4096 },
+                ),
+                payload: EditorCommandPayload::RuntimeControl {
+                    command: EditorRuntimeControlCommand::SimulationResume,
+                },
+            },
+        };
+
+        let error = validate_editor_packet(&packet, &context)
+            .expect_err("runtime did not negotiate ControlRuntime");
+
+        assert_eq!(
+            error,
+            crate::EditorProtocolValidationError::MissingCapability
+        );
+    }
+
+    #[test]
+    fn auth_proof_comparison_rejects_wrong_length_and_wrong_token() {
+        let session = EditorSessionId(7);
+        let proof = editor_auth_token_proof(b"token", session, b"editor", b"runtime-a");
+        let mut wrong_token = editor_auth_token_proof(b"other", session, b"editor", b"runtime-a");
+        wrong_token[0] ^= 0xff;
+        let short = &proof[..proof.len() - 1];
+
+        assert!(constant_time_bytes_eq(&proof, &proof));
+        assert!(!constant_time_bytes_eq(&proof, &wrong_token));
+        assert!(!constant_time_bytes_eq(&proof, short));
+    }
+
+    #[test]
     fn runtime_control_commands_are_queued_for_runtime_systems() {
         let state = EditorInspectorRuntimeState::default();
         state.queue_runtime_control(EditorRuntimeControlCommand::InputSetOwner {
@@ -1063,5 +1389,137 @@ mod tests {
             vec![EditorRuntimeControlCommand::WindowSetEmbedded { embedded: true }]
         );
         assert!(state.drain_runtime_controls(8).is_empty());
+    }
+
+    #[test]
+    fn editor_attachment_state_is_reference_counted() {
+        let state = EditorInspectorRuntimeState::default();
+
+        state.mark_editor_attached(true);
+        state.mark_editor_attached(true);
+        assert!(state.editor_attached());
+
+        state.mark_editor_attached(false);
+        assert!(state.editor_attached());
+
+        state.mark_editor_attached(false);
+        assert!(!state.editor_attached());
+    }
+
+    #[test]
+    fn runtime_control_queue_drops_oldest_when_bounded() {
+        let state = EditorInspectorRuntimeState::default();
+        for index in 0..(MAX_PENDING_RUNTIME_CONTROLS + 1) {
+            state.queue_runtime_control(EditorRuntimeControlCommand::WindowSetEmbedded {
+                embedded: index % 2 == 0,
+            });
+        }
+
+        let queued = state.drain_runtime_controls(MAX_PENDING_RUNTIME_CONTROLS + 1);
+
+        assert_eq!(queued.len(), MAX_PENDING_RUNTIME_CONTROLS);
+    }
+
+    #[test]
+    fn diagnostics_subscription_replays_since_sequence_and_filters_streams() {
+        let state = EditorInspectorRuntimeState::default();
+        state.mark_editor_attached(true);
+        state.emit_diagnostic(crate::DiagnosticPacket::Event {
+            event: crate::DiagnosticEvent {
+                target: "fun::server".to_owned(),
+                level: crate::DiagnosticLevel::Info,
+                timestamp_or_tick: crate::DiagnosticTimestampOrTick::Tick { tick: 1 },
+                fields: vec![crate::DiagnosticField::text(
+                    "stream",
+                    "mutation_transactions",
+                )],
+                source: crate::DiagnosticSource::static_location(file!(), line!(), module_path!()),
+                frame_index: None,
+                span_id: None,
+            },
+        });
+        state.emit_diagnostic(crate::DiagnosticPacket::Event {
+            event: crate::DiagnosticEvent {
+                target: "fun::server".to_owned(),
+                level: crate::DiagnosticLevel::Info,
+                timestamp_or_tick: crate::DiagnosticTimestampOrTick::Tick { tick: 2 },
+                fields: vec![crate::DiagnosticField::text("stream", "stream_chunks")],
+                source: crate::DiagnosticSource::static_location(file!(), line!(), module_path!()),
+                frame_index: None,
+                span_id: None,
+            },
+        });
+        state.emit_diagnostic(crate::DiagnosticPacket::Event {
+            event: crate::DiagnosticEvent {
+                target: "fun::server".to_owned(),
+                level: crate::DiagnosticLevel::Info,
+                timestamp_or_tick: crate::DiagnosticTimestampOrTick::Tick { tick: 3 },
+                fields: vec![crate::DiagnosticField::text(
+                    "stream",
+                    "mutation_transactions",
+                )],
+                source: crate::DiagnosticSource::static_location(file!(), line!(), module_path!()),
+                frame_index: None,
+                span_id: None,
+            },
+        });
+
+        let batch = state.drain_diagnostics_for_subscription(
+            &EditorDiagnosticSubscription {
+                streams: vec![EditorDiagnosticStream::MutationTransactions],
+                since_sequence: Some(PacketSequence(1)),
+            },
+            8,
+        );
+
+        assert_eq!(
+            batch
+                .packets
+                .iter()
+                .map(|packet| packet.sequence)
+                .collect::<Vec<_>>(),
+            vec![crate::DiagnosticSequence(3)]
+        );
+    }
+
+    #[test]
+    fn diagnostics_subscription_live_batch_honors_streams() {
+        let state = EditorInspectorRuntimeState::default();
+        state.mark_editor_attached(true);
+        state.emit_diagnostic(crate::DiagnosticPacket::Counter {
+            counter: crate::DiagnosticCounter {
+                target: "fun::render".to_owned(),
+                name: "client_fps".to_owned(),
+                value: crate::DiagnosticValue::U64 { value: 60 },
+                unit: crate::DiagnosticUnit::Count,
+                window: crate::DiagnosticWindow {
+                    sample_count: 1,
+                    duration_ns: 16_000_000,
+                },
+            },
+        });
+        state.emit_diagnostic(crate::DiagnosticPacket::Counter {
+            counter: crate::DiagnosticCounter {
+                target: "fun::server".to_owned(),
+                name: "connected_clients".to_owned(),
+                value: crate::DiagnosticValue::U64 { value: 1 },
+                unit: crate::DiagnosticUnit::Count,
+                window: crate::DiagnosticWindow {
+                    sample_count: 1,
+                    duration_ns: 16_000_000,
+                },
+            },
+        });
+
+        let batch = state.drain_diagnostics_for_subscription(
+            &EditorDiagnosticSubscription {
+                streams: vec![EditorDiagnosticStream::ConnectedClients],
+                since_sequence: None,
+            },
+            8,
+        );
+
+        assert_eq!(batch.packets.len(), 1);
+        assert_eq!(batch.packets[0].sequence, crate::DiagnosticSequence(2));
     }
 }

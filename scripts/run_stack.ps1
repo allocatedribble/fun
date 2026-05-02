@@ -16,6 +16,17 @@ param(
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
+    [string]$RtSampleDirect = "",
+    [string]$RtSampleIndirect = "",
+    [string]$RtSampleReflections = "",
+    [string]$RtSurfaceCache = "",
+    [string]$RtMegaGeom = "",
+    [string]$RtOpacityMask = "",
+    [string]$RtHair = "",
+    [string]$RtAsyncReadback = "",
+    [string]$RtValidation = "",
+    [switch]$RenderUnknownVendor,
+    [string]$RenderVendorEmulation = "",
     [string]$SolariArch = "budgeted",
     [int]$SolariTargetFps = 144,
     [int]$SolariFrameBudgetNs = 6944444,
@@ -23,6 +34,7 @@ param(
     [string]$SolariVisualTarget = "competitive",
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
+    [int]$SolariBlasCompactionVertices = 0,
     [string]$SolariDebugOverlay = "",
     [string]$RenderGeometryPolicy = "hybrid",
     [int]$MeshletMinTriangles = 512,
@@ -40,6 +52,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Set-OptionalEnvValue {
+    param(
+        [string]$Name,
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        Remove-Item "Env:\$Name" -ErrorAction SilentlyContinue
+        return
+    }
+
+    [System.Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+}
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
@@ -206,6 +232,22 @@ if ($DisableMeshlets) {
 else {
     Remove-Item Env:\FUN_DISABLE_MESHLETS -ErrorAction SilentlyContinue
 }
+Set-OptionalEnvValue -Name "FUN_RT_SAMPLE_DIRECT" -Value $RtSampleDirect
+Set-OptionalEnvValue -Name "FUN_RT_SAMPLE_INDIRECT" -Value $RtSampleIndirect
+Set-OptionalEnvValue -Name "FUN_RT_SAMPLE_REFLECTIONS" -Value $RtSampleReflections
+Set-OptionalEnvValue -Name "FUN_RT_SURFACE_CACHE" -Value $RtSurfaceCache
+Set-OptionalEnvValue -Name "FUN_RT_MEGAGEOM" -Value $RtMegaGeom
+Set-OptionalEnvValue -Name "FUN_RT_OPACITY_MASK" -Value $RtOpacityMask
+Set-OptionalEnvValue -Name "FUN_RT_HAIR" -Value $RtHair
+Set-OptionalEnvValue -Name "FUN_RT_ASYNC_READBACK" -Value $RtAsyncReadback
+Set-OptionalEnvValue -Name "FUN_RT_VALIDATION" -Value $RtValidation
+if ($RenderUnknownVendor) {
+    $env:FUN_RENDER_UNKNOWN_VENDOR = "1"
+}
+else {
+    Remove-Item Env:\FUN_RENDER_UNKNOWN_VENDOR -ErrorAction SilentlyContinue
+}
+Set-OptionalEnvValue -Name "FUN_RENDER_VENDOR_EMULATION" -Value $RenderVendorEmulation
 if ($SolariDenoiseMode) {
     $env:FUN_SOLARI_DENOISE_MODE = $SolariDenoiseMode
 }
@@ -217,6 +259,12 @@ if ($SolariInternalScale) {
 }
 else {
     Remove-Item Env:\FUN_SOLARI_INTERNAL_SCALE -ErrorAction SilentlyContinue
+}
+if ($SolariBlasCompactionVertices -gt 0) {
+    $env:FUN_SOLARI_BLAS_COMPACTION_VERTICES = [string]$SolariBlasCompactionVertices
+}
+else {
+    Remove-Item Env:\FUN_SOLARI_BLAS_COMPACTION_VERTICES -ErrorAction SilentlyContinue
 }
 if ($SolariDebugOverlay) {
     $env:FUN_SOLARI_DEBUG_OVERLAY = $SolariDebugOverlay

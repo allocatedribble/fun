@@ -19,7 +19,8 @@ pub use catalog::{
 pub use compiled_world::{CompiledStaticAsset, CompiledWorldPackage, CompiledWorldPackageId};
 pub use config::{
     ClientOpaqueRenderer, ClientRenderConfig, ClientRenderProfile, ClientWindowConfig,
-    FunRenderAppOptions, FunRenderPresentation, RenderGeometryClass, RenderGeometryPolicy,
+    FunRenderAppOptions, FunRenderPresentation, FunRenderRtFeatures, RenderGeometryClass,
+    RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
     selected_present_mode, selected_render_backend,
 };
 pub use core::{

@@ -5,6 +5,17 @@ param(
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
     [switch]$DisableFpsOverlay,
+    [string]$RtSampleDirect = "",
+    [string]$RtSampleIndirect = "",
+    [string]$RtSampleReflections = "",
+    [string]$RtSurfaceCache = "",
+    [string]$RtMegaGeom = "",
+    [string]$RtOpacityMask = "",
+    [string]$RtHair = "",
+    [string]$RtAsyncReadback = "",
+    [string]$RtValidation = "",
+    [switch]$RenderUnknownVendor,
+    [string]$RenderVendorEmulation = "",
     [switch]$TraceDiagnostics,
     [switch]$FrameTimeDiagnostics,
     [int]$FrameTimeDiagnosticInterval = 60,
@@ -22,6 +33,7 @@ param(
     [string]$SolariVisualTarget = "competitive",
     [string]$SolariDenoiseMode = "balanced-fast",
     [string]$SolariInternalScale = "1.0",
+    [int]$SolariBlasCompactionVertices = 0,
     [string]$RenderGeometryPolicy = "hybrid",
     [int]$MeshletMinTriangles = 512,
     [int]$WindowWidth = 0,
@@ -118,6 +130,38 @@ function Add-KeyValueMetrics {
             $metricName = $metricName + "_ms"
         }
         Add-Metric -Sample $Sample -Name $metricName -Text $value -Milliseconds:$Milliseconds
+    }
+}
+
+function ConvertTo-KeyValueObject {
+    param([string]$Payload)
+
+    $result = [ordered]@{}
+    foreach ($match in [regex]::Matches($Payload, "([A-Za-z0-9_\/]+)=([^\s,]+)")) {
+        $key = ConvertTo-MetricName $match.Groups[1].Value
+        if ($key -eq "hash") {
+            $key = "capability_hash"
+        }
+        $result[$key] = $match.Groups[2].Value
+    }
+    return $result
+}
+
+function Parse-RenderCapabilitiesLog {
+    param([string[]]$Lines)
+
+    foreach ($line in $Lines) {
+        $capabilities = [regex]::Match($line, "\[bevy render\] capabilities: (?<payload>.*)$")
+        if ($capabilities.Success) {
+            $result = ConvertTo-KeyValueObject -Payload $capabilities.Groups["payload"].Value
+            $result["status"] = "found"
+            return $result
+        }
+    }
+
+    return [ordered]@{
+        status = "not_found"
+        capability_hash = $null
     }
 }
 
@@ -422,6 +466,8 @@ function Write-MarkdownReport {
     $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
     $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
+    $lines.Add("- RT capability hash: $($Summary.render_capabilities.capability_hash)") | Out-Null
+    $lines.Add("- RT gates: direct=$($Summary.config.rt_sample_direct) indirect=$($Summary.config.rt_sample_indirect) reflections=$($Summary.config.rt_sample_reflections) surface_cache=$($Summary.config.rt_surface_cache) megageom=$($Summary.config.rt_megageom) opacity_mask=$($Summary.config.rt_opacity_mask) hair=$($Summary.config.rt_hair) async_readback=$($Summary.config.rt_async_readback) validation=$($Summary.config.rt_validation)") | Out-Null
     $lines.Add("- Sample count: $($Summary.samples.count)") | Out-Null
     $lines.Add("") | Out-Null
 
@@ -664,6 +710,17 @@ try {
         if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
         if ($DisableMeshlets) { $runStackArgs += "-DisableMeshlets" }
         if ($DisableFpsOverlay) { $runStackArgs += "-DisableFpsOverlay" }
+        if (-not [string]::IsNullOrWhiteSpace($RtSampleDirect)) { $runStackArgs += @("-RtSampleDirect", $RtSampleDirect) }
+        if (-not [string]::IsNullOrWhiteSpace($RtSampleIndirect)) { $runStackArgs += @("-RtSampleIndirect", $RtSampleIndirect) }
+        if (-not [string]::IsNullOrWhiteSpace($RtSampleReflections)) { $runStackArgs += @("-RtSampleReflections", $RtSampleReflections) }
+        if (-not [string]::IsNullOrWhiteSpace($RtSurfaceCache)) { $runStackArgs += @("-RtSurfaceCache", $RtSurfaceCache) }
+        if (-not [string]::IsNullOrWhiteSpace($RtMegaGeom)) { $runStackArgs += @("-RtMegaGeom", $RtMegaGeom) }
+        if (-not [string]::IsNullOrWhiteSpace($RtOpacityMask)) { $runStackArgs += @("-RtOpacityMask", $RtOpacityMask) }
+        if (-not [string]::IsNullOrWhiteSpace($RtHair)) { $runStackArgs += @("-RtHair", $RtHair) }
+        if (-not [string]::IsNullOrWhiteSpace($RtAsyncReadback)) { $runStackArgs += @("-RtAsyncReadback", $RtAsyncReadback) }
+        if (-not [string]::IsNullOrWhiteSpace($RtValidation)) { $runStackArgs += @("-RtValidation", $RtValidation) }
+        if ($RenderUnknownVendor) { $runStackArgs += "-RenderUnknownVendor" }
+        if (-not [string]::IsNullOrWhiteSpace($RenderVendorEmulation)) { $runStackArgs += @("-RenderVendorEmulation", $RenderVendorEmulation) }
         $runStackArgs += "-BenchmarkLogMinimal"
         if ($TraceDiagnostics) { $runStackArgs += "-TraceDiagnostics" }
         if ($FrameTimeDiagnostics) {
@@ -687,6 +744,9 @@ try {
         }
         if (-not [string]::IsNullOrWhiteSpace($SolariInternalScale)) {
             $runStackArgs += @("-SolariInternalScale", $SolariInternalScale)
+        }
+        if ($SolariBlasCompactionVertices -gt 0) {
+            $runStackArgs += @("-SolariBlasCompactionVertices", "$SolariBlasCompactionVertices")
         }
         if (-not [string]::IsNullOrWhiteSpace($SolariArch)) {
             $runStackArgs += @("-SolariArch", $SolariArch)
@@ -748,6 +808,7 @@ try {
         throw "No [client perf] samples were found in $clientLog"
     }
 
+    $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
     $gitCommit = (Get-RepoGitLines -RepoRoot $repoRoot -Arguments @("rev-parse", "HEAD") | Select-Object -First 1)
@@ -774,6 +835,17 @@ try {
             disable_solari = [bool]$DisableSolari
             disable_meshlets = [bool]$DisableMeshlets
             disable_fps_overlay = [bool]$DisableFpsOverlay
+            rt_sample_direct = if ([string]::IsNullOrWhiteSpace($RtSampleDirect)) { "default" } else { $RtSampleDirect }
+            rt_sample_indirect = if ([string]::IsNullOrWhiteSpace($RtSampleIndirect)) { "default" } else { $RtSampleIndirect }
+            rt_sample_reflections = if ([string]::IsNullOrWhiteSpace($RtSampleReflections)) { "default" } else { $RtSampleReflections }
+            rt_surface_cache = if ([string]::IsNullOrWhiteSpace($RtSurfaceCache)) { "default" } else { $RtSurfaceCache }
+            rt_megageom = if ([string]::IsNullOrWhiteSpace($RtMegaGeom)) { "off" } else { $RtMegaGeom }
+            rt_opacity_mask = if ([string]::IsNullOrWhiteSpace($RtOpacityMask)) { "off" } else { $RtOpacityMask }
+            rt_hair = if ([string]::IsNullOrWhiteSpace($RtHair)) { "off" } else { $RtHair }
+            rt_async_readback = if ([string]::IsNullOrWhiteSpace($RtAsyncReadback)) { "default" } else { $RtAsyncReadback }
+            rt_validation = if ([string]::IsNullOrWhiteSpace($RtValidation)) { "default" } else { $RtValidation }
+            render_unknown_vendor = [bool]$RenderUnknownVendor
+            render_vendor_emulation = if ([string]::IsNullOrWhiteSpace($RenderVendorEmulation)) { "auto" } else { $RenderVendorEmulation }
             render_geometry_policy = $RenderGeometryPolicy
             meshlet_min_triangles = $MeshletMinTriangles
             window_width = $WindowWidth
@@ -785,6 +857,7 @@ try {
             solari_visual_target = if ([string]::IsNullOrWhiteSpace($SolariVisualTarget)) { "balanced" } else { $SolariVisualTarget }
             solari_denoise_mode = if ([string]::IsNullOrWhiteSpace($SolariDenoiseMode)) { "balanced-fast" } else { $SolariDenoiseMode }
             solari_internal_scale = if ([string]::IsNullOrWhiteSpace($SolariInternalScale)) { "1.0" } else { $SolariInternalScale }
+            solari_blas_compaction_vertices = $SolariBlasCompactionVertices
         }
         samples = [ordered]@{
             count = $samples.Count
@@ -794,6 +867,7 @@ try {
         }
         metrics = $stats
         comparison = $comparison
+        render_capabilities = $renderCapabilities
     }
 
     $jsonPath = Join-Path $outputRoot "summary.json"

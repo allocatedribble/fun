@@ -11,8 +11,8 @@ use bevy::{
     scene::ScenePlugin,
 };
 use bevy_quinnet::server::{
-    ConnectionEvent, EndpointAddrConfiguration, QuinnetServer, QuinnetServerPlugin,
-    ServerEndpointConfiguration, ServerEndpointConfigurationDefaultables,
+    ConnectionEvent, ConnectionLostEvent, EndpointAddrConfiguration, QuinnetServer,
+    QuinnetServerPlugin, ServerEndpointConfiguration, ServerEndpointConfigurationDefaultables,
     certificate::CertificateRetrievalMode,
 };
 use game_scene::StreamedWorldEntity;
@@ -22,6 +22,9 @@ use game_shared::{
 };
 use thunder::prelude::*;
 use tracing::{error, info};
+
+const GAME_PROTOCOL_VERSION: u32 = 1;
+const MAX_SESSION_TOKEN_BYTES: usize = 1024;
 
 fn main() {
     let mut app = App::new();
@@ -45,6 +48,7 @@ fn main() {
     .init_resource::<ReadyClients>()
     .init_resource::<ClientRelevanceSets>()
     .init_resource::<PendingWorldStreams>()
+    .init_resource::<ClientAdmissionStates>()
     .add_systems(
         Startup,
         (
@@ -58,11 +62,12 @@ fn main() {
     .add_systems(
         Update,
         (
+            cleanup_disconnected_clients,
+            queue_world_stream_for_new_clients,
             receive_client_control,
             apply_server_editor_mutations,
             rebuild_world_stream,
             update_server_editor_inspector_snapshot,
-            queue_world_stream_for_new_clients,
             send_pending_world_streams,
         )
             .chain(),
@@ -353,7 +358,8 @@ fn start_server_editor_inspector(inspector: Res<ServerEditorInspectorState>) {
 struct ServerWorldStream {
     revision: WorldRevision,
     editor_revision: WorldRevision,
-    signature: Vec<NetEntity>,
+    manifest_signature: u64,
+    entity_ids: Vec<NetEntity>,
     chunks: Vec<WorldStreamChunk>,
 }
 
@@ -381,6 +387,98 @@ struct ServerClientRelevanceSet {
 #[derive(Debug, Default, Resource)]
 struct PendingWorldStreams {
     ids: HashSet<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientAdmissionStage {
+    Unauthenticated,
+    Admitted,
+    Streaming,
+    WorldReady,
+    InGame,
+}
+
+#[derive(Debug, Default, Resource)]
+struct ClientAdmissionStates {
+    stages: HashMap<u64, ClientAdmissionStage>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientHelloRejection {
+    WrongProtocolVersion,
+    MissingSessionToken,
+    SessionTokenTooLarge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorldReadyRejection {
+    NotStreaming,
+    DuplicateReady,
+    NoWorldStream,
+    WrongLevel,
+    StaleRevision,
+    FutureRevision,
+    WrongChunkCount,
+    WrongManifestSignature,
+}
+
+fn validate_client_hello(hello: &ClientHello) -> Result<(), ClientHelloRejection> {
+    if hello.protocol_version != GAME_PROTOCOL_VERSION {
+        return Err(ClientHelloRejection::WrongProtocolVersion);
+    }
+    if hello.session_token.is_empty() {
+        return Err(ClientHelloRejection::MissingSessionToken);
+    }
+    if hello.session_token.len() > MAX_SESSION_TOKEN_BYTES {
+        return Err(ClientHelloRejection::SessionTokenTooLarge);
+    }
+    Ok(())
+}
+
+fn client_can_receive_stream(stage: ClientAdmissionStage) -> bool {
+    matches!(
+        stage,
+        ClientAdmissionStage::Admitted
+            | ClientAdmissionStage::Streaming
+            | ClientAdmissionStage::WorldReady
+            | ClientAdmissionStage::InGame
+    )
+}
+
+fn validate_world_ready_ack(
+    stage: ClientAdmissionStage,
+    ack: &WorldStreamAck,
+    manifest: &ServerWorldStream,
+) -> Result<(), WorldReadyRejection> {
+    match stage {
+        ClientAdmissionStage::Streaming => {}
+        ClientAdmissionStage::WorldReady | ClientAdmissionStage::InGame => {
+            return Err(WorldReadyRejection::DuplicateReady);
+        }
+        ClientAdmissionStage::Unauthenticated | ClientAdmissionStage::Admitted => {
+            return Err(WorldReadyRejection::NotStreaming);
+        }
+    }
+
+    let Some(first_chunk) = manifest.chunks.first() else {
+        return Err(WorldReadyRejection::NoWorldStream);
+    };
+    if ack.level_id != first_chunk.level_id {
+        return Err(WorldReadyRejection::WrongLevel);
+    }
+    if ack.revision.0 < manifest.revision.0 {
+        return Err(WorldReadyRejection::StaleRevision);
+    }
+    if ack.revision.0 > manifest.revision.0 {
+        return Err(WorldReadyRejection::FutureRevision);
+    }
+    if ack.chunk_count != first_chunk.chunk_count {
+        return Err(WorldReadyRejection::WrongChunkCount);
+    }
+    if ack.manifest_signature != manifest.manifest_signature {
+        return Err(WorldReadyRejection::WrongManifestSignature);
+    }
+    Ok(())
 }
 
 #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
@@ -598,6 +696,7 @@ fn rebuild_world_stream(
     mut manifest: ResMut<ServerWorldStream>,
     mut pending: ResMut<PendingWorldStreams>,
     connected: Res<ConnectedClients>,
+    admissions: Res<ClientAdmissionStates>,
     _log_config: Res<ServerLogConfig>,
     #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
     query: Query<(
@@ -618,7 +717,12 @@ fn rebuild_world_stream(
     let mut specs = Vec::with_capacity(entity_count);
     for (identity, authority, transform, streamed, name) in &query {
         if !identity.entity.is_valid() {
-            return;
+            game_shared::fun_diag_warn!(
+                target: "fun::server::stream",
+                net_entity = identity.entity.0,
+                "skipping invalid streamed network entity"
+            );
+            continue;
         }
         let editor_identity = game_shared::EditorVisibleEntityIdentity::from_network_identity(
             identity.entity,
@@ -644,23 +748,46 @@ fn rebuild_world_stream(
     }
 
     specs.sort_by_key(|spec| spec.entity);
-    let signature = specs.iter().map(|spec| spec.entity).collect::<Vec<_>>();
-    if signature == manifest.signature {
+    if specs.is_empty() {
+        return;
+    }
+    let manifest_signature = game_scene::world_stream_manifest_signature(&specs);
+    if manifest_signature == manifest.manifest_signature {
         return;
     }
 
-    manifest.revision = WorldRevision(manifest.revision.0.saturating_add(1).max(1));
+    let next_revision = WorldRevision(manifest.revision.0.saturating_add(1).max(1));
+    let entity_ids = specs.iter().map(|spec| spec.entity).collect();
+    let Ok(chunks) = game_scene::try_chunk_world_specs(DEMO_LEVEL_ID, next_revision, specs) else {
+        game_shared::fun_diag_warn!(
+            target: "fun::server::stream",
+            revision = next_revision.0,
+            "world stream exceeds the maximum supported chunk count"
+        );
+        return;
+    };
+    manifest.revision = next_revision;
     manifest.editor_revision = manifest.revision;
-    manifest.signature = signature;
-    manifest.chunks = game_scene::chunk_world_specs(DEMO_LEVEL_ID, manifest.revision, specs);
+    manifest.manifest_signature = manifest_signature;
+    manifest.entity_ids = entity_ids;
+    manifest.chunks = chunks;
     pending.ids.clear();
-    pending.ids.extend(connected.ids.iter().copied());
+    pending
+        .ids
+        .extend(connected.ids.iter().copied().filter(|client_id| {
+            admissions
+                .stages
+                .get(client_id)
+                .copied()
+                .is_some_and(client_can_receive_stream)
+        }));
 
     game_shared::fun_diag_info_if!(
         _log_config.stream_verbose(),
         target: "fun::server::stream",
         revision = manifest.revision.0,
-        specs = manifest.signature.len(),
+        specs = manifest.entity_ids.len(),
+        manifest_signature = manifest.manifest_signature,
         chunks = manifest.chunks.len(),
         pending_clients = pending.ids.len(),
         "built world stream"
@@ -717,27 +844,75 @@ fn queue_world_stream_for_new_clients(
     mut ready: ResMut<ReadyClients>,
     mut relevance: ResMut<ClientRelevanceSets>,
     mut pending: ResMut<PendingWorldStreams>,
+    mut admissions: ResMut<ClientAdmissionStates>,
     _log_config: Res<ServerLogConfig>,
 ) {
     for event in events.read() {
         connected.ids.insert(event.id);
         ready.ids.remove(&event.id);
         relevance.sets.remove(&event.id);
-        pending.ids.insert(event.id);
+        pending.ids.remove(&event.id);
+        admissions
+            .stages
+            .insert(event.id, ClientAdmissionStage::Unauthenticated);
         game_shared::fun_diag_info_if!(
             _log_config.net_verbose(),
             target: "fun::server::net",
             client_id = event.id,
-            pending_world_streams = pending.ids.len(),
             "client connected"
         );
     }
 }
 
-fn receive_client_control(
-    mut server: ResMut<QuinnetServer>,
+fn cleanup_disconnected_clients(
+    mut events: MessageReader<ConnectionLostEvent>,
+    mut connected: ResMut<ConnectedClients>,
     mut ready: ResMut<ReadyClients>,
     mut relevance: ResMut<ClientRelevanceSets>,
+    mut pending: ResMut<PendingWorldStreams>,
+    mut admissions: ResMut<ClientAdmissionStates>,
+    _log_config: Res<ServerLogConfig>,
+) {
+    for event in events.read() {
+        clear_client_state(
+            event.id,
+            &mut connected,
+            &mut ready,
+            &mut relevance,
+            &mut pending,
+            &mut admissions,
+        );
+        game_shared::fun_diag_info_if!(
+            _log_config.net_verbose(),
+            target: "fun::server::net",
+            client_id = event.id,
+            "client disconnected"
+        );
+    }
+}
+
+fn clear_client_state(
+    client_id: u64,
+    connected: &mut ConnectedClients,
+    ready: &mut ReadyClients,
+    relevance: &mut ClientRelevanceSets,
+    pending: &mut PendingWorldStreams,
+    admissions: &mut ClientAdmissionStates,
+) {
+    connected.ids.remove(&client_id);
+    ready.ids.remove(&client_id);
+    relevance.sets.remove(&client_id);
+    pending.ids.remove(&client_id);
+    admissions.stages.remove(&client_id);
+}
+
+fn receive_client_control(
+    mut server: ResMut<QuinnetServer>,
+    mut connected: ResMut<ConnectedClients>,
+    mut ready: ResMut<ReadyClients>,
+    mut relevance: ResMut<ClientRelevanceSets>,
+    mut pending: ResMut<PendingWorldStreams>,
+    mut admissions: ResMut<ClientAdmissionStates>,
     manifest: Res<ServerWorldStream>,
     _log_config: Res<ServerLogConfig>,
     #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
@@ -759,7 +934,7 @@ fn receive_client_control(
             #[cfg(all(feature = "diagnostics", debug_assertions))]
             let decode_started = Instant::now();
             match decode_client_packet(payload.as_ref()) {
-                Ok(ClientPacket::Hello { hello: _hello }) => {
+                Ok(ClientPacket::Hello { hello }) => {
                     #[cfg(all(feature = "diagnostics", debug_assertions))]
                     server_profiler_event(
                         &profiler,
@@ -774,6 +949,42 @@ fn receive_client_control(
                             duration_ns: elapsed_ns(decode_started),
                         },
                     );
+                    if admissions
+                        .stages
+                        .get(&client_id)
+                        .copied()
+                        .unwrap_or(ClientAdmissionStage::Unauthenticated)
+                        != ClientAdmissionStage::Unauthenticated
+                    {
+                        error!(target: "fun::server::net", client_id, "rejecting duplicate client hello");
+                        endpoint.try_disconnect_client(client_id);
+                        clear_client_state(
+                            client_id,
+                            &mut connected,
+                            &mut ready,
+                            &mut relevance,
+                            &mut pending,
+                            &mut admissions,
+                        );
+                        continue;
+                    }
+                    if let Err(rejection) = validate_client_hello(&hello) {
+                        error!(target: "fun::server::net", client_id, ?rejection, "rejecting invalid client hello");
+                        endpoint.try_disconnect_client(client_id);
+                        clear_client_state(
+                            client_id,
+                            &mut connected,
+                            &mut ready,
+                            &mut relevance,
+                            &mut pending,
+                            &mut admissions,
+                        );
+                        continue;
+                    }
+                    admissions
+                        .stages
+                        .insert(client_id, ClientAdmissionStage::Admitted);
+                    pending.ids.insert(client_id);
                     game_shared::fun_diag_info_if!(
                         _log_config.net_verbose(),
                         target: "fun::server::net",
@@ -781,15 +992,39 @@ fn receive_client_control(
                         "client completed Thunder hello"
                     );
                 }
-                Ok(ClientPacket::WorldReady { ack: _ack }) => {
+                Ok(ClientPacket::WorldReady { ack }) => {
+                    let stage = admissions
+                        .stages
+                        .get(&client_id)
+                        .copied()
+                        .unwrap_or(ClientAdmissionStage::Unauthenticated);
+                    if let Err(rejection) = validate_world_ready_ack(stage, &ack, &manifest) {
+                        error!(target: "fun::server::net", client_id, ?rejection, "rejecting world-ready acknowledgement");
+                        endpoint.try_disconnect_client(client_id);
+                        clear_client_state(
+                            client_id,
+                            &mut connected,
+                            &mut ready,
+                            &mut relevance,
+                            &mut pending,
+                            &mut admissions,
+                        );
+                        continue;
+                    }
+                    admissions
+                        .stages
+                        .insert(client_id, ClientAdmissionStage::WorldReady);
                     ready.ids.insert(client_id);
                     relevance.sets.insert(
                         client_id,
                         ServerClientRelevanceSet {
                             tick: NetworkTick(manifest.editor_revision.0),
-                            entities: manifest.signature.iter().copied().collect(),
+                            entities: manifest.entity_ids.iter().copied().collect(),
                         },
                     );
+                    admissions
+                        .stages
+                        .insert(client_id, ClientAdmissionStage::InGame);
                     #[cfg(all(feature = "diagnostics", debug_assertions))]
                     server_profiler_event(
                         &profiler,
@@ -797,7 +1032,7 @@ fn receive_client_control(
                             stage: "receive_decode",
                             packet_type: "client_world_ready",
                             client_id: Some(client_id),
-                            world_revision: Some(_ack.revision.0),
+                            world_revision: Some(ack.revision.0),
                             chunk_index: None,
                             chunk_count: None,
                             bytes: _bytes_len,
@@ -808,12 +1043,33 @@ fn receive_client_control(
                         _log_config.net_verbose(),
                         target: "fun::server::net",
                         client_id,
-                        level = %_ack.level_id.0,
-                        revision = _ack.revision.0,
+                        level = %ack.level_id.0,
+                        revision = ack.revision.0,
+                        chunk_count = ack.chunk_count,
+                        manifest_signature = ack.manifest_signature,
                         "client loaded world"
                     );
                 }
                 Ok(_packet) => {
+                    if admissions
+                        .stages
+                        .get(&client_id)
+                        .copied()
+                        .unwrap_or(ClientAdmissionStage::Unauthenticated)
+                        == ClientAdmissionStage::Unauthenticated
+                    {
+                        error!(target: "fun::server::net", client_id, "rejecting control packet before client admission");
+                        endpoint.try_disconnect_client(client_id);
+                        clear_client_state(
+                            client_id,
+                            &mut connected,
+                            &mut ready,
+                            &mut relevance,
+                            &mut pending,
+                            &mut admissions,
+                        );
+                        continue;
+                    }
                     #[cfg(all(feature = "diagnostics", debug_assertions))]
                     server_profiler_event(
                         &profiler,
@@ -999,6 +1255,21 @@ fn apply_server_transform_transaction(
     Option<EntityDelta>,
 ) {
     let transaction_id = transaction.transaction_id;
+    let execution_budget = game_shared::EditorExecutionBudget {
+        max_ops: 1,
+        used_ops: 0,
+    };
+    if execution_budget
+        .consume_ops(transaction.ops.len().min(u32::MAX as usize) as u32)
+        .is_none()
+    {
+        return rejected_mutation(
+            transaction_id,
+            current_revision,
+            "mutation_budget_exceeded",
+            "server Transform patch accepts one operation per transaction",
+        );
+    }
     if transaction.ops.len() != 1 {
         return rejected_mutation(
             transaction_id,
@@ -1036,10 +1307,7 @@ fn apply_server_transform_transaction(
             base_world_revision: transaction.base_world_revision,
             current_world_revision: current_revision,
             known_entities,
-            execution_budget: game_shared::EditorExecutionBudget {
-                max_ops: 1,
-                used_ops: 0,
-            },
+            execution_budget,
         },
     ) {
         return rejected_mutation(
@@ -1389,6 +1657,9 @@ fn streamed_world_preview(streamed: &StreamedWorldEntity) -> String {
 fn send_pending_world_streams(
     mut server: ResMut<QuinnetServer>,
     mut pending: ResMut<PendingWorldStreams>,
+    mut ready: ResMut<ReadyClients>,
+    mut relevance: ResMut<ClientRelevanceSets>,
+    mut admissions: ResMut<ClientAdmissionStates>,
     manifest: Res<ServerWorldStream>,
     _log_config: Res<ServerLogConfig>,
     #[cfg(all(feature = "diagnostics", debug_assertions))] profiler: Res<ServerProfiler>,
@@ -1403,6 +1674,17 @@ fn send_pending_world_streams(
 
     let pending_clients = pending.ids.iter().copied().collect::<Vec<_>>();
     for client_id in pending_clients {
+        let stage = admissions
+            .stages
+            .get(&client_id)
+            .copied()
+            .unwrap_or(ClientAdmissionStage::Unauthenticated);
+        if !client_can_receive_stream(stage) {
+            pending.ids.remove(&client_id);
+            continue;
+        }
+        ready.ids.remove(&client_id);
+        relevance.sets.remove(&client_id);
         game_shared::fun_diag_info_if!(
             _log_config.stream_verbose(),
             target: "fun::server::stream",
@@ -1468,6 +1750,7 @@ fn send_pending_world_streams(
             }
         }
 
+        let mut sent_all_chunks = true;
         for chunk in &manifest.chunks {
             let packet = ServerPacket::WorldStream {
                 chunk: chunk.clone(),
@@ -1519,12 +1802,19 @@ fn send_pending_world_streams(
                         },
                     );
                     error!(target: "fun::server::stream", client_id, %error, "failed to encode world stream");
-                    continue;
+                    sent_all_chunks = false;
+                    break;
                 }
             }
         }
 
+        if !sent_all_chunks {
+            continue;
+        }
         pending.ids.remove(&client_id);
+        admissions
+            .stages
+            .insert(client_id, ClientAdmissionStage::Streaming);
         game_shared::fun_diag_info_if!(
             _log_config.stream_verbose(),
             target: "fun::server::stream",
@@ -1577,4 +1867,148 @@ fn unix_ns() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_manifest() -> ServerWorldStream {
+        ServerWorldStream {
+            revision: WorldRevision(9),
+            editor_revision: WorldRevision(9),
+            manifest_signature: 0x1234_5678_9abc_def0,
+            entity_ids: vec![NetEntity(1)],
+            chunks: vec![WorldStreamChunk {
+                level_id: WorldLevelId(DEMO_LEVEL_ID.to_owned()),
+                revision: WorldRevision(9),
+                chunk_index: 0,
+                chunk_count: 2,
+                manifest_signature: 0x1234_5678_9abc_def0,
+                entities: Vec::new(),
+            }],
+        }
+    }
+
+    fn valid_ack() -> WorldStreamAck {
+        WorldStreamAck {
+            level_id: WorldLevelId(DEMO_LEVEL_ID.to_owned()),
+            revision: WorldRevision(9),
+            chunk_count: 2,
+            manifest_signature: 0x1234_5678_9abc_def0,
+        }
+    }
+
+    #[test]
+    fn client_hello_requires_protocol_and_session_token() {
+        let valid = ClientHello {
+            protocol_version: GAME_PROTOCOL_VERSION,
+            session_token: vec![1, 2, 3],
+            feature_bits: 0,
+            oldest_input_sequence: PacketSequence(0),
+        };
+        assert_eq!(validate_client_hello(&valid), Ok(()));
+
+        let mut missing_token = valid.clone();
+        missing_token.session_token.clear();
+        assert_eq!(
+            validate_client_hello(&missing_token),
+            Err(ClientHelloRejection::MissingSessionToken)
+        );
+
+        let mut wrong_version = valid;
+        wrong_version.protocol_version = GAME_PROTOCOL_VERSION + 1;
+        assert_eq!(
+            validate_client_hello(&wrong_version),
+            Err(ClientHelloRejection::WrongProtocolVersion)
+        );
+    }
+
+    #[test]
+    fn world_ready_ack_must_match_current_stream_manifest() {
+        let manifest = test_manifest();
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::Streaming, &valid_ack(), &manifest),
+            Ok(())
+        );
+
+        let mut wrong_level = valid_ack();
+        wrong_level.level_id = WorldLevelId("other-level".to_owned());
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::Streaming, &wrong_level, &manifest),
+            Err(WorldReadyRejection::WrongLevel)
+        );
+
+        let mut stale = valid_ack();
+        stale.revision = WorldRevision(8);
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::Streaming, &stale, &manifest),
+            Err(WorldReadyRejection::StaleRevision)
+        );
+
+        let mut future = valid_ack();
+        future.revision = WorldRevision(10);
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::Streaming, &future, &manifest),
+            Err(WorldReadyRejection::FutureRevision)
+        );
+
+        let mut wrong_count = valid_ack();
+        wrong_count.chunk_count = 1;
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::Streaming, &wrong_count, &manifest),
+            Err(WorldReadyRejection::WrongChunkCount)
+        );
+
+        let mut wrong_signature = valid_ack();
+        wrong_signature.manifest_signature ^= 1;
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::Streaming, &wrong_signature, &manifest),
+            Err(WorldReadyRejection::WrongManifestSignature)
+        );
+
+        assert_eq!(
+            validate_world_ready_ack(ClientAdmissionStage::InGame, &valid_ack(), &manifest),
+            Err(WorldReadyRejection::DuplicateReady)
+        );
+    }
+
+    #[test]
+    fn disconnect_cleanup_removes_all_authoritative_client_state() {
+        let client_id = 42;
+        let mut connected = ConnectedClients::default();
+        let mut ready = ReadyClients::default();
+        let mut relevance = ClientRelevanceSets::default();
+        let mut pending = PendingWorldStreams::default();
+        let mut admissions = ClientAdmissionStates::default();
+
+        connected.ids.insert(client_id);
+        ready.ids.insert(client_id);
+        relevance.sets.insert(
+            client_id,
+            ServerClientRelevanceSet {
+                tick: NetworkTick(9),
+                entities: [NetEntity(1)].into_iter().collect(),
+            },
+        );
+        pending.ids.insert(client_id);
+        admissions
+            .stages
+            .insert(client_id, ClientAdmissionStage::InGame);
+
+        clear_client_state(
+            client_id,
+            &mut connected,
+            &mut ready,
+            &mut relevance,
+            &mut pending,
+            &mut admissions,
+        );
+
+        assert!(!connected.ids.contains(&client_id));
+        assert!(!ready.ids.contains(&client_id));
+        assert!(!relevance.sets.contains_key(&client_id));
+        assert!(!pending.ids.contains(&client_id));
+        assert!(!admissions.stages.contains_key(&client_id));
+    }
 }

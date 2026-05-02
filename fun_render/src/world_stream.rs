@@ -20,6 +20,7 @@ use crate::{
 pub struct RenderWorldContext {
     pub level_id: Option<String>,
     pub revision: Option<WorldRevision>,
+    pub manifest_signature: u64,
     pub expected_chunks: u16,
     pub received_chunks: HashSet<u16>,
     pub spawned_entities: HashMap<NetEntity, Entity>,
@@ -60,6 +61,7 @@ pub fn despawn_render_context(
     }
     context.level_id = None;
     context.revision = None;
+    context.manifest_signature = 0;
     context.expected_chunks = 0;
     context.received_chunks.clear();
     context.spawned_entities.clear();
@@ -85,6 +87,7 @@ pub fn apply_render_world_chunk(
     let mut outcome = RenderWorldChunkOutcome::default();
     if context.revision != Some(chunk.revision)
         || context.level_id.as_deref() != Some(chunk.level_id.0.as_str())
+        || context.manifest_signature != chunk.manifest_signature
     {
         outcome.world_revision_changed = true;
         game_shared::fun_diag_info_if!(
@@ -102,6 +105,7 @@ pub fn apply_render_world_chunk(
 
         context.level_id = Some(chunk.level_id.0.clone());
         context.revision = Some(chunk.revision);
+        context.manifest_signature = chunk.manifest_signature;
         context.expected_chunks = chunk.chunk_count;
         game_shared::fun_diag_info_if!(
             options.stream_verbose,

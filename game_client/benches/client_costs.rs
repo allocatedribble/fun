@@ -221,6 +221,7 @@ fn sample_world_stream_chunk(entity_count: usize) -> WorldStreamChunk {
         revision: WorldRevision(7),
         chunk_index: 0,
         chunk_count: 1,
+        manifest_signature: 0x6372_6974_6572_6961,
         entities: (0..entity_count)
             .map(|index| sample_world_entity(index as u64))
             .collect(),

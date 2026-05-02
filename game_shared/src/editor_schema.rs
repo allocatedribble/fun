@@ -202,6 +202,23 @@ impl EditorExecutionBudget {
     pub const fn has_capacity(self) -> bool {
         self.remaining_ops() > 0
     }
+
+    #[must_use]
+    pub const fn can_consume_ops(self, ops: u32) -> bool {
+        ops <= self.remaining_ops()
+    }
+
+    #[must_use]
+    pub const fn consume_ops(self, ops: u32) -> Option<Self> {
+        if self.can_consume_ops(ops) {
+            Some(Self {
+                max_ops: self.max_ops,
+                used_ops: self.used_ops.saturating_add(ops),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for EditorExecutionBudget {
@@ -432,7 +449,7 @@ fn validate_common_mutation(
     current_world_revision: EditorWorldRevision,
     execution_budget: EditorExecutionBudget,
 ) -> Result<(), EditorMutationError> {
-    if base_world_revision < current_world_revision {
+    if base_world_revision != current_world_revision {
         return Err(EditorMutationError::StaleRevision);
     }
     if !execution_budget.has_capacity() {
@@ -768,6 +785,26 @@ mod tests {
     }
 
     #[test]
+    fn component_mutation_validation_rejects_future_revision() {
+        let registry = EditorSchemaRegistry::new(test_components(), &[]);
+        let request = EditorComponentMutationRequest {
+            entity: NetEntity::from_parts(1, 2),
+            component_kind: EDITOR_COMPONENT_KIND_TRANSFORM,
+            payload: &[1],
+            granted_capabilities: &[EditorCapability::MutateEntities],
+            base_world_revision: EditorWorldRevision(3),
+            current_world_revision: EditorWorldRevision(2),
+            known_entities: &[visible_entity(EditorEntityMutability::RuntimeMutable)],
+            execution_budget: EditorExecutionBudget::default(),
+        };
+
+        assert_eq!(
+            validate_component_mutation(registry, request),
+            Err(EditorMutationError::StaleRevision)
+        );
+    }
+
+    #[test]
     fn component_mutation_validation_rejects_empty_payload() {
         let registry = EditorSchemaRegistry::new(test_components(), &[]);
         let request = EditorComponentMutationRequest {
@@ -829,6 +866,17 @@ mod tests {
             validate_component_mutation(registry, request),
             Err(EditorMutationError::ExecutionBudgetExceeded)
         );
+    }
+
+    #[test]
+    fn execution_budget_consumes_whole_transactions() {
+        let budget = EditorExecutionBudget {
+            max_ops: 1,
+            used_ops: 0,
+        };
+
+        assert!(budget.consume_ops(1).is_some());
+        assert!(budget.consume_ops(2).is_none());
     }
 
     #[test]

@@ -14,6 +14,7 @@ use game_shared::{
 use thunder::prelude::*;
 
 pub const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
+pub const MAX_WORLD_STREAM_CHUNKS: usize = u16::MAX as usize;
 pub const DEFAULT_SCENE_ID: SceneId = SceneId("arena-blockout");
 const DEFAULT_SCENE_FUNCTION_NAME: &str = "spawn_default_scene";
 const FLOOR_ENTITY: NetEntity = NetEntity(1);
@@ -68,6 +69,11 @@ pub struct SceneLightingDescriptor {
     pub sun_direction: [f32; 3],
     pub sun_illuminance_lux: f32,
     pub ambient_rgb: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamChunkError {
+    TooManyChunks,
 }
 
 pub trait SceneRenderManifestProvider {
@@ -233,6 +239,17 @@ pub fn scene_render_manifest(
 }
 
 #[must_use]
+pub fn scene_render_manifest_by_id(
+    scene_id: &str,
+    revision: WorldRevision,
+) -> Option<SceneRenderManifest> {
+    if scene_id == DEFAULT_SCENE_ID.0 {
+        return Some(default_scene_render_manifest(revision));
+    }
+    None
+}
+
+#[must_use]
 pub fn default_scene_descriptor() -> SceneDescriptor {
     SceneDescriptor {
         id: DEFAULT_SCENE_ID,
@@ -305,13 +322,21 @@ pub fn chunk_world_specs(
     revision: WorldRevision,
     specs: Vec<WorldEntitySpec>,
 ) -> Vec<WorldStreamChunk> {
-    let chunk_count = specs
-        .len()
-        .div_ceil(WORLD_STREAM_ENTITIES_PER_CHUNK)
-        .max(1)
-        .min(u16::MAX as usize) as u16;
+    try_chunk_world_specs(level_id, revision, specs).unwrap_or_default()
+}
 
-    specs
+pub fn try_chunk_world_specs(
+    level_id: &str,
+    revision: WorldRevision,
+    specs: Vec<WorldEntitySpec>,
+) -> Result<Vec<WorldStreamChunk>, StreamChunkError> {
+    let chunk_count = chunk_count_for_spec_len(specs.len())?;
+    if chunk_count == 0 {
+        return Ok(Vec::new());
+    }
+    let manifest_signature = world_stream_manifest_signature(&specs);
+
+    Ok(specs
         .chunks(WORLD_STREAM_ENTITIES_PER_CHUNK)
         .enumerate()
         .map(|(chunk_index, entities)| WorldStreamChunk {
@@ -319,9 +344,39 @@ pub fn chunk_world_specs(
             revision,
             chunk_index: chunk_index as u16,
             chunk_count,
+            manifest_signature,
             entities: entities.to_vec(),
         })
-        .collect()
+        .collect())
+}
+
+fn chunk_count_for_spec_len(spec_len: usize) -> Result<u16, StreamChunkError> {
+    if spec_len == 0 {
+        return Ok(0);
+    }
+    let chunk_count = spec_len.div_ceil(WORLD_STREAM_ENTITIES_PER_CHUNK);
+    if chunk_count > MAX_WORLD_STREAM_CHUNKS {
+        return Err(StreamChunkError::TooManyChunks);
+    }
+    Ok(chunk_count as u16)
+}
+
+#[must_use]
+pub fn world_stream_manifest_signature(specs: &[WorldEntitySpec]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash = fnv1a_u64(hash, specs.len() as u64);
+    for spec in specs {
+        hash = fnv1a_u64(hash, spec.entity.0);
+        hash = fnv1a_str(hash, &spec.name);
+        hash = hash_replication_class(hash, spec.class);
+        hash = hash_authority_mode(hash, spec.authority);
+        hash = hash_transform(hash, spec.transform);
+        hash = hash_catalog(hash, spec.catalog);
+        hash = hash_render(hash, spec.render);
+        hash = hash_collider(hash, spec.collider);
+        hash = hash_color(hash, spec.color);
+    }
+    hash
 }
 
 #[must_use]
@@ -418,6 +473,95 @@ fn qvec(value: Vec3) -> QuantizedVec3 {
     QuantizedVec3::from_f32(value.to_array(), Quantization::MILLIMETERS)
 }
 
+fn hash_replication_class(mut hash: u64, class: ReplicationClass) -> u64 {
+    match class {
+        ReplicationClass::Pawn => fnv1a(hash, 0),
+        ReplicationClass::Projectile => fnv1a(hash, 1),
+        ReplicationClass::Destructible => fnv1a(hash, 2),
+        ReplicationClass::Vehicle => fnv1a(hash, 3),
+        ReplicationClass::Objective => fnv1a(hash, 4),
+        ReplicationClass::World => fnv1a(hash, 5),
+        ReplicationClass::Custom(value) => {
+            hash = fnv1a(hash, 6);
+            fnv1a_u16(hash, value)
+        }
+    }
+}
+
+fn hash_authority_mode(mut hash: u64, authority: AuthorityMode) -> u64 {
+    match authority {
+        AuthorityMode::ServerOnly => fnv1a(hash, 0),
+        AuthorityMode::ClientPredicted { owner } => {
+            hash = fnv1a(hash, 1);
+            fnv1a_u64(hash, owner.0)
+        }
+        AuthorityMode::StaticServer => fnv1a(hash, 2),
+    }
+}
+
+fn hash_transform(mut hash: u64, transform: QuantizedTransform3) -> u64 {
+    hash = hash_qvec(hash, transform.translation);
+    hash = fnv1a_i16(hash, transform.rotation.x);
+    hash = fnv1a_i16(hash, transform.rotation.y);
+    hash = fnv1a_i16(hash, transform.rotation.z);
+    fnv1a_i16(hash, transform.rotation.w)
+}
+
+fn hash_catalog(mut hash: u64, catalog: Option<WorldCatalogRef>) -> u64 {
+    match catalog {
+        Some(catalog) => {
+            hash = fnv1a_u8(hash, 1);
+            hash = fnv1a(hash, catalog.asset_id);
+            hash = fnv1a(hash, catalog.material_id);
+            fnv1a(hash, catalog.collider_id)
+        }
+        None => fnv1a_u8(hash, 0),
+    }
+}
+
+fn hash_render(mut hash: u64, render: Option<WorldPrimitive>) -> u64 {
+    match render {
+        Some(WorldPrimitive::Plane { size }) => {
+            hash = fnv1a_u8(hash, 1);
+            hash_qvec(hash, size)
+        }
+        Some(WorldPrimitive::Cuboid { size }) => {
+            hash = fnv1a_u8(hash, 2);
+            hash_qvec(hash, size)
+        }
+        None => fnv1a_u8(hash, 0),
+    }
+}
+
+fn hash_collider(mut hash: u64, collider: Option<WorldCollider>) -> u64 {
+    match collider {
+        Some(WorldCollider::Cuboid { size }) => {
+            hash = fnv1a_u8(hash, 1);
+            hash_qvec(hash, size)
+        }
+        None => fnv1a_u8(hash, 0),
+    }
+}
+
+fn hash_color(mut hash: u64, color: Option<PackedColorRgba8>) -> u64 {
+    match color {
+        Some(color) => {
+            hash = fnv1a_u8(hash, 1);
+            hash = fnv1a_u8(hash, color.r);
+            hash = fnv1a_u8(hash, color.g);
+            hash = fnv1a_u8(hash, color.b);
+            fnv1a_u8(hash, color.a)
+        }
+        None => fnv1a_u8(hash, 0),
+    }
+}
+
+fn hash_qvec(mut hash: u64, value: QuantizedVec3) -> u64 {
+    hash = fnv1a_i32(hash, value.x);
+    hash = fnv1a_i32(hash, value.y);
+    fnv1a_i32(hash, value.z)
+}
+
 fn fnv1a(mut hash: u64, value: u32) -> u64 {
     for byte in value.to_le_bytes() {
         hash ^= u64::from(byte);
@@ -426,10 +570,40 @@ fn fnv1a(mut hash: u64, value: u32) -> u64 {
     hash
 }
 
+fn fnv1a_u8(mut hash: u64, value: u8) -> u64 {
+    hash ^= u64::from(value);
+    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    hash
+}
+
+fn fnv1a_u16(mut hash: u64, value: u16) -> u64 {
+    for byte in value.to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn fnv1a_i16(hash: u64, value: i16) -> u64 {
+    fnv1a_u16(hash, value as u16)
+}
+
+fn fnv1a_i32(hash: u64, value: i32) -> u64 {
+    fnv1a(hash, value as u32)
+}
+
 fn fnv1a_u64(mut hash: u64, value: u64) -> u64 {
     for byte in value.to_le_bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn fnv1a_str(mut hash: u64, value: &str) -> u64 {
+    hash = fnv1a_u64(hash, value.len() as u64);
+    for byte in value.bytes() {
+        hash = fnv1a_u8(hash, byte);
     }
     hash
 }
@@ -450,6 +624,35 @@ mod tests {
         let first = default_scene_world_stream_chunks(WorldRevision(1));
         let second = default_scene_world_stream_chunks(WorldRevision(1));
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn empty_world_specs_produce_zero_chunks() {
+        let chunks = try_chunk_world_specs(DEMO_LEVEL_ID, WorldRevision(1), Vec::new())
+            .expect("empty world is valid");
+
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn huge_world_specs_are_rejected_before_chunk_index_wrap() {
+        let too_many_specs =
+            MAX_WORLD_STREAM_CHUNKS.saturating_mul(WORLD_STREAM_ENTITIES_PER_CHUNK) + 1;
+
+        assert_eq!(
+            chunk_count_for_spec_len(too_many_specs),
+            Err(StreamChunkError::TooManyChunks)
+        );
+    }
+
+    #[test]
+    fn world_stream_signature_changes_when_entity_fields_change() {
+        let mut specs = default_scene_world_specs();
+        let original = world_stream_manifest_signature(&specs);
+
+        specs[0].transform.translation.x += 1;
+
+        assert_ne!(original, world_stream_manifest_signature(&specs));
     }
 
     #[test]

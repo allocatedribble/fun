@@ -1174,7 +1174,12 @@ pub fn validate_editor_packet(
     }
 
     validate_packet_budget(packet, context)?;
-    validate_header_revision(header, context)?;
+    if matches!(
+        packet,
+        EditorProtocolPacket::Command { .. } | EditorProtocolPacket::Activation { .. }
+    ) {
+        validate_header_revision(header, context)?;
+    }
 
     match packet {
         EditorProtocolPacket::Handshake { packet } => validate_handshake_packet(packet, context),
@@ -1205,7 +1210,7 @@ fn validate_header_revision(
     context: &EditorProtocolValidationContext,
 ) -> Result<(), EditorProtocolValidationError> {
     if let Some(base_world_revision) = header.base_world_revision
-        && base_world_revision < context.world_revision
+        && base_world_revision != context.world_revision
     {
         return Err(EditorProtocolValidationError::StaleRevision);
     }
@@ -1261,8 +1266,20 @@ fn validate_command_packet(
             if transaction.requires_persistence() {
                 require_capability(context, EditorCapability::PersistIteration)?;
             }
-            if transaction.base_world_revision < context.world_revision {
-                return Err(EditorProtocolValidationError::StaleRevision);
+            match transaction.conflict_policy {
+                EditorConflictPolicy::RejectOnConflict
+                    if transaction.base_world_revision != context.world_revision =>
+                {
+                    return Err(EditorProtocolValidationError::StaleRevision);
+                }
+                EditorConflictPolicy::RebaseIfClean
+                    if transaction.base_world_revision > context.world_revision =>
+                {
+                    return Err(EditorProtocolValidationError::StaleRevision);
+                }
+                EditorConflictPolicy::RejectOnConflict
+                | EditorConflictPolicy::RebaseIfClean
+                | EditorConflictPolicy::ForceDevOnly => {}
             }
             validate_mutation_components(transaction, context)
         }
@@ -1271,7 +1288,7 @@ fn validate_command_packet(
         }
         EditorCommandPayload::Persist { request } => {
             require_capability(context, EditorCapability::PersistIteration)?;
-            if request.base_world_revision < context.world_revision {
+            if request.base_world_revision != context.world_revision {
                 return Err(EditorProtocolValidationError::StaleRevision);
             }
             Ok(())
@@ -1791,6 +1808,18 @@ mod tests {
 
         assert_eq!(
             validate_editor_packet(&packet, &context).expect_err("base revision is stale"),
+            EditorProtocolValidationError::StaleRevision
+        );
+    }
+
+    #[test]
+    fn validation_rejects_future_world_revision_for_reject_on_conflict() {
+        let packet = mutation_command_packet(EditorWorldRevision(3));
+        let mut context = validation_context();
+        context.world_revision = EditorWorldRevision(2);
+
+        assert_eq!(
+            validate_editor_packet(&packet, &context).expect_err("base revision is future"),
             EditorProtocolValidationError::StaleRevision
         );
     }

@@ -162,6 +162,20 @@ square/rectangle and break or remove Solari shadows. Keep the `rr` mode in the
 matrix for diagnosis, but do not use it as the default path until that artifact
 is fixed.
 
+For the RT/Solari capability matrix:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_rt_matrix.ps1 -RenderBackend vulkan -PresentMode immediate
+```
+
+That matrix records the backend capability hash from the startup capability
+line into every `summary.json`, along with the RT feature gates used for the
+run. Its lanes cover baseline Solari, direct-only, GI-only, direct+GI, DLSS RR
+diagnostic, half-resolution GI reservoirs, async readback on/off, and BLAS
+compaction budget variants. Some gates are Tier-0 policy metadata until the
+matching Solari passes are wired; they are still captured so later tiers cannot
+land without before/after numbers under the same names.
+
 ## Default Client Matrix
 
 The quick iteration benchmark is:

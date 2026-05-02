@@ -648,30 +648,43 @@ impl Plugin for GameClientPlugin {
 
 #[derive(Debug, Resource)]
 struct StaticPreviewWorldStream {
-    scene_id: Option<String>,
+    scene_id: String,
     chunks: Vec<WorldStreamChunk>,
     applied: bool,
 }
 
 impl StaticPreviewWorldStream {
     fn new(scene_id: Option<&str>) -> Self {
-        Self {
-            scene_id: scene_id.map(str::to_owned),
+        let mut stream = Self {
+            scene_id: game_scene::DEFAULT_SCENE_ID.0.to_owned(),
             chunks: game_scene::default_scene_world_stream_chunks(WorldRevision(1)),
             applied: false,
+        };
+        if let Some(scene_id) = scene_id
+            && stream.load_scene(scene_id.to_owned()).is_err()
+        {
+            warn!(
+                target: "fun::preview",
+                scene_id,
+                "unknown startup preview scene; retaining default scene"
+            );
         }
+        stream
     }
 
-    fn load_scene(&mut self, scene_id: String) {
-        self.scene_id = Some(scene_id);
-        self.chunks = game_scene::default_scene_world_stream_chunks(WorldRevision(1));
+    fn load_scene(&mut self, scene_id: String) -> Result<(), ()> {
+        let manifest =
+            game_scene::scene_render_manifest_by_id(&scene_id, WorldRevision(1)).ok_or(())?;
+        self.scene_id = scene_id;
+        self.chunks = manifest.world_stream_chunks;
         self.applied = false;
+        Ok(())
     }
 
     #[cfg(test)]
     fn from_chunks(chunks: Vec<WorldStreamChunk>) -> Self {
         Self {
-            scene_id: None,
+            scene_id: "preview-test".to_owned(),
             chunks,
             applied: false,
         }
@@ -725,7 +738,14 @@ fn apply_editor_runtime_controls(
             }
             game_shared::EditorRuntimeControlCommand::SceneLoadPreview { scene_id } => {
                 if let Some(stream) = preview_stream.as_mut() {
-                    stream.load_scene(scene_id);
+                    if stream.load_scene(scene_id.clone()).is_err() {
+                        warn!(
+                            target: "fun::client::host",
+                            command_id,
+                            scene_id = scene_id.as_str(),
+                            "rejected unknown static preview scene"
+                        );
+                    }
                 }
             }
             game_shared::EditorRuntimeControlCommand::ShutdownRequest => {
@@ -776,8 +796,18 @@ fn process_is_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(windows))]
-fn process_is_alive(_pid: u32) -> bool {
-    true
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    if cfg!(target_os = "linux") {
+        return std::fs::metadata(format!("/proc/{pid}")).is_ok();
+    }
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 #[allow(
@@ -816,10 +846,7 @@ fn apply_static_preview_world_stream(
         return;
     }
 
-    let scene_id = preview_stream
-        .scene_id
-        .clone()
-        .unwrap_or_else(|| game_shared::DEMO_LEVEL_ID.to_owned());
+    let scene_id = preview_stream.scene_id.clone();
     info!(
         target: "fun::preview",
         scene_id = scene_id.as_str(),
@@ -849,7 +876,16 @@ fn apply_static_preview_world_stream(
             .perf_counters
             .add_catalog_lookup_ns(outcome.catalog_lookup_ns);
     }
-    preview_stream.applied = true;
+    if !render_world.is_complete() {
+        warn!(
+            target: "fun::preview",
+            scene_id = scene_id.as_str(),
+            received_chunks = render_world.received_chunks.len(),
+            expected_chunks = render_world.expected_chunks,
+            "static editor preview stream incomplete; leaving preview retryable"
+        );
+        return;
+    }
 
     if world_revision_changed {
         request_solari_lighting_history_reset(
@@ -861,31 +897,30 @@ fn apply_static_preview_world_stream(
         reset_dlss_ray_reconstruction_history(&mut dlss_rr);
     }
 
-    if render_world.is_complete() {
-        world_status.ready = true;
-        enable_solari_lighting_for_ready_world(
-            &mut commands,
-            &render_config,
-            &solari_cameras,
-            &mut solari_lighting,
-            &mut solari_reset_events,
-        );
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        enable_dlss_ray_reconstruction_for_ready_world(
-            &mut commands,
-            &render_config,
-            dlss_rr_supported.as_deref(),
-            &dlss_rr_cameras,
-            &mut dlss_rr,
-        );
-        info!(
-            target: "fun::preview",
-            scene_id = scene_id.as_str(),
-            spawned_entities = render_world.spawned_entities.len(),
-            revision = render_world.revision.map(|revision| revision.0).unwrap_or_default(),
-            "static editor preview stream ready"
-        );
-    }
+    preview_stream.applied = true;
+    world_status.ready = true;
+    enable_solari_lighting_for_ready_world(
+        &mut commands,
+        &render_config,
+        &solari_cameras,
+        &mut solari_lighting,
+        &mut solari_reset_events,
+    );
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    enable_dlss_ray_reconstruction_for_ready_world(
+        &mut commands,
+        &render_config,
+        dlss_rr_supported.as_deref(),
+        &dlss_rr_cameras,
+        &mut dlss_rr,
+    );
+    info!(
+        target: "fun::preview",
+        scene_id = scene_id.as_str(),
+        spawned_entities = render_world.spawned_entities.len(),
+        revision = render_world.revision.map(|revision| revision.0).unwrap_or_default(),
+        "static editor preview stream ready"
+    );
 }
 
 fn start_client_editor_inspector(inspector: Res<ClientEditorInspectorState>) {
@@ -1796,6 +1831,8 @@ fn receive_world_stream(
                             .unwrap_or_default(),
                     ),
                     revision: render_world.render_world.revision.unwrap_or_default(),
+                    chunk_count: render_world.render_world.expected_chunks,
+                    manifest_signature: render_world.render_world.manifest_signature,
                 },
             };
 
@@ -3484,6 +3521,12 @@ mod tests {
     }
 
     #[test]
+    fn parent_liveness_reports_current_process_alive() {
+        assert!(process_is_alive(std::process::id()));
+        assert!(!process_is_alive(0));
+    }
+
+    #[test]
     fn editor_preview_static_stream_keeps_transforms_stable_across_frames() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -3518,12 +3561,56 @@ mod tests {
         assert!(app.world().resource::<RenderWorldStatus>().ready);
     }
 
+    #[test]
+    fn static_preview_rejects_unknown_scene_without_replacing_current_stream() {
+        let mut stream = StaticPreviewWorldStream::new(Some(game_scene::DEFAULT_SCENE_ID.0));
+        let original_scene_id = stream.scene_id.clone();
+        let original_chunks = stream.chunks.clone();
+
+        assert!(stream.load_scene("missing-scene".to_owned()).is_err());
+
+        assert_eq!(stream.scene_id, original_scene_id);
+        assert_eq!(stream.chunks, original_chunks);
+    }
+
+    #[test]
+    fn static_preview_does_not_mark_applied_until_chunks_are_complete() {
+        let stream = StaticPreviewWorldStream::from_chunks(vec![WorldStreamChunk {
+            chunk_count: 2,
+            ..preview_test_chunk()
+        }]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<SolariResetEvent>()
+            .insert_resource(ClientRenderConfig::from_env())
+            .insert_resource(ClientLogConfig {
+                stream_verbose: false,
+                net_verbose: false,
+                render_verbose: false,
+                benchmark_minimal: true,
+            })
+            .insert_resource(WorldRenderCatalog::default())
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<MeshletMesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(stream)
+            .init_resource::<RenderWorldContext>()
+            .init_resource::<RenderWorldStatus>()
+            .add_systems(Update, apply_static_preview_world_stream);
+
+        app.update();
+
+        assert!(!app.world().resource::<StaticPreviewWorldStream>().applied);
+        assert!(!app.world().resource::<RenderWorldStatus>().ready);
+    }
+
     fn preview_test_chunk() -> WorldStreamChunk {
         WorldStreamChunk {
             level_id: WorldLevelId("preview-test".to_owned()),
             revision: WorldRevision(1),
             chunk_index: 0,
             chunk_count: 1,
+            manifest_signature: 0x7072_6576_6965_7701,
             entities: vec![WorldEntitySpec {
                 entity: NetEntity(10_001),
                 name: "PreviewStaticProbe".to_owned(),

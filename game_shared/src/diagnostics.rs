@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+const REDACTED_DIAGNOSTIC_VALUE: &str = "<redacted>";
+
 /// Runtime diagnostic severity transported to the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub enum DiagnosticLevel {
@@ -78,13 +80,79 @@ impl DiagnosticField {
 
     #[must_use]
     pub fn text(name: impl Into<String>, value: impl Into<String>) -> Self {
+        let name = name.into();
+        let value = if is_sensitive_diagnostic_name(&name) {
+            REDACTED_DIAGNOSTIC_VALUE.to_owned()
+        } else {
+            value.into()
+        };
+        Self {
+            value: DiagnosticValue::Text { value },
+            name,
+        }
+    }
+
+    #[must_use]
+    pub fn sensitive_text(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             value: DiagnosticValue::Text {
-                value: value.into(),
+                value: REDACTED_DIAGNOSTIC_VALUE.to_owned(),
             },
         }
     }
+
+    #[must_use]
+    pub fn bytes(name: impl Into<String>, value: Vec<u8>) -> Self {
+        let name = name.into();
+        Self {
+            value: DiagnosticValue::Bytes {
+                value: if is_sensitive_diagnostic_name(&name) {
+                    Vec::new()
+                } else {
+                    value
+                },
+            },
+            name,
+        }
+    }
+}
+
+#[must_use]
+pub fn is_sensitive_diagnostic_name(name: &str) -> bool {
+    let mut token = [0_u8; 32];
+    let mut token_len = 0usize;
+    for byte in name.bytes().chain(std::iter::once(b'_')) {
+        if byte.is_ascii_alphanumeric() {
+            if token_len < token.len() {
+                token[token_len] = byte.to_ascii_lowercase();
+                token_len += 1;
+            }
+            continue;
+        }
+        if token_len > 0 && sensitive_diagnostic_token(&token[..token_len]) {
+            return true;
+        }
+        token_len = 0;
+    }
+    false
+}
+
+fn sensitive_diagnostic_token(token: &[u8]) -> bool {
+    [
+        b"authorization".as_slice(),
+        b"bearer".as_slice(),
+        b"cookie".as_slice(),
+        b"credential".as_slice(),
+        b"jwt".as_slice(),
+        b"password".as_slice(),
+        b"secret".as_slice(),
+        b"session".as_slice(),
+        b"token".as_slice(),
+        b"ticket".as_slice(),
+    ]
+    .iter()
+    .any(|needle| token.windows(needle.len()).any(|window| window == *needle))
 }
 
 /// Runtime event emitted once and fanned out to tracing, live editor, and ring sinks.
@@ -739,5 +807,37 @@ mod tests {
         assert!(sinks.emit(event(1)).is_none());
         assert!(sinks.ring.is_empty());
         assert!(sinks.editor_live_stream.drain(1).is_empty());
+    }
+
+    #[test]
+    fn diagnostic_field_constructors_redact_secret_named_fields() {
+        assert_eq!(
+            DiagnosticField::text("session_token", "raw-secret").value,
+            DiagnosticValue::Text {
+                value: REDACTED_DIAGNOSTIC_VALUE.to_owned()
+            }
+        );
+        assert_eq!(
+            DiagnosticField::text("sessiontoken", "raw-secret").value,
+            DiagnosticValue::Text {
+                value: REDACTED_DIAGNOSTIC_VALUE.to_owned()
+            }
+        );
+        assert_eq!(
+            DiagnosticField::sensitive_text("opaque").value,
+            DiagnosticValue::Text {
+                value: REDACTED_DIAGNOSTIC_VALUE.to_owned()
+            }
+        );
+        assert_eq!(
+            DiagnosticField::bytes("auth_ticket_bytes", vec![1, 2, 3]).value,
+            DiagnosticValue::Bytes { value: Vec::new() }
+        );
+        assert_eq!(
+            DiagnosticField::text("stream", "mutation_transactions").value,
+            DiagnosticValue::Text {
+                value: "mutation_transactions".to_owned()
+            }
+        );
     }
 }

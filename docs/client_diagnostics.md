@@ -170,6 +170,9 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   creates, previous-frame reuses, same-frame lifetime aliases, and cached slot
   counts.
 - `bevy_render::scheduler`: render graph budget pressure.
+- `bevy_render::capabilities`: one startup capability inventory line with the
+  backend capability hash, vendor class, RT/AS support, async queue probe state,
+  DLSS capability slots, native opacity/SER/LSS slots, and RT validation slot.
 - `bevy_pbr::meshlet::scheduler`: meshlet visibility budget decisions and
   async-compute policy decisions. WGPU currently runs these candidates through
   the graphics-queue fallback unless a backend-specific async path proves a p95
@@ -218,6 +221,17 @@ testing; engine-side validation clamps them to bounded GPU-safe ranges:
 - `FUN_SOLARI_FRAME_BUDGET_NS=6944444`
 - `FUN_SOLARI_GPU_BUDGET_NS=3000000`
 - `FUN_SOLARI_VISUAL_TARGET=competitive|balanced|cinematic`
+- `FUN_RT_SAMPLE_DIRECT=0|1`
+- `FUN_RT_SAMPLE_INDIRECT=0|1`
+- `FUN_RT_SAMPLE_REFLECTIONS=0|1`
+- `FUN_RT_SURFACE_CACHE=0|1`
+- `FUN_RT_MEGAGEOM=off|software|native`
+- `FUN_RT_OPACITY_MASK=off|baked|native`
+- `FUN_RT_HAIR=off|cards|strands|native_lss`
+- `FUN_RT_ASYNC_READBACK=0|1`
+- `FUN_RT_VALIDATION=0|1`
+- `FUN_RENDER_UNKNOWN_VENDOR=1`
+- `FUN_RENDER_VENDOR_EMULATION=unknown|nvidia|amd|intel`
 - `FUN_SOLARI_WORLD_CACHE_SIZE`
 - `FUN_SOLARI_WORLD_CACHE_UPDATES`
 - `FUN_SOLARI_WORLD_CACHE_LIGHT_SAMPLES`
