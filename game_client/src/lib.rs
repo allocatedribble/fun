@@ -47,14 +47,17 @@ use bevy::{pbr::experimental::meshlet::MeshletMesh3d, solari::prelude::Raytracin
 use bevy_quinnet::client::{
     ClientConnectionConfiguration, ClientConnectionConfigurationDefaultables, QuinnetClient,
     QuinnetClientPlugin,
-    certificate::CertificateVerificationMode,
+    certificate::{CertificateVerificationMode, KnownHosts, TrustOnFirstUseConfig},
     connection::{ClientAddrConfiguration, ConnectionEvent},
 };
 use editor_hotkey::EditorHotkeyPlugin;
 use first_person::FirstPersonControllerPlugin;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use game_shared::DEFAULT_RENDER_TARGET_RATE_HZ;
-use game_shared::{CatalogCollider, DEFAULT_TICK_RATE_HZ, EditorInputOwner, GAME_SERVER_ADDR};
+use game_shared::{
+    CatalogCollider, DEFAULT_TICK_RATE_HZ, EditorInputOwner, GAME_SERVER_ADDR,
+    GAME_SERVER_KNOWN_HOSTS_FILE,
+};
 use thunder::prelude::*;
 use tracing::{debug, error, info, warn};
 
@@ -1266,7 +1269,10 @@ fn connect_to_game_server(options: Res<ClientAppOptions>, mut client: ResMut<Qui
     let config = ClientConnectionConfiguration {
         addr_config: ClientAddrConfiguration::from_strings(server_addr, "0.0.0.0:0")
             .expect("game server address should be valid"),
-        cert_mode: CertificateVerificationMode::SkipVerification,
+        cert_mode: CertificateVerificationMode::TrustOnFirstUse(TrustOnFirstUseConfig {
+            known_hosts: KnownHosts::HostsFile(GAME_SERVER_KNOWN_HOSTS_FILE.to_owned()),
+            ..Default::default()
+        }),
         defaultables: ClientConnectionConfigurationDefaultables {
             send_channels_cfg: ClientChannel::channels_configuration(limits),
             ..Default::default()

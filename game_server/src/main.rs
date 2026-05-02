@@ -16,7 +16,10 @@ use bevy_quinnet::server::{
     certificate::CertificateRetrievalMode,
 };
 use game_scene::StreamedWorldEntity;
-use game_shared::{DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_TITLE};
+use game_shared::{
+    DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_SERVER_CERT_FILE,
+    GAME_SERVER_KEY_FILE, GAME_TITLE,
+};
 use thunder::prelude::*;
 use tracing::{error, info};
 
@@ -85,7 +88,10 @@ fn start_endpoint(mut server: ResMut<QuinnetServer>) {
         .start_endpoint(ServerEndpointConfiguration {
             addr_config: EndpointAddrConfiguration::from_string(GAME_SERVER_BIND_ADDR)
                 .expect("game server bind address should be valid"),
-            cert_mode: CertificateRetrievalMode::GenerateSelfSigned {
+            cert_mode: CertificateRetrievalMode::LoadFromFileOrGenerateSelfSigned {
+                cert_file: GAME_SERVER_CERT_FILE.to_owned(),
+                key_file: GAME_SERVER_KEY_FILE.to_owned(),
+                save_on_disk: true,
                 server_hostname: "127.0.0.1".to_owned(),
             },
             defaultables: ServerEndpointConfigurationDefaultables {
