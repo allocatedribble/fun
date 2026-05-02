@@ -7,6 +7,13 @@ struct CloudParams {
     sky_horizon: vec4<f32>,
     ambient: vec4<f32>,
     wind: vec4<f32>,
+    sun: vec4<f32>,
+    history: vec4<u32>,
+    current_camera: vec4<f32>,
+    previous_camera: vec4<f32>,
+    wind_history: vec4<f32>,
+    current_world_from_clip: mat4x4<f32>,
+    previous_clip_from_world: mat4x4<f32>,
 }
 
 fn saturate(value: f32) -> f32 {
@@ -104,4 +111,28 @@ fn height_gradient(height01: f32, edge_softness: f32) -> f32 {
     let base = smoothstep(0.02, 0.18 + edge_softness * 0.12, height01);
     let top = 1.0 - smoothstep(0.74 - edge_softness * 0.18, 1.0, height01);
     return saturate(base * top);
+}
+
+fn reconstruct_world_ray(params: CloudParams, uv: vec2<f32>) -> vec3<f32> {
+    let clip = vec4<f32>(uv * 2.0 - vec2<f32>(1.0), 1.0, 1.0);
+    let world = params.current_world_from_clip * clip;
+    let world_position = world.xyz / max(abs(world.w), 0.00001);
+    return normalize(world_position - params.current_camera.xyz);
+}
+
+fn reproject_world_to_uv(params: CloudParams, world_position: vec3<f32>) -> vec2<f32> {
+    let previous_clip = params.previous_clip_from_world * vec4<f32>(world_position, 1.0);
+    let previous_ndc = previous_clip.xyz / max(abs(previous_clip.w), 0.00001);
+    return previous_ndc.xy * 0.5 + vec2<f32>(0.5);
+}
+
+fn intersect_cloud_slab(params: CloudParams, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec2<f32> {
+    let base = params.profile0.z;
+    let top = max(params.profile0.w, base + 1.0);
+    if (abs(ray_dir.y) < 0.0001) {
+        return vec2<f32>(1.0, 0.0);
+    }
+    let t0 = (base - ray_origin.y) / ray_dir.y;
+    let t1 = (top - ray_origin.y) / ray_dir.y;
+    return vec2<f32>(max(min(t0, t1), 0.0), max(t0, t1));
 }

@@ -113,7 +113,8 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 - `fun::render`: backend, present mode, Solari, meshlets, DLSS RR, and denoiser
   mode.
 - `fun::render::clouds`: cloud configuration, render-path cloud signature
-  fields, history reset requests, and future per-view cloud render setup.
+  fields, history reset requests, reset generation/counts, and future per-view
+  cloud render setup.
 - `fun::stream`: streamed world chunks, revisions, ready state, acks, duplicate
   entities, and world resets.
 - `fun::solari`: Solari activation and temporal-history resets.

@@ -6,7 +6,7 @@ pub mod weather;
 
 pub use config::{FunCloudDebugOverlay, FunCloudInternalScale, FunCloudQuality, FunCloudSettings};
 pub use plugin::{
-    FunCloudHistoryResetEvent, FunCloudHistoryResetReason, FunSkyPlugin,
+    FunCloudHistoryResetEvent, FunCloudHistoryResetReason, FunCloudHistoryState, FunSkyPlugin,
     request_cloud_history_reset,
 };
 pub use profiles::builtin_weather_profile;

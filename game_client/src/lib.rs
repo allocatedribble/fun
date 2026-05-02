@@ -63,6 +63,9 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
+const MAX_SERVER_CONTROL_PACKET_BYTES: usize = 64 * 1024;
+const MAX_SERVER_SNAPSHOT_PACKET_BYTES: usize = 512 * 1024;
+const MAX_SERVER_WORLD_STREAM_PACKET_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientRuntimeMode {
@@ -737,15 +740,15 @@ fn apply_editor_runtime_controls(
                 host_control.visual_paused = false;
             }
             game_shared::EditorRuntimeControlCommand::SceneLoadPreview { scene_id } => {
-                if let Some(stream) = preview_stream.as_mut() {
-                    if stream.load_scene(scene_id.clone()).is_err() {
-                        warn!(
-                            target: "fun::client::host",
-                            command_id,
-                            scene_id = scene_id.as_str(),
-                            "rejected unknown static preview scene"
-                        );
-                    }
+                if let Some(stream) = preview_stream.as_mut()
+                    && stream.load_scene(scene_id.clone()).is_err()
+                {
+                    warn!(
+                        target: "fun::client::host",
+                        command_id,
+                        scene_id = scene_id.as_str(),
+                        "rejected unknown static preview scene"
+                    );
                 }
             }
             game_shared::EditorRuntimeControlCommand::ShutdownRequest => {
@@ -1438,7 +1441,7 @@ fn receive_server_control(
             "try_receive_control_payload",
         );
         crate::frame_profile_start!(decode_started);
-        match decode_server_packet(payload.as_ref()) {
+        match decode_server_packet_bounded(payload.as_ref(), MAX_SERVER_CONTROL_PACKET_BYTES) {
             Ok(ServerPacket::Welcome { welcome: _welcome }) => {
                 crate::frame_profile_elapsed!(
                     frame_profiler,
@@ -1523,7 +1526,10 @@ fn receive_server_snapshots(
 
     while let Some(payload) = connection.try_receive_payload(ServerChannel::Snapshot) {
         let payload_len = payload.as_ref().len();
-        let snapshot = match decode_server_packet(payload.as_ref()) {
+        let snapshot = match decode_server_packet_bounded(
+            payload.as_ref(),
+            MAX_SERVER_SNAPSHOT_PACKET_BYTES,
+        ) {
             Ok(ServerPacket::Snapshot { snapshot }) => snapshot,
             Ok(_packet) => {
                 game_shared::fun_diag_debug_if!(
@@ -1629,7 +1635,10 @@ fn receive_world_stream(
             channel = "stream",
             "received stream payload"
         );
-        let packet = match decode_server_packet(payload.as_ref()) {
+        let packet = match decode_server_packet_bounded(
+            payload.as_ref(),
+            MAX_SERVER_WORLD_STREAM_PACKET_BYTES,
+        ) {
             Ok(ServerPacket::WorldStream { chunk }) => chunk,
             Ok(_packet) => {
                 game_shared::fun_diag_debug_if!(
@@ -2313,6 +2322,10 @@ struct RenderProfileMetric {
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "render budget logging intentionally reads each diagnostics bucket explicitly"
+)]
 fn log_render_performance(
     diagnostics: &DiagnosticsStore,
     render_recovery: Option<&RenderRecoveryStatus>,
@@ -2601,6 +2614,15 @@ fn log_render_performance(
     let cloud_internal_height = cloud_internal_size.map(|size| u64::from(size.y));
     let cloud_vram_bytes = cloud_internal_size
         .map(|size| estimate_cloud_vram_bytes(render_config.cloud_quality, size));
+    let cloud_history_reset_count =
+        diagnostic_average(diagnostics, "render/clouds/history_reset_count")
+            .map(|value| value as u64);
+    let cloud_history_accept_rate =
+        diagnostic_average(diagnostics, "render/clouds/history_accept_rate");
+    let cloud_history_reject_rate =
+        diagnostic_average(diagnostics, "render/clouds/history_reject_rate");
+    let cloud_history_average_age =
+        diagnostic_average(diagnostics, "render/clouds/history_average_age");
     let cloud_enabled =
         render_config.clouds_enabled && render_config.cloud_quality.primary_step_count() > 0;
     let configured_budget_pressure =
@@ -2777,6 +2799,10 @@ fn log_render_performance(
         cloud_light_steps = render_config.cloud_quality.light_step_count(),
         cloud_temporal_enabled = render_config.cloud_temporal_enabled,
         cloud_shadows_enabled = render_config.cloud_shadows_enabled,
+        cloud_history_accept_rate = ?cloud_history_accept_rate,
+        cloud_history_reject_rate = ?cloud_history_reject_rate,
+        cloud_history_reset_count = ?cloud_history_reset_count,
+        cloud_history_average_age = ?cloud_history_average_age,
         cloud_vram_bytes = ?cloud_vram_bytes,
         "cloud performance budget sample"
     );

@@ -374,6 +374,10 @@ fn update_cursor_grab(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "camera look input reads Bevy resources and pivots directly for scheduler clarity"
+)]
 fn apply_look(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     cursor_options: Single<&CursorOptions>,

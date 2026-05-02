@@ -2,6 +2,8 @@
     CloudParams,
     blue_noise_jitter,
     height_gradient,
+    intersect_cloud_slab,
+    reconstruct_world_ray,
     saturate,
     sky_gradient,
 }
@@ -41,10 +43,13 @@ fn raymarch_cloud_layer(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = (vec2<f32>(gid.xy) + vec2<f32>(0.5)) / vec2<f32>(size);
     let jitter = blue_noise_jitter(gid.xy, cloud.quality.w, cloud.wind.w);
     let sky = sky_gradient(cloud, uv);
-    let weather_uv = uv + cloud.wind.xy * cloud.wind.z * f32(cloud.quality.w) * 0.000015;
+    let ray_origin = cloud.current_camera.xyz;
+    let view_dir = reconstruct_world_ray(cloud, uv);
+    let ray_segment = intersect_cloud_slab(cloud, ray_origin, view_dir);
+    let weather_uv = ray_origin.xz / cloud.profile1.x + cloud.wind_history.xy;
     let weather = sample_weather(weather_uv);
 
-    if (weather.r < 0.015 || cloud.profile0.x < 0.015 || cloud.profile0.y <= 0.0) {
+    if (ray_segment.y <= ray_segment.x || weather.r < 0.015 || cloud.profile0.x < 0.015 || cloud.profile0.y <= 0.0) {
         textureStore(cloud_color, vec2<i32>(gid.xy), vec4<f32>(sky, 0.0));
         textureStore(cloud_transmittance, vec2<i32>(gid.xy), vec4<f32>(1.0, 0.0, weather.r, 1.0));
         return;
@@ -52,12 +57,15 @@ fn raymarch_cloud_layer(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let primary_steps = max(cloud.quality.x, 1u);
     let visible_steps = min(primary_steps, 64u);
-    let horizon_fade = smoothstep(0.02, 0.38, uv.y);
-    let sun_dir = normalize(vec3<f32>(0.42, 0.82, 0.28));
-    let view_dir = normalize(vec3<f32>(uv.x * 2.0 - 1.0, uv.y * 1.35 + 0.1, 1.0));
+    let horizon_fade = smoothstep(-0.04, 0.24, view_dir.y);
+    let sun_dir = normalize(cloud.sun.xyz);
     let phase = phase_approximation(dot(sun_dir, view_dir));
     let sun_color = mix(vec3<f32>(1.0, 0.92, 0.78), vec3<f32>(1.0, 0.78, 0.55), cloud.sky_horizon.a);
     let ambient = cloud.ambient.rgb;
+    let cloud_base = cloud.profile0.z;
+    let cloud_depth = max(cloud.profile0.w - cloud.profile0.z, 1.0);
+    let segment_length = min(ray_segment.y - ray_segment.x, 200000.0);
+    let weather_scale = max(cloud.profile1.x, 1000.0);
 
     var color = vec3<f32>(0.0);
     var transmittance = 1.0;
@@ -69,21 +77,43 @@ fn raymarch_cloud_layer(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         let t = (f32(i) + jitter) / f32(visible_steps);
-        let height = saturate(t);
+        let sample_distance = ray_segment.x + t * segment_length;
+        let world_position = ray_origin + view_dir * sample_distance;
+        let height = saturate((world_position.y - cloud_base) / cloud_depth);
         let height_mask = height_gradient(height, cloud.ambient.a);
-        let motion = cloud.wind.xy * (f32(cloud.quality.w) * 0.0007 + height * 0.13);
-        let noise = sample_shape(vec3<f32>(weather_uv * 3.2 + motion, height * 1.7 + cloud.wind.w));
+        let sample_weather_uv = world_position.xz / weather_scale + cloud.wind_history.xy;
+        let local_weather = sample_weather(sample_weather_uv);
+        let motion = cloud.wind.xy * height * 0.13;
+        let noise = sample_shape(vec3<f32>(sample_weather_uv * 3.2 + motion, height * 1.7 + cloud.wind.w));
         let body = saturate(noise.r * 0.7 + noise.g * 0.45 - noise.b * cloud.profile1.w * 0.38);
-        let coverage_cut = saturate(weather.r - (1.0 - body) * (0.82 - cloud.profile1.y * 0.24));
+        let coverage_cut = saturate(local_weather.r - (1.0 - body) * (0.82 - cloud.profile1.y * 0.24));
         let density = coverage_cut
-            * weather.a
+            * local_weather.a
             * cloud.profile0.y
             * height_mask
             * horizon_fade
-            * mix(0.55, 1.35, weather.g);
+            * mix(0.55, 1.35, local_weather.g);
 
         if (density > 0.002) {
-            let local_shadow = exp(-density * mix(0.7, 1.55, weather.b));
+            var light_density = 0.0;
+            let light_steps = min(cloud.quality.y, 8u);
+            for (var light_step = 0u; light_step < 8u; light_step = light_step + 1u) {
+                if (light_step >= light_steps) {
+                    break;
+                }
+                let light_world_position = world_position + sun_dir * (f32(light_step) + 1.0) * 650.0;
+                let light_height = saturate((light_world_position.y - cloud_base) / cloud_depth);
+                if (light_height > 0.0 && light_height < 1.0) {
+                    let light_weather_uv = light_world_position.xz / weather_scale + cloud.wind_history.xy;
+                    let light_weather = sample_weather(light_weather_uv);
+                    let light_noise = sample_shape(vec3<f32>(light_weather_uv * 3.2 + motion, light_height * 1.7 + cloud.wind.w));
+                    let light_body = saturate(light_noise.r * 0.7 + light_noise.g * 0.45 - light_noise.b * cloud.profile1.w * 0.38);
+                    let light_cut = saturate(light_weather.r - (1.0 - light_body) * (0.82 - cloud.profile1.y * 0.24));
+                    light_density = light_density + light_cut * light_weather.a * height_gradient(light_height, cloud.ambient.a);
+                }
+            }
+            let light_shadow = light_density / max(f32(light_steps), 1.0);
+            let local_shadow = exp(-(density * mix(0.7, 1.55, local_weather.b) + light_shadow * 0.42));
             let powder = 1.0 - exp(-density * 2.15);
             let lighting = ambient * 0.55 + sun_color * (0.22 + phase * 0.09 + powder * 0.33) * local_shadow;
             let alpha = saturate(1.0 - exp(-density * 0.18));

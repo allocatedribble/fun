@@ -33,10 +33,10 @@ pub use offscreen::{EditorOffscreenRenderTarget, FunRenderOffscreenPresentationP
 pub use signature::{RenderPathSignature, render_path_signature_for_options};
 pub use sky::{
     FunCloudDebugOverlay, FunCloudHistoryResetEvent, FunCloudHistoryResetReason,
-    FunCloudInternalScale, FunCloudQuality, FunCloudSettings, FunCloudTypeMix, FunSkyPlugin,
-    FunWeatherPattern, FunWeatherPatternPhase, FunWeatherProfile, FunWeatherProfileId,
-    FunWeatherState, FunWeatherTransition, FunWeatherTransitionCurve, FunWeatherValidationError,
-    request_cloud_history_reset,
+    FunCloudHistoryState, FunCloudInternalScale, FunCloudQuality, FunCloudSettings,
+    FunCloudTypeMix, FunSkyPlugin, FunWeatherPattern, FunWeatherPatternPhase, FunWeatherProfile,
+    FunWeatherProfileId, FunWeatherState, FunWeatherTransition, FunWeatherTransitionCurve,
+    FunWeatherValidationError, request_cloud_history_reset,
 };
 pub use solari::benchmark_parse_solari_denoise_mode;
 pub use solari::{

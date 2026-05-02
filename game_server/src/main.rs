@@ -26,6 +26,7 @@ use thunder::prelude::*;
 use tracing::{error, info};
 
 const GAME_PROTOCOL_VERSION: u32 = 1;
+const MAX_CLIENT_CONTROL_PACKET_BYTES: usize = 64 * 1024;
 const MAX_SESSION_TOKEN_BYTES: usize = 1024;
 const GAME_SERVER_TLS_MODE_ENV: &str = "FUN_GAME_SERVER_TLS_MODE";
 const GAME_SERVER_TLS_MODE_DEVELOPMENT: &str = "development";
@@ -1077,7 +1078,7 @@ fn receive_client_control(
             );
             #[cfg(all(feature = "diagnostics", debug_assertions))]
             let decode_started = Instant::now();
-            match decode_client_packet(payload.as_ref()) {
+            match decode_client_packet_bounded(payload.as_ref(), MAX_CLIENT_CONTROL_PACKET_BYTES) {
                 Ok(ClientPacket::Hello { hello }) => {
                     #[cfg(all(feature = "diagnostics", debug_assertions))]
                     server_profiler_event(

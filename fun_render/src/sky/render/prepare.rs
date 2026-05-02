@@ -1,6 +1,6 @@
 use bevy::{
     ecs::system::SystemParam,
-    math::{UVec2, UVec4, Vec4},
+    math::{Mat4, UVec2, UVec4, Vec2, Vec3, Vec4},
     prelude::*,
     render::{
         camera::ExtractedCamera,
@@ -9,12 +9,14 @@ use bevy::{
             TextureDescriptor, TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
         },
         renderer::{RenderDevice, RenderQueue},
+        view::ExtractedView,
     },
 };
 use tracing::debug;
 
 use crate::sky::{
     config::{FunCloudDebugOverlay, FunCloudQuality, FunCloudSettings},
+    plugin::{FunCloudHistoryState, FunCloudSceneLightState},
     weather::FunWeatherState,
 };
 
@@ -37,20 +39,45 @@ pub struct GpuCloudParams {
     pub sky_horizon: Vec4,
     pub ambient: Vec4,
     pub wind: Vec4,
+    pub sun: Vec4,
+    pub history: UVec4,
+    pub current_camera: Vec4,
+    pub previous_camera: Vec4,
+    pub wind_history: Vec4,
+    pub current_world_from_clip: Mat4,
+    pub previous_clip_from_world: Mat4,
 }
 
 impl GpuCloudParams {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "GPU uniform construction mirrors the shader contract explicitly"
+    )]
     pub fn new(
         settings: FunCloudSettings,
         state: FunWeatherState,
+        history_state: FunCloudHistoryState,
+        scene_light: FunCloudSceneLightState,
         internal_size: UVec2,
         weather_map_size: u32,
         shape_noise_size: u32,
         frame_index: u32,
+        current_world_from_clip: Mat4,
+        previous_clip_from_world: Mat4,
+        current_camera_position: Vec3,
+        previous_camera_position: Vec3,
+        current_wind_offset: Vec2,
+        previous_wind_offset: Vec2,
+        history_age_frames: u32,
+        history_reset_this_frame: bool,
     ) -> Self {
         let profile = state.profile;
         let seed_low = (state.weather_seed & 0xffff_ffff) as u32;
         let seed_high = (state.weather_seed >> 32) as u32;
+        let sun_direction = profile
+            .sun_direction_override
+            .unwrap_or(scene_light.direction_to_light)
+            .normalize_or_zero();
         let runtime_flags = u32::from(settings.temporal_enabled)
             | (debug_overlay_code(settings.debug_overlay) << 8)
             | (u32::from(settings.shadows_enabled) << 16);
@@ -104,6 +131,38 @@ impl GpuCloudParams {
                 profile.wind_speed_mps + profile.wind_shear_mps * 0.25,
                 (seed_low ^ seed_high) as f32 / u32::MAX as f32,
             ),
+            sun: Vec4::new(
+                sun_direction.x,
+                sun_direction.y,
+                sun_direction.z,
+                scene_light.illuminance_lux,
+            ),
+            history: UVec4::new(
+                history_state.generation(),
+                history_state.reset_count().min(u64::from(u32::MAX)) as u32,
+                u32::from(history_reset_this_frame),
+                history_age_frames,
+            ),
+            current_camera: Vec4::new(
+                current_camera_position.x,
+                current_camera_position.y,
+                current_camera_position.z,
+                1.0,
+            ),
+            previous_camera: Vec4::new(
+                previous_camera_position.x,
+                previous_camera_position.y,
+                previous_camera_position.z,
+                1.0,
+            ),
+            wind_history: Vec4::new(
+                current_wind_offset.x,
+                current_wind_offset.y,
+                previous_wind_offset.x,
+                previous_wind_offset.y,
+            ),
+            current_world_from_clip,
+            previous_clip_from_world,
         }
     }
 }
@@ -155,6 +214,11 @@ pub struct FunCloudTextureAllocation {
     pub composite_a_bind_group: BindGroup,
     pub composite_b_bind_group: BindGroup,
     pub shape_noise_generated: bool,
+    history_generation: u32,
+    history_age_frames: u32,
+    previous_clip_from_world: Mat4,
+    previous_camera_position: Vec3,
+    previous_wind_offset: Vec2,
 }
 
 pub type UniformCloudParams = bevy::render::render_resource::UniformBuffer<GpuCloudParams>;
@@ -182,9 +246,11 @@ impl FunCloudTextureKey {
 
 #[derive(SystemParam)]
 pub struct PrepareCloudTexturesParams<'w, 's> {
-    cameras: Query<'w, 's, &'static ExtractedCamera>,
+    cameras: Query<'w, 's, (&'static ExtractedCamera, &'static ExtractedView)>,
     settings: Option<Res<'w, FunCloudSettings>>,
     weather_state: Option<Res<'w, FunWeatherState>>,
+    history_state: Option<Res<'w, FunCloudHistoryState>>,
+    scene_light: Option<Res<'w, FunCloudSceneLightState>>,
     layouts: Option<Res<'w, FunCloudPipelineLayouts>>,
     pipeline_cache: Res<'w, PipelineCache>,
     render_device: Res<'w, RenderDevice>,
@@ -209,11 +275,18 @@ pub fn prepare_cloud_textures(
         return;
     }
 
+    let view_sample = params
+        .cameras
+        .iter()
+        .find_map(|(camera, view)| camera.physical_viewport_size.map(|_| view));
     let view_size = params
         .cameras
         .iter()
-        .find_map(|camera| camera.physical_viewport_size)
+        .find_map(|(camera, _)| camera.physical_viewport_size)
         .unwrap_or(DEFAULT_CLOUD_VIEW_SIZE);
+    let (current_world_from_clip, current_clip_from_world, current_camera_position) = view_sample
+        .map(cloud_camera_matrices)
+        .unwrap_or((Mat4::IDENTITY, Mat4::IDENTITY, Vec3::ZERO));
     let internal_size = settings.internal_scale.scale_size(view_size);
     let key = FunCloudTextureKey {
         internal_size,
@@ -250,18 +323,72 @@ pub fn prepare_cloud_textures(
     textures.frame_index = textures.frame_index.wrapping_add(1);
     let frame_index = textures.frame_index;
     if let Some(allocation) = textures.allocation.as_mut() {
+        let history_state = params.history_state.as_deref().copied().unwrap_or_default();
+        let scene_light = params.scene_light.as_deref().copied().unwrap_or_default();
+        let current_wind_offset = cloud_wind_offset(*weather_state, frame_index);
+        let history_reset_this_frame = allocation.history_generation != history_state.generation();
+        if history_reset_this_frame {
+            allocation.history_generation = history_state.generation();
+            allocation.history_age_frames = 0;
+            allocation.previous_clip_from_world = current_clip_from_world;
+            allocation.previous_camera_position = current_camera_position;
+            allocation.previous_wind_offset = current_wind_offset;
+        }
+        let previous_clip_from_world = allocation.previous_clip_from_world;
+        let previous_camera_position = allocation.previous_camera_position;
+        let previous_wind_offset = allocation.previous_wind_offset;
+        let history_age_frames = allocation.history_age_frames;
         allocation.params.set(GpuCloudParams::new(
             *settings,
             *weather_state,
+            history_state,
+            scene_light,
             key.internal_size,
             key.weather_map_size,
             key.shape_noise_size,
             frame_index,
+            current_world_from_clip,
+            previous_clip_from_world,
+            current_camera_position,
+            previous_camera_position,
+            current_wind_offset,
+            previous_wind_offset,
+            history_age_frames,
+            history_reset_this_frame,
         ));
         allocation
             .params
             .write_buffer(&params.render_device, &params.render_queue);
+        allocation.previous_clip_from_world = current_clip_from_world;
+        allocation.previous_camera_position = current_camera_position;
+        allocation.previous_wind_offset = current_wind_offset;
+        allocation.history_age_frames = if history_reset_this_frame {
+            0
+        } else {
+            allocation.history_age_frames.saturating_add(1)
+        };
     }
+}
+
+fn cloud_camera_matrices(view: &ExtractedView) -> (Mat4, Mat4, Vec3) {
+    let world_from_view = view.world_from_view.to_matrix();
+    let view_from_world = world_from_view.inverse();
+    let clip_from_world = view
+        .clip_from_world
+        .unwrap_or_else(|| view.clip_from_view * view_from_world);
+    (
+        clip_from_world.inverse(),
+        clip_from_world,
+        view.world_from_view.translation(),
+    )
+}
+
+fn cloud_wind_offset(state: FunWeatherState, frame_index: u32) -> Vec2 {
+    let profile = state.profile;
+    Vec2::new(profile.wind_direction.x, profile.wind_direction.z)
+        * (profile.wind_speed_mps + profile.wind_shear_mps * 0.25)
+        * frame_index as f32
+        * 0.000_015
 }
 
 fn create_cloud_texture_allocation(
@@ -415,6 +542,11 @@ fn create_cloud_texture_allocation(
         composite_a_bind_group,
         composite_b_bind_group,
         shape_noise_generated: false,
+        history_generation: 0,
+        history_age_frames: 0,
+        previous_clip_from_world: Mat4::IDENTITY,
+        previous_camera_position: Vec3::ZERO,
+        previous_wind_offset: Vec2::ZERO,
     }
 }
 
@@ -464,9 +596,7 @@ fn create_texture_3d(
 }
 
 fn cloud_texture_usage() -> TextureUsages {
-    TextureUsages::TEXTURE_BINDING
-        .union(TextureUsages::STORAGE_BINDING)
-        .union(TextureUsages::COPY_SRC)
+    TextureUsages::TEXTURE_BINDING.union(TextureUsages::STORAGE_BINDING)
 }
 
 const fn weather_map_size(quality: FunCloudQuality) -> u32 {
@@ -516,7 +646,24 @@ mod tests {
         };
         let state = FunWeatherState::from_profile_id(FunWeatherProfileId::StormFront).unwrap();
 
-        let params = GpuCloudParams::new(settings, state, UVec2::new(960, 540), 512, 64, 17);
+        let params = GpuCloudParams::new(
+            settings,
+            state,
+            FunCloudHistoryState::default(),
+            FunCloudSceneLightState::default(),
+            UVec2::new(960, 540),
+            512,
+            64,
+            17,
+            Mat4::IDENTITY,
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec2::ZERO,
+            Vec2::ZERO,
+            3,
+            true,
+        );
 
         assert_eq!(params.view_size, UVec4::new(960, 540, 512, 64));
         assert_eq!(params.quality.x, 20);
@@ -524,6 +671,9 @@ mod tests {
         assert_eq!(params.quality.z & 1, 1);
         assert_eq!((params.quality.z >> 8) & 0xff, 1);
         assert_eq!(params.quality.w, 17);
+        assert_eq!(params.history.x, 1);
+        assert_eq!(params.history.z, 1);
+        assert_eq!(params.history.w, 3);
         assert!(params.profile0.x > 0.0);
         assert!(params.profile1.y > 0.0);
     }

@@ -9,6 +9,9 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use game_client::{benchmark_parse_solari_denoise_mode, first_person};
 use thunder::prelude::*;
 
+const BENCH_CLIENT_PACKET_LIMIT_BYTES: usize = 64 * 1024;
+const BENCH_SERVER_PACKET_LIMIT_BYTES: usize = 1024 * 1024;
+
 fn solari_and_denoiser_costs(c: &mut Criterion) {
     let mut group = c.benchmark_group("client/solari_setup");
     for mode in [
@@ -141,7 +144,15 @@ fn networking_costs(c: &mut Criterion) {
         b.iter(|| black_box(encode_client_packet(black_box(&input_packet)).unwrap()));
     });
     group.bench_function("decode_client_input", |b| {
-        b.iter(|| black_box(decode_client_packet(black_box(&encoded_input)).unwrap()));
+        b.iter(|| {
+            black_box(
+                decode_client_packet_bounded(
+                    black_box(&encoded_input),
+                    BENCH_CLIENT_PACKET_LIMIT_BYTES,
+                )
+                .unwrap(),
+            )
+        });
     });
 
     for entity_count in [16_usize, 128, 512] {
@@ -161,7 +172,15 @@ fn networking_costs(c: &mut Criterion) {
             BenchmarkId::new("decode_world_stream", entity_count),
             &encoded,
             |b, encoded| {
-                b.iter(|| black_box(decode_server_packet(black_box(encoded)).unwrap()));
+                b.iter(|| {
+                    black_box(
+                        decode_server_packet_bounded(
+                            black_box(encoded),
+                            BENCH_SERVER_PACKET_LIMIT_BYTES,
+                        )
+                        .unwrap(),
+                    )
+                });
             },
         );
     }
