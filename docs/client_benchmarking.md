@@ -104,9 +104,10 @@ Performance claims must include `frame_ns.mean/p95`,
 `meshlet_prepare_cpu_ns`, `world_stream_apply_cpu_ns`,
 `physics_fixed_update_cpu_ns`, `post_process_gpu_ns`, `present_wait_ns`,
 `cloud_raymarch_gpu_ns.mean/p95`, `cloud_temporal_gpu_ns.mean/p95`,
-`cloud_composite_gpu_ns.mean/p95`, `cloud_total_gpu_ns.mean/p95`,
-`cloud_weather_update_cpu_ns`, `cloud_internal_width`,
-`cloud_internal_height`, `cloud_primary_steps`, `cloud_light_steps`,
+`cloud_resolve_gpu_ns.mean/p95`, `cloud_composite_gpu_ns.mean/p95`,
+`cloud_shape_noise_gpu_ns.mean/p95`, `cloud_total_gpu_ns.mean/p95`,
+`cloud_weather_update_gpu_ns.mean/p95`, `cloud_weather_update_cpu_ns`,
+`cloud_internal_width`, `cloud_internal_height`, `cloud_primary_steps`, `cloud_light_steps`,
 `cloud_history_accept_rate`, `cloud_history_reset_count`,
 `cloud_weather_profile_id`, `cloud_quality`, `cloud_vram_bytes`,
 `meshlet_path_instance_count`, `raster_path_instance_count`,
@@ -215,6 +216,21 @@ When a change touches one of these systems, also run the matching isolation case
 - CPU-heavy gameplay or networking: keep rendering settings fixed and compare
   process CPU, memory, FPS, and frame time.
 
+## Cloud Visual Smoke
+
+For visible cloud-render changes, run the stack runner at least three ways:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -DisableClouds
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -CloudProfile scattered -CloudQuality balanced
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -CloudDebugOverlay coverage
+```
+
+Capture screenshots or a short note confirming that clouds are visible on
+background pixels, the debug overlay reaches the final camera target, and
+foreground geometry remains unclouded. The current cloud composite is a
+sky/background replacement path, not full scene volumetric occlusion.
+
 ## Regression Budget
 
 A candidate needs explanation before it lands if it does any of the following:
@@ -247,7 +263,12 @@ Client benchmark:
   - transient_texture_creates/reuses/aliases mean: ... -> ... (...%)
   - render_scheduler_pressure mean: ... -> ... (...%)
   - cloud_total_gpu_ns mean: ... -> ... (...%)
+  - cloud_weather_update_gpu_ns mean: ... -> ... (...%)
+  - cloud_shape_noise_gpu_ns mean: ... -> ... (...%)
   - cloud_raymarch_gpu_ns mean: ... -> ... (...%)
+  - cloud_temporal_gpu_ns mean: ... -> ... (...%)
+  - cloud_resolve_gpu_ns mean: ... -> ... (...%)
+  - cloud_composite_gpu_ns mean: ... -> ... (...%)
   - schedule_physics_movement_ns mean: ... -> ... (...%)
   - schedule_world_stream_apply_ns mean: ... -> ... (...%)
   - relevant_pass_ns mean: ... -> ... (...%)

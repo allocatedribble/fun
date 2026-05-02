@@ -59,11 +59,13 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     let solari_enabled = render_config.solari_enabled;
     let solari_feature_policy: SolariFeaturePolicy =
         render_config.rt_features.solari_feature_policy();
+    let rt_features = render_config.rt_features;
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     let fps_overlay_enabled = render_config.fps_overlay_enabled;
 
     app.insert_resource(opaque_renderer.method())
         .insert_resource(signature)
+        .insert_resource(rt_features)
         .insert_resource(render_config)
         .insert_resource(solari_settings)
         .insert_resource(solari_runtime_params)
@@ -123,6 +125,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     }
 
     if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+        render_app.insert_resource(rt_features);
         render_app.add_systems(
             RenderStartup,
             log_rt_backend_fallbacks

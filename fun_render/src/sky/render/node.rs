@@ -101,7 +101,7 @@ pub fn run_cloud_compute_passes(
     });
 
     {
-        let span = diagnostics.pass_span(&mut pass, "clouds/weather_update");
+        let span = diagnostics.time_span(&mut pass, "clouds/weather_update");
         pass.set_pipeline(weather_map_pipeline);
         pass.set_bind_group(0, &allocation.generation_bind_group, &[]);
         dispatch_2d(
@@ -114,7 +114,7 @@ pub fn run_cloud_compute_passes(
     }
 
     if let Some(shape_noise_pipeline) = shape_noise_pipeline {
-        let span = diagnostics.pass_span(&mut pass, "clouds/shape_noise");
+        let span = diagnostics.time_span(&mut pass, "clouds/shape_noise");
         pass.set_pipeline(shape_noise_pipeline);
         pass.set_bind_group(0, &allocation.generation_bind_group, &[]);
         dispatch_3d(
@@ -129,7 +129,7 @@ pub fn run_cloud_compute_passes(
     }
 
     {
-        let span = diagnostics.pass_span(&mut pass, "clouds/raymarch");
+        let span = diagnostics.time_span(&mut pass, "clouds/raymarch");
         pass.set_pipeline(raymarch_pipeline);
         pass.set_bind_group(0, &allocation.raymarch_bind_group, &[]);
         dispatch_2d(
@@ -142,7 +142,7 @@ pub fn run_cloud_compute_passes(
     }
 
     {
-        let span = diagnostics.pass_span(&mut pass, "clouds/temporal");
+        let span = diagnostics.time_span(&mut pass, "clouds/temporal");
         pass.set_pipeline(temporal_pipeline);
         pass.set_bind_group(0, temporal_bind_group, &[]);
         dispatch_2d(
@@ -155,7 +155,7 @@ pub fn run_cloud_compute_passes(
     }
 
     {
-        let span = diagnostics.pass_span(&mut pass, "clouds/resolve");
+        let span = diagnostics.time_span(&mut pass, "clouds/resolve");
         pass.set_pipeline(composite_pipeline);
         pass.set_bind_group(0, composite_bind_group, &[]);
         dispatch_2d(
@@ -226,7 +226,7 @@ pub fn render_clouds_to_view(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    let span = diagnostics.pass_span(&mut render_pass, "clouds/composite");
+    let span = diagnostics.time_span(&mut render_pass, "clouds/composite");
     render_pass.set_render_pipeline(render_pipeline);
     render_pass.set_bind_group(0, &bind_group, &[]);
     render_pass.draw(0..3, 0..1);

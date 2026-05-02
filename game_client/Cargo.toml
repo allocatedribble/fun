@@ -7,7 +7,7 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["dlss"]
+default = ["dlss", "volumetric_clouds"]
 benchmarks = ["render_diagnostics", "fun_render/benchmarks"]
 bevy_debug = ["bevy/debug"]
 diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
@@ -21,6 +21,7 @@ render_diagnostics = [
     "bevy/meshlet_debug_diagnostics",
     "fun_render/render_diagnostics",
 ]
+volumetric_clouds = ["fun_render/volumetric_clouds"]
 
 [dependencies]
 avian3d.workspace = true

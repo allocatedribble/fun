@@ -123,9 +123,10 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 - `fun::diag`: periodic world/camera/renderable inventory.
 - `fun::perf`: FPS, frame ms/ns, Solari total ns, meshlet visibility ns, and
   external RR ns.
-- `fun::perf::clouds`: cloud raymarch, temporal, composite, total GPU ns,
-  weather-update CPU ns, history accept/reset counts, internal dimensions,
-  step counts, quality/profile labels, and cloud VRAM bytes.
+- `fun::perf::clouds`: cloud weather update, shape-noise, raymarch, temporal,
+  resolve, composite, and total GPU ns, weather-update CPU ns, history
+  accept/reset counts, internal dimensions, step counts, quality/profile labels,
+  and cloud VRAM bytes.
 - `fun::perf::schedule_heatmap`: actual client system costs gathered from the
   running Bevy schedule. It reports networking receive, streamed-world apply,
   movement input, look, first-person physics movement, diagnostics logging,
@@ -188,6 +189,19 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   async-compute policy decisions. WGPU currently runs these candidates through
   the graphics-queue fallback unless a backend-specific async path proves a p95
   win.
+
+For volumetric-cloud performance claims, the runtime diagnostic store must
+include these GPU paths before a benchmark summary is considered valid:
+
+- `render/clouds/weather_update/elapsed_gpu`
+- `render/clouds/shape_noise/elapsed_gpu`
+- `render/clouds/raymarch/elapsed_gpu`
+- `render/clouds/temporal/elapsed_gpu`
+- `render/clouds/resolve/elapsed_gpu`
+- `render/clouds/composite/elapsed_gpu`
+
+If these paths are absent, `fun::perf::clouds` may still report cloud
+configuration and VRAM, but cloud pass timing is not proven.
 
 ## Render Graph Resource Policy
 

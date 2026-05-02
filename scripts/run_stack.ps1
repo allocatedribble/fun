@@ -333,6 +333,9 @@ if ($PresentMode) {
 else {
     Remove-Item Env:\FUN_PRESENT_MODE -ErrorAction SilentlyContinue
 }
+if (-not $env:FUN_GAME_SERVER_TLS_MODE) {
+    $env:FUN_GAME_SERVER_TLS_MODE = "development"
+}
 
 $env:PATH = @(
     (Join-Path $targetRoot $profile),

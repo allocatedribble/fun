@@ -3516,21 +3516,20 @@ fn sum_optional_ms(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64>
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 fn estimate_cloud_vram_bytes(quality: fun_render::FunCloudQuality, internal_size: UVec2) -> u64 {
     let weather_map_size = match quality {
-        fun_render::FunCloudQuality::Off => 1,
+        fun_render::FunCloudQuality::Off => 1_u64,
         fun_render::FunCloudQuality::Cheap => 256,
         fun_render::FunCloudQuality::Balanced => 512,
         fun_render::FunCloudQuality::Cinematic => 1024,
     };
     let shape_noise_size = match quality {
-        fun_render::FunCloudQuality::Off => 1,
+        fun_render::FunCloudQuality::Off => 1_u64,
         fun_render::FunCloudQuality::Cheap => 32,
         fun_render::FunCloudQuality::Balanced | fun_render::FunCloudQuality::Cinematic => 64,
     };
 
     let lowres_texels = u64::from(internal_size.x) * u64::from(internal_size.y);
-    let weather_texels = u64::from(weather_map_size) * u64::from(weather_map_size);
-    let noise_texels =
-        u64::from(shape_noise_size) * u64::from(shape_noise_size) * u64::from(shape_noise_size);
+    let weather_texels = weather_map_size * weather_map_size;
+    let noise_texels = shape_noise_size * shape_noise_size * shape_noise_size;
 
     (lowres_texels * 5 + weather_texels + noise_texels) * 8
 }

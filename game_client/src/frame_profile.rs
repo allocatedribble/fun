@@ -1198,8 +1198,10 @@ mod enabled {
     }
 
     pub(crate) fn install_detailed_frame_profiler(app: &mut App) {
-        app.init_resource::<DetailedFrameProfiler>()
-            .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
+        app.init_resource::<DetailedFrameProfiler>();
+        if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
+            app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+        }
 
         install_profile_schedules(app);
         insert_profile_schedules_into_main_order(app);
