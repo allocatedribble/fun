@@ -5,17 +5,25 @@
   import AccountLoginPanel from './AccountLoginPanel.svelte';
   import Commandbar from './Commandbar.svelte';
   import LogPanel from './LogPanel.svelte';
+  import UiFrameRateBadge from './UiFrameRateBadge.svelte';
 
   export let state: EditorUiState;
   export let route: FunClientRoute;
 
   $: editorRoute = route.startsWith('editor.');
+  $: showUiFrameRate = route.startsWith('launcher.') || editorRoute;
   $: showCommandbar = !editorRoute && (state.commandbar.focused || state.commandbar.input.trim().length > 0);
   $: showDiagnostics = state.diagnosticsView.visible && route !== 'editor.diagnostics';
   $: notificationCount = state.diagnosticsView.unreadCriticalCount + state.diagnosticsView.unreadWarningCount;
 </script>
 
 <div class="shared-overlay-layer" aria-label="Shared overlay">
+  {#if showUiFrameRate}
+    <div class="shared-ui-frame-rate">
+      <UiFrameRateBadge />
+    </div>
+  {/if}
+
   {#if showCommandbar}
     <div class="shared-commandbar" data-hit-region="commandbar">
       <Commandbar
@@ -85,6 +93,13 @@
   .shared-notifications,
   .shared-log-drawer {
     pointer-events: auto;
+  }
+
+  .shared-ui-frame-rate {
+    position: absolute;
+    top: 0.75rem;
+    right: 3.35rem;
+    pointer-events: none;
   }
 
   .shared-commandbar {
