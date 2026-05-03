@@ -110,6 +110,13 @@ asset update path with lower-level dirty-rect GPU uploads while preserving the
 same typed browser/ECS boundary. CEF windowless painting and the Bevy texture
 upload consumer both run at a fixed 60 Hz presentation rate.
 
+CEF composition is a HUD/UI layer, not a world-image layer. Render ordering is
+world render, depth/motion vectors, Solari/lighting, DLSS SR/RR if active,
+post-processing, CEF UI composition, debug overlays/FPS counters, and present.
+CEF UI must not feed DLSS input color, depth, motion vectors, or Ray
+Reconstruction guide buffers; browser pixels have no world-space motion-vector
+contract and must not contaminate temporal reconstruction.
+
 The main browser page is `fun-ui://main/index.html`, uses a transparent
 background, and carries HUD, menu, launcher, editor, loading, diagnostics, and
 debug overlay state inside the same full-window Svelte page at

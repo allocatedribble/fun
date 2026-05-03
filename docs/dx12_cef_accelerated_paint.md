@@ -307,6 +307,25 @@ accelerated frames the reason is `GpuFullFrameFirstPass`; empty dirty rect lists
 and dirty rect explosions keep the same full-frame reasons used by the CPU
 compositor.
 
+CEF is composed as HUD/UI after the world image is finished. The combined order
+is:
+
+```text
+World render
+  -> depth/motion vectors
+  -> Solari / lighting
+  -> DLSS SR / RR if active
+  -> post-processing
+  -> CEF UI composition
+  -> debug overlays / FPS counters
+  -> present
+```
+
+The CEF texture is not a DLSS input or guide surface. It must not feed input
+color, depth, motion vectors, or Ray Reconstruction guide buffers because it has
+no world-space motion-vector convention and should not enter temporal
+reconstruction history.
+
 Resource states for this pass:
 
 - CEF source shared texture: D3D11 resource opened and released only during

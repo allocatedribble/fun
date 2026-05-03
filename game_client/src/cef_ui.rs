@@ -31,7 +31,10 @@ use fun_host::{
     FunClientHostState, FunHostCommandRequest, FunHostCommandResponse, FunHostCommandStatus,
     FunHostMode, FunInputOwner, FunViewportRect,
 };
-use fun_render::{RenderWorldContext, RenderWorldStatus};
+use fun_render::{
+    FUN_RENDER_DEBUG_OVERLAY_Z_INDEX, FUN_RENDER_HUD_UI_Z_INDEX, RenderWorldContext,
+    RenderWorldStatus,
+};
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
 use fun_ui_cef::diagnostics::{
     CefUiDiagnosticKind, CefUiDiagnosticSeverity, CefUiTransportCounterSnapshot,
@@ -65,7 +68,7 @@ use game_shared::{
 pub const MAX_CEF_UI_HIT_REGIONS: usize = 64;
 const MAX_JS_MESSAGES_PER_FRAME: usize = 64;
 const CEF_UI_RENDER_RATE_HZ: u64 = fun_ui_cef::CEF_UI_WINDOWLESS_FRAME_RATE_HZ as u64;
-const FUN_CLIENT_FPS_COUNTER_Z_INDEX: i32 = CEF_UI_TEXTURE_Z_INDEX + 20;
+const FUN_CLIENT_FPS_COUNTER_Z_INDEX: i32 = FUN_RENDER_DEBUG_OVERLAY_Z_INDEX;
 const FUN_CLIENT_FPS_COUNTER_REFRESH: Duration = Duration::from_millis(250);
 const FUN_CLIENT_FPS_COUNTER_WIDTH: f32 = 88.0;
 const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
@@ -2705,7 +2708,7 @@ fn flush_cef_ui_host_envelopes_to_browser(
 }
 
 const CEF_UI_TEXTURE_BYTES_PER_PIXEL: usize = 4;
-const CEF_UI_TEXTURE_Z_INDEX: i32 = 900_000;
+const CEF_UI_TEXTURE_Z_INDEX: i32 = FUN_RENDER_HUD_UI_Z_INDEX;
 
 fn cef_ui_render_interval() -> Duration {
     Duration::from_nanos(1_000_000_000 / CEF_UI_RENDER_RATE_HZ)

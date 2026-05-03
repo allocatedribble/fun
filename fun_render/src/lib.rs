@@ -3,6 +3,7 @@ compile_error!("fun_render/dx12_dlss_native is a Windows-only experimental featu
 
 mod catalog;
 mod compiled_world;
+mod composition;
 mod config;
 pub mod core;
 mod dlss_correctness;
@@ -26,6 +27,10 @@ pub use catalog::{
     CompiledRenderAsset, WorldRenderCatalog, prewarm_world_render_catalog, warn_missing_catalog_ref,
 };
 pub use compiled_world::{CompiledStaticAsset, CompiledWorldPackage, CompiledWorldPackageId};
+pub use composition::{
+    FUN_RENDER_COMPOSITION_ORDER, FUN_RENDER_DEBUG_OVERLAY_STAGE, FUN_RENDER_DEBUG_OVERLAY_Z_INDEX,
+    FUN_RENDER_HUD_UI_STAGE, FUN_RENDER_HUD_UI_Z_INDEX, FunRenderCompositionStage,
+};
 pub use config::{
     ClientOpaqueRenderer, ClientRenderConfig, ClientRenderProfile, ClientWindowConfig,
     FunRenderAppOptions, FunRenderPresentation, FunRenderRtFeatures, NativeDlssConfig,

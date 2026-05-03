@@ -50,6 +50,28 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 - The current node falls back to a debug copy if evaluation fails, then disables the native SR path in render-world status after the failure budget is exhausted. Until support is reported ready, main-world camera setup removes native DLSS render-scale overrides and resets mip bias to native.
 - Native SDK evaluation still returns `native_shim_unavailable`; this is intentional until a `fun_dx12_dlss` crate, SDK discovery, and command-list accessor are added.
 
+## CEF HUD Composition Boundary
+
+`fun_render::FunRenderCompositionStage` records the combined renderer ordering
+contract:
+
+```text
+WorldRender
+  -> DepthMotionVectors
+  -> SolariLighting
+  -> DlssReconstruction
+  -> PostProcessing
+  -> HudUi
+  -> DebugOverlays
+  -> Present
+```
+
+The CEF/Svelte surface maps to `HudUi`. It is sampled only after DLSS SR/RR and
+post-processing have produced the visible world image. It must not be bound as
+DLSS input color, depth, motion vectors, or Ray Reconstruction guide data.
+Browser pixels have no world-space motion-vector contract, so treating them as
+temporal input would contaminate SR/RR history.
+
 ## Runtime Robustness
 
 - `Dx12NativeDlssSrRuntimeMode` models runtime transitions between `Disabled`, `NativeTaa`, `DLSS Quality`, `DLSS Balanced`, `DLSS Performance`, and `DLSS Ultra Performance`.
