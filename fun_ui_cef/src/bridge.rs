@@ -128,13 +128,29 @@ pub enum UiEnvelopePayload {
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
 pub enum UiControlPayload {
     Ready,
-    RouteChanged { route: BrowserUiRouteState },
-    HitRegionsChanged { regions: Vec<BrowserUiHitRegion> },
-    TextEntryChanged { active: bool },
-    MenuCommand { command: BrowserUiMenuCommand },
-    ChatSubmit { message: String },
-    SettingsChanged { key: String, value_json: Vec<u8> },
-    Lifecycle { state: UiLifecycleState },
+    RouteChanged {
+        route: BrowserUiRouteState,
+    },
+    HitRegionsChanged {
+        mode: BrowserUiHitRegionMode,
+        regions: Vec<BrowserUiHitRegion>,
+    },
+    TextEntryChanged {
+        active: bool,
+    },
+    MenuCommand {
+        command: BrowserUiMenuCommand,
+    },
+    ChatSubmit {
+        message: String,
+    },
+    SettingsChanged {
+        key: String,
+        value_json: Vec<u8>,
+    },
+    Lifecycle {
+        state: UiLifecycleState,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
@@ -348,14 +364,50 @@ pub enum BrowserUiRouteState {
     DevtoolsOverlay,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum BrowserUiHitRegionMode {
+    Gameplay,
+    HudPassive,
+    UiModal,
+    TextEntry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum BrowserUiHitRegionId {
+    Chat,
+    Minimap,
+    Scoreboard,
+    PauseMenu,
+    Loadout,
+    Settings,
+    Diagnostics,
+    Devtools,
+}
+
+impl BrowserUiHitRegionId {
+    #[must_use]
+    pub fn from_wire_str(value: &str) -> Option<Self> {
+        match value {
+            "chat" => Some(Self::Chat),
+            "minimap" => Some(Self::Minimap),
+            "scoreboard" => Some(Self::Scoreboard),
+            "pause_menu" => Some(Self::PauseMenu),
+            "loadout" => Some(Self::Loadout),
+            "settings" => Some(Self::Settings),
+            "diagnostics" => Some(Self::Diagnostics),
+            "devtools" => Some(Self::Devtools),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub struct BrowserUiHitRegion {
-    pub id: u16,
+    pub id: BrowserUiHitRegionId,
     pub x: i32,
     pub y: i32,
-    pub width: i32,
-    pub height: i32,
-    pub captures_pointer: bool,
+    pub w: i32,
+    pub h: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
@@ -434,6 +486,7 @@ pub enum BrowserUiProtocolValidationError {
     NonAdvancingStateRevision,
     TooManyHitRegions,
     InvalidHitRegion,
+    DuplicateHitRegion,
 }
 
 pub fn validate_browser_ui_packet(
@@ -562,22 +615,27 @@ fn validate_envelope_payload(
             payload: UiControlPayload::ChatSubmit { message },
         } if message.len() > 512 => Err(BrowserUiProtocolValidationError::OversizeChatMessage),
         UiEnvelopePayload::Control {
-            payload: UiControlPayload::HitRegionsChanged { regions },
+            payload: UiControlPayload::HitRegionsChanged { regions, .. },
         } if regions.len() > MAX_UI_HIT_REGIONS => {
             Err(BrowserUiProtocolValidationError::TooManyHitRegions)
         }
         UiEnvelopePayload::Control {
-            payload: UiControlPayload::HitRegionsChanged { regions },
+            payload: UiControlPayload::HitRegionsChanged { regions, .. },
         } if regions.iter().any(|region| {
-            region.width <= 0
-                || region.height <= 0
+            region.w <= 0
+                || region.h <= 0
                 || region.x < 0
                 || region.y < 0
-                || region.x.saturating_add(region.width) < region.x
-                || region.y.saturating_add(region.height) < region.y
+                || region.x.saturating_add(region.w) < region.x
+                || region.y.saturating_add(region.h) < region.y
         }) =>
         {
             Err(BrowserUiProtocolValidationError::InvalidHitRegion)
+        }
+        UiEnvelopePayload::Control {
+            payload: UiControlPayload::HitRegionsChanged { regions, .. },
+        } if has_duplicate_hit_region_ids(regions) => {
+            Err(BrowserUiProtocolValidationError::DuplicateHitRegion)
         }
         UiEnvelopePayload::StatePatch { patch } if patch.patches.is_empty() => {
             Err(BrowserUiProtocolValidationError::EmptyStatePatch)
@@ -595,6 +653,19 @@ fn validate_envelope_payload(
         | UiEnvelopePayload::Error { .. }
         | UiEnvelopePayload::JsonBytes { .. } => Ok(()),
     }
+}
+
+fn has_duplicate_hit_region_ids(regions: &[BrowserUiHitRegion]) -> bool {
+    for (index, region) in regions.iter().enumerate() {
+        if regions
+            .iter()
+            .skip(index.saturating_add(1))
+            .any(|other| other.id == region.id)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -867,13 +938,13 @@ mod tests {
             None,
             BrowserUiSequence(4),
             UiControlPayload::HitRegionsChanged {
+                mode: BrowserUiHitRegionMode::HudPassive,
                 regions: vec![BrowserUiHitRegion {
-                    id: 1,
+                    id: BrowserUiHitRegionId::Chat,
                     x: 0,
                     y: 0,
-                    width: 0,
-                    height: 24,
-                    captures_pointer: true,
+                    w: 0,
+                    h: 24,
                 }],
             },
         );
@@ -884,6 +955,42 @@ mod tests {
                 &BrowserUiProtocolValidationContext::local_game_ui()
             ),
             Err(BrowserUiProtocolValidationError::InvalidHitRegion)
+        );
+    }
+
+    #[test]
+    fn ui_envelope_rejects_duplicate_hit_region_ids() {
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Event,
+            None,
+            BrowserUiSequence(5),
+            UiControlPayload::HitRegionsChanged {
+                mode: BrowserUiHitRegionMode::HudPassive,
+                regions: vec![
+                    BrowserUiHitRegion {
+                        id: BrowserUiHitRegionId::Chat,
+                        x: 0,
+                        y: 0,
+                        w: 10,
+                        h: 10,
+                    },
+                    BrowserUiHitRegion {
+                        id: BrowserUiHitRegionId::Chat,
+                        x: 20,
+                        y: 0,
+                        w: 10,
+                        h: 10,
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Err(BrowserUiProtocolValidationError::DuplicateHitRegion)
         );
     }
 

@@ -1,14 +1,21 @@
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{ecs::system::SystemParam, prelude::*, window::PrimaryWindow};
 use fun_render::{RenderWorldContext, RenderWorldStatus};
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
-use fun_ui_cef::diagnostics::{CefUiDiagnosticKind, CefUiDiagnosticSeverity};
+use fun_ui_cef::diagnostics::{
+    CefUiDiagnosticKind, CefUiDiagnosticSeverity, FUN_UI_DIAGNOSTICS_TARGET,
+};
 use fun_ui_cef::{
-    BrowserBridgeError, BrowserBridgeQueues, BrowserUiHitRegion,
-    BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError, BrowserUiRequestId,
-    BrowserUiRouteState, BrowserUiSequence, CefUiModel, GameUiChannel, GameUiFieldKey,
-    UiControlPayload, UiEnvelope, UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue,
-    UiPatchBatch, UiPatchValue, UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration,
-    validate_ui_envelope,
+    BrowserBridgeError, BrowserBridgeQueues, BrowserUiHitRegion, BrowserUiHitRegionId,
+    BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
+    BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefUiModel, CefUiSecurityPolicy,
+    FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, UiControlPayload, UiEnvelope,
+    UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue,
+    UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration, validate_ui_envelope,
+};
+use game_shared::{
+    GameUiMenuTarget, GameUiProtocolValidationContext, GameUiRequestEnvelope, GameUiRequestId,
+    GameUiRequestPayload, GameUiRequestRejectionReason, GameUiSequence, GameUiSettingKey,
+    GameUiSettingValue, validate_game_ui_request,
 };
 
 pub const MAX_CEF_UI_HIT_REGIONS: usize = 64;
@@ -31,9 +38,15 @@ impl Plugin for GameCefUiPlugin {
         app.init_resource::<CefUiStatus>()
             .init_resource::<CefUiFocusMode>()
             .init_resource::<CefUiInputCapture>()
+            .init_resource::<CefUiPointerState>()
+            .init_resource::<CefUiOverlayClickThroughState>()
+            .init_resource::<GameplayInputGate>()
+            .init_resource::<CefUiAuthority>()
+            .init_resource::<CefUiSecurityPolicyResource>()
             .init_resource::<CefUiBridge>()
             .init_resource::<CefUiFrameStats>()
             .init_resource::<CefUiModelCache>()
+            .init_resource::<CefUiDiagnosticsState>()
             .add_message::<CefUiIntent>()
             .add_message::<CefUiRequest>()
             .add_message::<CefUiRouteChanged>()
@@ -66,7 +79,13 @@ impl Plugin for GameCefUiPlugin {
             )
             .add_systems(
                 PreUpdate,
-                (update_cef_ui_focus_mode, update_cef_ui_input_capture)
+                (
+                    update_cef_ui_focus_mode,
+                    update_cef_ui_pointer_state,
+                    update_cef_ui_input_capture,
+                    update_gameplay_input_gate,
+                    update_cef_ui_overlay_click_through,
+                )
                     .chain()
                     .in_set(GameCefUiSet::InputOwnership),
             )
@@ -190,6 +209,7 @@ pub enum CefUiError {
     BridgeClosed,
     BridgeQueueFull,
     InvalidEnvelope(BrowserUiProtocolValidationError),
+    RejectedUiRequest(GameUiRequestRejectionReason),
     PatchWrite(UiPatchWriteError),
 }
 
@@ -210,6 +230,8 @@ pub struct CefUiStatus {
     pub compositor_visible: bool,
     pub last_frame_generation: Option<UiSurfaceGeneration>,
     pub last_error: Option<CefUiError>,
+    pub last_blocked_navigation: Option<FunUiNavigationBlockReason>,
+    pub last_js_error: Option<CefUiJsErrorKind>,
 }
 
 impl Default for CefUiStatus {
@@ -221,8 +243,17 @@ impl Default for CefUiStatus {
             compositor_visible: false,
             last_frame_generation: None,
             last_error: None,
+            last_blocked_navigation: None,
+            last_js_error: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefUiJsErrorKind {
+    InvalidBridgeEnvelope,
+    RejectedRequest,
+    QueueClosed,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
@@ -244,9 +275,8 @@ pub struct CefUiHitRect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CefUiHitRegion {
-    pub id: u16,
+    pub id: BrowserUiHitRegionId,
     pub rect: CefUiHitRect,
-    pub captures_pointer: bool,
 }
 
 impl From<BrowserUiHitRegion> for CefUiHitRegion {
@@ -256,11 +286,20 @@ impl From<BrowserUiHitRegion> for CefUiHitRegion {
             rect: CefUiHitRect {
                 x: value.x,
                 y: value.y,
-                width: value.width,
-                height: value.height,
+                width: value.w,
+                height: value.h,
             },
-            captures_pointer: value.captures_pointer,
         }
+    }
+}
+
+impl CefUiHitRegion {
+    #[must_use]
+    pub const fn contains(self, point: CefUiPointerPosition) -> bool {
+        point.x >= self.rect.x
+            && point.y >= self.rect.y
+            && point.x < self.rect.x.saturating_add(self.rect.width)
+            && point.y < self.rect.y.saturating_add(self.rect.height)
     }
 }
 
@@ -268,13 +307,16 @@ impl From<BrowserUiHitRegion> for CefUiHitRegion {
 pub struct CefUiInputCapture {
     pub capture_keyboard: bool,
     pub capture_pointer: bool,
+    pub hit_region_mode: BrowserUiHitRegionMode,
     pub hit_regions: Vec<CefUiHitRegion>,
+    pub active_hit_region: Option<BrowserUiHitRegionId>,
     pub modal_reason: Option<CefUiModalReason>,
     pub text_entry_active: bool,
 }
 
 impl CefUiInputCapture {
-    fn set_hit_regions(&mut self, regions: &[BrowserUiHitRegion]) {
+    fn set_hit_regions(&mut self, mode: BrowserUiHitRegionMode, regions: &[BrowserUiHitRegion]) {
+        self.hit_region_mode = mode;
         self.hit_regions.clear();
         self.hit_regions.extend(
             regions
@@ -286,10 +328,11 @@ impl CefUiInputCapture {
     }
 
     #[must_use]
-    fn has_pointer_hit_region(&self) -> bool {
+    fn hit_region_at(&self, point: CefUiPointerPosition) -> Option<BrowserUiHitRegionId> {
         self.hit_regions
             .iter()
-            .any(|region| region.captures_pointer)
+            .find(|region| region.contains(point))
+            .map(|region| region.id)
     }
 }
 
@@ -298,11 +341,102 @@ impl Default for CefUiInputCapture {
         Self {
             capture_keyboard: false,
             capture_pointer: false,
+            hit_region_mode: BrowserUiHitRegionMode::Gameplay,
             hit_regions: Vec::with_capacity(MAX_CEF_UI_HIT_REGIONS),
+            active_hit_region: None,
             modal_reason: None,
             text_entry_active: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CefUiPointerPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct CefUiPointerState {
+    pub position: Option<CefUiPointerPosition>,
+    pub active_hit_region: Option<BrowserUiHitRegionId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct CefUiOverlayClickThroughState {
+    pub click_through: bool,
+    pub change_count: u64,
+}
+
+impl Default for CefUiOverlayClickThroughState {
+    fn default() -> Self {
+        Self {
+            click_through: true,
+            change_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum GameplayInputBlockReason {
+    #[default]
+    None,
+    UiPointerRegion,
+    UiModal,
+    TextEntry,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct GameplayInputGate {
+    pub block_movement: bool,
+    pub block_fire: bool,
+    pub block_actions: bool,
+    pub block_look: bool,
+    pub keyboard_owned_by_ui: bool,
+    pub pointer_owned_by_ui: bool,
+    pub reason: GameplayInputBlockReason,
+}
+
+impl GameplayInputGate {
+    #[must_use]
+    pub const fn blocks_movement(self) -> bool {
+        self.block_movement
+    }
+
+    #[must_use]
+    pub const fn blocks_pointer_actions(self) -> bool {
+        self.block_fire || self.block_actions || self.pointer_owned_by_ui
+    }
+
+    #[must_use]
+    pub const fn blocks_keyboard_actions(self) -> bool {
+        self.block_actions || self.keyboard_owned_by_ui
+    }
+
+    #[must_use]
+    pub const fn blocks_look(self) -> bool {
+        self.block_look || self.pointer_owned_by_ui
+    }
+}
+
+#[derive(Debug, Clone, Resource)]
+pub struct CefUiAuthority {
+    pub context: GameUiProtocolValidationContext,
+}
+
+impl Default for CefUiAuthority {
+    fn default() -> Self {
+        Self {
+            context: GameUiProtocolValidationContext::local_game_client(
+                std::env::var_os("FUN_CEF_UI_DEVTOOLS").is_some(),
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct CefUiSecurityPolicyResource {
+    pub policy: CefUiSecurityPolicy,
 }
 
 #[derive(Debug, Clone, Resource)]
@@ -382,9 +516,19 @@ pub struct CefUiFrameStats {
     pub dirty_rect_count: u64,
     pub uploaded_bytes: u64,
     pub js_message_count: u64,
+    pub js_message_rejected_count: u64,
     pub patch_batch_count: u64,
     pub dropped_patch_count: u64,
     pub coalesced_patch_count: u64,
+    pub overlay_click_through_change_count: u64,
+    pub navigation_blocked_count: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+struct CefUiDiagnosticsState {
+    last_dropped_patch_count: u64,
+    last_coalesced_patch_count: u64,
+    last_overlay_change_count: u64,
 }
 
 #[derive(Debug, Clone, Message)]
@@ -398,9 +542,7 @@ pub enum CefUiIntent {
 
 #[derive(Debug, Clone, Message)]
 pub struct CefUiRequest {
-    pub request_id: BrowserUiRequestId,
-    pub sequence: BrowserUiSequence,
-    pub payload: UiControlPayload,
+    pub envelope: GameUiRequestEnvelope,
 }
 
 #[derive(Debug, Clone, Copy, Message)]
@@ -410,6 +552,7 @@ pub struct CefUiRouteChanged {
 
 #[derive(Debug, Clone, Message)]
 pub struct CefUiHitRegionsChanged {
+    pub mode: BrowserUiHitRegionMode,
     pub regions: Vec<BrowserUiHitRegion>,
 }
 
@@ -456,6 +599,8 @@ struct CefUiModelCache {
 struct CefUiRuntimeModel {
     browser_loaded: bool,
     compositor_visible: bool,
+    overlay_click_through: bool,
+    focus_mode_code: u16,
     render_world_ready: bool,
     expected_chunks: u16,
     received_chunks: u16,
@@ -464,12 +609,16 @@ struct CefUiRuntimeModel {
 impl CefUiRuntimeModel {
     fn from_resources(
         status: &CefUiStatus,
+        focus_mode: CefUiFocusMode,
+        overlay_state: &CefUiOverlayClickThroughState,
         world_status: &RenderWorldStatus,
         world_context: &RenderWorldContext,
     ) -> Self {
         Self {
             browser_loaded: status.browser_loaded,
             compositor_visible: status.compositor_visible,
+            overlay_click_through: overlay_state.click_through,
+            focus_mode_code: focus_mode_code(focus_mode),
             render_world_ready: world_status.ready,
             expected_chunks: world_context.expected_chunks,
             received_chunks: world_context
@@ -494,6 +643,16 @@ impl CefUiModel for CefUiRuntimeModel {
             GameUiChannel::Diagnostics,
             GameUiFieldKey::CompositorVisible,
             self.compositor_visible,
+        );
+        let _ = out.set_bool(
+            GameUiChannel::Diagnostics,
+            GameUiFieldKey::OverlayClickThrough,
+            self.overlay_click_through,
+        );
+        let _ = out.set_u16(
+            GameUiChannel::Diagnostics,
+            GameUiFieldKey::FocusMode,
+            self.focus_mode_code,
         );
         let _ = out.set_bool(
             Self::CHANNEL,
@@ -527,6 +686,20 @@ impl CefUiModel for CefUiRuntimeModel {
                 self.compositor_visible,
             );
         }
+        if self.overlay_click_through != previous.overlay_click_through {
+            let _ = out.set_bool(
+                GameUiChannel::Diagnostics,
+                GameUiFieldKey::OverlayClickThrough,
+                self.overlay_click_through,
+            );
+        }
+        if self.focus_mode_code != previous.focus_mode_code {
+            let _ = out.set_u16(
+                GameUiChannel::Diagnostics,
+                GameUiFieldKey::FocusMode,
+                self.focus_mode_code,
+            );
+        }
         if self.render_world_ready != previous.render_world_ready {
             let _ = out.set_bool(
                 Self::CHANNEL,
@@ -551,16 +724,30 @@ impl CefUiModel for CefUiRuntimeModel {
     }
 }
 
+const fn focus_mode_code(focus_mode: CefUiFocusMode) -> u16 {
+    match focus_mode {
+        CefUiFocusMode::Gameplay => 1,
+        CefUiFocusMode::HudPassive => 2,
+        CefUiFocusMode::UiModal => 3,
+        CefUiFocusMode::TextEntry => 4,
+    }
+}
+
 fn cef_ui_initialize_service(mut status: ResMut<CefUiStatus>) {
     status.initialized = true;
     status.compositor_visible = true;
     status.current_route = CefUiRoute::Hud;
+    tracing::info!(
+        target: FUN_UI_DIAGNOSTICS_TARGET,
+        "CEF UI ECS binding initialized"
+    );
 }
 
 fn drain_cef_incoming_queue(
     mut bridge: ResMut<CefUiBridge>,
     mut status: ResMut<CefUiStatus>,
     mut stats: ResMut<CefUiFrameStats>,
+    authority: Res<CefUiAuthority>,
     mut writers: CefUiIncomingWriters,
 ) {
     let context = BrowserUiProtocolValidationContext::local_game_ui();
@@ -571,17 +758,27 @@ fn drain_cef_incoming_queue(
         stats.js_message_count = stats.js_message_count.saturating_add(1);
         if let Err(error) = validate_ui_envelope(&envelope, &context) {
             status.last_error = Some(CefUiError::InvalidEnvelope(error));
+            status.last_js_error = Some(CefUiJsErrorKind::InvalidBridgeEnvelope);
+            stats.js_message_rejected_count = stats.js_message_rejected_count.saturating_add(1);
+            tracing::warn!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                ?error,
+                "rejected JS bridge envelope"
+            );
             continue;
         }
-        drain_validated_envelope(
-            envelope,
-            &mut status,
-            &mut writers.intents,
-            &mut writers.requests,
-            &mut writers.routes,
-            &mut writers.hit_regions,
-            &mut writers.text_entry,
-        );
+        if let Err(error) =
+            drain_validated_envelope(envelope, &mut status, &authority.context, &mut writers)
+        {
+            stats.js_message_rejected_count = stats.js_message_rejected_count.saturating_add(1);
+            status.last_error = Some(error);
+            status.last_js_error = Some(CefUiJsErrorKind::RejectedRequest);
+            tracing::warn!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                ?error,
+                "rejected JS UI request"
+            );
+        }
     }
 }
 
@@ -594,65 +791,125 @@ struct CefUiIncomingWriters<'w> {
     text_entry: MessageWriter<'w, CefUiTextEntryChanged>,
 }
 
+fn game_ui_request_from_control(
+    request_id: BrowserUiRequestId,
+    sequence: BrowserUiSequence,
+    payload: &UiControlPayload,
+) -> Result<Option<GameUiRequestEnvelope>, GameUiRequestRejectionReason> {
+    let payload = match payload {
+        UiControlPayload::ChatSubmit { message } => GameUiRequestPayload::SendChat {
+            message: message.clone(),
+        },
+        UiControlPayload::MenuCommand { command } => GameUiRequestPayload::OpenMenu {
+            target: menu_target_for_command(*command),
+        },
+        UiControlPayload::SettingsChanged { key, value_json } => {
+            let Some(key) = GameUiSettingKey::from_wire_key(key) else {
+                return Err(GameUiRequestRejectionReason::InvalidPayload);
+            };
+            GameUiRequestPayload::ChangeSetting {
+                key,
+                value: GameUiSettingValue::JsonBytes {
+                    bytes: value_json.clone(),
+                },
+            }
+        }
+        UiControlPayload::Ready
+        | UiControlPayload::RouteChanged { .. }
+        | UiControlPayload::HitRegionsChanged { .. }
+        | UiControlPayload::TextEntryChanged { .. }
+        | UiControlPayload::Lifecycle { .. } => return Ok(None),
+    };
+    Ok(Some(GameUiRequestEnvelope::new(
+        GameUiRequestId(request_id.0),
+        GameUiSequence(sequence.0),
+        payload,
+    )))
+}
+
+fn menu_target_for_command(command: BrowserUiMenuCommand) -> GameUiMenuTarget {
+    match command {
+        BrowserUiMenuCommand::Resume | BrowserUiMenuCommand::LeaveMatch => GameUiMenuTarget::Pause,
+        BrowserUiMenuCommand::OpenSettings => GameUiMenuTarget::Settings,
+    }
+}
+
+fn write_validated_intent(payload: UiControlPayload, intents: &mut MessageWriter<CefUiIntent>) {
+    match payload {
+        UiControlPayload::ChatSubmit { message } => {
+            intents.write(CefUiIntent::ChatSubmit { message });
+        }
+        UiControlPayload::MenuCommand { command } => {
+            intents.write(CefUiIntent::MenuCommand { command });
+        }
+        UiControlPayload::SettingsChanged { key, value_json } => {
+            intents.write(CefUiIntent::SettingsChanged { key, value_json });
+        }
+        UiControlPayload::Ready
+        | UiControlPayload::RouteChanged { .. }
+        | UiControlPayload::HitRegionsChanged { .. }
+        | UiControlPayload::TextEntryChanged { .. }
+        | UiControlPayload::Lifecycle { .. } => {}
+    }
+}
+
 fn drain_validated_envelope(
     envelope: UiEnvelope,
     status: &mut CefUiStatus,
-    intents: &mut MessageWriter<CefUiIntent>,
-    requests: &mut MessageWriter<CefUiRequest>,
-    routes: &mut MessageWriter<CefUiRouteChanged>,
-    hit_regions: &mut MessageWriter<CefUiHitRegionsChanged>,
-    text_entry: &mut MessageWriter<CefUiTextEntryChanged>,
-) {
+    authority: &GameUiProtocolValidationContext,
+    writers: &mut CefUiIncomingWriters,
+) -> Result<(), CefUiError> {
     let sequence = envelope.sequence;
     let request_id = envelope.request_id;
     let kind = envelope.kind;
     match envelope.payload {
         UiEnvelopePayload::Control { payload } if kind == UiEnvelopeKind::Request => {
             if let Some(request_id) = request_id {
-                requests.write(CefUiRequest {
-                    request_id,
-                    sequence,
-                    payload,
-                });
+                let Some(request) = game_ui_request_from_control(request_id, sequence, &payload)
+                    .map_err(CefUiError::RejectedUiRequest)?
+                else {
+                    return Ok(());
+                };
+                validate_game_ui_request(&request, authority)
+                    .map_err(CefUiError::RejectedUiRequest)?;
+                writers.requests.write(CefUiRequest { envelope: request });
+                write_validated_intent(payload, &mut writers.intents);
             }
         }
         UiEnvelopePayload::Control {
             payload: UiControlPayload::Ready,
         } => {
-            status.browser_loaded = true;
-            intents.write(CefUiIntent::Ready);
+            mark_browser_loaded(status);
+            writers.intents.write(CefUiIntent::Ready);
         }
         UiEnvelopePayload::Control {
             payload: UiControlPayload::RouteChanged { route },
         } => {
-            routes.write(CefUiRouteChanged {
+            writers.routes.write(CefUiRouteChanged {
                 route: CefUiRoute::from(route),
             });
         }
         UiEnvelopePayload::Control {
-            payload: UiControlPayload::HitRegionsChanged { regions },
+            payload: UiControlPayload::HitRegionsChanged { mode, regions },
         } => {
-            hit_regions.write(CefUiHitRegionsChanged { regions });
+            writers
+                .hit_regions
+                .write(CefUiHitRegionsChanged { mode, regions });
         }
         UiEnvelopePayload::Control {
             payload: UiControlPayload::TextEntryChanged { active },
         } => {
-            text_entry.write(CefUiTextEntryChanged { active });
+            writers.text_entry.write(CefUiTextEntryChanged { active });
         }
         UiEnvelopePayload::Control {
-            payload: UiControlPayload::ChatSubmit { message },
+            payload:
+                UiControlPayload::ChatSubmit { .. }
+                | UiControlPayload::MenuCommand { .. }
+                | UiControlPayload::SettingsChanged { .. },
         } => {
-            intents.write(CefUiIntent::ChatSubmit { message });
-        }
-        UiEnvelopePayload::Control {
-            payload: UiControlPayload::MenuCommand { command },
-        } => {
-            intents.write(CefUiIntent::MenuCommand { command });
-        }
-        UiEnvelopePayload::Control {
-            payload: UiControlPayload::SettingsChanged { key, value_json },
-        } => {
-            intents.write(CefUiIntent::SettingsChanged { key, value_json });
+            return Err(CefUiError::RejectedUiRequest(
+                GameUiRequestRejectionReason::InvalidPayload,
+            ));
         }
         UiEnvelopePayload::Control {
             payload: UiControlPayload::Lifecycle { state },
@@ -661,9 +918,9 @@ fn drain_validated_envelope(
                 state,
                 UiLifecycleState::PageLoaded | UiLifecycleState::PageVisible
             ) {
-                status.browser_loaded = true;
+                mark_browser_loaded(status);
             }
-            intents.write(CefUiIntent::Lifecycle { state });
+            writers.intents.write(CefUiIntent::Lifecycle { state });
         }
         UiEnvelopePayload::Error { .. }
         | UiEnvelopePayload::Empty
@@ -671,6 +928,17 @@ fn drain_validated_envelope(
         | UiEnvelopePayload::ModelPatchBatch { .. }
         | UiEnvelopePayload::JsonBytes { .. } => {}
     }
+    Ok(())
+}
+
+fn mark_browser_loaded(status: &mut CefUiStatus) {
+    if !status.browser_loaded {
+        tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            "CEF UI page loaded"
+        );
+    }
+    status.browser_loaded = true;
 }
 
 fn apply_cef_ui_route_changes(
@@ -687,7 +955,7 @@ fn apply_cef_ui_hit_region_changes(
     mut changes: MessageReader<CefUiHitRegionsChanged>,
 ) {
     for change in changes.read() {
-        input_capture.set_hit_regions(&change.regions);
+        input_capture.set_hit_regions(change.mode, &change.regions);
     }
 }
 
@@ -707,7 +975,12 @@ fn update_cef_ui_focus_mode(
 ) {
     *focus_mode = if input_capture.text_entry_active {
         CefUiFocusMode::TextEntry
-    } else if status.current_route.modal_reason().is_some() {
+    } else if status.current_route.modal_reason().is_some()
+        || matches!(
+            input_capture.hit_region_mode,
+            BrowserUiHitRegionMode::UiModal
+        )
+    {
         CefUiFocusMode::UiModal
     } else if status.compositor_visible {
         CefUiFocusMode::HudPassive
@@ -716,12 +989,34 @@ fn update_cef_ui_focus_mode(
     };
 }
 
+fn update_cef_ui_pointer_state(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    input_capture: Res<CefUiInputCapture>,
+    mut pointer_state: ResMut<CefUiPointerState>,
+) {
+    let position = windows
+        .single()
+        .ok()
+        .and_then(Window::cursor_position)
+        .map(|position| CefUiPointerPosition {
+            x: position.x.max(0.0).min(i32::MAX as f32) as i32,
+            y: position.y.max(0.0).min(i32::MAX as f32) as i32,
+        });
+    let active_hit_region = position.and_then(|point| input_capture.hit_region_at(point));
+    if pointer_state.position != position || pointer_state.active_hit_region != active_hit_region {
+        pointer_state.position = position;
+        pointer_state.active_hit_region = active_hit_region;
+    }
+}
+
 fn update_cef_ui_input_capture(
     focus_mode: Res<CefUiFocusMode>,
     status: Res<CefUiStatus>,
+    pointer_state: Res<CefUiPointerState>,
     mut input_capture: ResMut<CefUiInputCapture>,
 ) {
     input_capture.modal_reason = status.current_route.modal_reason();
+    input_capture.active_hit_region = pointer_state.active_hit_region;
     match *focus_mode {
         CefUiFocusMode::Gameplay => {
             input_capture.capture_keyboard = false;
@@ -729,23 +1024,100 @@ fn update_cef_ui_input_capture(
         }
         CefUiFocusMode::HudPassive => {
             input_capture.capture_keyboard = false;
-            input_capture.capture_pointer = input_capture.has_pointer_hit_region();
+            input_capture.capture_pointer = pointer_state.active_hit_region.is_some();
         }
-        CefUiFocusMode::UiModal | CefUiFocusMode::TextEntry => {
+        CefUiFocusMode::UiModal => {
             input_capture.capture_keyboard = true;
             input_capture.capture_pointer = true;
         }
+        CefUiFocusMode::TextEntry => {
+            input_capture.capture_keyboard = true;
+            input_capture.capture_pointer = pointer_state.active_hit_region.is_some();
+        }
+    }
+}
+
+fn update_gameplay_input_gate(
+    focus_mode: Res<CefUiFocusMode>,
+    input_capture: Res<CefUiInputCapture>,
+    mut gate: ResMut<GameplayInputGate>,
+) {
+    *gate = match *focus_mode {
+        CefUiFocusMode::Gameplay => GameplayInputGate::default(),
+        CefUiFocusMode::HudPassive if input_capture.capture_pointer => GameplayInputGate {
+            block_movement: false,
+            block_fire: true,
+            block_actions: true,
+            block_look: true,
+            keyboard_owned_by_ui: false,
+            pointer_owned_by_ui: true,
+            reason: GameplayInputBlockReason::UiPointerRegion,
+        },
+        CefUiFocusMode::HudPassive => GameplayInputGate::default(),
+        CefUiFocusMode::UiModal => GameplayInputGate {
+            block_movement: true,
+            block_fire: true,
+            block_actions: true,
+            block_look: true,
+            keyboard_owned_by_ui: true,
+            pointer_owned_by_ui: true,
+            reason: GameplayInputBlockReason::UiModal,
+        },
+        CefUiFocusMode::TextEntry => GameplayInputGate {
+            block_movement: true,
+            block_fire: true,
+            block_actions: true,
+            block_look: true,
+            keyboard_owned_by_ui: true,
+            pointer_owned_by_ui: input_capture.capture_pointer,
+            reason: GameplayInputBlockReason::TextEntry,
+        },
+    };
+}
+
+fn update_cef_ui_overlay_click_through(
+    focus_mode: Res<CefUiFocusMode>,
+    input_capture: Res<CefUiInputCapture>,
+    mut overlay_state: ResMut<CefUiOverlayClickThroughState>,
+    mut stats: ResMut<CefUiFrameStats>,
+) {
+    let desired_click_through = match *focus_mode {
+        CefUiFocusMode::Gameplay | CefUiFocusMode::HudPassive | CefUiFocusMode::TextEntry => {
+            !input_capture.capture_pointer
+        }
+        CefUiFocusMode::UiModal => false,
+    };
+    if overlay_state.click_through != desired_click_through {
+        overlay_state.click_through = desired_click_through;
+        overlay_state.change_count = overlay_state.change_count.saturating_add(1);
+        stats.overlay_click_through_change_count =
+            stats.overlay_click_through_change_count.saturating_add(1);
+        tracing::debug!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            click_through = desired_click_through,
+            focus_mode = ?*focus_mode,
+            active_hit_region = ?input_capture.active_hit_region,
+            "CEF UI overlay click-through state changed"
+        );
     }
 }
 
 fn collect_gameplay_ui_model(
     status: Res<CefUiStatus>,
+    focus_mode: Res<CefUiFocusMode>,
+    overlay_state: Res<CefUiOverlayClickThroughState>,
     world_status: Res<RenderWorldStatus>,
     world_context: Res<RenderWorldContext>,
     mut cache: ResMut<CefUiModelCache>,
     mut bridge: ResMut<CefUiBridge>,
 ) {
-    let model = CefUiRuntimeModel::from_resources(&status, &world_status, &world_context);
+    let model = CefUiRuntimeModel::from_resources(
+        &status,
+        *focus_mode,
+        &overlay_state,
+        &world_status,
+        &world_context,
+    );
     match cache.previous {
         Some(previous) => model.write_patch(&previous, bridge.patch_writer()),
         None => model.write_initial_snapshot(bridge.patch_writer()),
@@ -841,9 +1213,34 @@ fn send_cef_ui_patch_batch(
     }
 }
 
-fn flush_cef_ui_diagnostics(bridge: Res<CefUiBridge>, mut stats: ResMut<CefUiFrameStats>) {
-    stats.dropped_patch_count = bridge.dropped_patch_count();
-    stats.coalesced_patch_count = bridge.coalesced_patch_count();
+fn flush_cef_ui_diagnostics(
+    bridge: Res<CefUiBridge>,
+    mut stats: ResMut<CefUiFrameStats>,
+    mut diagnostics_state: ResMut<CefUiDiagnosticsState>,
+) {
+    let dropped_patch_count = bridge.dropped_patch_count();
+    let coalesced_patch_count = bridge.coalesced_patch_count();
+    stats.dropped_patch_count = dropped_patch_count;
+    stats.coalesced_patch_count = coalesced_patch_count;
+    if dropped_patch_count != diagnostics_state.last_dropped_patch_count {
+        tracing::warn!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            dropped_patch_count,
+            "CEF UI outgoing patch dropped due to backpressure"
+        );
+        diagnostics_state.last_dropped_patch_count = dropped_patch_count;
+    }
+    if coalesced_patch_count != diagnostics_state.last_coalesced_patch_count {
+        tracing::debug!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            coalesced_patch_count,
+            "CEF UI outgoing patches coalesced"
+        );
+        diagnostics_state.last_coalesced_patch_count = coalesced_patch_count;
+    }
+    if stats.overlay_click_through_change_count != diagnostics_state.last_overlay_change_count {
+        diagnostics_state.last_overlay_change_count = stats.overlay_click_through_change_count;
+    }
 }
 
 fn write_patch_value(
@@ -875,10 +1272,20 @@ fn write_diagnostic_patch(
         CefUiDiagnosticKind::RuntimeInitialize => 1_u32,
         CefUiDiagnosticKind::SubprocessHandled => 2,
         CefUiDiagnosticKind::BrowserCreated => 3,
-        CefUiDiagnosticKind::BrowserClosed => 4,
-        CefUiDiagnosticKind::PaintReceived => 5,
-        CefUiDiagnosticKind::BridgePacketRejected => 6,
-        CefUiDiagnosticKind::ShutdownStarted => 7,
+        CefUiDiagnosticKind::PageLoaded => 4,
+        CefUiDiagnosticKind::BrowserClosed => 5,
+        CefUiDiagnosticKind::PaintReceived => 6,
+        CefUiDiagnosticKind::DirtyRectUpload => 7,
+        CefUiDiagnosticKind::SchemeRequestServed => 8,
+        CefUiDiagnosticKind::SchemeRequestRejected => 9,
+        CefUiDiagnosticKind::NavigationBlocked => 10,
+        CefUiDiagnosticKind::JsBridgeMessageReceived => 11,
+        CefUiDiagnosticKind::BridgePacketRejected => 12,
+        CefUiDiagnosticKind::JsBridgeMessageRejected => 13,
+        CefUiDiagnosticKind::OutgoingPatchCoalesced => 14,
+        CefUiDiagnosticKind::OutgoingPatchDropped => 15,
+        CefUiDiagnosticKind::OverlayStateChanged => 16,
+        CefUiDiagnosticKind::ShutdownStarted => 17,
     };
     let value = diagnostic
         .value
@@ -898,7 +1305,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn text_entry_focus_captures_keyboard_and_pointer() {
+    fn text_entry_focus_captures_keyboard_and_blocks_gameplay_without_pointer_region() {
         let status = CefUiStatus {
             initialized: true,
             browser_loaded: true,
@@ -906,6 +1313,8 @@ mod tests {
             compositor_visible: true,
             last_frame_generation: None,
             last_error: None,
+            last_blocked_navigation: None,
+            last_js_error: None,
         };
         let mut input_capture = CefUiInputCapture {
             text_entry_active: true,
@@ -924,14 +1333,89 @@ mod tests {
         match focus_mode {
             CefUiFocusMode::TextEntry => {
                 input_capture.capture_keyboard = true;
-                input_capture.capture_pointer = true;
+                input_capture.capture_pointer = false;
             }
             CefUiFocusMode::Gameplay | CefUiFocusMode::HudPassive | CefUiFocusMode::UiModal => {}
         }
+        let gate = GameplayInputGate {
+            block_movement: true,
+            block_fire: true,
+            block_actions: true,
+            block_look: true,
+            keyboard_owned_by_ui: true,
+            pointer_owned_by_ui: input_capture.capture_pointer,
+            reason: GameplayInputBlockReason::TextEntry,
+        };
 
         assert_eq!(focus_mode, CefUiFocusMode::TextEntry);
         assert!(input_capture.capture_keyboard);
-        assert!(input_capture.capture_pointer);
+        assert!(!input_capture.capture_pointer);
+        assert!(gate.blocks_movement());
+        assert!(gate.blocks_keyboard_actions());
+    }
+
+    #[test]
+    fn passive_hud_captures_pointer_only_inside_declared_region() {
+        let mut input_capture = CefUiInputCapture::default();
+        input_capture.set_hit_regions(
+            BrowserUiHitRegionMode::HudPassive,
+            &[BrowserUiHitRegion {
+                id: BrowserUiHitRegionId::Chat,
+                x: 20,
+                y: 720,
+                w: 420,
+                h: 80,
+            }],
+        );
+
+        assert_eq!(
+            input_capture.hit_region_at(CefUiPointerPosition { x: 24, y: 724 }),
+            Some(BrowserUiHitRegionId::Chat)
+        );
+        assert_eq!(
+            input_capture.hit_region_at(CefUiPointerPosition { x: 10, y: 724 }),
+            None
+        );
+    }
+
+    #[test]
+    fn modal_focus_disables_overlay_click_through() {
+        let mut overlay_state = CefUiOverlayClickThroughState::default();
+        let mut stats = CefUiFrameStats::default();
+        let input_capture = CefUiInputCapture {
+            capture_pointer: true,
+            ..Default::default()
+        };
+        let desired_click_through = match CefUiFocusMode::UiModal {
+            CefUiFocusMode::Gameplay | CefUiFocusMode::HudPassive | CefUiFocusMode::TextEntry => {
+                !input_capture.capture_pointer
+            }
+            CefUiFocusMode::UiModal => false,
+        };
+        if overlay_state.click_through != desired_click_through {
+            overlay_state.click_through = desired_click_through;
+            overlay_state.change_count = overlay_state.change_count.saturating_add(1);
+            stats.overlay_click_through_change_count =
+                stats.overlay_click_through_change_count.saturating_add(1);
+        }
+
+        assert!(!overlay_state.click_through);
+        assert_eq!(overlay_state.change_count, 1);
+        assert_eq!(stats.overlay_click_through_change_count, 1);
+    }
+
+    #[test]
+    fn validates_authoritative_chat_request_before_intent() {
+        let payload = UiControlPayload::ChatSubmit {
+            message: "squad ready".to_owned(),
+        };
+        let request =
+            game_ui_request_from_control(BrowserUiRequestId(1), BrowserUiSequence(2), &payload)
+                .expect("valid request conversion")
+                .expect("chat request");
+        let authority = GameUiProtocolValidationContext::local_game_client(false);
+
+        assert_eq!(validate_game_ui_request(&request, &authority), Ok(()));
     }
 
     #[test]

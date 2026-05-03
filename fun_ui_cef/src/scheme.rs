@@ -62,7 +62,7 @@ pub struct FunUiAsset {
     pub bytes: &'static [u8],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub enum FunUiUrlError {
     WrongScheme,
     WrongHost,
@@ -94,6 +94,64 @@ pub enum FunUiDevServerError {
     InvalidPort,
     ContainsPath,
     ContainsCredentials,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum FunUiNavigationTarget {
+    MainFrame,
+    Popup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum FunUiNavigationBlockReason {
+    Popup,
+    FileScheme,
+    ExternalNetwork,
+    UnknownScheme,
+    InvalidFunUiUrl,
+    DevServerDisabled,
+    DevServerOriginMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum FunUiNavigationDecision {
+    Allow,
+    Block { reason: FunUiNavigationBlockReason },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunUiNavigationPolicy {
+    pub dev_server_url: Option<FunUiDevServerUrl>,
+    pub popups_allowed: bool,
+}
+
+impl FunUiNavigationPolicy {
+    #[must_use]
+    pub const fn production() -> Self {
+        Self {
+            dev_server_url: None,
+            popups_allowed: false,
+        }
+    }
+
+    #[must_use]
+    pub fn with_dev_server(dev_server_url: FunUiDevServerUrl) -> Self {
+        Self {
+            dev_server_url: Some(dev_server_url),
+            popups_allowed: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum FunUiSchemeRequestOutcome {
+    Served {
+        route: FunUiAssetRoute,
+        byte_len: u32,
+    },
+    Rejected {
+        reason: FunUiUrlError,
+    },
 }
 
 #[must_use]
@@ -136,6 +194,17 @@ pub fn resolve_fun_ui_asset(url: &str) -> Result<FunUiAsset, FunUiUrlError> {
         mime_type: route.mime_type(),
         bytes: route.bytes(),
     })
+}
+
+#[must_use]
+pub fn classify_fun_ui_scheme_request(url: &str) -> FunUiSchemeRequestOutcome {
+    match resolve_fun_ui_asset(url) {
+        Ok(asset) => FunUiSchemeRequestOutcome::Served {
+            route: asset.route,
+            byte_len: asset.bytes.len().min(u32::MAX as usize) as u32,
+        },
+        Err(reason) => FunUiSchemeRequestOutcome::Rejected { reason },
+    }
 }
 
 pub fn validate_fun_ui_dev_server_url(url: &str) -> Result<FunUiDevServerUrl, FunUiDevServerError> {
@@ -182,6 +251,55 @@ pub fn fun_ui_dev_server_from_env() -> Result<Option<FunUiDevServerUrl>, FunUiDe
         .filter(|value| !value.is_empty())
         .map(|value| validate_fun_ui_dev_server_url(&value))
         .transpose()
+}
+
+#[must_use]
+pub fn validate_fun_ui_navigation(
+    url: &str,
+    target: FunUiNavigationTarget,
+    policy: &FunUiNavigationPolicy,
+) -> FunUiNavigationDecision {
+    if matches!(target, FunUiNavigationTarget::Popup) && !policy.popups_allowed {
+        return FunUiNavigationDecision::Block {
+            reason: FunUiNavigationBlockReason::Popup,
+        };
+    }
+    if url.starts_with("fun-ui://") {
+        return if validate_fun_ui_asset_url(url).is_ok() {
+            FunUiNavigationDecision::Allow
+        } else {
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::InvalidFunUiUrl,
+            }
+        };
+    }
+    if url.starts_with("file://") {
+        return FunUiNavigationDecision::Block {
+            reason: FunUiNavigationBlockReason::FileScheme,
+        };
+    }
+    if url.starts_with("http://") {
+        let Some(dev_server_url) = &policy.dev_server_url else {
+            return FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::DevServerDisabled,
+            };
+        };
+        return if http_origin_matches(url, dev_server_url.as_str()) {
+            FunUiNavigationDecision::Allow
+        } else {
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::DevServerOriginMismatch,
+            }
+        };
+    }
+    if url.starts_with("https://") {
+        return FunUiNavigationDecision::Block {
+            reason: FunUiNavigationBlockReason::ExternalNetwork,
+        };
+    }
+    FunUiNavigationDecision::Block {
+        reason: FunUiNavigationBlockReason::UnknownScheme,
+    }
 }
 
 #[must_use]
@@ -248,6 +366,35 @@ fn contains_encoded_traversal(path: &str) -> bool {
     path.as_bytes()
         .windows(3)
         .any(|window| matches!(window, b"%2e" | b"%2E" | b"%2f" | b"%2F" | b"%5c" | b"%5C"))
+}
+
+fn http_origin_matches(url: &str, allowed_origin: &str) -> bool {
+    let Some(url_origin) = http_origin(url) else {
+        return false;
+    };
+    let Some(allowed_origin) = http_origin(allowed_origin) else {
+        return false;
+    };
+    url_origin == allowed_origin
+}
+
+fn http_origin(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("http://")?;
+    if rest.contains('@') {
+        return None;
+    }
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|authority| !authority.is_empty())?;
+    if authority.starts_with("127.0.0.1:")
+        || authority.starts_with("localhost:")
+        || authority.starts_with("[::1]:")
+    {
+        Some(authority)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +469,103 @@ mod tests {
         assert_eq!(
             validate_fun_ui_dev_server_url("http://127.0.0.1:5173/app"),
             Err(FunUiDevServerError::ContainsPath)
+        );
+    }
+
+    #[test]
+    fn navigation_policy_blocks_external_file_and_popups() {
+        let policy = FunUiNavigationPolicy::production();
+
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "fun-ui://main/index.html",
+                FunUiNavigationTarget::MainFrame,
+                &policy
+            ),
+            FunUiNavigationDecision::Allow
+        );
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "file:///C:/Users/premi/secrets.txt",
+                FunUiNavigationTarget::MainFrame,
+                &policy
+            ),
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::FileScheme
+            }
+        );
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "https://example.com",
+                FunUiNavigationTarget::MainFrame,
+                &policy
+            ),
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::ExternalNetwork
+            }
+        );
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "fun-ui://main/index.html",
+                FunUiNavigationTarget::Popup,
+                &policy
+            ),
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::Popup
+            }
+        );
+    }
+
+    #[test]
+    fn navigation_policy_allows_only_configured_loopback_dev_origin() {
+        let dev_server =
+            validate_fun_ui_dev_server_url("http://127.0.0.1:5173").expect("dev server");
+        let policy = FunUiNavigationPolicy::with_dev_server(dev_server);
+
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "http://127.0.0.1:5173/src/main.ts",
+                FunUiNavigationTarget::MainFrame,
+                &policy
+            ),
+            FunUiNavigationDecision::Allow
+        );
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "http://localhost:5173/src/main.ts",
+                FunUiNavigationTarget::MainFrame,
+                &policy
+            ),
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::DevServerOriginMismatch
+            }
+        );
+        assert_eq!(
+            validate_fun_ui_navigation(
+                "http://127.0.0.1:3000/src/main.ts",
+                FunUiNavigationTarget::MainFrame,
+                &policy
+            ),
+            FunUiNavigationDecision::Block {
+                reason: FunUiNavigationBlockReason::DevServerOriginMismatch
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_scheme_requests_without_serving_unknown_paths() {
+        assert!(matches!(
+            classify_fun_ui_scheme_request("fun-ui://main/assets/app.css"),
+            FunUiSchemeRequestOutcome::Served {
+                route: FunUiAssetRoute::AppCss,
+                ..
+            }
+        ));
+        assert_eq!(
+            classify_fun_ui_scheme_request("fun-ui://main/.env"),
+            FunUiSchemeRequestOutcome::Rejected {
+                reason: FunUiUrlError::HiddenPathSegment
+            }
         );
     }
 }

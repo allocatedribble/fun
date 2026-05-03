@@ -4,12 +4,14 @@ pub mod editor_inspector;
 pub mod editor_protocol;
 pub mod editor_schema;
 pub mod render_catalog;
+pub mod ui_protocol;
 
 pub use diagnostics::*;
 pub use editor_inspector::*;
 pub use editor_protocol::*;
 pub use editor_schema::*;
 pub use render_catalog::*;
+pub use ui_protocol::*;
 
 pub const DEFAULT_TICK_RATE_HZ: f64 = 60.0;
 pub const DEFAULT_RENDER_TARGET_RATE_HZ: f64 = 144.0;

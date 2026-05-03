@@ -56,6 +56,7 @@ pub enum GameUiFieldKey {
     Route,
     ModalReason,
     FocusMode,
+    OverlayClickThrough,
 }
 
 impl GameUiFieldKey {
@@ -82,6 +83,7 @@ impl GameUiFieldKey {
             Self::Route => 18,
             Self::ModalReason => 19,
             Self::FocusMode => 20,
+            Self::OverlayClickThrough => 21,
         }
     }
 }

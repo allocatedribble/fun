@@ -22,7 +22,7 @@
       </main>
 
       <main class="layer route-pause_menu" hidden>
-        <nav class="menu-panel" aria-label="Pause menu">
+        <nav class="menu-panel" aria-label="Pause menu" data-hit-region="pause_menu">
           <button type="button" data-command="resume">Resume</button>
           <button type="button" data-command="settings">Settings</button>
           <button type="button" data-command="leave">Leave match</button>
@@ -30,15 +30,15 @@
       </main>
 
       <main class="layer route-loadout" hidden>
-        <section class="panel" data-field="loadout"></section>
+        <section class="panel" data-field="loadout" data-hit-region="loadout"></section>
       </main>
 
       <main class="layer route-scoreboard" hidden>
-        <section class="panel scoreboard" data-field="scoreboard"></section>
+        <section class="panel scoreboard" data-field="scoreboard" data-hit-region="scoreboard"></section>
       </main>
 
       <main class="layer route-chat" hidden>
-        <section class="chat-panel">
+        <section class="chat-panel" data-hit-region="chat">
           <div class="chat-rows" data-field="chat"></div>
           <form class="chat-form" data-form="chat">
             <input name="message" maxlength="512" autocomplete="off" />
@@ -52,11 +52,11 @@
       </main>
 
       <main class="layer route-diagnostics" hidden>
-        <section class="panel diagnostics" data-field="diagnostics"></section>
+        <section class="panel diagnostics" data-field="diagnostics" data-hit-region="diagnostics"></section>
       </main>
 
       <main class="layer route-devtools_overlay" hidden>
-        <section class="panel devtools" data-field="devtools"></section>
+        <section class="panel devtools" data-field="devtools" data-hit-region="devtools"></section>
       </main>
     </div>
     <script src="fun-ui://main/assets/app.js"></script>

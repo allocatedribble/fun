@@ -80,6 +80,40 @@
         node.hidden = candidate !== route;
       }
     });
+    reportHitRegions();
+  }
+
+  function currentHitMode() {
+    var route = document.getElementById("app").dataset.route;
+    if (route === "hud") {
+      return "hud_passive";
+    }
+    if (route === "chat") {
+      return "text_entry";
+    }
+    return "ui_modal";
+  }
+
+  function reportHitRegions() {
+    var regions = Array.prototype.slice
+      .call(document.querySelectorAll("[data-hit-region]"))
+      .filter(function (node) {
+        return !node.closest("[hidden]");
+      })
+      .map(function (node) {
+        var rect = node.getBoundingClientRect();
+        return {
+          id: node.dataset.hitRegion,
+          x: Math.max(0, Math.round(rect.left)),
+          y: Math.max(0, Math.round(rect.top)),
+          w: Math.max(1, Math.round(rect.width)),
+          h: Math.max(1, Math.round(rect.height)),
+        };
+      });
+    window.fun.emit("ui.hit_regions.changed", {
+      mode: currentHitMode(),
+      regions: regions,
+    });
   }
 
   function applyPatch(patch) {
@@ -218,7 +252,7 @@
     if (!command) {
       return;
     }
-    window.fun.emit("menu.command", { command: command });
+    window.fun.request("menu.command", { command: command }).catch(function () {});
   });
 
   document.addEventListener("submit", function (event) {
@@ -229,10 +263,24 @@
     var input = event.target.elements.message;
     var message = input.value.trim();
     if (message) {
-      window.fun.emit("chat.submit", { message: message });
+      window.fun.request("chat.submit", { message: message }).catch(function () {});
       input.value = "";
     }
   });
+
+  document.addEventListener("focusin", function (event) {
+    if (event.target && event.target.matches("input, textarea")) {
+      window.fun.emit("ui.text_entry.changed", { active: true });
+    }
+  });
+
+  document.addEventListener("focusout", function (event) {
+    if (event.target && event.target.matches("input, textarea")) {
+      window.fun.emit("ui.text_entry.changed", { active: false });
+    }
+  });
+
+  window.addEventListener("resize", reportHitRegions);
 
   window.addEventListener("hashchange", function () {
     setRoute(window.location.hash.slice(1) || "hud");

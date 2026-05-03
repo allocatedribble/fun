@@ -13,14 +13,15 @@ pub mod model;
 pub mod render_handler;
 pub mod runtime;
 pub mod scheme;
+pub mod security;
 
 pub use bootstrap::{CefSubprocessExit, maybe_execute_cef_subprocess};
 pub use bridge::{
     BrowserBridgeError, BrowserBridgeQueues, BrowserUiCapability, BrowserUiHitRegion,
-    BrowserUiPacket, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
-    BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, UiControlPayload, UiEnvelope,
-    UiEnvelopeChannel, UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet,
-    validate_ui_envelope,
+    BrowserUiHitRegionId, BrowserUiHitRegionMode, BrowserUiPacket,
+    BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError, BrowserUiRequestId,
+    BrowserUiRouteState, BrowserUiSequence, UiControlPayload, UiEnvelope, UiEnvelopeChannel,
+    UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet, validate_ui_envelope,
 };
 pub use browser::{BrowserUiConfig, BrowserUiPage, MAIN_BROWSER_PAGE};
 pub use compositor::{
@@ -36,4 +37,12 @@ pub use model::{
 };
 pub use render_handler::{CefPaintFrame, CefUiFrameMetadata, new_fun_cef_render_handler};
 pub use runtime::{CefRuntime, CefRuntimeConfig, CefRuntimeError};
-pub use scheme::{FUN_UI_MAIN_URL, FUN_UI_SCHEME, FunUiAssetRoute, FunUiRoute};
+pub use scheme::{
+    FUN_UI_MAIN_URL, FUN_UI_SCHEME, FunUiAssetRoute, FunUiNavigationBlockReason,
+    FunUiNavigationDecision, FunUiNavigationPolicy, FunUiNavigationTarget, FunUiRoute,
+    FunUiSchemeRequestOutcome, classify_fun_ui_scheme_request, validate_fun_ui_navigation,
+};
+pub use security::{
+    CefUiHelperProcessPolicy, CefUiJavaScriptAuthority, CefUiSecurityPolicy,
+    CefUiStateExposurePolicy,
+};

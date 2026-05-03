@@ -326,6 +326,7 @@ fn base_camera_scene() -> impl BsnScene {
 fn cache_movement_input(
     keys: Res<ButtonInput<KeyCode>>,
     host_control: Option<Res<ClientHostControlState>>,
+    #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
         ClientScheduleProfiler,
     >,
@@ -344,7 +345,18 @@ fn cache_movement_input(
 
     if host_control.as_deref().is_some_and(|control| {
         control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
-    }) {
+    }) || {
+        #[cfg(feature = "cef_ui")]
+        {
+            ui_input_gate
+                .as_deref()
+                .is_some_and(|gate| gate.blocks_movement())
+        }
+        #[cfg(not(feature = "cef_ui"))]
+        {
+            false
+        }
+    } {
         input_state.movement = Vec2::ZERO;
         input_state.jump_queued = false;
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -362,13 +374,39 @@ fn update_cursor_grab(
     mut cursor_options: Single<&mut CursorOptions>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
 ) {
-    if mouse_buttons.just_pressed(MouseButton::Left) {
+    let pointer_actions_blocked = {
+        #[cfg(feature = "cef_ui")]
+        {
+            ui_input_gate
+                .as_deref()
+                .is_some_and(|gate| gate.blocks_pointer_actions())
+        }
+        #[cfg(not(feature = "cef_ui"))]
+        {
+            false
+        }
+    };
+    let keyboard_actions_blocked = {
+        #[cfg(feature = "cef_ui")]
+        {
+            ui_input_gate
+                .as_deref()
+                .is_some_and(|gate| gate.blocks_keyboard_actions())
+        }
+        #[cfg(not(feature = "cef_ui"))]
+        {
+            false
+        }
+    };
+
+    if !pointer_actions_blocked && mouse_buttons.just_pressed(MouseButton::Left) {
         cursor_options.visible = false;
         cursor_options.grab_mode = CursorGrabMode::Locked;
     }
 
-    if keys.just_pressed(KeyCode::Escape) {
+    if !keyboard_actions_blocked && keys.just_pressed(KeyCode::Escape) {
         cursor_options.visible = true;
         cursor_options.grab_mode = CursorGrabMode::None;
     }
@@ -382,6 +420,7 @@ fn apply_look(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     cursor_options: Single<&CursorOptions>,
     host_control: Option<Res<ClientHostControlState>>,
+    #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
         ClientScheduleProfiler,
     >,
@@ -396,7 +435,18 @@ fn apply_look(
     crate::frame_profile_scope!(_scope, frame_profiler, "Update", "apply_look");
     if host_control.as_deref().is_some_and(|control| {
         control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
-    }) {
+    }) || {
+        #[cfg(feature = "cef_ui")]
+        {
+            ui_input_gate
+                .as_deref()
+                .is_some_and(|gate| gate.blocks_look())
+        }
+        #[cfg(not(feature = "cef_ui"))]
+        {
+            false
+        }
+    } {
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
         return;
