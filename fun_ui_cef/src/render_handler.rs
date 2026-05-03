@@ -1,11 +1,14 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cef::rc::Rc;
 use cef::{
-    Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler, WrapRenderHandler,
-    wrap_render_handler,
+    Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler, ScreenInfo,
+    WrapRenderHandler, wrap_render_handler,
 };
+
+use crate::diagnostics::FUN_UI_DIAGNOSTICS_TARGET;
 
 pub const CEF_UI_BYTES_PER_PIXEL: usize = 4;
 
@@ -318,10 +321,32 @@ wrap_render_handler! {
         scale_factor: CefUiScaleFactor,
         viewport_width: i32,
         viewport_height: i32,
+        view_rect_logged: Arc<AtomicBool>,
+        paint_logged: Arc<AtomicBool>,
+        accelerated_paint_logged: Arc<AtomicBool>,
     }
 
     impl RenderHandler {
+        fn root_screen_rect(
+            &self,
+            _browser: Option<&mut Browser>,
+            rect: Option<&mut Rect>,
+        ) -> std::os::raw::c_int {
+            if let Some(rect) = rect {
+                *rect = viewport_rect(self.viewport_width, self.viewport_height);
+            }
+            1
+        }
+
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
+            if !self.view_rect_logged.swap(true, Ordering::AcqRel) {
+                tracing::info!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    width = self.viewport_width,
+                    height = self.viewport_height,
+                    "CEF UI render handler view rect requested"
+                );
+            }
             if let Some(rect) = rect {
                 *rect = Rect {
                     x: 0,
@@ -330,6 +355,38 @@ wrap_render_handler! {
                     height: self.viewport_height,
                 };
             }
+        }
+
+        fn screen_point(
+            &self,
+            _browser: Option<&mut Browser>,
+            view_x: std::os::raw::c_int,
+            view_y: std::os::raw::c_int,
+            screen_x: Option<&mut std::os::raw::c_int>,
+            screen_y: Option<&mut std::os::raw::c_int>,
+        ) -> std::os::raw::c_int {
+            if let Some(screen_x) = screen_x {
+                *screen_x = view_x;
+            }
+            if let Some(screen_y) = screen_y {
+                *screen_y = view_y;
+            }
+            1
+        }
+
+        fn screen_info(
+            &self,
+            _browser: Option<&mut Browser>,
+            screen_info: Option<&mut ScreenInfo>,
+        ) -> std::os::raw::c_int {
+            if let Some(screen_info) = screen_info {
+                *screen_info = viewport_screen_info(
+                    self.viewport_width,
+                    self.viewport_height,
+                    self.scale_factor,
+                );
+            }
+            1
         }
 
         fn on_paint(
@@ -345,7 +402,7 @@ wrap_render_handler! {
                 return;
             };
 
-            let dirty_rects = dirty_rects
+            let dirty_rects: Vec<CefDirtyRect> = dirty_rects
                 .unwrap_or_default()
                 .iter()
                 .map(CefDirtyRect::from)
@@ -354,6 +411,15 @@ wrap_render_handler! {
             let Some(bytes) = copy_cef_paint_buffer(buffer, expected_byte_len) else {
                 return;
             };
+            if !self.paint_logged.swap(true, Ordering::AcqRel) {
+                tracing::info!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    width,
+                    height,
+                    dirty_rect_count = dirty_rects.len(),
+                    "CEF UI paint frame received"
+                );
+            }
             self.paint_sink.ingest_cef_paint(CefOwnedPaintFrame {
                 element: CefPaintElement::from_cef(type_),
                 width,
@@ -365,6 +431,22 @@ wrap_render_handler! {
                 dirty_rects,
                 bytes,
             });
+        }
+
+        fn on_accelerated_paint(
+            &self,
+            _browser: Option<&mut Browser>,
+            _type_: PaintElementType,
+            dirty_rects: Option<&[Rect]>,
+            _info: Option<&cef::AcceleratedPaintInfo>,
+        ) {
+            if !self.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
+                tracing::warn!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    dirty_rect_count = dirty_rects.unwrap_or_default().len(),
+                    "CEF UI accelerated paint callback received without shared-texture support"
+                );
+            }
         }
     }
 }
@@ -389,7 +471,34 @@ pub fn new_fun_cef_render_handler_for_viewport(
         scale_factor,
         viewport_width.min(i32::MAX as u32) as i32,
         viewport_height.min(i32::MAX as u32) as i32,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
     )
+}
+
+#[must_use]
+fn viewport_rect(width: i32, height: i32) -> Rect {
+    Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    }
+}
+
+#[must_use]
+fn viewport_screen_info(width: i32, height: i32, scale_factor: CefUiScaleFactor) -> ScreenInfo {
+    let rect = viewport_rect(width, height);
+    ScreenInfo {
+        device_scale_factor: scale_factor.as_f32(),
+        depth: 32,
+        depth_per_component: 8,
+        is_monochrome: 0,
+        rect: rect.clone(),
+        available_rect: rect,
+        ..ScreenInfo::default()
+    }
 }
 
 fn copy_cef_paint_buffer(buffer: *const u8, expected_byte_len: usize) -> Option<Vec<u8>> {
@@ -470,5 +579,16 @@ mod tests {
         let b = CefDirtyRect::new(8, 1, 4, 4);
 
         assert_eq!(a.union(b), CefDirtyRect::new(2, 1, 10, 13));
+    }
+
+    #[test]
+    fn viewport_screen_info_matches_offscreen_viewport() {
+        let screen_info = viewport_screen_info(1280, 720, CefUiScaleFactor::from_millipoints(1500));
+
+        assert_eq!(screen_info.device_scale_factor, 1.5);
+        assert_eq!(screen_info.depth, 32);
+        assert_eq!(screen_info.depth_per_component, 8);
+        assert_eq!(screen_info.rect.width, 1280);
+        assert_eq!(screen_info.available_rect.height, 720);
     }
 }

@@ -1,4 +1,12 @@
-use bevy::{ecs::system::SystemParam, prelude::*, window::PrimaryWindow};
+use std::time::Duration;
+
+use bevy::{
+    asset::RenderAssetUsages,
+    ecs::system::SystemParam,
+    prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    window::PrimaryWindow,
+};
 use fun_render::{RenderWorldContext, RenderWorldStatus};
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
 use fun_ui_cef::diagnostics::{
@@ -8,10 +16,12 @@ use fun_ui_cef::{
     BrowserBridgeError, BrowserBridgeQueues, BrowserUiHitRegion, BrowserUiHitRegionId,
     BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
     BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefUiModel, CefUiSecurityPolicy,
-    FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, UiControlPayload, UiEnvelope,
-    UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue,
-    UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration, validate_ui_envelope,
+    FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, SharedCefUiCompositor,
+    UiControlPayload, UiEnvelope, UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue,
+    UiPatchBatch, UiPatchValue, UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration,
+    validate_ui_envelope,
 };
+use fun_ui_cef::{CefDirtyRect, CefPaintElement, CefUiCompositorFrame};
 use game_shared::{
     GameUiMenuTarget, GameUiProtocolValidationContext, GameUiRequestEnvelope, GameUiRequestId,
     GameUiRequestPayload, GameUiRequestRejectionReason, GameUiSequence, GameUiSettingKey,
@@ -20,6 +30,7 @@ use game_shared::{
 
 pub const MAX_CEF_UI_HIT_REGIONS: usize = 64;
 const MAX_JS_MESSAGES_PER_FRAME: usize = 64;
+const CEF_UI_RENDER_RATE_HZ: u64 = fun_ui_cef::CEF_UI_WINDOWLESS_FRAME_RATE_HZ as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum GameCefUiSet {
@@ -45,6 +56,8 @@ impl Plugin for GameCefUiPlugin {
             .init_resource::<CefUiSecurityPolicyResource>()
             .init_resource::<CefUiBridge>()
             .init_resource::<CefUiFrameStats>()
+            .init_resource::<CefUiMessageLoopPump>()
+            .init_resource::<CefUiRenderTexture>()
             .init_resource::<CefUiModelCache>()
             .init_resource::<CefUiDiagnosticsState>()
             .add_message::<CefUiIntent>()
@@ -79,6 +92,10 @@ impl Plugin for GameCefUiPlugin {
             )
             .add_systems(
                 PreUpdate,
+                pump_cef_ui_message_loop.before(GameCefUiSet::DrainIncoming),
+            )
+            .add_systems(
+                PreUpdate,
                 (
                     update_cef_ui_focus_mode,
                     update_cef_ui_pointer_state,
@@ -98,6 +115,10 @@ impl Plugin for GameCefUiPlugin {
                 (write_cef_ui_outgoing_messages, send_cef_ui_patch_batch)
                     .chain()
                     .in_set(GameCefUiSet::FlushBridge),
+            )
+            .add_systems(
+                PostUpdate,
+                upload_cef_ui_frame_to_fun_texture.after(GameCefUiSet::FlushBridge),
             )
             .add_systems(
                 Last,
@@ -523,6 +544,90 @@ pub struct CefUiFrameStats {
     pub overlay_click_through_change_count: u64,
     pub navigation_blocked_count: u64,
 }
+
+#[derive(Debug, Clone, Resource)]
+pub struct CefUiRenderCompositor {
+    compositor: SharedCefUiCompositor,
+}
+
+impl CefUiRenderCompositor {
+    #[must_use]
+    pub fn new(compositor: SharedCefUiCompositor) -> Self {
+        Self { compositor }
+    }
+
+    #[must_use]
+    pub fn compositor(&self) -> &SharedCefUiCompositor {
+        &self.compositor
+    }
+}
+
+#[derive(Debug, Resource)]
+pub struct CefUiMessageLoopPump {
+    enabled: bool,
+    pump_timer: Timer,
+    active_logged: bool,
+}
+
+impl CefUiMessageLoopPump {
+    #[must_use]
+    pub fn external_pump_60hz() -> Self {
+        Self {
+            enabled: true,
+            pump_timer: Timer::new(cef_ui_render_interval(), TimerMode::Repeating),
+            active_logged: false,
+        }
+    }
+
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            pump_timer: Timer::new(cef_ui_render_interval(), TimerMode::Repeating),
+            active_logged: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn interval(&self) -> Duration {
+        self.pump_timer.duration()
+    }
+}
+
+impl Default for CefUiMessageLoopPump {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
+#[derive(Debug, Resource)]
+struct CefUiRenderTexture {
+    image: Option<Handle<Image>>,
+    root_entity: Option<Entity>,
+    last_generation: Option<UiSurfaceGeneration>,
+    size: Option<UVec2>,
+    upload_timer: Timer,
+}
+
+impl Default for CefUiRenderTexture {
+    fn default() -> Self {
+        Self {
+            image: None,
+            root_entity: None,
+            last_generation: None,
+            size: None,
+            upload_timer: Timer::new(cef_ui_render_interval(), TimerMode::Repeating),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, Component)]
+struct CefUiRenderTextureRoot;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 struct CefUiDiagnosticsState {
@@ -1097,7 +1202,7 @@ fn update_cef_ui_overlay_click_through(
             click_through = desired_click_through,
             focus_mode = ?*focus_mode,
             active_hit_region = ?input_capture.active_hit_region,
-            "CEF UI overlay click-through state changed"
+            "CEF UI input passthrough state changed"
         );
     }
 }
@@ -1211,6 +1316,250 @@ fn send_cef_ui_patch_batch(
             status.last_error = Some(CefUiError::from(error));
         }
     }
+}
+
+const CEF_UI_TEXTURE_BYTES_PER_PIXEL: usize = 4;
+const CEF_UI_TEXTURE_Z_INDEX: i32 = 900_000;
+
+fn cef_ui_render_interval() -> Duration {
+    Duration::from_nanos(1_000_000_000 / CEF_UI_RENDER_RATE_HZ)
+}
+
+fn pump_cef_ui_message_loop(time: Res<Time>, mut pump: ResMut<CefUiMessageLoopPump>) {
+    if !pump.enabled {
+        return;
+    }
+    if pump.pump_timer.tick(time.delta()).just_finished() {
+        if !pump.active_logged {
+            tracing::info!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                render_rate_hz = CEF_UI_RENDER_RATE_HZ,
+                "CEF UI external message loop pump active"
+            );
+            pump.active_logged = true;
+        }
+        fun_ui_cef::pump_cef_message_loop_work();
+    }
+}
+
+fn upload_cef_ui_frame_to_fun_texture(
+    mut commands: Commands,
+    render_compositor: Option<Res<CefUiRenderCompositor>>,
+    time: Res<Time>,
+    mut render_texture: ResMut<CefUiRenderTexture>,
+    mut images: ResMut<Assets<Image>>,
+    mut image_nodes: Query<&mut ImageNode, With<CefUiRenderTextureRoot>>,
+    mut status: ResMut<CefUiStatus>,
+    mut stats: ResMut<CefUiFrameStats>,
+) {
+    let Some(render_compositor) = render_compositor else {
+        return;
+    };
+    if !render_texture
+        .upload_timer
+        .tick(time.delta())
+        .just_finished()
+    {
+        return;
+    }
+    let Some(frame) = render_compositor
+        .compositor()
+        .with_compositor(|compositor| compositor.consume_ready().cloned())
+        .flatten()
+    else {
+        return;
+    };
+    if frame.element != CefPaintElement::View
+        || render_texture.last_generation == Some(frame.metadata.generation)
+    {
+        return;
+    }
+    let Some(size) = cef_ui_frame_texture_size(&frame) else {
+        return;
+    };
+    let Some(expected_byte_len) = cef_ui_texture_byte_len(size) else {
+        return;
+    };
+    if frame.pixels().len() != expected_byte_len {
+        return;
+    }
+
+    let uploaded_bytes = if render_texture.image.is_none() || render_texture.size != Some(size) {
+        let image_handle = images.add(new_cef_ui_texture_image(size, frame.pixels().to_vec()));
+        render_texture.image = Some(image_handle.clone());
+        render_texture.size = Some(size);
+        tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            width = size.x,
+            height = size.y,
+            render_rate_hz = CEF_UI_RENDER_RATE_HZ,
+            "CEF UI texture attached to Fun render"
+        );
+        sync_cef_ui_image_node(
+            &mut commands,
+            &mut render_texture,
+            &mut image_nodes,
+            image_handle,
+        );
+        expected_byte_len
+    } else {
+        let Some(image_handle) = render_texture.image.as_ref() else {
+            return;
+        };
+        let Some(mut image) = images.get_mut(image_handle) else {
+            return;
+        };
+        apply_cef_ui_frame_to_texture(&mut image, &frame).unwrap_or(0)
+    };
+
+    render_texture.last_generation = Some(frame.metadata.generation);
+    status.browser_loaded = true;
+    status.compositor_visible = true;
+    status.last_frame_generation = Some(frame.metadata.generation);
+    stats.paint_count = stats.paint_count.saturating_add(1);
+    stats.dirty_rect_count = stats
+        .dirty_rect_count
+        .saturating_add(frame.metadata.dirty_rects.len() as u64);
+    stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(uploaded_bytes as u64);
+}
+
+fn sync_cef_ui_image_node(
+    commands: &mut Commands,
+    render_texture: &mut CefUiRenderTexture,
+    image_nodes: &mut Query<&mut ImageNode, With<CefUiRenderTextureRoot>>,
+    image_handle: Handle<Image>,
+) {
+    if let Some(root_entity) = render_texture.root_entity {
+        if let Ok(mut image_node) = image_nodes.get_mut(root_entity) {
+            image_node.image = image_handle;
+            image_node.image_mode = NodeImageMode::Stretch;
+            return;
+        }
+        render_texture.root_entity = None;
+    }
+
+    let root_entity = commands
+        .spawn((
+            Name::new("CEF UI Render Texture"),
+            CefUiRenderTextureRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
+            ImageNode {
+                image: image_handle,
+                image_mode: NodeImageMode::Stretch,
+                ..default()
+            },
+            GlobalZIndex(CEF_UI_TEXTURE_Z_INDEX),
+        ))
+        .id();
+    render_texture.root_entity = Some(root_entity);
+}
+
+fn new_cef_ui_texture_image(size: UVec2, pixels: Vec<u8>) -> Image {
+    Image::new(
+        Extent3d {
+            width: size.x,
+            height: size.y,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn apply_cef_ui_frame_to_texture(image: &mut Image, frame: &CefUiCompositorFrame) -> Option<usize> {
+    let size = cef_ui_frame_texture_size(frame)?;
+    if image.texture_descriptor.size.width != size.x
+        || image.texture_descriptor.size.height != size.y
+        || image.texture_descriptor.format != TextureFormat::Bgra8UnormSrgb
+    {
+        *image = new_cef_ui_texture_image(size, frame.pixels().to_vec());
+        return cef_ui_texture_byte_len(size);
+    }
+    let data = image.data.as_mut()?;
+    copy_cef_dirty_rects_to_texture_data(data, frame.pixels(), size, &frame.metadata.dirty_rects)
+}
+
+fn cef_ui_frame_texture_size(frame: &CefUiCompositorFrame) -> Option<UVec2> {
+    if frame.metadata.width <= 0 || frame.metadata.height <= 0 {
+        return None;
+    }
+    Some(UVec2::new(
+        u32::try_from(frame.metadata.width).ok()?,
+        u32::try_from(frame.metadata.height).ok()?,
+    ))
+}
+
+fn cef_ui_texture_byte_len(size: UVec2) -> Option<usize> {
+    usize::try_from(size.x)
+        .ok()?
+        .checked_mul(usize::try_from(size.y).ok()?)?
+        .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
+}
+
+fn copy_cef_dirty_rects_to_texture_data(
+    dst: &mut [u8],
+    src: &[u8],
+    size: UVec2,
+    dirty_rects: &[CefDirtyRect],
+) -> Option<usize> {
+    let expected_byte_len = cef_ui_texture_byte_len(size)?;
+    if dst.len() != expected_byte_len || src.len() != expected_byte_len {
+        return None;
+    }
+    if dirty_rects.is_empty() {
+        dst.copy_from_slice(src);
+        return Some(expected_byte_len);
+    }
+
+    let mut copied_bytes = 0usize;
+    for rect in dirty_rects {
+        copied_bytes = copied_bytes
+            .checked_add(copy_cef_dirty_rect_to_texture_data(dst, src, size, *rect)?)?;
+    }
+    Some(copied_bytes)
+}
+
+fn copy_cef_dirty_rect_to_texture_data(
+    dst: &mut [u8],
+    src: &[u8],
+    size: UVec2,
+    rect: CefDirtyRect,
+) -> Option<usize> {
+    if rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 {
+        return None;
+    }
+    let x = usize::try_from(rect.x).ok()?;
+    let y = usize::try_from(rect.y).ok()?;
+    let width = usize::try_from(rect.width).ok()?;
+    let height = usize::try_from(rect.height).ok()?;
+    let texture_width = usize::try_from(size.x).ok()?;
+    let texture_height = usize::try_from(size.y).ok()?;
+    if x.checked_add(width)? > texture_width || y.checked_add(height)? > texture_height {
+        return None;
+    }
+
+    let row_bytes = width.checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)?;
+    let mut copied_bytes = 0usize;
+    for row in y..y.checked_add(height)? {
+        let offset = row
+            .checked_mul(texture_width)?
+            .checked_add(x)?
+            .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)?;
+        let end = offset.checked_add(row_bytes)?;
+        dst.get_mut(offset..end)?
+            .copy_from_slice(src.get(offset..end)?);
+        copied_bytes = copied_bytes.checked_add(row_bytes)?;
+    }
+    Some(copied_bytes)
 }
 
 fn flush_cef_ui_diagnostics(
@@ -1402,6 +1751,61 @@ mod tests {
         assert!(!overlay_state.click_through);
         assert_eq!(overlay_state.change_count, 1);
         assert_eq!(stats.overlay_click_through_change_count, 1);
+    }
+
+    #[test]
+    fn cef_texture_copy_updates_only_declared_dirty_rects() {
+        let size = UVec2::new(4, 2);
+        let src = (0..32_u8).collect::<Vec<_>>();
+        let mut dst = vec![0_u8; 32];
+        let copied = copy_cef_dirty_rects_to_texture_data(
+            &mut dst,
+            &src,
+            size,
+            &[CefDirtyRect::new(1, 0, 2, 2)],
+        )
+        .expect("dirty rect copy");
+
+        assert_eq!(copied, 16);
+        assert_eq!(&dst[4..12], &src[4..12]);
+        assert_eq!(&dst[20..28], &src[20..28]);
+        assert_eq!(&dst[0..4], &[0, 0, 0, 0]);
+        assert_eq!(&dst[12..20], &[0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&dst[28..32], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn cef_texture_copy_rejects_out_of_bounds_dirty_rects() {
+        let size = UVec2::new(2, 2);
+        let src = vec![1_u8; 16];
+        let mut dst = vec![0_u8; 16];
+
+        assert_eq!(
+            copy_cef_dirty_rects_to_texture_data(
+                &mut dst,
+                &src,
+                size,
+                &[CefDirtyRect::new(1, 1, 2, 1)]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cef_render_texture_upload_timer_is_fixed_sixty_hz() {
+        let render_texture = CefUiRenderTexture::default();
+        let message_loop_pump = CefUiMessageLoopPump::external_pump_60hz();
+
+        assert_eq!(CEF_UI_RENDER_RATE_HZ, 60);
+        assert_eq!(
+            render_texture.upload_timer.duration(),
+            Duration::from_nanos(16_666_666)
+        );
+        assert!(message_loop_pump.enabled());
+        assert_eq!(
+            message_loop_pump.interval(),
+            render_texture.upload_timer.duration()
+        );
     }
 
     #[test]

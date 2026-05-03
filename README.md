@@ -69,8 +69,14 @@ construction and then initializes CEF as a separate windowless browser runtime.
 CEF owns browser lifetime, page loading, JavaScript bridge messages, offscreen
 paint callbacks, dirty rects, transparent UI buffers, and UI compositor state.
 Bevy ECS owns game state and exchanges typed UI packets with the browser bridge.
-Bevy render owns game rendering only. CEF paint output must not become a Bevy
-RenderGraph node, a Bevy `Image`, a sprite, or a normal ECS-rendered mesh.
+`game_client` presents the latest CEF offscreen paint frame as a Bevy texture
+rendered by the normal Fun render stack, so the browser UI is visible in the
+game window without a native browser child window or an operating-system overlay
+window. The first presentation path uses a fullscreen transparent Bevy UI image
+node backed by the CEF compositor buffer; future optimization can replace the
+asset update path with lower-level dirty-rect GPU uploads while preserving the
+same typed browser/ECS boundary. CEF windowless painting and the Bevy texture
+upload consumer both run at a fixed 60 Hz presentation rate.
 
 The main browser page is `fun-ui://main/index.html`, uses a transparent
 background, and carries HUD, menu, scoreboard, chat, loading, diagnostics, and

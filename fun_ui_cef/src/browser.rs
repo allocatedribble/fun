@@ -1,11 +1,14 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cef::rc::Rc as _;
 use cef::{
-    BrowserSettings, CefString, Client, ImplClient, RenderHandler, WindowInfo, WrapClient,
-    browser_host_create_browser, wrap_client,
+    Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplClient,
+    ImplLifeSpanHandler, LifeSpanHandler, PaintElementType, Rect, RenderHandler, WindowInfo,
+    WrapClient, WrapLifeSpanHandler, browser_host_create_browser, wrap_client,
+    wrap_life_span_handler,
 };
 
+use crate::diagnostics::FUN_UI_DIAGNOSTICS_TARGET;
 use crate::render_handler::CefUiScaleFactor;
 use crate::scheme::{
     FUN_UI_MAIN_URL, FunUiDevServerError, FunUiDevServerUrl, fun_ui_dev_server_from_env,
@@ -20,6 +23,7 @@ pub const MAIN_BROWSER_PAGE: BrowserUiPage = BrowserUiPage {
     url: FUN_UI_MAIN_URL,
     transparent_background: true,
 };
+pub const CEF_UI_WINDOWLESS_FRAME_RATE_HZ: i32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrowserUiPage {
@@ -44,7 +48,7 @@ impl BrowserUiConfig {
             dev_server_url: None,
             viewport_width,
             viewport_height,
-            windowless_frame_rate: 60,
+            windowless_frame_rate: CEF_UI_WINDOWLESS_FRAME_RATE_HZ,
         }
     }
 
@@ -156,6 +160,29 @@ impl Default for BrowserLifecycle {
     }
 }
 
+#[derive(Clone)]
+struct BrowserState {
+    lifecycle: BrowserLifecycle,
+    browser: Option<Browser>,
+}
+
+impl BrowserState {
+    const fn new() -> Self {
+        Self {
+            lifecycle: BrowserLifecycle::new(),
+            browser: None,
+        }
+    }
+}
+
+type SharedBrowserState = Arc<Mutex<BrowserState>>;
+
+fn with_browser_state(state: &SharedBrowserState, update: impl FnOnce(&mut BrowserState)) {
+    if let Ok(mut state) = state.lock() {
+        update(&mut state);
+    }
+}
+
 #[derive(Debug)]
 pub enum CefUiBrowserError {
     DevServer(FunUiDevServerError),
@@ -185,12 +212,73 @@ impl From<FunUiDevServerError> for CefUiBrowserError {
     }
 }
 
+wrap_life_span_handler! {
+    struct FunCefLifeSpanHandler {
+        state: SharedBrowserState,
+    }
+
+    impl LifeSpanHandler {
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            let Some(browser) = browser else {
+                return;
+            };
+            let browser_id = CefBrowserId(browser.identifier());
+            with_browser_state(&self.state, |state| {
+                state.lifecycle.mark_ready(browser_id);
+                state.browser = Some(browser.clone());
+            });
+            if let Some(host) = browser.host() {
+                host.set_windowless_frame_rate(CEF_UI_WINDOWLESS_FRAME_RATE_HZ);
+                host.was_hidden(0);
+                host.set_focus(1);
+                host.notify_screen_info_changed();
+                host.was_resized();
+                host.invalidate(PaintElementType::VIEW);
+            }
+            tracing::info!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                browser_id = browser_id.0,
+                render_rate_hz = CEF_UI_WINDOWLESS_FRAME_RATE_HZ,
+                "CEF UI browser created"
+            );
+        }
+
+        fn do_close(&self, _browser: Option<&mut Browser>) -> std::os::raw::c_int {
+            with_browser_state(&self.state, |state| state.lifecycle.begin_close());
+            0
+        }
+
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            let browser_id = browser.as_ref().map(|browser| CefBrowserId(browser.identifier()));
+            with_browser_state(&self.state, |state| {
+                state.browser = None;
+                state.lifecycle.mark_closed();
+            });
+            tracing::info!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                browser_id = browser_id.map(|id| id.0),
+                "CEF UI browser closed"
+            );
+        }
+    }
+}
+
+#[must_use]
+fn new_fun_cef_life_span_handler(state: SharedBrowserState) -> LifeSpanHandler {
+    FunCefLifeSpanHandler::new(state)
+}
+
 wrap_client! {
     pub struct FunCefBrowserClient {
         render_handler: RenderHandler,
+        life_span_handler: LifeSpanHandler,
     }
 
     impl Client {
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life_span_handler.clone())
+        }
+
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }
@@ -198,15 +286,18 @@ wrap_client! {
 }
 
 #[must_use]
-pub fn new_fun_cef_browser_client(render_handler: RenderHandler) -> Client {
-    FunCefBrowserClient::new(render_handler)
+pub fn new_fun_cef_browser_client(
+    render_handler: RenderHandler,
+    life_span_handler: LifeSpanHandler,
+) -> Client {
+    FunCefBrowserClient::new(render_handler, life_span_handler)
 }
 
 pub struct CefUiBrowser {
     config: BrowserUiConfig,
     client: Client,
     compositor: SharedCefUiCompositor,
-    lifecycle: BrowserLifecycle,
+    state: SharedBrowserState,
 }
 
 impl CefUiBrowser {
@@ -225,12 +316,13 @@ impl CefUiBrowser {
             config.viewport_width,
             config.viewport_height,
         );
-        let mut client = new_fun_cef_browser_client(render_handler);
-        let window_info = WindowInfo::default().set_as_windowless(null_cef_window_handle());
+        let state = Arc::new(Mutex::new(BrowserState::new()));
+        with_browser_state(&state, |state| state.lifecycle.mark_creating());
+        let life_span_handler = new_fun_cef_life_span_handler(Arc::clone(&state));
+        let mut client = new_fun_cef_browser_client(render_handler, life_span_handler);
+        let window_info = windowless_window_info(&config);
         let page_url = config.page_url();
         let settings = config.browser_settings();
-        let mut lifecycle = BrowserLifecycle::new();
-        lifecycle.mark_creating();
         let created = browser_host_create_browser(
             Some(&window_info),
             Some(&mut client),
@@ -247,7 +339,7 @@ impl CefUiBrowser {
             config,
             client,
             compositor,
-            lifecycle,
+            state,
         })
     }
 
@@ -265,8 +357,15 @@ impl CefUiBrowser {
     }
 
     #[must_use]
-    pub const fn lifecycle(&self) -> &BrowserLifecycle {
-        &self.lifecycle
+    pub fn lifecycle(&self) -> BrowserLifecycle {
+        self.state
+            .lock()
+            .map(|state| state.lifecycle.clone())
+            .unwrap_or_else(|_| {
+                let mut lifecycle = BrowserLifecycle::new();
+                lifecycle.mark_closed();
+                lifecycle
+            })
     }
 
     #[must_use]
@@ -276,9 +375,30 @@ impl CefUiBrowser {
 
     pub fn close(&mut self) {
         let _retained_client = &self.client;
-        self.lifecycle.begin_close();
-        self.lifecycle.mark_closed();
+        let browser = self.state.lock().ok().and_then(|mut state| {
+            state.lifecycle.begin_close();
+            state.browser.take()
+        });
+        if let Some(browser) = browser
+            && browser.is_valid() != 0
+            && let Some(host) = browser.host()
+        {
+            host.close_browser(1);
+        } else {
+            with_browser_state(&self.state, |state| state.lifecycle.mark_closed());
+        }
     }
+}
+
+fn windowless_window_info(config: &BrowserUiConfig) -> WindowInfo {
+    let mut window_info = WindowInfo::default().set_as_windowless(null_cef_window_handle());
+    window_info.bounds = Rect {
+        x: 0,
+        y: 0,
+        width: config.viewport_width.min(i32::MAX as u32) as i32,
+        height: config.viewport_height.min(i32::MAX as u32) as i32,
+    };
+    window_info
 }
 
 #[cfg(target_os = "windows")]
@@ -312,5 +432,9 @@ mod tests {
 
         assert_eq!(config.page_url_str(), "fun-ui://main/index.html");
         assert_eq!(config.browser_settings().background_color, 0x0000_0000);
+        assert_eq!(
+            config.browser_settings().windowless_frame_rate,
+            CEF_UI_WINDOWLESS_FRAME_RATE_HZ
+        );
     }
 }

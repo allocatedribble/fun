@@ -156,7 +156,7 @@ impl CefRuntime {
             self.config.message_loop_strategy,
             CefMessageLoopStrategy::ExternalPump
         ) {
-            cef::do_message_loop_work();
+            pump_cef_message_loop_work();
         }
     }
 
@@ -175,6 +175,10 @@ impl CefRuntime {
     pub const fn shutdown_started(&self) -> bool {
         self.shutdown_started
     }
+}
+
+pub fn pump_cef_message_loop_work() {
+    cef::do_message_loop_work();
 }
 
 pub(crate) fn configure_cef_api_version() {

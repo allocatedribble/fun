@@ -1,7 +1,9 @@
 //! CEF-backed game UI subsystem for Fun.
 //!
 //! This crate deliberately stays outside `fun_render`: CEF owns browser UI
-//! pixels and bridge state, while Bevy render remains the game renderer.
+//! lifetime, page loading, bridge state, and offscreen paint production. The
+//! game client decides how those paint frames are presented by the normal Fun
+//! render stack.
 
 pub mod bootstrap;
 pub mod bridge;
@@ -24,10 +26,11 @@ pub use bridge::{
     UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet, validate_ui_envelope,
 };
 pub use browser::{
-    BrowserUiConfig, BrowserUiPage, CefUiBrowser, CefUiBrowserError, MAIN_BROWSER_PAGE,
+    BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefUiBrowser,
+    CefUiBrowserError, MAIN_BROWSER_PAGE,
 };
 pub use compositor::{
-    CefUiCompositor, CefUiOverlayMode, CefUiOverlaySurface, SharedCefUiCompositor,
+    CefUiCompositor, CefUiCompositorFrame, CefUiUploadPlan, SharedCefUiCompositor,
     UiCompositorState, UiSurfaceGeneration,
 };
 pub use input::{BrowserUiInputEvent, BrowserUiInputOwner, validate_input_event};
@@ -37,8 +40,13 @@ pub use model::{
     MAX_UI_PATCH_TEXT_BYTES, UiPatchBackpressureQueue, UiPatchBatch, UiPatchOp, UiPatchRecord,
     UiPatchSequence, UiPatchValue, UiPatchWriteError, UiPatchWriter, UiRowId, UiRowRevision,
 };
-pub use render_handler::{CefPaintFrame, CefUiFrameMetadata, new_fun_cef_render_handler};
-pub use runtime::{CefRuntime, CefRuntimeConfig, CefRuntimeError};
+pub use render_handler::{
+    CefDirtyRect, CefPaintElement, CefPaintFrame, CefUiFrameMetadata, new_fun_cef_render_handler,
+};
+pub use runtime::{
+    CefMessageLoopStrategy, CefRuntime, CefRuntimeConfig, CefRuntimeError,
+    pump_cef_message_loop_work,
+};
 pub use scheme::{
     FUN_UI_MAIN_URL, FUN_UI_SCHEME, FunUiAssetRoute, FunUiNavigationBlockReason,
     FunUiNavigationDecision, FunUiNavigationPolicy, FunUiNavigationTarget, FunUiRoute,
