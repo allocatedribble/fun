@@ -1,3 +1,5 @@
+#[cfg(feature = "cef_ui")]
+pub mod cef_ui;
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
@@ -586,6 +588,9 @@ impl Plugin for GameClientPlugin {
             .init_resource::<RenderWorldStatus>()
             .init_resource::<ClientWorldStreamAckState>()
             .init_resource::<ClientEditorInspectorState>();
+
+        #[cfg(feature = "cef_ui")]
+        app.add_plugins(crate::cef_ui::GameCefUiPlugin);
 
         if self.options.mode.runs_gameplay_runtime() {
             app.add_plugins((

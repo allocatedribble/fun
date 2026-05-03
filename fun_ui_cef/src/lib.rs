@@ -9,20 +9,30 @@ pub mod browser;
 pub mod compositor;
 pub mod diagnostics;
 pub mod input;
+pub mod model;
 pub mod render_handler;
 pub mod runtime;
 pub mod scheme;
 
 pub use bootstrap::{CefSubprocessExit, maybe_execute_cef_subprocess};
 pub use bridge::{
-    BrowserUiCapability, BrowserUiPacket, BrowserUiProtocolValidationContext,
-    BrowserUiProtocolValidationError, UiEnvelope, UiEnvelopeChannel, UiEnvelopeKind,
-    validate_browser_ui_packet, validate_ui_envelope,
+    BrowserBridgeError, BrowserBridgeQueues, BrowserUiCapability, BrowserUiHitRegion,
+    BrowserUiPacket, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
+    BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, UiControlPayload, UiEnvelope,
+    UiEnvelopeChannel, UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet,
+    validate_ui_envelope,
 };
 pub use browser::{BrowserUiConfig, BrowserUiPage, MAIN_BROWSER_PAGE};
 pub use compositor::{
     CefUiCompositor, CefUiOverlayMode, CefUiOverlaySurface, SharedCefUiCompositor,
     UiCompositorState, UiSurfaceGeneration,
+};
+pub use input::{BrowserUiInputEvent, BrowserUiInputOwner, validate_input_event};
+pub use model::{
+    CefUiModel, DEFAULT_MAX_PATCHES_PER_BATCH, DEFAULT_MAX_PENDING_PATCH_BATCHES,
+    DEFAULT_UI_PATCH_SCHEMA_REVISION, GameUiChannel, GameUiFieldKey, MAX_UI_PATCH_BINARY_BYTES,
+    MAX_UI_PATCH_TEXT_BYTES, UiPatchBackpressureQueue, UiPatchBatch, UiPatchOp, UiPatchRecord,
+    UiPatchSequence, UiPatchValue, UiPatchWriteError, UiPatchWriter, UiRowId, UiRowRevision,
 };
 pub use render_handler::{CefPaintFrame, CefUiFrameMetadata, new_fun_cef_render_handler};
 pub use runtime::{CefRuntime, CefRuntimeConfig, CefRuntimeError};

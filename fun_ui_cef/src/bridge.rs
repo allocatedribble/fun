@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 
+use crate::model::UiPatchBatch;
+
 const BROWSER_UI_PROTOCOL_VERSION: u32 = 1;
 const BROWSER_UI_SCHEMA_REVISION: u32 = 1;
 const DEFAULT_MAX_PACKET_BYTES: u32 = 64 * 1024;
 const DEFAULT_MAX_QUEUE_LEN: usize = 256;
+const MAX_UI_HIT_REGIONS: usize = 64;
 
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, compactly::v1::Encode,
@@ -97,6 +100,19 @@ impl UiEnvelope {
             payload: UiEnvelopePayload::StatePatch { patch: payload },
         }
     }
+
+    #[must_use]
+    pub fn model_patch_batch(sequence: BrowserUiSequence, batch: UiPatchBatch) -> Self {
+        Self {
+            protocol_version: BrowserUiProtocolVersion(BROWSER_UI_PROTOCOL_VERSION),
+            schema_revision: BrowserUiSchemaRevision(BROWSER_UI_SCHEMA_REVISION),
+            channel: UiEnvelopeChannel::State,
+            kind: UiEnvelopeKind::Patch,
+            request_id: None,
+            sequence,
+            payload: UiEnvelopePayload::ModelPatchBatch { batch },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
@@ -104,6 +120,7 @@ pub enum UiEnvelopePayload {
     Empty,
     Control { payload: UiControlPayload },
     StatePatch { patch: UiStatePatchPayload },
+    ModelPatchBatch { batch: UiPatchBatch },
     Error { error: UiErrorPayload },
     JsonBytes { bytes: Vec<u8> },
 }
@@ -112,6 +129,8 @@ pub enum UiEnvelopePayload {
 pub enum UiControlPayload {
     Ready,
     RouteChanged { route: BrowserUiRouteState },
+    HitRegionsChanged { regions: Vec<BrowserUiHitRegion> },
+    TextEntryChanged { active: bool },
     MenuCommand { command: BrowserUiMenuCommand },
     ChatSubmit { message: String },
     SettingsChanged { key: String, value_json: Vec<u8> },
@@ -320,11 +339,23 @@ pub struct ScoreboardTeamRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
 pub enum BrowserUiRouteState {
     Hud,
-    Menu,
+    PauseMenu,
+    Loadout,
     Scoreboard,
     Chat,
     Loading,
     Diagnostics,
+    DevtoolsOverlay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
+pub struct BrowserUiHitRegion {
+    pub id: u16,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub captures_pointer: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
@@ -375,6 +406,7 @@ impl BrowserUiProtocolValidationContext {
                 BrowserUiCapability::ReadScoreboard,
                 BrowserUiCapability::SendChat,
                 BrowserUiCapability::ControlMenuState,
+                BrowserUiCapability::ReadDiagnostics,
             ],
             revision: BrowserUiRevision(0),
             max_payload_bytes: DEFAULT_MAX_PACKET_BYTES,
@@ -400,6 +432,8 @@ pub enum BrowserUiProtocolValidationError {
     UnexpectedRequestId,
     EmptyStatePatch,
     NonAdvancingStateRevision,
+    TooManyHitRegions,
+    InvalidHitRegion,
 }
 
 pub fn validate_browser_ui_packet(
@@ -502,9 +536,17 @@ fn validate_envelope_lane(envelope: &UiEnvelope) -> Result<(), BrowserUiProtocol
         (UiEnvelopeChannel::Control, _, UiEnvelopePayload::StatePatch { .. }) => {
             Err(BrowserUiProtocolValidationError::InvalidEnvelopeLane)
         }
+        (UiEnvelopeChannel::Control, _, UiEnvelopePayload::ModelPatchBatch { .. }) => {
+            Err(BrowserUiProtocolValidationError::InvalidEnvelopeLane)
+        }
         (UiEnvelopeChannel::State, UiEnvelopeKind::Patch, UiEnvelopePayload::StatePatch { .. }) => {
             Ok(())
         }
+        (
+            UiEnvelopeChannel::State,
+            UiEnvelopeKind::Patch,
+            UiEnvelopePayload::ModelPatchBatch { .. },
+        ) => Ok(()),
         (UiEnvelopeChannel::State, _, _) => {
             Err(BrowserUiProtocolValidationError::InvalidEnvelopeLane)
         }
@@ -519,15 +561,37 @@ fn validate_envelope_payload(
         UiEnvelopePayload::Control {
             payload: UiControlPayload::ChatSubmit { message },
         } if message.len() > 512 => Err(BrowserUiProtocolValidationError::OversizeChatMessage),
+        UiEnvelopePayload::Control {
+            payload: UiControlPayload::HitRegionsChanged { regions },
+        } if regions.len() > MAX_UI_HIT_REGIONS => {
+            Err(BrowserUiProtocolValidationError::TooManyHitRegions)
+        }
+        UiEnvelopePayload::Control {
+            payload: UiControlPayload::HitRegionsChanged { regions },
+        } if regions.iter().any(|region| {
+            region.width <= 0
+                || region.height <= 0
+                || region.x < 0
+                || region.y < 0
+                || region.x.saturating_add(region.width) < region.x
+                || region.y.saturating_add(region.height) < region.y
+        }) =>
+        {
+            Err(BrowserUiProtocolValidationError::InvalidHitRegion)
+        }
         UiEnvelopePayload::StatePatch { patch } if patch.patches.is_empty() => {
             Err(BrowserUiProtocolValidationError::EmptyStatePatch)
         }
         UiEnvelopePayload::StatePatch { patch } if patch.target_revision <= patch.base_revision => {
             Err(BrowserUiProtocolValidationError::NonAdvancingStateRevision)
         }
+        UiEnvelopePayload::ModelPatchBatch { batch } if batch.is_empty() => {
+            Err(BrowserUiProtocolValidationError::EmptyStatePatch)
+        }
         UiEnvelopePayload::Empty
         | UiEnvelopePayload::Control { .. }
         | UiEnvelopePayload::StatePatch { .. }
+        | UiEnvelopePayload::ModelPatchBatch { .. }
         | UiEnvelopePayload::Error { .. }
         | UiEnvelopePayload::JsonBytes { .. } => Ok(()),
     }
@@ -753,6 +817,30 @@ mod tests {
     }
 
     #[test]
+    fn ui_envelope_keeps_typed_model_patch_on_state_lane() {
+        let mut writer = crate::model::UiPatchWriter::default();
+        writer
+            .set_u16(
+                crate::model::GameUiChannel::Hud,
+                crate::model::GameUiFieldKey::Health,
+                80,
+            )
+            .expect("hud patch");
+        let envelope = UiEnvelope::model_patch_batch(
+            BrowserUiSequence(3),
+            writer.finish_batch().expect("model patch batch"),
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn ui_envelope_rejects_empty_state_patch() {
         let envelope = UiEnvelope::state_patch(
             BrowserUiSequence(2),
@@ -769,6 +857,33 @@ mod tests {
                 &BrowserUiProtocolValidationContext::local_game_ui()
             ),
             Err(BrowserUiProtocolValidationError::EmptyStatePatch)
+        );
+    }
+
+    #[test]
+    fn ui_envelope_rejects_invalid_hit_region() {
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Event,
+            None,
+            BrowserUiSequence(4),
+            UiControlPayload::HitRegionsChanged {
+                regions: vec![BrowserUiHitRegion {
+                    id: 1,
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 24,
+                    captures_pointer: true,
+                }],
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Err(BrowserUiProtocolValidationError::InvalidHitRegion)
         );
     }
 
