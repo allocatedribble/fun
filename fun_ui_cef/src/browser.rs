@@ -1,6 +1,8 @@
 use cef::{BrowserSettings, CefString};
 
-use crate::scheme::FUN_UI_MAIN_URL;
+use crate::scheme::{
+    FUN_UI_MAIN_URL, FunUiDevServerError, FunUiDevServerUrl, fun_ui_dev_server_from_env,
+};
 
 pub const MAIN_BROWSER_PAGE: BrowserUiPage = BrowserUiPage {
     url: FUN_UI_MAIN_URL,
@@ -16,6 +18,7 @@ pub struct BrowserUiPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserUiConfig {
     pub page: BrowserUiPage,
+    pub dev_server_url: Option<FunUiDevServerUrl>,
     pub viewport_width: u32,
     pub viewport_height: u32,
     pub windowless_frame_rate: i32,
@@ -26,15 +29,42 @@ impl BrowserUiConfig {
     pub const fn main_window(viewport_width: u32, viewport_height: u32) -> Self {
         Self {
             page: MAIN_BROWSER_PAGE,
+            dev_server_url: None,
             viewport_width,
             viewport_height,
             windowless_frame_rate: 60,
         }
     }
 
+    pub fn main_window_from_env(
+        viewport_width: u32,
+        viewport_height: u32,
+    ) -> Result<Self, FunUiDevServerError> {
+        Ok(Self {
+            dev_server_url: fun_ui_dev_server_from_env()?,
+            ..Self::main_window(viewport_width, viewport_height)
+        })
+    }
+
     #[must_use]
     pub fn page_url(&self) -> CefString {
-        CefString::from(self.page.url)
+        CefString::from(
+            self.dev_server_url
+                .as_ref()
+                .map_or(self.page.url, FunUiDevServerUrl::as_str),
+        )
+    }
+
+    #[must_use]
+    pub fn page_url_str(&self) -> &str {
+        self.dev_server_url
+            .as_ref()
+            .map_or(self.page.url, FunUiDevServerUrl::as_str)
+    }
+
+    #[must_use]
+    pub const fn transparent_background(&self) -> bool {
+        self.page.transparent_background
     }
 
     #[must_use]
@@ -122,7 +152,7 @@ mod tests {
     fn main_page_is_transparent_fun_ui_url() {
         let config = BrowserUiConfig::default();
 
-        assert_eq!(config.page.url, "fun-ui://main/index.html");
+        assert_eq!(config.page_url_str(), "fun-ui://main/index.html");
         assert_eq!(config.browser_settings().background_color, 0x0000_0000);
     }
 }

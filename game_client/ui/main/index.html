@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' fun-ui:; script-src 'self' fun-ui:; style-src 'self' fun-ui:; img-src 'self' fun-ui: data:; connect-src 'self' fun-ui:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fun UI</title>
+    <link rel="stylesheet" href="fun-ui://main/assets/app.css" />
+  </head>
+  <body>
+    <div id="app" data-route="hud">
+      <main class="layer route-hud" data-panel="hud">
+        <section class="hud-strip" aria-label="HUD">
+          <div class="meter health" data-field="health">100</div>
+          <div class="meter armor" data-field="armor">50</div>
+          <div class="ammo" data-field="ammo">30 / 90</div>
+        </section>
+        <section class="objective" data-field="objective">Hold the line</section>
+      </main>
+
+      <main class="layer route-pause_menu" hidden>
+        <nav class="menu-panel" aria-label="Pause menu">
+          <button type="button" data-command="resume">Resume</button>
+          <button type="button" data-command="settings">Settings</button>
+          <button type="button" data-command="leave">Leave match</button>
+        </nav>
+      </main>
+
+      <main class="layer route-loadout" hidden>
+        <section class="panel" data-field="loadout"></section>
+      </main>
+
+      <main class="layer route-scoreboard" hidden>
+        <section class="panel scoreboard" data-field="scoreboard"></section>
+      </main>
+
+      <main class="layer route-chat" hidden>
+        <section class="chat-panel">
+          <div class="chat-rows" data-field="chat"></div>
+          <form class="chat-form" data-form="chat">
+            <input name="message" maxlength="512" autocomplete="off" />
+            <button type="submit">Send</button>
+          </form>
+        </section>
+      </main>
+
+      <main class="layer route-loading" hidden>
+        <section class="loading-panel" data-field="loading">Loading</section>
+      </main>
+
+      <main class="layer route-diagnostics" hidden>
+        <section class="panel diagnostics" data-field="diagnostics"></section>
+      </main>
+
+      <main class="layer route-devtools_overlay" hidden>
+        <section class="panel devtools" data-field="devtools"></section>
+      </main>
+    </div>
+    <script src="fun-ui://main/assets/app.js"></script>
+  </body>
+</html>

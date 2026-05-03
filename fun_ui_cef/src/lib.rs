@@ -16,9 +16,14 @@ pub mod scheme;
 pub use bootstrap::{CefSubprocessExit, maybe_execute_cef_subprocess};
 pub use bridge::{
     BrowserUiCapability, BrowserUiPacket, BrowserUiProtocolValidationContext,
-    BrowserUiProtocolValidationError, validate_browser_ui_packet,
+    BrowserUiProtocolValidationError, UiEnvelope, UiEnvelopeChannel, UiEnvelopeKind,
+    validate_browser_ui_packet, validate_ui_envelope,
 };
 pub use browser::{BrowserUiConfig, BrowserUiPage, MAIN_BROWSER_PAGE};
-pub use compositor::{UiCompositorState, UiSurfaceGeneration};
+pub use compositor::{
+    CefUiCompositor, CefUiOverlayMode, CefUiOverlaySurface, SharedCefUiCompositor,
+    UiCompositorState, UiSurfaceGeneration,
+};
+pub use render_handler::{CefPaintFrame, CefUiFrameMetadata, new_fun_cef_render_handler};
 pub use runtime::{CefRuntime, CefRuntimeConfig, CefRuntimeError};
-pub use scheme::{FUN_UI_MAIN_URL, FUN_UI_SCHEME, FunUiRoute};
+pub use scheme::{FUN_UI_MAIN_URL, FUN_UI_SCHEME, FunUiAssetRoute, FunUiRoute};

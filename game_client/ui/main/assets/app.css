@@ -1,0 +1,179 @@
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family:
+    Inter,
+    Segoe UI,
+    system-ui,
+    sans-serif;
+  color: #f7f7f4;
+  letter-spacing: 0;
+  user-select: none;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 1px solid rgb(255 255 255 / 16%);
+  background: rgb(15 17 19 / 84%);
+  color: #f7f7f4;
+  padding: 0.55rem 0.8rem;
+  border-radius: 6px;
+}
+
+input {
+  min-width: 0;
+  border: 1px solid rgb(255 255 255 / 16%);
+  background: rgb(5 7 9 / 78%);
+  color: #f7f7f4;
+  padding: 0.55rem 0.7rem;
+  border-radius: 6px;
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hud-strip {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.meter,
+.ammo,
+.objective,
+.panel,
+.menu-panel,
+.chat-panel,
+.loading-panel {
+  background: rgb(9 12 14 / 70%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 24%);
+  backdrop-filter: blur(10px);
+}
+
+.meter,
+.ammo {
+  min-width: 76px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.health {
+  border-color: rgb(234 92 80 / 45%);
+}
+
+.armor {
+  border-color: rgb(76 160 214 / 45%);
+}
+
+.objective {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+  max-width: min(560px, calc(100vw - 48px));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-panel,
+.panel,
+.chat-panel,
+.loading-panel {
+  pointer-events: auto;
+  border-radius: 8px;
+}
+
+.menu-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.panel {
+  position: absolute;
+  top: 72px;
+  right: 24px;
+  width: min(460px, calc(100vw - 48px));
+  max-height: calc(100vh - 144px);
+  padding: 14px;
+  overflow: hidden auto;
+}
+
+.chat-panel {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  width: min(460px, calc(100vw - 48px));
+  padding: 12px;
+}
+
+.chat-rows {
+  min-height: 120px;
+  max-height: 240px;
+  overflow: hidden auto;
+}
+
+.chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.loading-panel {
+  position: absolute;
+  inset: auto 24px 24px auto;
+  padding: 0.7rem 0.95rem;
+}
+
+@media (max-width: 720px) {
+  .hud-strip,
+  .chat-panel {
+    left: 12px;
+    bottom: 12px;
+  }
+
+  .objective {
+    top: 12px;
+  }
+
+  .panel {
+    top: 56px;
+    right: 12px;
+    width: calc(100vw - 24px);
+  }
+}

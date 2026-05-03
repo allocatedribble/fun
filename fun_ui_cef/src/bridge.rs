@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 const BROWSER_UI_PROTOCOL_VERSION: u32 = 1;
+const BROWSER_UI_SCHEMA_REVISION: u32 = 1;
 const DEFAULT_MAX_PACKET_BYTES: u32 = 64 * 1024;
 const DEFAULT_MAX_QUEUE_LEN: usize = 256;
 
@@ -22,7 +23,158 @@ pub struct BrowserUiSequence(pub u64);
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, compactly::v1::Encode,
 )]
+pub struct BrowserUiSchemaRevision(pub u32);
+
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, compactly::v1::Encode,
+)]
 pub struct BrowserUiRevision(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum UiEnvelopeKind {
+    Event,
+    Request,
+    Response,
+    Error,
+    Patch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum UiEnvelopeChannel {
+    Control,
+    State,
+}
+
+impl UiEnvelopeChannel {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::State => "state",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct UiEnvelope {
+    pub protocol_version: BrowserUiProtocolVersion,
+    pub schema_revision: BrowserUiSchemaRevision,
+    pub channel: UiEnvelopeChannel,
+    pub kind: UiEnvelopeKind,
+    pub request_id: Option<BrowserUiRequestId>,
+    pub sequence: BrowserUiSequence,
+    pub payload: UiEnvelopePayload,
+}
+
+impl UiEnvelope {
+    #[must_use]
+    pub const fn control(
+        kind: UiEnvelopeKind,
+        request_id: Option<BrowserUiRequestId>,
+        sequence: BrowserUiSequence,
+        payload: UiControlPayload,
+    ) -> Self {
+        Self {
+            protocol_version: BrowserUiProtocolVersion(BROWSER_UI_PROTOCOL_VERSION),
+            schema_revision: BrowserUiSchemaRevision(BROWSER_UI_SCHEMA_REVISION),
+            channel: UiEnvelopeChannel::Control,
+            kind,
+            request_id,
+            sequence,
+            payload: UiEnvelopePayload::Control { payload },
+        }
+    }
+
+    #[must_use]
+    pub const fn state_patch(sequence: BrowserUiSequence, payload: UiStatePatchPayload) -> Self {
+        Self {
+            protocol_version: BrowserUiProtocolVersion(BROWSER_UI_PROTOCOL_VERSION),
+            schema_revision: BrowserUiSchemaRevision(BROWSER_UI_SCHEMA_REVISION),
+            channel: UiEnvelopeChannel::State,
+            kind: UiEnvelopeKind::Patch,
+            request_id: None,
+            sequence,
+            payload: UiEnvelopePayload::StatePatch { patch: payload },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum UiEnvelopePayload {
+    Empty,
+    Control { payload: UiControlPayload },
+    StatePatch { patch: UiStatePatchPayload },
+    Error { error: UiErrorPayload },
+    JsonBytes { bytes: Vec<u8> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum UiControlPayload {
+    Ready,
+    RouteChanged { route: BrowserUiRouteState },
+    MenuCommand { command: BrowserUiMenuCommand },
+    ChatSubmit { message: String },
+    SettingsChanged { key: String, value_json: Vec<u8> },
+    Lifecycle { state: UiLifecycleState },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
+pub enum UiLifecycleState {
+    PageLoaded,
+    PageHidden,
+    PageVisible,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct UiStatePatchPayload {
+    pub base_revision: BrowserUiRevision,
+    pub target_revision: BrowserUiRevision,
+    pub patches: Vec<UiStatePatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct UiStatePatch {
+    pub path: UiStatePath,
+    pub value: UiStateValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum UiStatePath {
+    HudHealth,
+    HudArmor,
+    HudAmmo,
+    ObjectiveLabel,
+    ScoreboardRows,
+    Loadout,
+    ChatRows,
+    Loading,
+    DiagnosticsSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum UiStateValue {
+    Bool { value: bool },
+    U16 { value: u16 },
+    U32 { value: u32 },
+    Text { value: String },
+    JsonBytes { bytes: Vec<u8> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct UiErrorPayload {
+    pub code: UiErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, compactly::v1::Encode)]
+pub enum UiErrorCode {
+    UnknownMethod,
+    InvalidPayload,
+    MissingCapability,
+    QueueClosed,
+    Internal,
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub struct BrowserUiSizeBudget {
@@ -238,10 +390,16 @@ impl BrowserUiProtocolValidationContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserUiProtocolValidationError {
     StaleVersion,
+    StaleSchemaRevision,
     MissingCapability,
     StaleRevision,
     OversizePayload,
     OversizeChatMessage,
+    InvalidEnvelopeLane,
+    MissingRequestId,
+    UnexpectedRequestId,
+    EmptyStatePatch,
+    NonAdvancingStateRevision,
 }
 
 pub fn validate_browser_ui_packet(
@@ -289,10 +447,116 @@ fn validate_payload(packet: &BrowserUiPacket) -> Result<(), BrowserUiProtocolVal
     }
 }
 
+pub fn validate_ui_envelope(
+    envelope: &UiEnvelope,
+    context: &BrowserUiProtocolValidationContext,
+) -> Result<(), BrowserUiProtocolValidationError> {
+    if envelope.protocol_version != context.protocol_version {
+        return Err(BrowserUiProtocolValidationError::StaleVersion);
+    }
+    if envelope.schema_revision != BrowserUiSchemaRevision(BROWSER_UI_SCHEMA_REVISION) {
+        return Err(BrowserUiProtocolValidationError::StaleSchemaRevision);
+    }
+    validate_envelope_budget(envelope, context)?;
+    validate_envelope_request_id(envelope)?;
+    validate_envelope_lane(envelope)?;
+    validate_envelope_payload(envelope)
+}
+
+fn validate_envelope_budget(
+    envelope: &UiEnvelope,
+    context: &BrowserUiProtocolValidationContext,
+) -> Result<(), BrowserUiProtocolValidationError> {
+    let payload_len = compactly::v1::encode(envelope).len();
+    if payload_len > context.max_payload_bytes as usize {
+        return Err(BrowserUiProtocolValidationError::OversizePayload);
+    }
+    Ok(())
+}
+
+fn validate_envelope_request_id(
+    envelope: &UiEnvelope,
+) -> Result<(), BrowserUiProtocolValidationError> {
+    match envelope.kind {
+        UiEnvelopeKind::Request | UiEnvelopeKind::Response | UiEnvelopeKind::Error
+            if envelope.request_id.is_none() =>
+        {
+            Err(BrowserUiProtocolValidationError::MissingRequestId)
+        }
+        UiEnvelopeKind::Event | UiEnvelopeKind::Patch if envelope.request_id.is_some() => {
+            Err(BrowserUiProtocolValidationError::UnexpectedRequestId)
+        }
+        UiEnvelopeKind::Event
+        | UiEnvelopeKind::Request
+        | UiEnvelopeKind::Response
+        | UiEnvelopeKind::Error
+        | UiEnvelopeKind::Patch => Ok(()),
+    }
+}
+
+fn validate_envelope_lane(envelope: &UiEnvelope) -> Result<(), BrowserUiProtocolValidationError> {
+    match (envelope.channel, envelope.kind, &envelope.payload) {
+        (UiEnvelopeChannel::Control, UiEnvelopeKind::Patch, _) => {
+            Err(BrowserUiProtocolValidationError::InvalidEnvelopeLane)
+        }
+        (UiEnvelopeChannel::Control, _, UiEnvelopePayload::StatePatch { .. }) => {
+            Err(BrowserUiProtocolValidationError::InvalidEnvelopeLane)
+        }
+        (UiEnvelopeChannel::State, UiEnvelopeKind::Patch, UiEnvelopePayload::StatePatch { .. }) => {
+            Ok(())
+        }
+        (UiEnvelopeChannel::State, _, _) => {
+            Err(BrowserUiProtocolValidationError::InvalidEnvelopeLane)
+        }
+        (UiEnvelopeChannel::Control, _, _) => Ok(()),
+    }
+}
+
+fn validate_envelope_payload(
+    envelope: &UiEnvelope,
+) -> Result<(), BrowserUiProtocolValidationError> {
+    match &envelope.payload {
+        UiEnvelopePayload::Control {
+            payload: UiControlPayload::ChatSubmit { message },
+        } if message.len() > 512 => Err(BrowserUiProtocolValidationError::OversizeChatMessage),
+        UiEnvelopePayload::StatePatch { patch } if patch.patches.is_empty() => {
+            Err(BrowserUiProtocolValidationError::EmptyStatePatch)
+        }
+        UiEnvelopePayload::StatePatch { patch } if patch.target_revision <= patch.base_revision => {
+            Err(BrowserUiProtocolValidationError::NonAdvancingStateRevision)
+        }
+        UiEnvelopePayload::Empty
+        | UiEnvelopePayload::Control { .. }
+        | UiEnvelopePayload::StatePatch { .. }
+        | UiEnvelopePayload::Error { .. }
+        | UiEnvelopePayload::JsonBytes { .. } => Ok(()),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostEnvelopeDelivery {
+    pub entrypoint: &'static str,
+    pub envelope: UiEnvelope,
+}
+
+impl HostEnvelopeDelivery {
+    pub const ENTRYPOINT: &'static str = "window.fun.receiveFromHost";
+
+    #[must_use]
+    pub const fn new(envelope: UiEnvelope) -> Self {
+        Self {
+            entrypoint: Self::ENTRYPOINT,
+            envelope,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserBridgeQueues {
     to_browser: VecDeque<BrowserUiPacket>,
     to_runtime: VecDeque<BrowserUiPacket>,
+    host_to_js: VecDeque<UiEnvelope>,
+    js_to_host: VecDeque<UiEnvelope>,
     max_queue_len: usize,
     accepting_messages: bool,
 }
@@ -303,6 +567,8 @@ impl BrowserBridgeQueues {
         Self {
             to_browser: VecDeque::new(),
             to_runtime: VecDeque::new(),
+            host_to_js: VecDeque::new(),
+            js_to_host: VecDeque::new(),
             max_queue_len: DEFAULT_MAX_QUEUE_LEN,
             accepting_messages: true,
         }
@@ -334,12 +600,42 @@ impl BrowserBridgeQueues {
         Ok(())
     }
 
+    pub fn push_host_envelope(&mut self, envelope: UiEnvelope) -> Result<(), BrowserBridgeError> {
+        if !self.accepting_messages {
+            return Err(BrowserBridgeError::Closed);
+        }
+        if self.host_to_js.len() >= self.max_queue_len {
+            return Err(BrowserBridgeError::QueueFull);
+        }
+        self.host_to_js.push_back(envelope);
+        Ok(())
+    }
+
+    pub fn push_js_envelope(&mut self, envelope: UiEnvelope) -> Result<(), BrowserBridgeError> {
+        if !self.accepting_messages {
+            return Err(BrowserBridgeError::Closed);
+        }
+        if self.js_to_host.len() >= self.max_queue_len {
+            return Err(BrowserBridgeError::QueueFull);
+        }
+        self.js_to_host.push_back(envelope);
+        Ok(())
+    }
+
     pub fn pop_for_browser(&mut self) -> Option<BrowserUiPacket> {
         self.to_browser.pop_front()
     }
 
     pub fn pop_for_runtime(&mut self) -> Option<BrowserUiPacket> {
         self.to_runtime.pop_front()
+    }
+
+    pub fn pop_host_envelope_for_js(&mut self) -> Option<UiEnvelope> {
+        self.host_to_js.pop_front()
+    }
+
+    pub fn pop_js_envelope_for_host(&mut self) -> Option<UiEnvelope> {
+        self.js_to_host.pop_front()
     }
 }
 
@@ -413,5 +709,84 @@ mod tests {
             ),
             Err(BrowserUiProtocolValidationError::OversizeChatMessage)
         );
+    }
+
+    #[test]
+    fn ui_envelope_enforces_request_ids() {
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Request,
+            None,
+            BrowserUiSequence(1),
+            UiControlPayload::Ready,
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Err(BrowserUiProtocolValidationError::MissingRequestId)
+        );
+    }
+
+    #[test]
+    fn ui_envelope_keeps_state_patch_on_state_lane() {
+        let envelope = UiEnvelope::state_patch(
+            BrowserUiSequence(2),
+            UiStatePatchPayload {
+                base_revision: BrowserUiRevision(1),
+                target_revision: BrowserUiRevision(2),
+                patches: vec![UiStatePatch {
+                    path: UiStatePath::HudHealth,
+                    value: UiStateValue::U16 { value: 80 },
+                }],
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn ui_envelope_rejects_empty_state_patch() {
+        let envelope = UiEnvelope::state_patch(
+            BrowserUiSequence(2),
+            UiStatePatchPayload {
+                base_revision: BrowserUiRevision(1),
+                target_revision: BrowserUiRevision(2),
+                patches: Vec::new(),
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Err(BrowserUiProtocolValidationError::EmptyStatePatch)
+        );
+    }
+
+    #[test]
+    fn bridge_queues_separate_js_and_host_envelopes() {
+        let mut queues = BrowserBridgeQueues::new();
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Event,
+            None,
+            BrowserUiSequence(1),
+            UiControlPayload::Ready,
+        );
+
+        queues
+            .push_js_envelope(envelope.clone())
+            .expect("queue js envelope");
+
+        assert_eq!(queues.pop_js_envelope_for_host(), Some(envelope));
+        assert_eq!(queues.pop_host_envelope_for_js(), None);
     }
 }

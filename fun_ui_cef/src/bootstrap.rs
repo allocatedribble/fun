@@ -1,5 +1,10 @@
 use cef::rc::Rc;
-use cef::{App, CefString, CommandLine, ImplApp, ImplCommandLine, WrapApp, args::Args, wrap_app};
+use cef::{
+    App, CefString, CommandLine, ImplApp, ImplCommandLine, SchemeRegistrar, WrapApp, args::Args,
+    wrap_app,
+};
+
+use crate::scheme::register_fun_ui_custom_scheme;
 
 const DISABLED_BROWSER_SWITCHES: &[&str] = &[
     "disable-background-networking",
@@ -24,6 +29,12 @@ wrap_app! {
         ) {
             if let Some(command_line) = command_line {
                 apply_default_command_line_policy(command_line);
+            }
+        }
+
+        fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
+            if let Some(registrar) = registrar {
+                register_fun_ui_custom_scheme(registrar);
             }
         }
     }
