@@ -3376,7 +3376,8 @@ fn write_cef_full_texture_to_gpu(
     gpu_image: &GpuImage,
     upload: &CefUiTextureUpload,
 ) {
-    render_queue.write_texture(
+    render_queue.tracked_write_texture(
+        "cef_ui.cpu_paint.full_frame",
         gpu_image.texture.as_image_copy(),
         &upload.pixels,
         TexelCopyBufferLayout {
@@ -3389,6 +3390,7 @@ fn write_cef_full_texture_to_gpu(
             height: upload.size.y,
             depth_or_array_layers: 1,
         },
+        cef_ui_texture_byte_len(upload.size).unwrap_or(upload.pixels.len()) as u64,
     );
 }
 
@@ -3402,7 +3404,9 @@ fn write_cef_dirty_rect_to_gpu(
     let offset = cef_dirty_rect_offset_bytes(upload.size, x, y)?;
     let mut texture_copy = gpu_image.texture.as_image_copy();
     texture_copy.origin = Origin3d { x, y, z: 0 };
-    render_queue.write_texture(
+    let uploaded_bytes = cef_dirty_rect_byte_len(upload.size, rect)?;
+    render_queue.tracked_write_texture(
+        "cef_ui.cpu_paint.dirty_rect",
         texture_copy,
         &upload.pixels,
         TexelCopyBufferLayout {
@@ -3415,8 +3419,9 @@ fn write_cef_dirty_rect_to_gpu(
             height,
             depth_or_array_layers: 1,
         },
+        uploaded_bytes as u64,
     );
-    cef_dirty_rect_byte_len(upload.size, rect)
+    Some(uploaded_bytes)
 }
 
 fn sync_cef_ui_image_node(

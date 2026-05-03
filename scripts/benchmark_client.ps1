@@ -278,6 +278,52 @@ function Parse-RenderPresentationLog {
     return $result
 }
 
+function Parse-RenderUploadCallsitesLog {
+    param([string[]]$Lines)
+
+    $callsites = [ordered]@{}
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, "\[client perf\] render upload top: rank=(?<rank>\d+) operation=(?<operation>\S+) label=(?<label>\S+) calls=(?<calls>\d+) bytes=(?<bytes>\d+)")
+        if (-not $match.Success) {
+            continue
+        }
+        $operation = $match.Groups["operation"].Value
+        $label = $match.Groups["label"].Value
+        $key = "$operation`n$label"
+        if (-not $callsites.Contains($key)) {
+            $callsites[$key] = [ordered]@{
+                operation = $operation
+                label = $label
+                calls = 0
+                bytes = 0
+                samples = 0
+            }
+        }
+        $entry = $callsites[$key]
+        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
+        $entry.bytes = [uint64]$entry.bytes + [uint64]$match.Groups["bytes"].Value
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $callsites.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.bytes }; Descending = $true }, @{ Expression = { [uint64]$_.calls }; Descending = $true }, label |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    operation = $_.operation
+                    label = $_.label
+                    calls = $_.calls
+                    bytes = $_.bytes
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
 function Parse-ClientPerfLog {
     param([string[]]$Lines)
 
@@ -370,6 +416,12 @@ function Parse-ClientPerfLog {
         $meshletBuffers = [regex]::Match($line, "\[client perf\] meshlet buffers: (?<payload>.*)$")
         if ($meshletBuffers.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $meshletBuffers.Groups["payload"].Value -Prefix "meshlet_"
+            continue
+        }
+
+        $renderUploads = [regex]::Match($line, "\[client perf\] render uploads: (?<payload>.*)$")
+        if ($renderUploads.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $renderUploads.Groups["payload"].Value -Prefix "render_upload_"
             continue
         }
 
@@ -946,6 +998,13 @@ function Write-MarkdownReport {
         "cef_published_generation",
         "cef_sampled_generation",
         "cef_stale_frame_count",
+        "render_upload_write_texture_calls",
+        "render_upload_write_texture_bytes",
+        "render_upload_write_buffer_calls",
+        "render_upload_write_buffer_bytes",
+        "render_upload_write_buffer_with_calls",
+        "render_upload_write_buffer_with_bytes",
+        "render_upload_callsite_count",
         "dlss_rr_gpu_ns",
         "solari_pass_dlss_rr_guide_resolve_ns",
         "solari_pass_direct_ns",
@@ -977,6 +1036,16 @@ function Write-MarkdownReport {
                 (Format-StatValue -Stats $stats -Metric $metric -Field "max"), `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "count")
             $lines.Add($row) | Out-Null
+        }
+    }
+    if ($null -ne $Summary.render_upload_callsites -and $Summary.render_upload_callsites.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Render Upload Top Callsites") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | operation | label | calls | bytes | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---:|---:|---:|") | Out-Null
+        foreach ($callsite in $Summary.render_upload_callsites) {
+            $lines.Add("| $($callsite.rank) | $($callsite.operation) | $($callsite.label) | $($callsite.calls) | $($callsite.bytes) | $($callsite.samples) |") | Out-Null
         }
     }
 
@@ -1302,6 +1371,7 @@ try {
     $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
+    $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
     $rrAcceptance = New-Dx12DlssRrAcceptance `
@@ -1392,6 +1462,7 @@ try {
         render_capabilities = $renderCapabilities
         rt_feature_gates = $rtFeatureGates
         render_presentation = $renderPresentation
+        render_upload_callsites = $renderUploadCallsites
     }
 
     $jsonPath = Join-Path $outputRoot "summary.json"

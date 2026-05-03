@@ -189,6 +189,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parit
 python tools\dx12_parity_report.py --vulkan target\benchmarks\client\<vulkan>\summary.json --dx12 target\benchmarks\client\<dx12>\summary.json --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
 ```
 
+`-RenderDiagnostics` also enables render upload counters for
+`RenderQueue::write_texture`, `write_buffer`, and `write_buffer_with`. The
+current upload inventory and cleanup target order are in
+[`docs/dx12_upload_audit.md`](docs/dx12_upload_audit.md).
+
 Denoiser and DLSS Ray Reconstruction comparison:
 
 ```powershell

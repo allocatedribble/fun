@@ -261,7 +261,14 @@ function Get-RequiredMetricNames {
         "cef_transport_fallback_count",
         "cef_published_generation",
         "cef_sampled_generation",
-        "cef_stale_frame_count"
+        "cef_stale_frame_count",
+        "render_upload_write_texture_calls",
+        "render_upload_write_texture_bytes",
+        "render_upload_write_buffer_calls",
+        "render_upload_write_buffer_bytes",
+        "render_upload_write_buffer_with_calls",
+        "render_upload_write_buffer_with_bytes",
+        "render_upload_callsite_count"
     )
 }
 
@@ -316,7 +323,7 @@ function New-MetricPresence {
 function New-KeyMetricSnapshot {
     param([object]$Summary)
 
-    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns")
+    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes")
     $snapshot = [ordered]@{}
     foreach ($name in $names) {
         $property = if ($null -ne $Summary -and $null -ne $Summary.metrics) { $Summary.metrics.PSObject.Properties[$name] } else { $null }

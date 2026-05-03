@@ -34,6 +34,13 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("cef_gpu_copy_bytes", "lower", "CEF GPU copy bytes"),
     ("cef_gpu_copy_ns", "lower", "CEF GPU copy"),
     ("cef_transport_fallback_count", "lower", "CEF fallback count"),
+    ("render_upload_write_texture_calls", "lower", "render texture upload calls"),
+    ("render_upload_write_texture_bytes", "lower", "render texture upload bytes"),
+    ("render_upload_write_buffer_calls", "lower", "render buffer upload calls"),
+    ("render_upload_write_buffer_bytes", "lower", "render buffer upload bytes"),
+    ("render_upload_write_buffer_with_calls", "lower", "render buffer-with upload calls"),
+    ("render_upload_write_buffer_with_bytes", "lower", "render buffer-with upload bytes"),
+    ("render_upload_callsite_count", "lower", "render upload callsite count"),
     ("transient_texture_creates", "lower", "transient texture creates"),
     ("transient_buffer_creates", "lower", "transient buffer creates"),
     ("render_scheduler_pressure", "lower", "render scheduler pressure"),
@@ -264,6 +271,15 @@ def likely_bottleneck(
     cef_gpu = row_by_metric(rows, "cef_gpu_copy_ns")
     if cef_cpu_upload > 0.0 or (cef_gpu and cef_gpu["p95_delta"] is not None and cef_gpu["p95_delta"] > 200_000):
         reasons.append("CEF upload/copy metric regressed")
+        return "upload-bound", "PIX", reasons
+
+    texture_upload = row_by_metric(rows, "render_upload_write_texture_bytes")
+    buffer_upload = row_by_metric(rows, "render_upload_write_buffer_bytes")
+    if texture_upload and texture_upload["p95_delta"] is not None and texture_upload["p95_delta"] > 1_000_000:
+        reasons.append("DX12 texture upload bytes are materially higher")
+        return "upload-bound", "PIX", reasons
+    if buffer_upload and buffer_upload["p95_delta"] is not None and buffer_upload["p95_delta"] > 1_000_000:
+        reasons.append("DX12 buffer upload bytes are materially higher")
         return "upload-bound", "PIX", reasons
 
     if pix.get("barrier_count", 0.0) > 0 or pix.get("resource_barrier_count", 0.0) > 0:

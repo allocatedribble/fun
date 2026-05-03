@@ -199,7 +199,15 @@ resource request/create/reuse/alias counts, render scheduler pressure, and CEF
 transport counters: `cef_on_paint_fps`, `cef_on_accelerated_paint_fps`,
 `cef_cpu_upload_bytes`, `cef_gpu_copy_bytes`, `cef_gpu_copy_ns`,
 `cef_transport_fallback_count`, `cef_published_generation`,
-`cef_sampled_generation`, and `cef_stale_frame_count`.
+`cef_sampled_generation`, and `cef_stale_frame_count`. Render upload counters
+are enabled by `-RenderDiagnostics` and recorded as
+`render_upload_write_texture_calls`, `render_upload_write_texture_bytes`,
+`render_upload_write_buffer_calls`, `render_upload_write_buffer_bytes`,
+`render_upload_write_buffer_with_calls`,
+`render_upload_write_buffer_with_bytes`, and
+`render_upload_callsite_count`; `summary.json` also includes
+`render_upload_callsites` with the top ten callsites aggregated over the sample
+window.
 
 PIX, GPUView, and PresentMon-only values are not guessed from client logs. The
 matrix JSON lists them under `dx12_external_metrics` with

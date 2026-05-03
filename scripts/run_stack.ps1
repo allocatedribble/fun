@@ -187,9 +187,13 @@ elseif (-not $env:BEVY_LOG) {
 }
 if ($RenderDiagnostics -or $FrameTimeDiagnostics) {
     $env:FUN_RENDER_DIAGNOSTICS = "1"
+    $env:FUN_RENDER_UPLOAD_COUNTERS = "1"
+    $env:BEVY_RENDER_UPLOAD_COUNTERS = "1"
 }
 else {
     Remove-Item Env:\FUN_RENDER_DIAGNOSTICS -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_RENDER_UPLOAD_COUNTERS -ErrorAction SilentlyContinue
+    Remove-Item Env:\BEVY_RENDER_UPLOAD_COUNTERS -ErrorAction SilentlyContinue
 }
 if ($FrameTimeDiagnostics) {
     $env:FUN_FRAME_TIME_DIAGNOSTICS = "1"

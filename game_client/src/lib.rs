@@ -3164,6 +3164,41 @@ fn log_render_performance(
         format_optional_u64(material_bind_group_recreate_ns),
         format_optional_u64(material_buffer_update_ns),
     );
+    let upload_snapshot = bevy::render::renderer::snapshot_render_upload_counters();
+    if upload_snapshot.enabled {
+        game_shared::fun_diag_info!(
+            target: "fun::perf::render_upload",
+            write_texture_calls = upload_snapshot.write_texture_calls,
+            write_texture_bytes = upload_snapshot.write_texture_bytes,
+            write_buffer_calls = upload_snapshot.write_buffer_calls,
+            write_buffer_bytes = upload_snapshot.write_buffer_bytes,
+            write_buffer_with_calls = upload_snapshot.write_buffer_with_calls,
+            write_buffer_with_bytes = upload_snapshot.write_buffer_with_bytes,
+            callsite_count = upload_snapshot.callsites.len(),
+            "render upload counter sample"
+        );
+        game_shared::fun_diag_info!(
+            "[client perf] render uploads: write_texture_calls={} write_texture_bytes={} write_buffer_calls={} write_buffer_bytes={} write_buffer_with_calls={} write_buffer_with_bytes={} callsite_count={}",
+            upload_snapshot.write_texture_calls,
+            upload_snapshot.write_texture_bytes,
+            upload_snapshot.write_buffer_calls,
+            upload_snapshot.write_buffer_bytes,
+            upload_snapshot.write_buffer_with_calls,
+            upload_snapshot.write_buffer_with_bytes,
+            upload_snapshot.callsites.len(),
+        );
+        for (rank, callsite) in upload_snapshot.callsites.iter().take(10).enumerate() {
+            game_shared::fun_diag_info!(
+                "[client perf] render upload top: rank={} operation={} label={} calls={} bytes={}",
+                rank + 1,
+                callsite.operation,
+                callsite.label,
+                callsite.calls,
+                callsite.bytes,
+            );
+        }
+        bevy::render::renderer::reset_render_upload_counters();
+    }
     log_schedule_heatmap(schedule_profiler);
 
     if let Some(window) = window {

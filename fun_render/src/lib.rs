@@ -36,7 +36,7 @@ pub use config::{
     FunRenderAppOptions, FunRenderPresentation, FunRenderRtFeatures, NativeDlssConfig,
     NativeDlssMode, RenderGeometryClass, RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode,
     RtOpacityMaskMode, RtVendorEmulation, log_native_dlss_startup_diagnostics,
-    selected_present_mode, selected_render_backend,
+    selected_max_frame_latency, selected_present_mode, selected_render_backend,
 };
 pub use core::{
     FunRenderCorePlugin, enable_solari_lighting_for_ready_world, install_fun_render_core,
