@@ -21,7 +21,7 @@ use tracing::warn;
 use crate::{
     ClientOpaqueRenderer, ClientRenderConfig, FunRenderAppOptions, FunRenderRtFeatures,
     FunSkyPlugin, RenderPathSignature, dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting,
-    prewarm_world_render_catalog, render_path_signature_for_options,
+    pipeline_warmup, prewarm_world_render_catalog, render_path_signature_for_options,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
 };
 
@@ -102,6 +102,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     dlss_correctness::install_dlss_correctness(app);
     dx12_dlss_sr::install_dx12_native_dlss_sr(app);
     dx12_dlss_rr::install_dx12_native_dlss_rr(app);
+    pipeline_warmup::install_fun_pipeline_warmup(app);
     dx12_dlss_sr::log_dx12_native_dlss_sr_support_once(
         render_config.native_dlss,
         crate::Dx12NativeDlssSrSupport::default(),

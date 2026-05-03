@@ -224,7 +224,21 @@ counters are enabled by `-RenderDiagnostics` and recorded as
 `render_upload_write_buffer_with_bytes`, and
 `render_upload_callsite_count`; `summary.json` also includes
 `render_upload_callsites` with the top ten callsites aggregated over the sample
-window.
+window. Render churn counters are enabled by the same diagnostics path and
+recorded as `render_churn_bind_group_creations`,
+`render_churn_bind_group_layout_creations`,
+`render_churn_bind_group_layout_cache_hits`,
+`render_churn_bind_group_layout_cache_misses`,
+`render_churn_pipeline_layout_creations`,
+`render_churn_render_pipeline_queued`,
+`render_churn_compute_pipeline_queued`,
+`render_churn_render_pipeline_creations`,
+`render_churn_compute_pipeline_creations`,
+`render_churn_pipeline_cache_hits`,
+`render_churn_pipeline_cache_misses`, and per-family pipeline-key counts such as
+`render_churn_material_pipeline_key_count` and
+`render_churn_cloud_pipeline_key_count`; `summary.json` also includes
+`render_churn_events` with the top ten creation/cache events.
 
 PIX, GPUView, and PresentMon-only values are not guessed from client logs. The
 matrix JSON lists them under `dx12_external_metrics` with

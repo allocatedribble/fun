@@ -45,6 +45,23 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("render_upload_write_buffer_with_calls", "lower", "render buffer-with upload calls"),
     ("render_upload_write_buffer_with_bytes", "lower", "render buffer-with upload bytes"),
     ("render_upload_callsite_count", "lower", "render upload callsite count"),
+    ("render_churn_bind_group_creations", "lower", "bind group creations"),
+    ("render_churn_bind_group_layout_creations", "lower", "bind group layout creations"),
+    ("render_churn_bind_group_layout_cache_misses", "lower", "bind group layout cache misses"),
+    ("render_churn_pipeline_layout_creations", "lower", "pipeline layout creations"),
+    ("render_churn_render_pipeline_queued", "lower", "render pipelines queued"),
+    ("render_churn_compute_pipeline_queued", "lower", "compute pipelines queued"),
+    ("render_churn_render_pipeline_creations", "lower", "render pipeline creations"),
+    ("render_churn_compute_pipeline_creations", "lower", "compute pipeline creations"),
+    ("render_churn_pipeline_cache_misses", "lower", "pipeline cache misses"),
+    ("render_churn_material_pipeline_key_count", "lower", "material pipeline keys"),
+    ("render_churn_post_process_pipeline_key_count", "lower", "post-process pipeline keys"),
+    ("render_churn_cloud_pipeline_key_count", "lower", "cloud pipeline keys"),
+    ("render_churn_solari_pipeline_key_count", "lower", "Solari pipeline keys"),
+    ("render_churn_meshlet_pipeline_key_count", "lower", "meshlet pipeline keys"),
+    ("render_churn_ui_pipeline_key_count", "lower", "UI pipeline keys"),
+    ("render_churn_debug_overlay_pipeline_key_count", "lower", "debug overlay pipeline keys"),
+    ("render_churn_event_count", "lower", "render churn event count"),
     ("transient_texture_creates", "lower", "transient texture creates"),
     ("transient_buffer_creates", "lower", "transient buffer creates"),
     ("render_scheduler_pressure", "lower", "render scheduler pressure"),
@@ -291,6 +308,23 @@ def likely_bottleneck(
     if buffer_upload and buffer_upload["p95_delta"] is not None and buffer_upload["p95_delta"] > 1_000_000:
         reasons.append("DX12 buffer upload bytes are materially higher")
         return "upload-bound", "PIX", reasons
+
+    render_pipeline_creates = row_by_metric(rows, "render_churn_render_pipeline_creations")
+    compute_pipeline_creates = row_by_metric(rows, "render_churn_compute_pipeline_creations")
+    bind_group_layout_creates = row_by_metric(rows, "render_churn_bind_group_layout_creations")
+    pipeline_misses = row_by_metric(rows, "render_churn_pipeline_cache_misses")
+    if render_pipeline_creates and render_pipeline_creates["dx12_p95"] and render_pipeline_creates["dx12_p95"] > 0:
+        reasons.append("DX12 runtime render pipeline creation was observed")
+        return "pipeline churn", "PIX", reasons
+    if compute_pipeline_creates and compute_pipeline_creates["dx12_p95"] and compute_pipeline_creates["dx12_p95"] > 0:
+        reasons.append("DX12 runtime compute pipeline creation was observed")
+        return "pipeline churn", "PIX", reasons
+    if bind_group_layout_creates and bind_group_layout_creates["p95_delta"] is not None and bind_group_layout_creates["p95_delta"] > 0:
+        reasons.append("DX12 bind group layout creation exceeded the Vulkan lane")
+        return "pipeline churn", "PIX", reasons
+    if pipeline_misses and pipeline_misses["p95_delta"] is not None and pipeline_misses["p95_delta"] > 0:
+        reasons.append("DX12 pipeline cache misses exceeded the Vulkan lane")
+        return "pipeline churn", "PIX", reasons
 
     if pix.get("barrier_count", 0.0) > 0 or pix.get("resource_barrier_count", 0.0) > 0:
         reasons.append("PIX summary includes barrier counters")

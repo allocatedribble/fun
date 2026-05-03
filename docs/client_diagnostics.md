@@ -151,6 +151,9 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   frame count. Startup also emits a parser-stable selected-transport line with
   requested transport, selected transport, backend, bridge readiness, ring
   depth, copy mode, strict mode, debug timings, and fallback reason.
+- `fun::perf::render_churn`: engine-level descriptor, bind group layout,
+  pipeline layout, PSO, and specialized pipeline cache churn sampled by the
+  client when render diagnostics enable the churn counters.
 - `fun::render_catalog`: prewarmed render-catalog inventory, per-asset geometry
   class decisions, and runtime catalog usage counts.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,
@@ -339,6 +342,16 @@ The stack script exposes the same controls as `-BenchmarkLogMinimal`,
 `-LogStreamVerbose`, `-LogNetVerbose`, and `-LogRenderVerbose`. New diagnostic
 output should use tracing macros and targets, not `println!` or duplicate stdout
 paths.
+
+## Descriptor And Pipeline Churn
+
+`-RenderDiagnostics` enables engine-level resource churn counters through
+`FUN_RENDER_CHURN_COUNTERS=1` and `BEVY_RENDER_CHURN_COUNTERS=1`. The client
+emits `[client perf] render churn:` totals and top-ten
+`[client perf] render churn top:` rows. Use
+[`dx12_descriptor_pipeline_churn.md`](dx12_descriptor_pipeline_churn.md) for the
+counter contract, steady-state expectations, and the canonicalization/warmup
+decision path.
 
 ## Denoiser Comparison
 

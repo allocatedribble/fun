@@ -3199,6 +3199,73 @@ fn log_render_performance(
         }
         bevy::render::renderer::reset_render_upload_counters();
     }
+    let churn_snapshot = bevy::render::renderer::snapshot_render_resource_churn_counters();
+    if churn_snapshot.enabled {
+        game_shared::fun_diag_info!(
+            target: "fun::perf::render_churn",
+            bind_group_creations = churn_snapshot.bind_group_creations,
+            bind_group_layout_creations = churn_snapshot.bind_group_layout_creations,
+            bind_group_layout_cache_hits = churn_snapshot.bind_group_layout_cache_hits,
+            bind_group_layout_cache_misses = churn_snapshot.bind_group_layout_cache_misses,
+            pipeline_layout_creations = churn_snapshot.pipeline_layout_creations,
+            render_pipeline_queued = churn_snapshot.render_pipeline_queued,
+            compute_pipeline_queued = churn_snapshot.compute_pipeline_queued,
+            render_pipeline_creations = churn_snapshot.render_pipeline_creations,
+            compute_pipeline_creations = churn_snapshot.compute_pipeline_creations,
+            render_pipeline_ready = churn_snapshot.render_pipeline_ready,
+            compute_pipeline_ready = churn_snapshot.compute_pipeline_ready,
+            render_pipeline_errors = churn_snapshot.render_pipeline_errors,
+            compute_pipeline_errors = churn_snapshot.compute_pipeline_errors,
+            pipeline_cache_hits = churn_snapshot.pipeline_cache_hits,
+            pipeline_cache_misses = churn_snapshot.pipeline_cache_misses,
+            material_pipeline_key_count = churn_snapshot.material_pipeline_key_count,
+            post_process_pipeline_key_count = churn_snapshot.post_process_pipeline_key_count,
+            cloud_pipeline_key_count = churn_snapshot.cloud_pipeline_key_count,
+            solari_pipeline_key_count = churn_snapshot.solari_pipeline_key_count,
+            meshlet_pipeline_key_count = churn_snapshot.meshlet_pipeline_key_count,
+            ui_pipeline_key_count = churn_snapshot.ui_pipeline_key_count,
+            debug_overlay_pipeline_key_count = churn_snapshot.debug_overlay_pipeline_key_count,
+            event_count = churn_snapshot.events.len(),
+            "render resource churn counter sample"
+        );
+        game_shared::fun_diag_info!(
+            "[client perf] render churn: bind_group_creations={} bind_group_layout_creations={} bind_group_layout_cache_hits={} bind_group_layout_cache_misses={} pipeline_layout_creations={} render_pipeline_queued={} compute_pipeline_queued={} render_pipeline_creations={} compute_pipeline_creations={} render_pipeline_ready={} compute_pipeline_ready={} render_pipeline_errors={} compute_pipeline_errors={} pipeline_cache_hits={} pipeline_cache_misses={} material_pipeline_key_count={} post_process_pipeline_key_count={} cloud_pipeline_key_count={} solari_pipeline_key_count={} meshlet_pipeline_key_count={} ui_pipeline_key_count={} debug_overlay_pipeline_key_count={} event_count={}",
+            churn_snapshot.bind_group_creations,
+            churn_snapshot.bind_group_layout_creations,
+            churn_snapshot.bind_group_layout_cache_hits,
+            churn_snapshot.bind_group_layout_cache_misses,
+            churn_snapshot.pipeline_layout_creations,
+            churn_snapshot.render_pipeline_queued,
+            churn_snapshot.compute_pipeline_queued,
+            churn_snapshot.render_pipeline_creations,
+            churn_snapshot.compute_pipeline_creations,
+            churn_snapshot.render_pipeline_ready,
+            churn_snapshot.compute_pipeline_ready,
+            churn_snapshot.render_pipeline_errors,
+            churn_snapshot.compute_pipeline_errors,
+            churn_snapshot.pipeline_cache_hits,
+            churn_snapshot.pipeline_cache_misses,
+            churn_snapshot.material_pipeline_key_count,
+            churn_snapshot.post_process_pipeline_key_count,
+            churn_snapshot.cloud_pipeline_key_count,
+            churn_snapshot.solari_pipeline_key_count,
+            churn_snapshot.meshlet_pipeline_key_count,
+            churn_snapshot.ui_pipeline_key_count,
+            churn_snapshot.debug_overlay_pipeline_key_count,
+            churn_snapshot.events.len(),
+        );
+        for (rank, event) in churn_snapshot.events.iter().take(10).enumerate() {
+            game_shared::fun_diag_info!(
+                "[client perf] render churn top: rank={} operation={} category={} label={} calls={}",
+                rank + 1,
+                event.operation,
+                event.category,
+                event.label,
+                event.calls,
+            );
+        }
+        bevy::render::renderer::reset_render_resource_churn_counters();
+    }
     log_schedule_heatmap(schedule_profiler);
 
     if let Some(window) = window {

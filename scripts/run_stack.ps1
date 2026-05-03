@@ -199,11 +199,15 @@ if ($RenderDiagnostics -or $FrameTimeDiagnostics) {
     $env:FUN_RENDER_DIAGNOSTICS = "1"
     $env:FUN_RENDER_UPLOAD_COUNTERS = "1"
     $env:BEVY_RENDER_UPLOAD_COUNTERS = "1"
+    $env:FUN_RENDER_CHURN_COUNTERS = "1"
+    $env:BEVY_RENDER_CHURN_COUNTERS = "1"
 }
 else {
     Remove-Item Env:\FUN_RENDER_DIAGNOSTICS -ErrorAction SilentlyContinue
     Remove-Item Env:\FUN_RENDER_UPLOAD_COUNTERS -ErrorAction SilentlyContinue
     Remove-Item Env:\BEVY_RENDER_UPLOAD_COUNTERS -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_RENDER_CHURN_COUNTERS -ErrorAction SilentlyContinue
+    Remove-Item Env:\BEVY_RENDER_CHURN_COUNTERS -ErrorAction SilentlyContinue
 }
 if ($CefPaintTransport -eq "default") {
     Remove-Item Env:\FUN_CEF_UI_PAINT_TRANSPORT -ErrorAction SilentlyContinue

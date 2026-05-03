@@ -329,6 +329,52 @@ function Parse-RenderUploadCallsitesLog {
     )
 }
 
+function Parse-RenderChurnEventsLog {
+    param([string[]]$Lines)
+
+    $events = [ordered]@{}
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, "\[client perf\] render churn top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+)")
+        if (-not $match.Success) {
+            continue
+        }
+        $operation = $match.Groups["operation"].Value
+        $category = $match.Groups["category"].Value
+        $label = $match.Groups["label"].Value
+        $key = "$operation`n$category`n$label"
+        if (-not $events.Contains($key)) {
+            $events[$key] = [ordered]@{
+                operation = $operation
+                category = $category
+                label = $label
+                calls = 0
+                samples = 0
+            }
+        }
+        $entry = $events[$key]
+        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $events.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    operation = $_.operation
+                    category = $_.category
+                    label = $_.label
+                    calls = $_.calls
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
 function Parse-CefUiTransportSelectionLog {
     param([string[]]$Lines)
 
@@ -454,6 +500,12 @@ function Parse-ClientPerfLog {
         $renderUploads = [regex]::Match($line, "\[client perf\] render uploads: (?<payload>.*)$")
         if ($renderUploads.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $renderUploads.Groups["payload"].Value -Prefix "render_upload_"
+            continue
+        }
+
+        $renderChurn = [regex]::Match($line, "\[client perf\] render churn: (?<payload>.*)$")
+        if ($renderChurn.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $renderChurn.Groups["payload"].Value -Prefix "render_churn_"
             continue
         }
 
@@ -1042,6 +1094,29 @@ function Write-MarkdownReport {
         "render_upload_write_buffer_with_calls",
         "render_upload_write_buffer_with_bytes",
         "render_upload_callsite_count",
+        "render_churn_bind_group_creations",
+        "render_churn_bind_group_layout_creations",
+        "render_churn_bind_group_layout_cache_hits",
+        "render_churn_bind_group_layout_cache_misses",
+        "render_churn_pipeline_layout_creations",
+        "render_churn_render_pipeline_queued",
+        "render_churn_compute_pipeline_queued",
+        "render_churn_render_pipeline_creations",
+        "render_churn_compute_pipeline_creations",
+        "render_churn_render_pipeline_ready",
+        "render_churn_compute_pipeline_ready",
+        "render_churn_render_pipeline_errors",
+        "render_churn_compute_pipeline_errors",
+        "render_churn_pipeline_cache_hits",
+        "render_churn_pipeline_cache_misses",
+        "render_churn_material_pipeline_key_count",
+        "render_churn_post_process_pipeline_key_count",
+        "render_churn_cloud_pipeline_key_count",
+        "render_churn_solari_pipeline_key_count",
+        "render_churn_meshlet_pipeline_key_count",
+        "render_churn_ui_pipeline_key_count",
+        "render_churn_debug_overlay_pipeline_key_count",
+        "render_churn_event_count",
         "dlss_rr_gpu_ns",
         "solari_pass_dlss_rr_guide_resolve_ns",
         "solari_pass_direct_ns",
@@ -1083,6 +1158,16 @@ function Write-MarkdownReport {
         $lines.Add("|---:|---|---|---:|---:|---:|") | Out-Null
         foreach ($callsite in $Summary.render_upload_callsites) {
             $lines.Add("| $($callsite.rank) | $($callsite.operation) | $($callsite.label) | $($callsite.calls) | $($callsite.bytes) | $($callsite.samples) |") | Out-Null
+        }
+    }
+    if ($null -ne $Summary.render_churn_events -and $Summary.render_churn_events.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Render Resource Churn Top Events") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | operation | category | label | calls | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
+        foreach ($event in $Summary.render_churn_events) {
+            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
         }
     }
 
@@ -1421,6 +1506,7 @@ try {
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
+    $renderChurnEvents = Parse-RenderChurnEventsLog -Lines $sampleLines
     $cefUiTransportSelection = Parse-CefUiTransportSelectionLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
@@ -1517,6 +1603,7 @@ try {
         rt_feature_gates = $rtFeatureGates
         render_presentation = $renderPresentation
         render_upload_callsites = $renderUploadCallsites
+        render_churn_events = $renderChurnEvents
         cef_ui_transport_selection = $cefUiTransportSelection
     }
 

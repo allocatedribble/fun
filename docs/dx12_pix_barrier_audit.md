@@ -71,6 +71,8 @@ markers and tracing targets:
 - `fun::render`: backend, present, DLSS, and renderer policy.
 - `fun::perf::clouds`: cloud pass costs and history state.
 - `fun::perf::solari`: Solari pass costs and denoiser guide costs.
+- `fun::perf::render_churn`: sampled descriptor/layout/pipeline creation and
+  specialized pipeline cache counters.
 - `bevy_render::transient`: transient texture/buffer reuse and aliasing.
 - `bevy_render::scheduler`: render graph pressure.
 
@@ -92,6 +94,12 @@ Summarize the capture by pass:
 - descriptor heap switches;
 - pipeline state creation or unexpected PSO churn;
 - present wait and swapchain queue depth if visible.
+
+Cross-check PIX PSO/root-signature findings against
+`render_churn_render_pipeline_creations`,
+`render_churn_compute_pipeline_creations`,
+`render_churn_bind_group_layout_creations`, and `render_churn_events` in the
+benchmark JSON.
 
 If a transition appears redundant, record the resource name, before state, after
 state, producing pass, consuming pass, and whether wgpu or a native DX12 interop

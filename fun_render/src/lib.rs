@@ -14,6 +14,7 @@ pub mod dx12_native;
 pub mod lighting;
 #[cfg(feature = "offscreen")]
 pub mod offscreen;
+mod pipeline_warmup;
 mod signature;
 pub mod sky;
 pub mod solari;
@@ -71,6 +72,7 @@ pub use dx12_native::{
 };
 #[cfg(feature = "offscreen")]
 pub use offscreen::{EditorOffscreenRenderTarget, FunRenderOffscreenPresentationPlugin};
+pub use pipeline_warmup::{FunPipelineWarmupConfig, FunPipelineWarmupMode};
 pub use signature::{RenderPathSignature, render_path_signature_for_options};
 pub use sky::{
     FunCloudDebugOverlay, FunCloudHistoryResetEvent, FunCloudHistoryResetReason,
