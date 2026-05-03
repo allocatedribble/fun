@@ -2,15 +2,18 @@
 
 ## Current State
 
-`game_client` can run the Bevy/wgpu renderer on DX12, but the CEF UI transport is
-still the CPU paint path.
+`game_client` can run the Bevy/wgpu renderer on DX12. The default CEF UI
+transport is still the CPU paint path, but an experimental Windows-only
+`cef_ui_dx12_accelerated_paint` feature now builds the first D3D11On12 bridge
+boundary.
 
 Evidence in the current code:
 
 - `fun_ui_cef::browser::windowless_window_info` creates a transparent
-  windowless browser, but does not enable CEF shared textures.
-- `fun_ui_cef` has a test asserting `shared_texture_enabled == 0` for the
-  windowless browser.
+  windowless browser and enables CEF shared textures only for the selected
+  `d3d11_shared_texture_dx12_copy` transport.
+- `fun_ui_cef` has tests proving CPU transport disables shared textures and
+  accelerated transport enables them.
 - `fun_ui_cef::render_handler::on_paint` receives a BGRA buffer from CEF and
   copies it into a Rust-owned frame.
 - `game_client::cef_ui` copies that frame into a Bevy `Image` and uploads it
@@ -92,8 +95,8 @@ Primary references:
 
 ## Required Implementation Boundary
 
-The first accelerated-paint implementation should add one Windows-only unsafe
-interop module, not scattered renderer calls.
+The first accelerated-paint implementation adds one Windows-only unsafe interop
+module, not scattered renderer calls.
 
 Suggested shape:
 
@@ -180,9 +183,11 @@ pub struct CefAcceleratedPaintFrame<'a> {
 ```
 
 The CPU sink remains unchanged. The optional accelerated sink returns
-`Accepted`, `Dropped`, or `FallbackRequested`. The current `game_client` sink is
-a placeholder that requests CPU fallback with `d3d11on12_bridge_unavailable`
-until the real D3D11On12 copy implementation exists.
+`Accepted`, `Dropped`, or `FallbackRequested`. With the
+`cef_ui_dx12_accelerated_paint` feature, `game_client` installs the shared
+interop slot as that sink. The sink dispatches to the bridge when initialized;
+until the output texture copy is implemented, the bridge requests CPU fallback
+with `output_texture_allocation_unavailable`.
 
 ## Startup Bridge Gate
 
@@ -211,10 +216,21 @@ main world
   falls back to CPU on Error or timeout
 ```
 
-Until the bridge exists, the render-world slot records
-`d3d11on12_bridge_unavailable` after it observes the render device and queue.
-This keeps the browser on the CPU path without enabling CEF shared textures
-blindly. If a future accelerated browser starts and CEF produces CPU `OnPaint`
+When `cef_ui_dx12_accelerated_paint` is not compiled, the render-world slot
+records `d3d11on12_bridge_unavailable` after it observes the render device and
+queue. When the feature is compiled, `game_client/src/cef_ui_dx12` is the only
+module that extracts wgpu DX12 HAL handles. It:
+
+- confirms the active wgpu backend is DX12;
+- clones the active `ID3D12Device` and `ID3D12CommandQueue`;
+- calls `D3D11On12CreateDevice` with `D3D11_CREATE_DEVICE_BGRA_SUPPORT`;
+- queries `ID3D11On12Device`;
+- creates an `ID3D12Fence`;
+- initializes an empty triple-buffer texture ring.
+
+The main world starts accelerated CEF only after the slot reports `Ready`. If
+bridge initialization fails, the client starts a CPU browser with a typed
+fallback reason. If an accelerated browser starts and CEF produces CPU `OnPaint`
 frames or no accelerated callbacks during the startup observation window, the
 client tears down that browser and recreates a CPU paint browser with
 `accelerated_paint_not_observed`.
@@ -237,7 +253,10 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 - `cef_sampled_generation`
 
 `cef_gpu_copy_*` remains zero on the CPU path. It should only move once the
-D3D11On12 copy into a FUN-owned D3D12 texture ring exists.
+D3D11On12 copy into a FUN-owned D3D12 texture ring exists. The current bridge
+has its own startup/copy diagnostic counters in `game_client/src/cef_ui_dx12`,
+but the accelerated copy currently fails closed because no output resources are
+allocated yet.
 
 ## Open Risks
 

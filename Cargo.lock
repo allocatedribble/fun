@@ -3311,6 +3311,8 @@ dependencies = [
  "log",
  "thunder",
  "tracing",
+ "wgpu",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

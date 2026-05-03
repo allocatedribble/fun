@@ -1,5 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+use crate::cef_ui_dx12::{Dx12CefInterop, Dx12CefInteropError};
 use bevy::{
     asset::{AssetId, RenderAssetUsages},
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -646,12 +648,16 @@ pub enum Dx12CefInteropState {
 #[derive(Debug, Clone, Resource)]
 pub struct SharedDx12CefInteropSlot {
     state: std::sync::Arc<std::sync::Mutex<Dx12CefInteropState>>,
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+    interop: std::sync::Arc<std::sync::Mutex<Option<Arc<Dx12CefInterop>>>>,
 }
 
 impl Default for SharedDx12CefInteropSlot {
     fn default() -> Self {
         Self {
             state: std::sync::Arc::new(std::sync::Mutex::new(Dx12CefInteropState::Pending)),
+            #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+            interop: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -673,6 +679,14 @@ impl SharedDx12CefInteropSlot {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+    pub fn set_ready_with_interop(&self, ready: Dx12CefInteropReady, interop: Arc<Dx12CefInterop>) {
+        if let Ok(mut bridge) = self.interop.lock() {
+            *bridge = Some(interop);
+        }
+        self.set_ready(ready);
+    }
+
     pub fn set_error(&self, reason: CefUiFallbackReason) {
         if let Ok(mut state) = self.state.lock() {
             if matches!(*state, Dx12CefInteropState::Pending) {
@@ -685,6 +699,12 @@ impl SharedDx12CefInteropSlot {
         if let Ok(mut state) = self.state.lock() {
             *state = Dx12CefInteropState::Error { reason };
         }
+    }
+
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+    #[must_use]
+    pub fn interop(&self) -> Option<Arc<Dx12CefInterop>> {
+        self.interop.lock().ok().and_then(|bridge| bridge.clone())
     }
 }
 
@@ -700,8 +720,19 @@ impl ExtractResource for SharedDx12CefInteropSlot {
 impl CefAcceleratedPaintSink for SharedDx12CefInteropSlot {
     fn ingest_cef_accelerated_paint(
         &self,
-        _frame: CefAcceleratedPaintFrame<'_>,
+        frame: CefAcceleratedPaintFrame<'_>,
     ) -> CefAcceleratedPaintOutcome {
+        #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+        if let Some(interop) = self.interop() {
+            let outcome = interop.ingest_accelerated_paint(frame);
+            if let CefAcceleratedPaintOutcome::FallbackRequested { reason } = outcome {
+                self.request_fallback(reason);
+            }
+            return outcome;
+        }
+
+        #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
+        let _ = frame;
         let reason = CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable;
         self.request_fallback(reason);
         CefAcceleratedPaintOutcome::FallbackRequested { reason }
@@ -1538,14 +1569,83 @@ fn initialize_dx12_cef_interop_slot(
     if !matches!(slot.snapshot(), Dx12CefInteropState::Pending) {
         return;
     }
-    if render_device.is_none() || render_queue.is_none() {
+    let (Some(render_device), Some(render_queue)) = (render_device, render_queue) else {
+        return;
+    };
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+    {
+        match unsafe { Dx12CefInterop::try_init_from_wgpu(&render_device, &render_queue) } {
+            Ok(interop) => {
+                let native_ptrs = interop.native_pointer_summary();
+                let ring_len = interop.ring_len();
+                let next_fence_value = interop.next_fence_value();
+                slot.set_ready_with_interop(Dx12CefInteropReady { generation: 1 }, interop);
+                tracing::info!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    bridge_generation = 1_u64,
+                    d3d12_device = native_ptrs.d3d12_device,
+                    d3d12_queue = native_ptrs.d3d12_queue,
+                    d3d11_device = native_ptrs.d3d11_device,
+                    d3d11_context = native_ptrs.d3d11_context,
+                    d3d11_on12 = native_ptrs.d3d11_on12,
+                    fence = native_ptrs.fence,
+                    ring_len,
+                    next_fence_value,
+                    "CEF UI D3D11On12 bridge initialized"
+                );
+            }
+            Err(error) => {
+                slot.set_error(dx12_cef_interop_fallback_reason(error));
+                tracing::warn!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    failure = error.failure.as_str(),
+                    detail = error.detail,
+                    hresult = error.hresult,
+                    fallback_reason = dx12_cef_interop_fallback_reason(error).as_wire_str(),
+                    "CEF UI D3D11On12 bridge initialization failed"
+                );
+            }
+        }
         return;
     }
-    slot.set_error(CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable);
-    tracing::info!(
-        target: FUN_UI_DIAGNOSTICS_TARGET,
-        "CEF UI DX12 interop slot observed render device and queue; D3D11On12 bridge is not implemented yet"
-    );
+
+    #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
+    {
+        let _ = (render_device, render_queue);
+        slot.set_error(CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable);
+        tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            "CEF UI DX12 interop slot observed render device and queue; D3D11On12 bridge feature is not compiled"
+        );
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+const fn dx12_cef_interop_fallback_reason(
+    error: Dx12CefInteropError,
+) -> CefUiPaintTransportFallbackReason {
+    match error.failure {
+        crate::cef_ui_dx12::Dx12CefInteropFailure::WrongBackend => {
+            CefUiPaintTransportFallbackReason::RenderBackendNotDx12
+        }
+        crate::cef_ui_dx12::Dx12CefInteropFailure::DeviceHalUnavailable
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::QueueHalUnavailable => {
+            CefUiPaintTransportFallbackReason::DeviceQueueExtractionFailed
+        }
+        crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11On12CreateDeviceFailed
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11DeviceMissing
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11ImmediateContextMissing
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11On12QueryFailed
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::FenceCreateFailed => {
+            CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable
+        }
+        crate::cef_ui_dx12::Dx12CefInteropFailure::SharedTextureHandleMissing => {
+            CefUiPaintTransportFallbackReason::SharedTextureUnsupported
+        }
+        crate::cef_ui_dx12::Dx12CefInteropFailure::OutputTextureRingUnavailable => {
+            CefUiPaintTransportFallbackReason::OutputTextureAllocationUnavailable
+        }
+    }
 }
 
 fn drain_cef_incoming_queue(

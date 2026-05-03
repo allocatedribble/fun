@@ -11,6 +11,11 @@ default = ["dlss", "volumetric_clouds"]
 benchmarks = ["render_diagnostics", "fun_render/benchmarks"]
 bevy_debug = ["bevy/debug"]
 cef_ui = ["dep:fun_ui_cef"]
+cef_ui_dx12_accelerated_paint = [
+    "cef_ui",
+    "dep:wgpu",
+    "dep:windows",
+]
 diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
 dlss = ["bevy/dlss", "fun_render/dlss"]
 dx12_dlss_native = ["fun_render/dx12_dlss_native"]
@@ -41,7 +46,17 @@ game_shared = { path = "../game_shared" }
 log.workspace = true
 thunder.workspace = true
 tracing.workspace = true
+wgpu = { version = "29.0.1", default-features = false, features = ["dx12"], optional = true }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D11on12",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+] }
 
 [dev-dependencies]
 criterion.workspace = true

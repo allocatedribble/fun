@@ -1,6 +1,10 @@
 pub mod ai_presentation;
+#[cfg(all(feature = "cef_ui_dx12_accelerated_paint", not(target_os = "windows")))]
+compile_error!("game_client feature `cef_ui_dx12_accelerated_paint` is Windows-only");
 #[cfg(feature = "cef_ui")]
 pub mod cef_ui;
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+pub mod cef_ui_dx12;
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
