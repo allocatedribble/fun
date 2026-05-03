@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,6 +10,8 @@ use cef::{
     ScreenInfo, WrapRenderHandler, wrap_render_handler,
 };
 
+#[cfg(target_os = "windows")]
+use crate::browser::CefUiFallbackReason;
 use crate::diagnostics::{FUN_UI_DIAGNOSTICS_TARGET, SharedCefUiTransportCounters};
 
 pub const CEF_UI_BYTES_PER_PIXEL: usize = 4;
@@ -315,6 +319,59 @@ pub trait CefPaintSink: Send + Sync + 'static {
     fn ingest_cef_paint(&self, frame: CefOwnedPaintFrame);
 }
 
+#[cfg(target_os = "windows")]
+pub type CefAcceleratedPaintInfo = AcceleratedPaintInfo;
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy)]
+pub struct CefAcceleratedPaintFrame<'a> {
+    pub element: CefPaintElement,
+    pub width: i32,
+    pub height: i32,
+    pub dirty_rects: &'a [CefDirtyRect],
+    pub shared_handle: *mut c_void,
+    pub timestamp_ns: CefUiFrameTimestampNs,
+    pub alpha_mode: CefUiAlphaMode,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefAcceleratedPaintDropReason {
+    MissingPaintInfo,
+    MissingSharedHandle,
+    InvalidSize,
+    DirtyRectOutOfBounds,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefAcceleratedPaintOutcome {
+    Accepted {
+        generation: CefUiFrameGeneration,
+    },
+    Dropped {
+        reason: CefAcceleratedPaintDropReason,
+    },
+    FallbackRequested {
+        reason: CefUiFallbackReason,
+    },
+}
+
+#[cfg(target_os = "windows")]
+pub trait CefAcceleratedPaintSink: Send + Sync + 'static {
+    fn ingest_cef_accelerated_paint(
+        &self,
+        frame: CefAcceleratedPaintFrame<'_>,
+    ) -> CefAcceleratedPaintOutcome;
+}
+
+#[cfg(target_os = "windows")]
+pub type CefAcceleratedPaintSinkSlot = Option<Arc<dyn CefAcceleratedPaintSink>>;
+
+#[cfg(not(target_os = "windows"))]
+#[derive(Clone, Copy, Default)]
+pub struct CefAcceleratedPaintSinkSlot;
+
 #[derive(Clone)]
 struct FunCefRenderHandlerLogs {
     view_rect_logged: Arc<AtomicBool>,
@@ -339,6 +396,7 @@ wrap_render_handler! {
         viewport_width: i32,
         viewport_height: i32,
         transport_counters: SharedCefUiTransportCounters,
+        accelerated_paint_sink: CefAcceleratedPaintSinkSlot,
         logs: FunCefRenderHandlerLogs,
     }
 
@@ -458,15 +516,71 @@ wrap_render_handler! {
             info: Option<&AcceleratedPaintInfo>,
         ) {
             self.transport_counters.record_on_accelerated_paint();
-            self.transport_counters.record_gpu_copy_failure();
-            if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
-                tracing::warn!(
-                    target: FUN_UI_DIAGNOSTICS_TARGET,
-                    element = ?CefPaintElement::from_cef(type_),
-                    dirty_rect_count = dirty_rects.unwrap_or_default().len(),
-                    shared_texture_handle_present = accelerated_paint_shared_texture_present(info),
-                    "CEF UI accelerated paint received before GPU transport bridge is ready"
+            let dirty_rects: Vec<CefDirtyRect> = dirty_rects
+                .unwrap_or_default()
+                .iter()
+                .map(CefDirtyRect::from)
+                .collect();
+            #[cfg(target_os = "windows")]
+            {
+                let outcome = dispatch_accelerated_paint(
+                    self.accelerated_paint_sink.as_ref(),
+                    CefPaintElement::from_cef(type_),
+                    &dirty_rects,
+                    info,
                 );
+                match outcome {
+                    CefAcceleratedPaintOutcome::Accepted { generation } => {
+                        if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
+                            tracing::info!(
+                                target: FUN_UI_DIAGNOSTICS_TARGET,
+                                generation = generation.0,
+                                dirty_rect_count = dirty_rects.len(),
+                                "CEF UI accelerated paint accepted"
+                            );
+                        }
+                    }
+                    CefAcceleratedPaintOutcome::Dropped { reason } => {
+                        self.transport_counters.record_gpu_copy_failure();
+                        if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
+                            tracing::warn!(
+                                target: FUN_UI_DIAGNOSTICS_TARGET,
+                                ?reason,
+                                dirty_rect_count = dirty_rects.len(),
+                                shared_texture_handle_present =
+                                    accelerated_paint_shared_texture_present(info),
+                                "CEF UI accelerated paint dropped"
+                            );
+                        }
+                    }
+                    CefAcceleratedPaintOutcome::FallbackRequested { reason } => {
+                        self.transport_counters.record_gpu_copy_failure();
+                        self.transport_counters.record_transport_fallback();
+                        if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
+                            tracing::warn!(
+                                target: FUN_UI_DIAGNOSTICS_TARGET,
+                                fallback_reason = reason.as_wire_str(),
+                                dirty_rect_count = dirty_rects.len(),
+                                shared_texture_handle_present =
+                                    accelerated_paint_shared_texture_present(info),
+                                "CEF UI accelerated paint requested CPU fallback"
+                            );
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = info;
+                self.transport_counters.record_gpu_copy_failure();
+                if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
+                    tracing::warn!(
+                        target: FUN_UI_DIAGNOSTICS_TARGET,
+                        element = ?CefPaintElement::from_cef(type_),
+                        dirty_rect_count = dirty_rects.len(),
+                        "CEF UI accelerated paint received on a non-Windows target"
+                    );
+                }
             }
         }
 
@@ -511,6 +625,27 @@ pub fn new_fun_cef_render_handler_for_viewport_with_counters(
         viewport_width.min(i32::MAX as u32) as i32,
         viewport_height.min(i32::MAX as u32) as i32,
         transport_counters,
+        CefAcceleratedPaintSinkSlot::default(),
+        FunCefRenderHandlerLogs::default(),
+    )
+}
+
+#[must_use]
+pub fn new_fun_cef_render_handler_for_viewport_with_counters_and_accelerated_sink(
+    paint_sink: Arc<dyn CefPaintSink>,
+    scale_factor: CefUiScaleFactor,
+    viewport_width: u32,
+    viewport_height: u32,
+    transport_counters: SharedCefUiTransportCounters,
+    accelerated_paint_sink: CefAcceleratedPaintSinkSlot,
+) -> RenderHandler {
+    FunCefRenderHandler::new(
+        paint_sink,
+        scale_factor,
+        viewport_width.min(i32::MAX as u32) as i32,
+        viewport_height.min(i32::MAX as u32) as i32,
+        transport_counters,
+        accelerated_paint_sink,
         FunCefRenderHandlerLogs::default(),
     )
 }
@@ -555,6 +690,72 @@ fn accelerated_paint_shared_texture_present(info: Option<&AcceleratedPaintInfo>)
 #[cfg(not(target_os = "windows"))]
 fn accelerated_paint_shared_texture_present(_info: Option<&AcceleratedPaintInfo>) -> bool {
     false
+}
+
+#[cfg(target_os = "windows")]
+fn dispatch_accelerated_paint(
+    sink: Option<&Arc<dyn CefAcceleratedPaintSink>>,
+    element: CefPaintElement,
+    dirty_rects: &[CefDirtyRect],
+    info: Option<&AcceleratedPaintInfo>,
+) -> CefAcceleratedPaintOutcome {
+    let Some(info) = info else {
+        return CefAcceleratedPaintOutcome::Dropped {
+            reason: CefAcceleratedPaintDropReason::MissingPaintInfo,
+        };
+    };
+    let Some((width, height)) = accelerated_paint_size(info) else {
+        return CefAcceleratedPaintOutcome::Dropped {
+            reason: CefAcceleratedPaintDropReason::InvalidSize,
+        };
+    };
+    if info.shared_texture_handle.is_null() {
+        return CefAcceleratedPaintOutcome::Dropped {
+            reason: CefAcceleratedPaintDropReason::MissingSharedHandle,
+        };
+    }
+    if dirty_rects
+        .iter()
+        .any(|rect| !rect.is_inside(width, height))
+    {
+        return CefAcceleratedPaintOutcome::Dropped {
+            reason: CefAcceleratedPaintDropReason::DirtyRectOutOfBounds,
+        };
+    }
+    let Some(sink) = sink else {
+        return CefAcceleratedPaintOutcome::FallbackRequested {
+            reason: CefUiFallbackReason::D3d11On12BridgeUnavailable,
+        };
+    };
+    let timestamp_ns = if info.extra.timestamp == 0 {
+        CefUiFrameTimestampNs::now()
+    } else {
+        CefUiFrameTimestampNs(info.extra.timestamp)
+    };
+    sink.ingest_cef_accelerated_paint(CefAcceleratedPaintFrame {
+        element,
+        width,
+        height,
+        dirty_rects,
+        shared_handle: info.shared_texture_handle.cast::<c_void>(),
+        timestamp_ns,
+        alpha_mode: CefUiAlphaMode::Premultiplied,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn accelerated_paint_size(info: &AcceleratedPaintInfo) -> Option<(i32, i32)> {
+    let width = info.extra.coded_size.width;
+    let height = info.extra.coded_size.height;
+    if width > 0 && height > 0 {
+        return Some((width, height));
+    }
+    let width = info.extra.content_rect.width;
+    let height = info.extra.content_rect.height;
+    if width > 0 && height > 0 {
+        return Some((width, height));
+    }
+    None
 }
 
 #[must_use]
@@ -638,5 +839,82 @@ mod tests {
         assert_eq!(screen_info.depth_per_component, 8);
         assert_eq!(screen_info.rect.width, 1280);
         assert_eq!(screen_info.available_rect.height, 720);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn accelerated_paint_dispatch_borrows_callback_only_frame() {
+        struct AcceptSink;
+
+        impl CefAcceleratedPaintSink for AcceptSink {
+            fn ingest_cef_accelerated_paint(
+                &self,
+                frame: CefAcceleratedPaintFrame<'_>,
+            ) -> CefAcceleratedPaintOutcome {
+                assert_eq!(frame.element, CefPaintElement::View);
+                assert_eq!(frame.width, 4);
+                assert_eq!(frame.height, 4);
+                assert_eq!(frame.dirty_rects, &[CefDirtyRect::new(0, 0, 4, 4)]);
+                assert!(!frame.shared_handle.is_null());
+                CefAcceleratedPaintOutcome::Accepted {
+                    generation: CefUiFrameGeneration(7),
+                }
+            }
+        }
+
+        let sink = Arc::new(AcceptSink) as Arc<dyn CefAcceleratedPaintSink>;
+        let rects = [CefDirtyRect::new(0, 0, 4, 4)];
+        let info = accelerated_paint_info_for_test(std::ptr::dangling_mut::<c_void>(), 4, 4);
+
+        assert_eq!(
+            dispatch_accelerated_paint(Some(&sink), CefPaintElement::View, &rects, Some(&info)),
+            CefAcceleratedPaintOutcome::Accepted {
+                generation: CefUiFrameGeneration(7)
+            }
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn accelerated_paint_dispatch_rejects_invalid_callback_inputs() {
+        let rects = [CefDirtyRect::new(0, 0, 4, 4)];
+        let info = accelerated_paint_info_for_test(std::ptr::null_mut(), 4, 4);
+
+        assert_eq!(
+            dispatch_accelerated_paint(None, CefPaintElement::View, &rects, None),
+            CefAcceleratedPaintOutcome::Dropped {
+                reason: CefAcceleratedPaintDropReason::MissingPaintInfo
+            }
+        );
+        assert_eq!(
+            dispatch_accelerated_paint(None, CefPaintElement::View, &rects, Some(&info)),
+            CefAcceleratedPaintOutcome::Dropped {
+                reason: CefAcceleratedPaintDropReason::MissingSharedHandle
+            }
+        );
+
+        let info = accelerated_paint_info_for_test(std::ptr::dangling_mut::<c_void>(), 4, 4);
+        assert_eq!(
+            dispatch_accelerated_paint(None, CefPaintElement::View, &rects, Some(&info)),
+            CefAcceleratedPaintOutcome::FallbackRequested {
+                reason: CefUiFallbackReason::D3d11On12BridgeUnavailable
+            }
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn accelerated_paint_info_for_test(
+        shared_texture_handle: *mut c_void,
+        width: i32,
+        height: i32,
+    ) -> AcceleratedPaintInfo {
+        AcceleratedPaintInfo {
+            shared_texture_handle,
+            extra: cef::AcceleratedPaintInfoCommon {
+                coded_size: cef::Size { width, height },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 }

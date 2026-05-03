@@ -32,7 +32,10 @@ use crate::{
         UiEnvelope, UiEnvelopeKind,
     },
     compositor::SharedCefUiCompositor,
-    render_handler::{CefPaintSink, new_fun_cef_render_handler_for_viewport_with_counters},
+    render_handler::{
+        CefAcceleratedPaintSinkSlot, CefPaintSink,
+        new_fun_cef_render_handler_for_viewport_with_counters_and_accelerated_sink,
+    },
 };
 
 pub const MAIN_BROWSER_PAGE: BrowserUiPage = BrowserUiPage {
@@ -80,6 +83,8 @@ pub enum CefUiPaintTransportFallbackReason {
     AcceleratedPaintNotObserved,
     DeviceQueueExtractionFailed,
 }
+
+pub type CefUiFallbackReason = CefUiPaintTransportFallbackReason;
 
 impl CefUiPaintTransportFallbackReason {
     #[must_use]
@@ -1188,6 +1193,20 @@ impl CefUiBrowser {
         compositor: SharedCefUiCompositor,
         bridge_queues: SharedBrowserBridgeQueues,
     ) -> Result<Self, CefUiBrowserError> {
+        Self::create_with_bridge_and_accelerated_sink(
+            config,
+            compositor,
+            bridge_queues,
+            CefAcceleratedPaintSinkSlot::default(),
+        )
+    }
+
+    pub fn create_with_bridge_and_accelerated_sink(
+        config: BrowserUiConfig,
+        compositor: SharedCefUiCompositor,
+        bridge_queues: SharedBrowserBridgeQueues,
+        accelerated_paint_sink: CefAcceleratedPaintSinkSlot,
+    ) -> Result<Self, CefUiBrowserError> {
         if config.dev_server_url.is_none() && !register_fun_ui_scheme_handler_factory() {
             return Err(CefUiBrowserError::SchemeFactoryRejected);
         }
@@ -1197,13 +1216,15 @@ impl CefUiBrowser {
             transport_counters.record_transport_fallback();
         }
         let paint_sink: Arc<dyn CefPaintSink> = Arc::new(compositor.clone());
-        let render_handler = new_fun_cef_render_handler_for_viewport_with_counters(
-            paint_sink,
-            CefUiScaleFactor::ONE,
-            config.viewport_width,
-            config.viewport_height,
-            transport_counters.clone(),
-        );
+        let render_handler =
+            new_fun_cef_render_handler_for_viewport_with_counters_and_accelerated_sink(
+                paint_sink,
+                CefUiScaleFactor::ONE,
+                config.viewport_width,
+                config.viewport_height,
+                transport_counters.clone(),
+                accelerated_paint_sink,
+            );
         let state = Arc::new(Mutex::new(BrowserState::new()));
         with_browser_state(&state, |state| state.lifecycle.mark_creating());
         let bridge_endpoint = BrowserBridgeEndpoint::new(bridge_queues);

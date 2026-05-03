@@ -158,11 +158,31 @@ Startup logs include:
 - fallback reason
 
 The render handler now has an `OnAcceleratedPaint` surface, but it only records
-the callback and rejects it until the GPU bridge exists. This is intentional:
-CEF's shared handle is only valid during the callback, can change every callback,
-and must not be enqueued for render-world processing. The future bridge must open
-the D3D11 shared texture and copy it into a FUN-owned GPU resource before the
-callback returns.
+the callback and dispatches a borrowed `CefAcceleratedPaintFrame` to an optional
+Windows-only sink. This is intentional: CEF's shared handle is only valid during
+the callback, can change every callback, and must not be enqueued for
+render-world processing. The future bridge must open the D3D11 shared texture
+and copy it into a FUN-owned GPU resource before the callback returns.
+
+The accelerated callback surface is callback-only:
+
+```rust
+#[cfg(windows)]
+pub struct CefAcceleratedPaintFrame<'a> {
+    pub element: CefPaintElement,
+    pub width: i32,
+    pub height: i32,
+    pub dirty_rects: &'a [CefDirtyRect],
+    pub shared_handle: *mut std::ffi::c_void,
+    pub timestamp_ns: CefUiFrameTimestampNs,
+    pub alpha_mode: CefUiAlphaMode,
+}
+```
+
+The CPU sink remains unchanged. The optional accelerated sink returns
+`Accepted`, `Dropped`, or `FallbackRequested`. The current `game_client` sink is
+a placeholder that requests CPU fallback with `d3d11on12_bridge_unavailable`
+until the real D3D11On12 copy implementation exists.
 
 ## Startup Bridge Gate
 

@@ -30,8 +30,9 @@ pub use bridge::{
 pub use browser::{
     BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowser,
-    CefUiBrowserError, CefUiBrowserHandle, CefUiPaintTransport, CefUiPaintTransportFallbackReason,
-    CefUiRenderBackendHint, CefUiRequestedPaintTransport, MAIN_BROWSER_PAGE,
+    CefUiBrowserError, CefUiBrowserHandle, CefUiFallbackReason, CefUiPaintTransport,
+    CefUiPaintTransportFallbackReason, CefUiRenderBackendHint, CefUiRequestedPaintTransport,
+    MAIN_BROWSER_PAGE,
 };
 pub use compositor::{
     CefUiCompositor, CefUiCompositorFrame, CefUiUploadPlan, SharedCefUiCompositor,
@@ -45,8 +46,14 @@ pub use model::{
     MAX_UI_PATCH_TEXT_BYTES, UiPatchBackpressureQueue, UiPatchBatch, UiPatchOp, UiPatchRecord,
     UiPatchSequence, UiPatchValue, UiPatchWriteError, UiPatchWriter, UiRowId, UiRowRevision,
 };
+#[cfg(target_os = "windows")]
 pub use render_handler::{
-    CefDirtyRect, CefPaintElement, CefPaintFrame, CefUiFrameMetadata, new_fun_cef_render_handler,
+    CefAcceleratedPaintDropReason, CefAcceleratedPaintFrame, CefAcceleratedPaintInfo,
+    CefAcceleratedPaintOutcome, CefAcceleratedPaintSink,
+};
+pub use render_handler::{
+    CefAcceleratedPaintSinkSlot, CefDirtyRect, CefPaintElement, CefPaintFrame, CefUiFrameMetadata,
+    new_fun_cef_render_handler,
 };
 pub use runtime::{
     CefMessageLoopStrategy, CefRuntime, CefRuntimeConfig, CefRuntimeError,

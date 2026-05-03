@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use bevy::{
     asset::{AssetId, RenderAssetUsages},
@@ -39,7 +39,7 @@ use fun_ui_cef::{
     BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
     BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefMessageLoopStrategy,
-    CefUiBrowser, CefUiBrowserHandle, CefUiModel, CefUiPaintTransport,
+    CefUiBrowser, CefUiBrowserHandle, CefUiFallbackReason, CefUiModel, CefUiPaintTransport,
     CefUiPaintTransportFallbackReason, CefUiRequestedPaintTransport, CefUiSecurityPolicy,
     FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, HostCommandError, HostCommandId,
     HostCommandRejection, HostCommandRequest as CefHostCommandRequest,
@@ -48,6 +48,8 @@ use fun_ui_cef::{
     UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue, UiPatchWriteError, UiPatchWriter,
     UiSurfaceGeneration, validate_ui_envelope,
 };
+#[cfg(target_os = "windows")]
+use fun_ui_cef::{CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefAcceleratedPaintSink};
 use fun_ui_cef::{CefDirtyRect, CefPaintElement, CefUiCompositorFrame};
 use game_shared::{
     GameUiMenuTarget, GameUiProtocolValidationContext, GameUiRequestEnvelope, GameUiRequestId,
@@ -65,8 +67,6 @@ const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
 const FUN_CLIENT_FPS_COUNTER_MARGIN: f32 = 12.0;
 const CEF_UI_TRANSPORT_COUNTER_REFRESH: Duration = Duration::from_secs(1);
 const CEF_UI_GPU_BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_millis(750);
-
-pub type CefUiFallbackReason = CefUiPaintTransportFallbackReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum GameCefUiSet {
@@ -680,6 +680,12 @@ impl SharedDx12CefInteropSlot {
             }
         }
     }
+
+    pub fn request_fallback(&self, reason: CefUiFallbackReason) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = Dx12CefInteropState::Error { reason };
+        }
+    }
 }
 
 impl ExtractResource for SharedDx12CefInteropSlot {
@@ -687,6 +693,18 @@ impl ExtractResource for SharedDx12CefInteropSlot {
 
     fn extract_resource(source: &Self::Source) -> Self {
         source.clone()
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl CefAcceleratedPaintSink for SharedDx12CefInteropSlot {
+    fn ingest_cef_accelerated_paint(
+        &self,
+        _frame: CefAcceleratedPaintFrame<'_>,
+    ) -> CefAcceleratedPaintOutcome {
+        let reason = CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable;
+        self.request_fallback(reason);
+        CefAcceleratedPaintOutcome::FallbackRequested { reason }
     }
 }
 
@@ -1378,11 +1396,29 @@ fn start_cef_ui_browser(
     let viewport_width = browser_config.viewport_width;
     let viewport_height = browser_config.viewport_height;
     let paint_transport = browser_config.paint_transport;
-    let browser = match CefUiBrowser::create_with_bridge(
+    #[cfg(target_os = "windows")]
+    let accelerated_paint_sink =
+        if paint_transport == CefUiPaintTransport::D3d11SharedTextureDx12Copy {
+            world
+                .get_resource::<SharedDx12CefInteropSlot>()
+                .map(|slot| Arc::new(slot.clone()) as Arc<dyn CefAcceleratedPaintSink>)
+        } else {
+            None
+        };
+    #[cfg(target_os = "windows")]
+    let browser_result = CefUiBrowser::create_with_bridge_and_accelerated_sink(
         browser_config,
         startup_config.compositor.clone(),
         startup_config.bridge_queues.clone(),
-    ) {
+        accelerated_paint_sink,
+    );
+    #[cfg(not(target_os = "windows"))]
+    let browser_result = CefUiBrowser::create_with_bridge(
+        browser_config,
+        startup_config.compositor.clone(),
+        startup_config.bridge_queues.clone(),
+    );
+    let browser = match browser_result {
         Ok(browser) => browser,
         Err(error) => {
             if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
@@ -1434,11 +1470,15 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
     else {
         return;
     };
+    let slot_state = world
+        .get_resource::<SharedDx12CefInteropSlot>()
+        .map(SharedDx12CefInteropSlot::snapshot)
+        .unwrap_or(Dx12CefInteropState::Pending);
     let delta = world
         .get_resource::<Time>()
         .map(Time::delta)
         .unwrap_or_default();
-    let should_fallback = {
+    let fallback_reason = {
         let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() else {
             return;
         };
@@ -1447,21 +1487,28 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
         {
             return;
         }
-        if snapshot.cef_on_accelerated_paint_count > 0 {
-            return;
+        if let Dx12CefInteropState::Error { reason } = slot_state {
+            reason
+        } else {
+            if snapshot.cef_on_accelerated_paint_count > 0 {
+                return;
+            }
+            state.accelerated_observe_elapsed =
+                state.accelerated_observe_elapsed.saturating_add(delta);
+            if snapshot.cef_on_paint_count >= 3
+                || state.accelerated_observe_elapsed >= startup_config.gpu_bridge_timeout
+            {
+                CefUiPaintTransportFallbackReason::AcceleratedPaintNotObserved
+            } else {
+                return;
+            }
         }
-        state.accelerated_observe_elapsed = state.accelerated_observe_elapsed.saturating_add(delta);
-        snapshot.cef_on_paint_count >= 3
-            || state.accelerated_observe_elapsed >= startup_config.gpu_bridge_timeout
     };
-    if !should_fallback {
-        return;
-    }
     let _old_browser = world.remove_non_send::<CefUiBrowserOwner>();
     let _old_control = world.remove_non_send::<CefUiBrowserControl>();
     if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
         state.kind = CefUiStartupStateKind::StartingCpuFallback {
-            reason: CefUiPaintTransportFallbackReason::AcceleratedPaintNotObserved,
+            reason: fallback_reason,
         };
         state.running_transport = None;
         state.accelerated_observe_elapsed = Duration::ZERO;
@@ -1470,15 +1517,13 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
         target: FUN_UI_DIAGNOSTICS_TARGET,
         cef_on_paint_count = snapshot.cef_on_paint_count,
         cef_on_accelerated_paint_count = snapshot.cef_on_accelerated_paint_count,
-        "CEF UI accelerated shared texture callback was not observed; recreating CPU paint browser"
+        fallback_reason = fallback_reason.as_wire_str(),
+        "CEF UI accelerated path requested CPU browser recreation"
     );
     let browser_config = startup_config
         .browser_config
         .clone()
-        .with_paint_transport_decision(
-            CefUiPaintTransport::CpuPaint,
-            CefUiPaintTransportFallbackReason::AcceleratedPaintNotObserved,
-        );
+        .with_paint_transport_decision(CefUiPaintTransport::CpuPaint, fallback_reason);
     start_cef_ui_browser(world, startup_config, browser_config);
 }
 
