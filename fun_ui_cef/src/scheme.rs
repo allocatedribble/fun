@@ -18,6 +18,7 @@ pub const FUN_UI_MAIN_URL: &str = "fun-ui://main/index.html";
 pub const FUN_UI_APP_JS_URL: &str = "fun-ui://main/assets/app.js";
 pub const FUN_UI_APP_CSS_URL: &str = "fun-ui://main/assets/app.css";
 pub const FUN_CEF_UI_DEV_SERVER_ENV: &str = "FUN_CEF_UI_DEV_SERVER";
+const FUN_UI_ASSET_CHARSET: &str = "utf-8";
 
 const INDEX_HTML_BYTES: &[u8] = include_bytes!("../../game_client/ui/main/index.html");
 const APP_JS_BYTES: &[u8] = include_bytes!("../../game_client/ui/main/assets/app.js");
@@ -47,6 +48,15 @@ impl FunUiAssetRoute {
 
     #[must_use]
     pub const fn mime_type(self) -> &'static str {
+        match self {
+            Self::IndexHtml => "text/html",
+            Self::AppJs => "text/javascript",
+            Self::AppCss => "text/css",
+        }
+    }
+
+    #[must_use]
+    pub const fn content_type(self) -> &'static str {
         match self {
             Self::IndexHtml => "text/html; charset=utf-8",
             Self::AppJs => "text/javascript; charset=utf-8",
@@ -403,9 +413,15 @@ wrap_resource_handler! {
                 response.set_status(200);
                 response.set_status_text(Some(&CefString::from("OK")));
                 response.set_mime_type(Some(&CefString::from(state.asset.mime_type)));
+                response.set_charset(Some(&CefString::from(FUN_UI_ASSET_CHARSET)));
                 response.set_header_by_name(
                     Some(&CefString::from("Cache-Control")),
                     Some(&CefString::from("no-store")),
+                    1,
+                );
+                response.set_header_by_name(
+                    Some(&CefString::from("Content-Type")),
+                    Some(&CefString::from(state.asset.route.content_type())),
                     1,
                 );
             }
@@ -610,7 +626,16 @@ mod tests {
             resolve_fun_ui_asset("fun-ui://main/assets/app.css")
                 .expect("app css")
                 .mime_type,
-            "text/css; charset=utf-8"
+            "text/css"
+        );
+        assert_eq!(
+            FunUiAssetRoute::IndexHtml.mime_type(),
+            "text/html",
+            "CEF Response::set_mime_type expects only the MIME token"
+        );
+        assert_eq!(
+            FunUiAssetRoute::IndexHtml.content_type(),
+            "text/html; charset=utf-8"
         );
     }
 
