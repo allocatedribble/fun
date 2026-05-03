@@ -157,6 +157,9 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 - `fun::perf::render_commands`: command encoder, render pass, compute pass,
   command buffer, queue submit, copy command, and native interop insertion
   counters for DX12/Vulkan submission-shape comparisons.
+- `fun::perf::render_shaders`: shader module creation, shader variant request,
+  pipeline creation timing, pipeline specialization, and material specialization
+  counters for runtime compilation and permutation-pressure checks.
 - `fun::render_catalog`: prewarmed render-catalog inventory, per-asset geometry
   class decisions, and runtime catalog usage counts.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,
@@ -367,6 +370,15 @@ emits `[client perf] render commands:` totals and top-ten
 [`dx12_command_submission_strategy.md`](dx12_command_submission_strategy.md) to
 distinguish renderer work from submit fragmentation before changing DX12 queue
 strategy.
+
+## Shader Compilation And Quality
+
+`-RenderDiagnostics` also enables shader diagnostics through
+`FUN_RENDER_SHADER_DIAGNOSTICS=1` and `BEVY_RENDER_SHADER_DIAGNOSTICS=1`. The
+client emits `[client perf] render shaders:` totals and top-ten
+`[client perf] render shader top:` rows. Use
+[`dx12_shader_quality.md`](dx12_shader_quality.md) for the compilation,
+analysis, and permutation-reduction contract.
 
 ## Denoiser Comparison
 

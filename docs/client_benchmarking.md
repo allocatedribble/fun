@@ -248,6 +248,21 @@ Command submission metrics are recorded as
 `render_command_native_interop_command_insertions`, and
 `render_command_event_count`; `summary.json` also includes
 `render_command_events` with the top ten operation/category/label rows.
+Shader diagnostics are recorded as
+`render_shader_shader_module_creations`,
+`render_shader_shader_module_create_ns`,
+`render_shader_shader_variant_requests`,
+`render_shader_shader_def_count`,
+`render_shader_material_specializations`,
+`render_shader_render_pipeline_create_count`,
+`render_shader_render_pipeline_create_ns`,
+`render_shader_compute_pipeline_create_count`,
+`render_shader_compute_pipeline_create_ns`,
+`render_shader_pipeline_create_count`,
+`render_shader_pipeline_create_ns`,
+`render_shader_pipeline_specialization_count`, and
+`render_shader_event_count`; `summary.json` also includes
+`render_shader_events` with the top ten shader/pipeline events.
 
 PIX, GPUView, and PresentMon-only values are not guessed from client logs. The
 matrix JSON lists them under `dx12_external_metrics` with

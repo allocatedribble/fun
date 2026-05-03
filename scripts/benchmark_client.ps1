@@ -421,6 +421,58 @@ function Parse-RenderCommandEventsLog {
     )
 }
 
+function Parse-RenderShaderEventsLog {
+    param([string[]]$Lines)
+
+    $events = [ordered]@{}
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, "\[client perf\] render shader top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+) elapsed_ns=(?<elapsed_ns>\d+) shader_defs=(?<shader_defs>\d+)")
+        if (-not $match.Success) {
+            continue
+        }
+        $operation = $match.Groups["operation"].Value
+        $category = $match.Groups["category"].Value
+        $label = $match.Groups["label"].Value
+        $key = "$operation`n$category`n$label"
+        if (-not $events.Contains($key)) {
+            $events[$key] = [ordered]@{
+                operation = $operation
+                category = $category
+                label = $label
+                calls = 0
+                elapsed_ns = 0
+                shader_defs = 0
+                samples = 0
+            }
+        }
+        $entry = $events[$key]
+        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
+        $entry.elapsed_ns = [uint64]$entry.elapsed_ns + [uint64]$match.Groups["elapsed_ns"].Value
+        $entry.shader_defs = [uint64]$entry.shader_defs + [uint64]$match.Groups["shader_defs"].Value
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $events.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.elapsed_ns }; Descending = $true }, @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    operation = $_.operation
+                    category = $_.category
+                    label = $_.label
+                    calls = $_.calls
+                    elapsed_ns = $_.elapsed_ns
+                    shader_defs = $_.shader_defs
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
 function Parse-TransientDescriptorCreateLog {
     param([string[]]$Lines)
 
@@ -686,6 +738,12 @@ function Parse-ClientPerfLog {
         $renderCommands = [regex]::Match($line, "\[client perf\] render commands: (?<payload>.*)$")
         if ($renderCommands.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $renderCommands.Groups["payload"].Value -Prefix "render_command_"
+            continue
+        }
+
+        $renderShaders = [regex]::Match($line, "\[client perf\] render shaders: (?<payload>.*)$")
+        if ($renderShaders.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $renderShaders.Groups["payload"].Value -Prefix "render_shader_"
             continue
         }
 
@@ -1323,6 +1381,19 @@ function Write-MarkdownReport {
         "render_command_copy_commands",
         "render_command_native_interop_command_insertions",
         "render_command_event_count",
+        "render_shader_shader_module_creations",
+        "render_shader_shader_module_create_ns",
+        "render_shader_shader_variant_requests",
+        "render_shader_shader_def_count",
+        "render_shader_material_specializations",
+        "render_shader_render_pipeline_create_count",
+        "render_shader_render_pipeline_create_ns",
+        "render_shader_compute_pipeline_create_count",
+        "render_shader_compute_pipeline_create_ns",
+        "render_shader_pipeline_create_count",
+        "render_shader_pipeline_create_ns",
+        "render_shader_pipeline_specialization_count",
+        "render_shader_event_count",
         "dlss_rr_gpu_ns",
         "solari_pass_dlss_rr_guide_resolve_ns",
         "solari_pass_direct_ns",
@@ -1384,6 +1455,16 @@ function Write-MarkdownReport {
         $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
         foreach ($event in $Summary.render_command_events) {
             $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
+        }
+    }
+    if ($null -ne $Summary.render_shader_events -and $Summary.render_shader_events.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Render Shader Top Events") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | operation | category | label | calls | elapsed ns | shader defs | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---|---:|---:|---:|---:|") | Out-Null
+        foreach ($event in $Summary.render_shader_events) {
+            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.elapsed_ns) | $($event.shader_defs) | $($event.samples) |") | Out-Null
         }
     }
     if ($null -ne $Summary.transient_descriptor_creates -and $Summary.transient_descriptor_creates.Count -gt 0) {
@@ -1744,6 +1825,7 @@ try {
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
     $renderChurnEvents = Parse-RenderChurnEventsLog -Lines $sampleLines
     $renderCommandEvents = Parse-RenderCommandEventsLog -Lines $sampleLines
+    $renderShaderEvents = Parse-RenderShaderEventsLog -Lines $sampleLines
     $transientDescriptorCreates = @(Parse-TransientDescriptorCreateLog -Lines $sampleLines)
     $transientDescriptorLabelVariants = @(Parse-TransientDescriptorLabelVariantLog -Lines $sampleLines)
     $cefUiTransportSelection = Parse-CefUiTransportSelectionLog -Lines $allLines
@@ -1844,6 +1926,7 @@ try {
         render_upload_callsites = $renderUploadCallsites
         render_churn_events = $renderChurnEvents
         render_command_events = $renderCommandEvents
+        render_shader_events = $renderShaderEvents
         transient_descriptor_creates = $transientDescriptorCreates
         transient_descriptor_label_variants = $transientDescriptorLabelVariants
         cef_ui_transport_selection = $cefUiTransportSelection

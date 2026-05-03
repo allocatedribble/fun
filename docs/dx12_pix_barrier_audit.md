@@ -75,6 +75,8 @@ markers and tracing targets:
   specialized pipeline cache counters.
 - `fun::perf::render_commands`: command encoder, pass, submit, copy, and native
   interop insertion counts by coarse render category.
+- `fun::perf::render_shaders`: shader module, shader variant, pipeline creation,
+  and material specialization counters.
 - `bevy_render::transient`: transient texture/buffer reuse, aliasing,
   descriptor miss reasons, and top descriptor-create rows.
 - `bevy_render::scheduler`: render graph pressure.
@@ -108,6 +110,10 @@ Check `render_command_queue_submits`,
 `render_command_copy_commands`, and `render_command_events` before attributing
 DX12 p95 loss to barriers. High submit or command-buffer counts should be
 investigated as submission fragmentation with PIX/GPUView evidence.
+Check `render_shader_shader_module_creations`,
+`render_shader_pipeline_create_count`, `render_shader_pipeline_create_ns`, and
+`render_shader_events` before treating a frame spike as a barrier issue. Runtime
+shader or pipeline creation belongs in the shader-quality lane first.
 
 If a transition appears redundant, record the resource name, before state, after
 state, producing pass, consuming pass, and whether wgpu or a native DX12 interop

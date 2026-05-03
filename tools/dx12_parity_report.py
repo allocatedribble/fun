@@ -70,6 +70,19 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("render_command_copy_commands", "lower", "copy commands"),
     ("render_command_native_interop_command_insertions", "lower", "native interop command insertions"),
     ("render_command_event_count", "lower", "render command event count"),
+    ("render_shader_shader_module_creations", "lower", "shader module creations"),
+    ("render_shader_shader_module_create_ns", "lower", "shader module creation time"),
+    ("render_shader_shader_variant_requests", "lower", "shader variant requests"),
+    ("render_shader_shader_def_count", "lower", "shader definition count"),
+    ("render_shader_material_specializations", "lower", "material specializations"),
+    ("render_shader_render_pipeline_create_count", "lower", "render pipeline create count"),
+    ("render_shader_render_pipeline_create_ns", "lower", "render pipeline create time"),
+    ("render_shader_compute_pipeline_create_count", "lower", "compute pipeline create count"),
+    ("render_shader_compute_pipeline_create_ns", "lower", "compute pipeline create time"),
+    ("render_shader_pipeline_create_count", "lower", "pipeline create count"),
+    ("render_shader_pipeline_create_ns", "lower", "pipeline create time"),
+    ("render_shader_pipeline_specialization_count", "lower", "pipeline specialization count"),
+    ("render_shader_event_count", "lower", "render shader event count"),
     ("transient_texture_creates", "lower", "transient texture creates"),
     ("transient_buffer_creates", "lower", "transient buffer creates"),
     ("transient_texture_descriptor_miss_creates", "lower", "transient texture descriptor misses"),
@@ -365,6 +378,31 @@ def likely_bottleneck(
     if native_interop and native_interop["dx12_p95"] and native_interop["dx12_p95"] > 0:
         reasons.append("DX12 native interop command insertion was observed; inspect fence and queue overlap")
         return "CEF/native interop sync", "PIX plus CEF counters", reasons
+
+    shader_module_creates = row_by_metric(rows, "render_shader_shader_module_creations")
+    shader_module_ns = row_by_metric(rows, "render_shader_shader_module_create_ns")
+    pipeline_create_count = row_by_metric(rows, "render_shader_pipeline_create_count")
+    pipeline_create_ns = row_by_metric(rows, "render_shader_pipeline_create_ns")
+    shader_variants = row_by_metric(rows, "render_shader_shader_variant_requests")
+    material_specializations = row_by_metric(rows, "render_shader_material_specializations")
+    if shader_module_creates and shader_module_creates["dx12_p95"] and shader_module_creates["dx12_p95"] > 0:
+        reasons.append("DX12 shader module creation was observed in the sample window")
+        return "shader compilation", "PIX plus vendor shader tools", reasons
+    if shader_module_ns and shader_module_ns["dx12_p95"] and shader_module_ns["dx12_p95"] > 0:
+        reasons.append("DX12 shader module creation time was observed in the sample window")
+        return "shader compilation", "PIX plus vendor shader tools", reasons
+    if pipeline_create_count and pipeline_create_count["dx12_p95"] and pipeline_create_count["dx12_p95"] > 0:
+        reasons.append("DX12 pipeline creation was observed in the sample window")
+        return "shader compilation", "PIX plus vendor shader tools", reasons
+    if pipeline_create_ns and pipeline_create_ns["dx12_p95"] and pipeline_create_ns["dx12_p95"] > 0:
+        reasons.append("DX12 pipeline creation time was observed in the sample window")
+        return "shader compilation", "PIX plus vendor shader tools", reasons
+    if shader_variants and shader_variants["p95_delta"] is not None and shader_variants["p95_delta"] > 0:
+        reasons.append("DX12 shader variant requests exceeded the Vulkan lane")
+        return "shader variant pressure", "benchmark shader top events", reasons
+    if material_specializations and material_specializations["p95_delta"] is not None and material_specializations["p95_delta"] > 0:
+        reasons.append("DX12 material specialization count exceeded the Vulkan lane")
+        return "shader variant pressure", "benchmark shader top events", reasons
 
     transient_texture_creates = row_by_metric(rows, "transient_texture_creates")
     transient_buffer_creates = row_by_metric(rows, "transient_buffer_creates")

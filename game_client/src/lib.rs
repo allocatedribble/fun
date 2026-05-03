@@ -3303,6 +3303,61 @@ fn log_render_performance(
         }
         bevy::render::renderer::reset_render_command_counters();
     }
+    let shader_snapshot = bevy::render::renderer::snapshot_render_shader_diagnostics();
+    if shader_snapshot.enabled {
+        let pipeline_create_ns = shader_snapshot
+            .render_pipeline_create_ns
+            .saturating_add(shader_snapshot.compute_pipeline_create_ns);
+        let pipeline_create_count = shader_snapshot
+            .render_pipeline_create_count
+            .saturating_add(shader_snapshot.compute_pipeline_create_count);
+        game_shared::fun_diag_info!(
+            target: "fun::perf::render_shaders",
+            shader_module_creations = shader_snapshot.shader_module_creations,
+            shader_module_create_ns = shader_snapshot.shader_module_create_ns,
+            shader_variant_requests = shader_snapshot.shader_variant_requests,
+            shader_def_count = shader_snapshot.shader_def_count,
+            material_specializations = shader_snapshot.material_specializations,
+            render_pipeline_create_count = shader_snapshot.render_pipeline_create_count,
+            render_pipeline_create_ns = shader_snapshot.render_pipeline_create_ns,
+            compute_pipeline_create_count = shader_snapshot.compute_pipeline_create_count,
+            compute_pipeline_create_ns = shader_snapshot.compute_pipeline_create_ns,
+            pipeline_create_count,
+            pipeline_create_ns,
+            pipeline_specialization_count = shader_snapshot.pipeline_specialization_count,
+            event_count = shader_snapshot.events.len(),
+            "render shader diagnostic sample"
+        );
+        game_shared::fun_diag_info!(
+            "[client perf] render shaders: shader_module_creations={} shader_module_create_ns={} shader_variant_requests={} shader_def_count={} material_specializations={} render_pipeline_create_count={} render_pipeline_create_ns={} compute_pipeline_create_count={} compute_pipeline_create_ns={} pipeline_create_count={} pipeline_create_ns={} pipeline_specialization_count={} event_count={}",
+            shader_snapshot.shader_module_creations,
+            shader_snapshot.shader_module_create_ns,
+            shader_snapshot.shader_variant_requests,
+            shader_snapshot.shader_def_count,
+            shader_snapshot.material_specializations,
+            shader_snapshot.render_pipeline_create_count,
+            shader_snapshot.render_pipeline_create_ns,
+            shader_snapshot.compute_pipeline_create_count,
+            shader_snapshot.compute_pipeline_create_ns,
+            pipeline_create_count,
+            pipeline_create_ns,
+            shader_snapshot.pipeline_specialization_count,
+            shader_snapshot.events.len(),
+        );
+        for (rank, event) in shader_snapshot.events.iter().take(10).enumerate() {
+            game_shared::fun_diag_info!(
+                "[client perf] render shader top: rank={} operation={} category={} label={} calls={} elapsed_ns={} shader_defs={}",
+                rank + 1,
+                event.operation,
+                event.category,
+                event.label,
+                event.calls,
+                event.elapsed_ns,
+                event.shader_defs,
+            );
+        }
+        bevy::render::renderer::reset_render_shader_diagnostics();
+    }
     log_schedule_heatmap(schedule_profiler);
 
     if let Some(window) = window {
