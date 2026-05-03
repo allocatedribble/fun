@@ -383,7 +383,7 @@ impl Dx12CefInterop {
             fence,
             next_fence_value: AtomicU64::new(1),
             next_frame_generation: AtomicU64::new(1),
-            slots: Mutex::new(Dx12CefTextureRing::empty()),
+            slots: Mutex::new(Dx12CefTextureRing::from_env()),
             copy_commands: Mutex::new(copy_commands),
             diagnostics: Dx12CefInteropDiagnostics::default(),
             consecutive_accelerated_paint_failures: AtomicU32::new(0),
@@ -419,6 +419,14 @@ impl Dx12CefInterop {
     }
 
     #[must_use]
+    pub fn ring_capacity(&self) -> usize {
+        self.slots
+            .lock()
+            .map(|slots| slots.capacity())
+            .unwrap_or_default()
+    }
+
+    #[must_use]
     pub fn native_pointer_summary(&self) -> Dx12CefNativePointerSummary {
         Dx12CefNativePointerSummary {
             d3d12_device: self.d3d12_device.as_raw() as usize,
@@ -435,7 +443,19 @@ impl Dx12CefInterop {
         let completed_fence_value = self.completed_fence_value();
         let mut slots = self.slots.lock().ok()?;
         slots.retire_completed_copying_slots(completed_fence_value);
-        let slot_index = slots.latest_ready_slot_index()?;
+        let latest_ready = slots.latest_ready_slot_index();
+        let Some(slot_index) = slots.latest_completed_ready_slot_index(completed_fence_value)
+        else {
+            if latest_ready.is_some() {
+                self.diagnostics.record_gpu_frame_not_ready();
+                self.diagnostics.record_gpu_frame_reused();
+            }
+            return None;
+        };
+        if latest_ready.is_some_and(|latest| latest != slot_index) {
+            self.diagnostics.record_gpu_frame_not_ready();
+            self.diagnostics.record_gpu_frame_reused();
+        }
         let slot = slots.slot(slot_index)?;
         Some(Dx12CefReadyFrameToken {
             generation: slot.generation,
@@ -464,6 +484,8 @@ impl Dx12CefInterop {
             )
         })?;
         if !copy_commands.can_reset(completed_fence_value) {
+            self.diagnostics.record_gpu_frame_not_ready();
+            self.diagnostics.record_gpu_frame_reused();
             return Ok(None);
         }
 
@@ -478,6 +500,8 @@ impl Dx12CefInterop {
             })?;
             slots.retire_completed_copying_slots(completed_fence_value);
             let Some(slot_index) = slots.ready_slot_index_by_generation(token.generation) else {
+                self.diagnostics.record_gpu_frame_not_ready();
+                self.diagnostics.record_gpu_frame_reused();
                 return Ok(None);
             };
             let slot = slots.slot_mut(slot_index).ok_or_else(|| {
@@ -488,6 +512,8 @@ impl Dx12CefInterop {
                 )
             })?;
             if completed_fence_value < slot.fence_value {
+                self.diagnostics.record_gpu_frame_not_ready();
+                self.diagnostics.record_gpu_frame_reused();
                 return Ok(None);
             }
             if slot.width != token.width
@@ -520,6 +546,7 @@ impl Dx12CefInterop {
         );
         match copy_result {
             Ok(result) => {
+                self.diagnostics.record_gpu_frame_ready();
                 if let Ok(mut slots) = self.slots.lock()
                     && let Some(slot) = slots.slot_mut(source.slot_index)
                     && slot.generation == source.generation
@@ -653,6 +680,17 @@ impl Dx12CefInterop {
         slot.dirty_rects.extend_from_slice(frame.dirty_rects);
         slot.dirty_rect_metadata = dirty_rect_metadata;
         self.diagnostics.record_gpu_copy(copied_bytes, copy_ns);
+        if cef_dx12_debug_timings_requested() {
+            tracing::debug!(
+                target: "fun::ui",
+                generation = generation.0,
+                copied_bytes,
+                copy_ns,
+                dirty_rect_count = frame.dirty_rects.len(),
+                copy_mode = "full_frame",
+                "CEF UI accelerated paint callback GPU copy timing"
+            );
+        }
         self.consecutive_accelerated_paint_failures
             .store(0, Ordering::Relaxed);
         self.diagnostics
@@ -877,21 +915,27 @@ impl Dx12CefInterop {
                         error,
                     )
                 })?;
-            resource_barrier(
-                &copy_commands.command_list,
-                target_resource,
-                target_state_before.as_d3d12_state(),
-                D3D12_RESOURCE_STATE_COPY_DEST,
-            );
-            copy_commands
-                .command_list
-                .CopyResource(target_resource, &source.resource);
-            resource_barrier(
-                &copy_commands.command_list,
-                target_resource,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
+            {
+                let _pix_scope = begin_dx12_pix_event(
+                    &copy_commands.command_list,
+                    "fun.cef.copy_ring_source_to_bevy_image",
+                );
+                resource_barrier(
+                    &copy_commands.command_list,
+                    target_resource,
+                    target_state_before.as_d3d12_state(),
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                );
+                copy_commands
+                    .command_list
+                    .CopyResource(target_resource, &source.resource);
+                resource_barrier(
+                    &copy_commands.command_list,
+                    target_resource,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                );
+            }
             copy_commands.command_list.Close().map_err(|error| {
                 Dx12CefInteropError::from_windows(
                     Dx12CefInteropFailure::CopyCommandListCloseFailed,
@@ -921,6 +965,15 @@ impl Dx12CefInterop {
                 })?;
         }
         copy_commands.pending_fence_value = fence_value;
+        if cef_dx12_debug_timings_requested() {
+            tracing::debug!(
+                target: "fun::ui",
+                generation = source.generation.0,
+                fence_value,
+                target_format = texture_format_label(target_format),
+                "CEF UI accelerated Bevy-image GPU copy submitted"
+            );
+        }
         if !self.bevy_copy_logged.swap(true, Ordering::AcqRel) {
             tracing::info!(
                 target: "fun::ui",
@@ -1154,6 +1207,36 @@ fn resource_barrier(
     }
 }
 
+struct Dx12PixEventScope<'a> {
+    command_list: &'a ID3D12GraphicsCommandList,
+}
+
+impl Drop for Dx12PixEventScope<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.command_list.EndEvent();
+        }
+    }
+}
+
+fn begin_dx12_pix_event<'a>(
+    command_list: &'a ID3D12GraphicsCommandList,
+    label: &str,
+) -> Dx12PixEventScope<'a> {
+    let wide_label = label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let byte_len = wide_label
+        .len()
+        .saturating_mul(std::mem::size_of::<u16>())
+        .min(u32::MAX as usize) as u32;
+    unsafe {
+        command_list.BeginEvent(0, Some(wide_label.as_ptr().cast()), byte_len);
+    }
+    Dx12PixEventScope { command_list }
+}
+
 fn transition_barrier(
     resource: &ID3D12Resource,
     before: D3D12_RESOURCE_STATES,
@@ -1256,6 +1339,17 @@ const fn texture_format_label(format: TextureFormat) -> &'static str {
 
 fn cef_dx12_debug_layer_requested() -> bool {
     std::env::var_os("FUN_CEF_UI_ACCELERATED_PAINT_DEBUG").is_some()
+}
+
+fn cef_dx12_debug_timings_requested() -> bool {
+    std::env::var("FUN_CEF_UI_DEBUG_TIMINGS")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
 }
 
 #[cfg(test)]

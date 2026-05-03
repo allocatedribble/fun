@@ -52,22 +52,26 @@ pub struct BrowserUiPage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CefUiPaintTransport {
+    Disabled,
+    Auto,
     CpuPaint,
-    D3d11SharedTextureDx12Copy,
+    D3d11On12Accelerated,
 }
 
 impl CefUiPaintTransport {
     #[must_use]
     pub const fn as_wire_str(self) -> &'static str {
         match self {
-            Self::CpuPaint => "cpu_paint",
-            Self::D3d11SharedTextureDx12Copy => "d3d11_shared_texture_dx12_copy",
+            Self::Disabled => "disabled",
+            Self::Auto => "auto",
+            Self::CpuPaint => "cpu",
+            Self::D3d11On12Accelerated => "d3d11on12",
         }
     }
 
     #[must_use]
     pub const fn shared_texture_enabled(self) -> bool {
-        matches!(self, Self::D3d11SharedTextureDx12Copy)
+        matches!(self, Self::D3d11On12Accelerated)
     }
 }
 
@@ -130,20 +134,24 @@ impl CefUiRenderBackendHint {
     }
 }
 
+pub type CefUiRequestedPaintTransport = CefUiPaintTransport;
+
+pub const CEF_UI_GPU_RING_DEPTH_DEFAULT: u8 = 3;
+pub const CEF_UI_GPU_RING_DEPTH_MIN: u8 = 2;
+pub const CEF_UI_GPU_RING_DEPTH_MAX: u8 = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CefUiRequestedPaintTransport {
-    Cpu,
-    Auto,
-    D3d11On12,
+pub enum CefUiGpuCopyMode {
+    FullFrame,
+    DirtyRects,
 }
 
-impl CefUiRequestedPaintTransport {
+impl CefUiGpuCopyMode {
     #[must_use]
     pub const fn as_wire_str(self) -> &'static str {
         match self {
-            Self::Cpu => "cpu",
-            Self::Auto => "auto",
-            Self::D3d11On12 => "d3d11on12",
+            Self::FullFrame => "full_frame",
+            Self::DirtyRects => "dirty_rects",
         }
     }
 }
@@ -160,6 +168,10 @@ pub struct BrowserUiConfig {
     pub paint_transport_fallback_reason: CefUiPaintTransportFallbackReason,
     pub render_backend_hint: CefUiRenderBackendHint,
     pub accelerated_paint_debug: bool,
+    pub accelerated_strict: bool,
+    pub gpu_ring_depth: u8,
+    pub gpu_copy_mode: CefUiGpuCopyMode,
+    pub gpu_debug_timings: bool,
 }
 
 impl BrowserUiConfig {
@@ -171,11 +183,15 @@ impl BrowserUiConfig {
             viewport_width,
             viewport_height,
             windowless_frame_rate: CEF_UI_WINDOWLESS_FRAME_RATE_HZ,
-            requested_paint_transport: CefUiRequestedPaintTransport::Cpu,
+            requested_paint_transport: CefUiRequestedPaintTransport::CpuPaint,
             paint_transport: CefUiPaintTransport::CpuPaint,
             paint_transport_fallback_reason: CefUiPaintTransportFallbackReason::None,
             render_backend_hint: CefUiRenderBackendHint::Auto,
             accelerated_paint_debug: false,
+            accelerated_strict: false,
+            gpu_ring_depth: CEF_UI_GPU_RING_DEPTH_DEFAULT,
+            gpu_copy_mode: CefUiGpuCopyMode::FullFrame,
+            gpu_debug_timings: false,
         }
     }
 
@@ -228,6 +244,10 @@ impl BrowserUiConfig {
     fn apply_paint_transport_env(&mut self) {
         self.render_backend_hint = render_backend_hint_from_env();
         self.accelerated_paint_debug = env_flag_enabled("FUN_CEF_UI_ACCELERATED_PAINT_DEBUG");
+        self.accelerated_strict = env_flag_enabled("FUN_CEF_UI_ACCELERATED_STRICT");
+        self.gpu_ring_depth = cef_ui_gpu_ring_depth_from_env();
+        self.gpu_copy_mode = cef_ui_gpu_copy_mode_from_env();
+        self.gpu_debug_timings = env_flag_enabled("FUN_CEF_UI_DEBUG_TIMINGS");
         let request = paint_transport_request_from_env();
         self.requested_paint_transport = request;
         let decision = select_paint_transport(
@@ -296,15 +316,16 @@ fn paint_transport_request_from_env() -> CefUiRequestedPaintTransport {
             "FUN_CEF_UI_ACCELERATED_PAINT ignored unsupported value"
         );
     }
-    CefUiRequestedPaintTransport::Cpu
+    CefUiRequestedPaintTransport::Auto
 }
 
 fn parse_paint_transport_request(value: &str) -> Option<CefUiRequestedPaintTransport> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "cpu" | "cpu_paint" => Some(CefUiRequestedPaintTransport::Cpu),
+        "disabled" | "off" | "none" => Some(CefUiRequestedPaintTransport::Disabled),
+        "cpu" | "cpu_paint" => Some(CefUiRequestedPaintTransport::CpuPaint),
         "auto" => Some(CefUiRequestedPaintTransport::Auto),
         "d3d11on12" | "d3d11_shared_texture_dx12_copy" | "d3d11-shared-texture-dx12-copy" => {
-            Some(CefUiRequestedPaintTransport::D3d11On12)
+            Some(CefUiRequestedPaintTransport::D3d11On12Accelerated)
         }
         _ => None,
     }
@@ -312,10 +333,40 @@ fn parse_paint_transport_request(value: &str) -> Option<CefUiRequestedPaintTrans
 
 fn parse_accelerated_paint_request(value: &str) -> Option<CefUiRequestedPaintTransport> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "0" | "false" | "off" | "cpu" => Some(CefUiRequestedPaintTransport::Cpu),
-        "1" | "true" | "on" | "d3d11on12" => Some(CefUiRequestedPaintTransport::D3d11On12),
+        "disabled" => Some(CefUiRequestedPaintTransport::Disabled),
+        "0" | "false" | "off" | "cpu" => Some(CefUiRequestedPaintTransport::CpuPaint),
+        "1" | "true" | "on" | "d3d11on12" => {
+            Some(CefUiRequestedPaintTransport::D3d11On12Accelerated)
+        }
         "auto" => Some(CefUiRequestedPaintTransport::Auto),
         _ => None,
+    }
+}
+
+#[must_use]
+pub fn cef_ui_gpu_ring_depth_from_env() -> u8 {
+    std::env::var("FUN_CEF_UI_GPU_RING_DEPTH")
+        .ok()
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        .map_or(CEF_UI_GPU_RING_DEPTH_DEFAULT, clamp_cef_ui_gpu_ring_depth)
+}
+
+#[must_use]
+pub const fn clamp_cef_ui_gpu_ring_depth(value: u8) -> u8 {
+    if value < CEF_UI_GPU_RING_DEPTH_MIN {
+        CEF_UI_GPU_RING_DEPTH_MIN
+    } else if value > CEF_UI_GPU_RING_DEPTH_MAX {
+        CEF_UI_GPU_RING_DEPTH_MAX
+    } else {
+        value
+    }
+}
+
+fn cef_ui_gpu_copy_mode_from_env() -> CefUiGpuCopyMode {
+    if env_flag_enabled("FUN_CEF_UI_COPY_DIRTY_RECTS") {
+        CefUiGpuCopyMode::DirtyRects
+    } else {
+        CefUiGpuCopyMode::FullFrame
     }
 }
 
@@ -359,11 +410,15 @@ const fn select_paint_transport(
     output_texture_allocation_ready: bool,
 ) -> CefUiPaintTransportDecision {
     match request {
-        CefUiRequestedPaintTransport::Cpu => CefUiPaintTransportDecision {
+        CefUiRequestedPaintTransport::Disabled => CefUiPaintTransportDecision {
+            transport: CefUiPaintTransport::Disabled,
+            fallback_reason: CefUiPaintTransportFallbackReason::None,
+        },
+        CefUiRequestedPaintTransport::CpuPaint => CefUiPaintTransportDecision {
             transport: CefUiPaintTransport::CpuPaint,
             fallback_reason: CefUiPaintTransportFallbackReason::None,
         },
-        CefUiRequestedPaintTransport::Auto | CefUiRequestedPaintTransport::D3d11On12 => {
+        CefUiRequestedPaintTransport::Auto | CefUiRequestedPaintTransport::D3d11On12Accelerated => {
             if !windows {
                 return CefUiPaintTransportDecision {
                     transport: CefUiPaintTransport::CpuPaint,
@@ -396,7 +451,7 @@ const fn select_paint_transport(
                 };
             }
             CefUiPaintTransportDecision {
-                transport: CefUiPaintTransport::D3d11SharedTextureDx12Copy,
+                transport: CefUiPaintTransport::D3d11On12Accelerated,
                 fallback_reason: CefUiPaintTransportFallbackReason::None,
             }
         }
@@ -1338,27 +1393,75 @@ fn windowless_window_info(config: &BrowserUiConfig) -> WindowInfo {
 
 fn log_paint_transport_selection(config: &BrowserUiConfig, window_info: &WindowInfo) {
     let shared_texture_enabled = window_info.shared_texture_enabled != 0;
-    let d3d11on12_ready = config.paint_transport == CefUiPaintTransport::D3d11SharedTextureDx12Copy;
+    let d3d11on12_ready = config.paint_transport == CefUiPaintTransport::D3d11On12Accelerated;
     match config.paint_transport {
+        CefUiPaintTransport::Disabled => tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            requested = config.requested_paint_transport.as_wire_str(),
+            selected = config.paint_transport.as_wire_str(),
+            backend = config.render_backend_hint.as_wire_str(),
+            windows = cfg!(target_os = "windows"),
+            shared_texture_enabled,
+            d3d11on12_ready,
+            cpu_fallback_enabled = !config.accelerated_strict,
+            ring_depth = config.gpu_ring_depth,
+            copy_mode = config.gpu_copy_mode.as_wire_str(),
+            strict = config.accelerated_strict,
+            debug_timings = config.gpu_debug_timings,
+            fallback_reason = config.paint_transport_fallback_reason.as_wire_str(),
+            accelerated_paint_debug = config.accelerated_paint_debug,
+            "CEF UI transport selected: disabled"
+        ),
+        CefUiPaintTransport::Auto => tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            requested = config.requested_paint_transport.as_wire_str(),
+            selected = config.paint_transport.as_wire_str(),
+            backend = config.render_backend_hint.as_wire_str(),
+            windows = cfg!(target_os = "windows"),
+            shared_texture_enabled,
+            d3d11on12_ready,
+            cpu_fallback_enabled = !config.accelerated_strict,
+            ring_depth = config.gpu_ring_depth,
+            copy_mode = config.gpu_copy_mode.as_wire_str(),
+            strict = config.accelerated_strict,
+            debug_timings = config.gpu_debug_timings,
+            fallback_reason = config.paint_transport_fallback_reason.as_wire_str(),
+            accelerated_paint_debug = config.accelerated_paint_debug,
+            "CEF UI transport selected: auto"
+        ),
         CefUiPaintTransport::CpuPaint => tracing::info!(
             target: FUN_UI_DIAGNOSTICS_TARGET,
+            requested = config.requested_paint_transport.as_wire_str(),
+            selected = config.paint_transport.as_wire_str(),
             backend = config.render_backend_hint.as_wire_str(),
             windows = cfg!(target_os = "windows"),
             shared_texture_enabled,
             d3d11on12_ready,
+            cpu_fallback_enabled = !config.accelerated_strict,
+            ring_depth = config.gpu_ring_depth,
+            copy_mode = config.gpu_copy_mode.as_wire_str(),
+            strict = config.accelerated_strict,
+            debug_timings = config.gpu_debug_timings,
             fallback_reason = config.paint_transport_fallback_reason.as_wire_str(),
             accelerated_paint_debug = config.accelerated_paint_debug,
-            "CEF UI paint transport selected: cpu_paint"
+            "CEF UI transport selected: cpu"
         ),
-        CefUiPaintTransport::D3d11SharedTextureDx12Copy => tracing::info!(
+        CefUiPaintTransport::D3d11On12Accelerated => tracing::info!(
             target: FUN_UI_DIAGNOSTICS_TARGET,
+            requested = config.requested_paint_transport.as_wire_str(),
+            selected = config.paint_transport.as_wire_str(),
             backend = config.render_backend_hint.as_wire_str(),
             windows = cfg!(target_os = "windows"),
             shared_texture_enabled,
             d3d11on12_ready,
+            cpu_fallback_enabled = !config.accelerated_strict,
+            ring_depth = config.gpu_ring_depth,
+            copy_mode = config.gpu_copy_mode.as_wire_str(),
+            strict = config.accelerated_strict,
+            debug_timings = config.gpu_debug_timings,
             fallback_reason = config.paint_transport_fallback_reason.as_wire_str(),
             accelerated_paint_debug = config.accelerated_paint_debug,
-            "CEF UI paint transport selected: d3d11_shared_texture_dx12_copy"
+            "CEF UI transport selected: d3d11on12"
         ),
     }
 }
@@ -1413,7 +1516,7 @@ mod tests {
     #[cfg(windows)]
     fn windowless_accelerated_paint_enables_shared_textures() {
         let config = BrowserUiConfig {
-            paint_transport: CefUiPaintTransport::D3d11SharedTextureDx12Copy,
+            paint_transport: CefUiPaintTransport::D3d11On12Accelerated,
             ..BrowserUiConfig::default()
         };
 
@@ -1426,7 +1529,7 @@ mod tests {
     #[test]
     fn explicit_d3d11on12_transport_falls_back_until_bridge_exists() {
         let decision = select_paint_transport(
-            CefUiRequestedPaintTransport::D3d11On12,
+            CefUiRequestedPaintTransport::D3d11On12Accelerated,
             CefUiRenderBackendHint::Dx12,
             true,
             false,
@@ -1483,11 +1586,37 @@ mod tests {
 
         assert_eq!(
             decision.transport,
-            CefUiPaintTransport::D3d11SharedTextureDx12Copy
+            CefUiPaintTransport::D3d11On12Accelerated
         );
         assert_eq!(
             decision.fallback_reason,
             CefUiPaintTransportFallbackReason::None
         );
+    }
+
+    #[test]
+    fn disabled_transport_never_enables_shared_textures() {
+        let config = BrowserUiConfig {
+            paint_transport: CefUiPaintTransport::Disabled,
+            ..BrowserUiConfig::default()
+        };
+        let decision = select_paint_transport(
+            CefUiRequestedPaintTransport::Disabled,
+            CefUiRenderBackendHint::Dx12,
+            true,
+            true,
+            true,
+            true,
+        );
+
+        assert_eq!(windowless_window_info(&config).shared_texture_enabled, 0);
+        assert_eq!(decision.transport, CefUiPaintTransport::Disabled);
+    }
+
+    #[test]
+    fn gpu_ring_depth_is_clamped_to_supported_runtime_range() {
+        assert_eq!(clamp_cef_ui_gpu_ring_depth(0), CEF_UI_GPU_RING_DEPTH_MIN);
+        assert_eq!(clamp_cef_ui_gpu_ring_depth(3), 3);
+        assert_eq!(clamp_cef_ui_gpu_ring_depth(9), CEF_UI_GPU_RING_DEPTH_MAX);
     }
 }

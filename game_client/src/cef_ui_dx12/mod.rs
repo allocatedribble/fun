@@ -17,5 +17,6 @@ pub use bridge::{
 pub use diagnostics::{Dx12CefInteropDiagnosticSnapshot, Dx12CefInteropDiagnostics};
 pub use handles::{Dx12CefNativeHandles, extract_wgpu_dx12_handles};
 pub use ring::{
-    CEF_GPU_RING_LEN, Dx12CefSlotState, Dx12CefTextureRing, Dx12CefTextureSlot, DxgiFormat,
+    CEF_GPU_RING_DEPTH_DEFAULT, CEF_GPU_RING_DEPTH_MAX, CEF_GPU_RING_DEPTH_MIN, Dx12CefSlotState,
+    Dx12CefTextureRing, Dx12CefTextureSlot, DxgiFormat,
 };

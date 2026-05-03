@@ -11,7 +11,7 @@ Evidence in the current code:
 
 - `fun_ui_cef::browser::windowless_window_info` creates a transparent
   windowless browser and enables CEF shared textures only for the selected
-  `d3d11_shared_texture_dx12_copy` transport.
+  `d3d11on12` transport.
 - `fun_ui_cef` has tests proving CPU transport disables shared textures and
   accelerated transport enables them.
 - `fun_ui_cef::render_handler::on_paint` receives a BGRA buffer from CEF and
@@ -153,8 +153,8 @@ Rules:
 - Copy into a FUN-owned D3D12/wgpu texture before CEF returns the frame to its
   pool.
 - Keep all raw COM pointer and wgpu HAL extraction inside one narrow module.
-- Log the selected paint transport on startup: `cpu_paint` or
-  `d3d11_shared_texture_dx12_copy`.
+- Log the requested and selected paint transport on startup, including
+  `disabled`, `cpu`, `d3d11on12`, and `auto` decisions.
 - Expose paint callback FPS separately from Svelte `requestAnimationFrame` FPS
   before using it for performance claims.
 
@@ -164,32 +164,53 @@ Rules:
 
 ```rust
 pub enum CefUiPaintTransport {
+    Disabled,
+    Auto,
     CpuPaint,
-    D3d11SharedTextureDx12Copy,
+    D3d11On12Accelerated,
 }
 ```
 
 `BrowserUiConfig` carries the selected transport, the render-backend hint, the
-accelerated-paint debug flag, and a typed fallback reason. The production
-default remains the CPU lane, but explicit or auto accelerated requests can now
-start the shared-texture browser after the render-world D3D11on12 bridge reports
-ready. If that bridge is unavailable, the request still fails closed to the CPU
-lane with a typed fallback reason.
+strict fallback policy, the GPU ring depth, the copy mode, timing-debug state,
+and a typed fallback reason. The compatibility lane remains CPU paint, while
+`auto` can select accelerated paint after the render-world D3D11On12 bridge
+reports ready. `disabled` starts no CEF browser and is intended for render-only
+DX12 comparison lanes.
 
 Environment gates:
 
-- `FUN_CEF_UI_PAINT_TRANSPORT=cpu|auto|d3d11on12`
-- `FUN_CEF_UI_ACCELERATED_PAINT=0|1|auto`
-- `FUN_CEF_UI_ACCELERATED_PAINT_DEBUG=0|1`
+- `FUN_CEF_UI_PAINT_TRANSPORT=disabled|cpu|d3d11on12|auto`
+- `FUN_CEF_UI_ACCELERATED_STRICT=0|1`
+- `FUN_CEF_UI_GPU_RING_DEPTH=2|3|4|5`
+- `FUN_CEF_UI_COPY_DIRTY_RECTS=0|1`
+- `FUN_CEF_UI_DEBUG_TIMINGS=0|1`
+
+`FUN_CEF_UI_ACCELERATED_PAINT=0|1|auto` is still accepted as a compatibility
+alias for older scripts, but new tooling should prefer
+`FUN_CEF_UI_PAINT_TRANSPORT`.
 
 Startup logs include:
 
+- requested transport
 - selected transport
 - backend hint
 - Windows target flag
 - CEF shared-texture flag
-- D3D11on12 readiness
+- D3D11On12 readiness
+- strict/fallback policy
+- GPU ring depth
+- copy mode (`full_frame` for the current implementation)
 - fallback reason
+
+The parser-stable line is:
+
+```text
+[client perf] cef_ui transport selected: requested=auto selected=d3d11on12 backend=dx12 bridge_ready=true cpu_fallback_enabled=true ring_depth=3 copy_mode=full_frame strict=false debug_timings=false fallback_reason=none
+```
+
+Benchmark summaries record this as `cef_ui_transport_selection` so DX12 parity
+reports can distinguish a real accelerated lane from a CPU fallback lane.
 
 The render handler now has an `OnAcceleratedPaint` surface, but it only records
 the callback and dispatches a borrowed `CefAcceleratedPaintFrame` to an optional
@@ -262,15 +283,18 @@ module that extracts wgpu DX12 HAL handles. It:
 - creates an `ID3D12Fence`;
 - creates a reusable direct command allocator/list pair for ring-slot to Bevy
   texture copies;
-- initializes an empty triple-buffer texture ring.
+- initializes an empty texture ring with depth clamped to the supported
+  `2..=5` slot range.
 - logs the first-pass GPU format policy:
   `CEF UI GPU format source=BGRA8 target=BGRA8 conversion=none alpha=premultiplied`.
 
 The main world starts accelerated CEF only after the slot reports `Ready`. If
 bridge initialization fails, the client starts a CPU browser with a typed
-fallback reason. If an accelerated browser starts and CEF produces CPU `OnPaint`
-frames or no accelerated callbacks during the startup observation window, the
-client tears down that browser and recreates a CPU paint browser with
+fallback reason unless strict accelerated mode is enabled. Strict mode marks the
+startup state as failed and logs the exact fallback reason instead of silently
+creating the CPU browser. If an accelerated browser starts and CEF produces CPU
+`OnPaint` frames or no accelerated callbacks during the startup observation
+window, the same strict-vs-fallback policy applies with
 `accelerated_paint_not_observed`.
 
 ## Render-World Bevy Texture Feed
@@ -290,7 +314,9 @@ new:
 `RenderSystems::PrepareResources` after the CPU upload lane. It:
 
 - reads the extracted `CefUiGpuTextureUpload` token;
-- waits until the CEF callback fence has completed;
+- consumes only frames whose CEF callback fence has completed;
+- reuses the last sampled frame when the newest accelerated frame is not ready
+  instead of blocking the render frame;
 - validates BGRA8 source and `Bgra8UnormSrgb` target formats;
 - uses the active Bevy `GpuImage` texture as the copy target;
 - records a native DX12 `CopyResource` through the isolated interop module;
@@ -298,6 +324,12 @@ new:
   `PIXEL_SHADER_RESOURCE` for Bevy UI sampling;
 - updates `CefUiGpuUploadState.last_generation` only after the GPU copy has
   been submitted.
+
+Normal rendering must not wait on CEF fences. Blocking waits are reserved for
+shutdown, resize/device teardown, or strict debug recovery. The GPU path records
+ready, not-ready, reused, and blocking-wait counters so p95 regressions can be
+attributed to interop synchronization instead of blended into generic frame
+time.
 
 The first GPU transport deliberately copies the full CEF frame for correctness.
 Dirty rectangles are still retained as metadata on the safe generation token,
@@ -369,6 +401,10 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 - `cef_gpu_copy_bytes`
 - `cef_gpu_copy_ns`
 - `cef_gpu_copy_failures`
+- `cef_gpu_frame_ready_count`
+- `cef_gpu_frame_not_ready_count`
+- `cef_gpu_frame_reused_count`
+- `cef_gpu_frame_blocking_wait_count`
 - `cef_transport_fallback_count`
 - `cef_published_generation`
 - `cef_sampled_generation`
@@ -376,7 +412,8 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 `cef_gpu_copy_*` remains zero on the CPU path. It moves only when the D3D11On12
 copy into a FUN-owned D3D12 texture ring succeeds. The current bridge has its
 own startup/copy diagnostic counters in `game_client/src/cef_ui_dx12`, including
-the last published generation and fence value.
+the last published generation, fence value, ring slot count, and nonblocking
+frame-consumption state.
 
 Keep FPS readings separate:
 
@@ -386,6 +423,24 @@ Keep FPS readings separate:
 - Bevy FPS: the game/render frame cadence.
 
 The UI RAF badge is not evidence of CEF paint callback cadence or GPU transport.
+
+## Static Visual Match
+
+When validating the accelerated path, capture the same static UI route once with
+`-CefPaintTransport cpu` and once with `-CefPaintTransport d3d11on12`. Compare
+the screenshots with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare_cef_ui_screenshots.ps1 `
+  -CpuReference target\captures\cef_cpu.png `
+  -GpuCandidate target\captures\cef_gpu.png `
+  -JsonOut target\captures\cef_ui_screenshot_diff.json
+```
+
+The script checks dimensions, max per-channel difference, mean channel
+difference, and changed-pixel ratio. Use this as the static UI guard for
+swapped channels, bad transparency, and obvious gamma/color-space drift. Runtime
+benchmark lanes still own paint cadence, GPU-copy timing, and fallback behavior.
 
 ## Fallback Policy
 
@@ -399,11 +454,13 @@ pub const MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK: u32 = 8;
 The accelerated callback copy records failures but does not request CPU fallback
 until the same accelerated transport has failed eight consecutive callback
 copies. A successful callback copy resets the budget. The Bevy-image GPU feed
-uses the same eight-frame budget for native copy errors and for ready ring-slot
-tokens that remain unsampled long enough to imply a stalled fence or stale GPU
-frame. When the budget is exhausted, the shared interop slot records a typed
-fallback reason and the main-world startup monitor recreates the browser on the
-CPU paint path.
+uses the same eight-frame budget for native copy errors. Ready ring-slot tokens
+that have not completed their fence are counted as not-ready/reused frames and
+do not block or trigger CPU fallback during normal rendering. Strict mode can
+promote repeated not-ready GPU frames to a loud fallback/error signal for
+debugging. When a real fallback budget is exhausted, the shared interop slot
+records a typed fallback reason and the main-world startup monitor recreates the
+browser on the CPU paint path unless strict mode is enabled.
 
 Fallback triggers covered by this pass:
 
@@ -414,7 +471,8 @@ Fallback triggers covered by this pass:
 - invalid accelerated frame dimensions.
 - Bevy target texture or native texture extraction failure.
 - ring-slot/output texture allocation failure.
-- copy fence or ready GPU frame stalling past the frame budget.
+- native Bevy image GPU copy failures.
+- copy fence or ready GPU frame stalling past the frame budget in strict mode.
 - DX12 device/queue extraction failure.
 - backend mismatch before accelerated browser creation.
 - accelerated callback not observed after browser creation.

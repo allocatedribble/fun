@@ -1,11 +1,16 @@
-use fun_ui_cef::{CefDirtyRect, CefUiDirtyRectMetadata, render_handler::CefUiFrameGeneration};
+use fun_ui_cef::{
+    CefDirtyRect, CefUiDirtyRectMetadata, cef_ui_gpu_ring_depth_from_env,
+    clamp_cef_ui_gpu_ring_depth, render_handler::CefUiFrameGeneration,
+};
 use windows::Win32::Graphics::{
     Direct3D11::ID3D11Resource,
     Direct3D12::ID3D12Resource,
     Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM},
 };
 
-pub const CEF_GPU_RING_LEN: usize = 3;
+pub const CEF_GPU_RING_DEPTH_DEFAULT: usize = fun_ui_cef::CEF_UI_GPU_RING_DEPTH_DEFAULT as usize;
+pub const CEF_GPU_RING_DEPTH_MIN: usize = fun_ui_cef::CEF_UI_GPU_RING_DEPTH_MIN as usize;
+pub const CEF_GPU_RING_DEPTH_MAX: usize = fun_ui_cef::CEF_UI_GPU_RING_DEPTH_MAX as usize;
 
 pub type DxgiFormat = DXGI_FORMAT;
 
@@ -38,7 +43,7 @@ pub struct Dx12CefTextureSlot {
 }
 
 pub struct Dx12CefTextureRing {
-    slots: [Option<Dx12CefTextureSlot>; CEF_GPU_RING_LEN],
+    slots: Vec<Option<Dx12CefTextureSlot>>,
     cursor: usize,
 }
 
@@ -51,15 +56,26 @@ impl Default for Dx12CefTextureRing {
 impl Dx12CefTextureRing {
     #[must_use]
     pub fn empty() -> Self {
+        Self::with_depth(CEF_GPU_RING_DEPTH_DEFAULT)
+    }
+
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::with_depth(cef_ui_gpu_ring_depth_from_env() as usize)
+    }
+
+    #[must_use]
+    pub fn with_depth(depth: usize) -> Self {
+        let depth = clamp_cef_ui_gpu_ring_depth(depth.min(u8::MAX as usize) as u8) as usize;
         Self {
-            slots: std::array::from_fn(|_| None),
+            slots: std::iter::repeat_with(|| None).take(depth).collect(),
             cursor: 0,
         }
     }
 
     #[must_use]
-    pub const fn capacity(&self) -> usize {
-        CEF_GPU_RING_LEN
+    pub fn capacity(&self) -> usize {
+        self.slots.len()
     }
 
     #[must_use]
@@ -114,22 +130,22 @@ impl Dx12CefTextureRing {
                     )
             })
         }) {
-            self.cursor = (index + 1) % CEF_GPU_RING_LEN;
+            self.cursor = (index + 1) % self.capacity();
             return Dx12CefRingSlotRequest::Reuse { index };
         }
 
         if let Some(index) = self.slots.iter().position(Option::is_none) {
-            self.cursor = (index + 1) % CEF_GPU_RING_LEN;
+            self.cursor = (index + 1) % self.capacity();
             return Dx12CefRingSlotRequest::Allocate { index };
         }
 
-        for offset in 0..CEF_GPU_RING_LEN {
-            let index = (self.cursor + offset) % CEF_GPU_RING_LEN;
+        for offset in 0..self.capacity() {
+            let index = (self.cursor + offset) % self.capacity();
             if self.slots[index]
                 .as_ref()
                 .is_some_and(|slot| matches!(slot.state, Dx12CefSlotState::Consumed))
             {
-                self.cursor = (index + 1) % CEF_GPU_RING_LEN;
+                self.cursor = (index + 1) % self.capacity();
                 return Dx12CefRingSlotRequest::Allocate { index };
             }
         }
@@ -138,7 +154,7 @@ impl Dx12CefTextureRing {
     }
 
     pub fn install_slot(&mut self, index: usize, slot: Dx12CefTextureSlot) {
-        if index < CEF_GPU_RING_LEN {
+        if index < self.capacity() {
             self.slots[index] = Some(slot);
         }
     }
@@ -161,6 +177,23 @@ impl Dx12CefTextureRing {
             .filter_map(|(index, slot)| {
                 slot.as_ref()
                     .filter(|slot| slot.state == Dx12CefSlotState::Ready)
+                    .map(|slot| (index, slot.generation))
+            })
+            .max_by_key(|(_, generation)| generation.0)
+            .map(|(index, _)| index)
+    }
+
+    #[must_use]
+    pub fn latest_completed_ready_slot_index(&self, completed_fence_value: u64) -> Option<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                slot.as_ref()
+                    .filter(|slot| {
+                        slot.state == Dx12CefSlotState::Ready
+                            && slot.fence_value <= completed_fence_value
+                    })
                     .map(|slot| (index, slot.generation))
             })
             .max_by_key(|(_, generation)| generation.0)
@@ -225,7 +258,6 @@ mod tests {
     fn dx12_cef_texture_ring_starts_empty_and_triple_buffered() {
         let mut ring = Dx12CefTextureRing::default();
 
-        assert_eq!(ring.capacity(), CEF_GPU_RING_LEN);
         assert_eq!(ring.capacity(), 3);
         assert!(ring.is_empty());
         assert_eq!(ring.debug_slot_summary().ready_count, 0);
@@ -233,6 +265,19 @@ mod tests {
         assert_eq!(
             ring.next_copy_slot_request(1280, 720, DXGI_FORMAT_B8G8R8A8_UNORM),
             Dx12CefRingSlotRequest::Allocate { index: 0 }
+        );
+    }
+
+    #[test]
+    fn dx12_cef_texture_ring_depth_is_runtime_clamped() {
+        assert_eq!(
+            Dx12CefTextureRing::with_depth(1).capacity(),
+            CEF_GPU_RING_DEPTH_MIN
+        );
+        assert_eq!(Dx12CefTextureRing::with_depth(4).capacity(), 4);
+        assert_eq!(
+            Dx12CefTextureRing::with_depth(99).capacity(),
+            CEF_GPU_RING_DEPTH_MAX
         );
     }
 }

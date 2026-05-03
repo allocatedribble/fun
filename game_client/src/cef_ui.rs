@@ -866,6 +866,10 @@ pub struct CefUiFrameStats {
     pub cef_gpu_copy_bytes: u64,
     pub cef_gpu_copy_ns: u64,
     pub cef_gpu_copy_failures: u64,
+    pub cef_gpu_frame_ready_count: u64,
+    pub cef_gpu_frame_not_ready_count: u64,
+    pub cef_gpu_frame_reused_count: u64,
+    pub cef_gpu_frame_blocking_wait_count: u64,
     pub cef_transport_fallback_count: u64,
     pub cef_published_generation: u64,
     pub cef_sampled_generation: u64,
@@ -1361,26 +1365,46 @@ fn cef_ui_startup_next_config(
         CefUiStartupStateKind::NotStarted => {
             state.waiting_elapsed = Duration::ZERO;
             match startup_config.browser_config.requested_paint_transport {
-                CefUiRequestedPaintTransport::Cpu => Some(cef_ui_cpu_start_config(
+                CefUiRequestedPaintTransport::Disabled => {
+                    state.kind = CefUiStartupStateKind::Running;
+                    state.running_transport = Some(CefUiPaintTransport::Disabled);
+                    log_cef_ui_transport_decision(
+                        &startup_config
+                            .browser_config
+                            .clone()
+                            .with_paint_transport_decision(
+                                CefUiPaintTransport::Disabled,
+                                CefUiPaintTransportFallbackReason::None,
+                            ),
+                        false,
+                    );
+                    None
+                }
+                CefUiRequestedPaintTransport::CpuPaint => Some(cef_ui_cpu_start_config(
                     startup_config,
                     CefUiPaintTransportFallbackReason::None,
                 )),
-                CefUiRequestedPaintTransport::Auto | CefUiRequestedPaintTransport::D3d11On12 => {
+                CefUiRequestedPaintTransport::Auto
+                | CefUiRequestedPaintTransport::D3d11On12Accelerated => {
                     if !cfg!(target_os = "windows") {
-                        return Some(cef_ui_cpu_start_config(
+                        let reason = CefUiPaintTransportFallbackReason::NonWindows;
+                        return cef_ui_accelerated_fallback_or_strict_failure(
                             startup_config,
-                            CefUiPaintTransportFallbackReason::NonWindows,
-                        ));
+                            state,
+                            reason,
+                        );
                     }
                     if !startup_config
                         .browser_config
                         .render_backend_hint
                         .is_dx12_compatible()
                     {
-                        return Some(cef_ui_cpu_start_config(
+                        let reason = CefUiPaintTransportFallbackReason::RenderBackendNotDx12;
+                        return cef_ui_accelerated_fallback_or_strict_failure(
                             startup_config,
-                            CefUiPaintTransportFallbackReason::RenderBackendNotDx12,
-                        ));
+                            state,
+                            reason,
+                        );
                     }
                     state.kind = CefUiStartupStateKind::WaitingForGpuBridge;
                     tracing::info!(
@@ -1412,21 +1436,22 @@ fn cef_ui_startup_next_config(
                             .browser_config
                             .clone()
                             .with_paint_transport_decision(
-                                CefUiPaintTransport::D3d11SharedTextureDx12Copy,
+                                CefUiPaintTransport::D3d11On12Accelerated,
                                 CefUiPaintTransportFallbackReason::None,
                             ),
                     )
                 }
                 Dx12CefInteropState::Error { reason } => {
-                    Some(cef_ui_cpu_start_config(startup_config, reason))
+                    cef_ui_accelerated_fallback_or_strict_failure(startup_config, state, reason)
                 }
                 Dx12CefInteropState::Pending
                     if state.waiting_elapsed >= startup_config.gpu_bridge_timeout =>
                 {
-                    Some(cef_ui_cpu_start_config(
+                    cef_ui_accelerated_fallback_or_strict_failure(
                         startup_config,
+                        state,
                         CefUiPaintTransportFallbackReason::GpuBridgeTimeout,
-                    ))
+                    )
                 }
                 Dx12CefInteropState::Pending => None,
             }
@@ -1436,6 +1461,34 @@ fn cef_ui_startup_next_config(
         | CefUiStartupStateKind::Running
         | CefUiStartupStateKind::Failed => None,
     }
+}
+
+fn cef_ui_accelerated_fallback_or_strict_failure(
+    startup_config: &CefUiStartupConfig,
+    state: &mut CefUiStartupState,
+    reason: CefUiPaintTransportFallbackReason,
+) -> Option<BrowserUiConfig> {
+    if startup_config.browser_config.accelerated_strict {
+        state.kind = CefUiStartupStateKind::Failed;
+        log_cef_ui_transport_decision(
+            &startup_config
+                .browser_config
+                .clone()
+                .with_paint_transport_decision(CefUiPaintTransport::Disabled, reason),
+            false,
+        );
+        tracing::error!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            requested_transport = startup_config
+                .browser_config
+                .requested_paint_transport
+                .as_wire_str(),
+            fallback_reason = reason.as_wire_str(),
+            "CEF UI accelerated transport failed in strict mode"
+        );
+        return None;
+    }
+    Some(cef_ui_cpu_start_config(startup_config, reason))
 }
 
 fn cef_ui_cpu_start_config(
@@ -1462,6 +1515,37 @@ fn cef_ui_cpu_start_config(
         .with_paint_transport_decision(CefUiPaintTransport::CpuPaint, reason)
 }
 
+fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready: bool) {
+    let _ = (browser_config, bridge_ready);
+    game_shared::fun_diag_info!(
+        target: "fun::perf::cef_ui_transport",
+        requested = browser_config.requested_paint_transport.as_wire_str(),
+        selected = browser_config.paint_transport.as_wire_str(),
+        backend = browser_config.render_backend_hint.as_wire_str(),
+        bridge_ready,
+        cpu_fallback_enabled = !browser_config.accelerated_strict,
+        ring_depth = browser_config.gpu_ring_depth,
+        copy_mode = browser_config.gpu_copy_mode.as_wire_str(),
+        strict = browser_config.accelerated_strict,
+        debug_timings = browser_config.gpu_debug_timings,
+        fallback_reason = browser_config.paint_transport_fallback_reason.as_wire_str(),
+        "CEF UI transport selected"
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] cef_ui transport selected: requested={} selected={} backend={} bridge_ready={} cpu_fallback_enabled={} ring_depth={} copy_mode={} strict={} debug_timings={} fallback_reason={}",
+        browser_config.requested_paint_transport.as_wire_str(),
+        browser_config.paint_transport.as_wire_str(),
+        browser_config.render_backend_hint.as_wire_str(),
+        bridge_ready,
+        !browser_config.accelerated_strict,
+        browser_config.gpu_ring_depth,
+        browser_config.gpu_copy_mode.as_wire_str(),
+        browser_config.accelerated_strict,
+        browser_config.gpu_debug_timings,
+        browser_config.paint_transport_fallback_reason.as_wire_str(),
+    );
+}
+
 fn start_cef_ui_browser(
     world: &mut World,
     startup_config: CefUiStartupConfig,
@@ -1469,15 +1553,23 @@ fn start_cef_ui_browser(
 ) {
     if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
         state.kind = match browser_config.paint_transport {
+            CefUiPaintTransport::Disabled | CefUiPaintTransport::Auto => {
+                CefUiStartupStateKind::Running
+            }
             CefUiPaintTransport::CpuPaint => CefUiStartupStateKind::StartingCpuFallback {
                 reason: browser_config.paint_transport_fallback_reason,
             },
-            CefUiPaintTransport::D3d11SharedTextureDx12Copy => {
-                CefUiStartupStateKind::StartingAccelerated
-            }
+            CefUiPaintTransport::D3d11On12Accelerated => CefUiStartupStateKind::StartingAccelerated,
         };
         state.running_transport = None;
         state.accelerated_observe_elapsed = Duration::ZERO;
+    }
+    if matches!(
+        browser_config.paint_transport,
+        CefUiPaintTransport::Disabled | CefUiPaintTransport::Auto
+    ) {
+        log_cef_ui_transport_decision(&browser_config, false);
+        return;
     }
 
     let page_url = browser_config.page_url_str().to_owned();
@@ -1485,24 +1577,23 @@ fn start_cef_ui_browser(
     let viewport_height = browser_config.viewport_height;
     let paint_transport = browser_config.paint_transport;
     #[cfg(target_os = "windows")]
-    let accelerated_paint_sink =
-        if paint_transport == CefUiPaintTransport::D3d11SharedTextureDx12Copy {
-            world
-                .get_resource::<SharedDx12CefInteropSlot>()
-                .map(|slot| Arc::new(slot.clone()) as Arc<dyn CefAcceleratedPaintSink>)
-        } else {
-            None
-        };
+    let accelerated_paint_sink = if paint_transport == CefUiPaintTransport::D3d11On12Accelerated {
+        world
+            .get_resource::<SharedDx12CefInteropSlot>()
+            .map(|slot| Arc::new(slot.clone()) as Arc<dyn CefAcceleratedPaintSink>)
+    } else {
+        None
+    };
     #[cfg(target_os = "windows")]
     let browser_result = CefUiBrowser::create_with_bridge_and_accelerated_sink(
-        browser_config,
+        browser_config.clone(),
         startup_config.compositor.clone(),
         startup_config.bridge_queues.clone(),
         accelerated_paint_sink,
     );
     #[cfg(not(target_os = "windows"))]
     let browser_result = CefUiBrowser::create_with_bridge(
-        browser_config,
+        browser_config.clone(),
         startup_config.compositor.clone(),
         startup_config.bridge_queues.clone(),
     );
@@ -1538,6 +1629,10 @@ fn start_cef_ui_browser(
         state.running_transport = Some(paint_transport);
         state.accelerated_observe_elapsed = Duration::ZERO;
     }
+    log_cef_ui_transport_decision(
+        &browser_config,
+        paint_transport == CefUiPaintTransport::D3d11On12Accelerated,
+    );
     tracing::info!(
         target: FUN_UI_DIAGNOSTICS_TARGET,
         page_url,
@@ -1571,7 +1666,7 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
             return;
         };
         if state.kind != CefUiStartupStateKind::Running
-            || state.running_transport != Some(CefUiPaintTransport::D3d11SharedTextureDx12Copy)
+            || state.running_transport != Some(CefUiPaintTransport::D3d11On12Accelerated)
         {
             return;
         }
@@ -1594,6 +1689,19 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
     };
     let _old_browser = world.remove_non_send::<CefUiBrowserOwner>();
     let _old_control = world.remove_non_send::<CefUiBrowserControl>();
+    if startup_config.browser_config.accelerated_strict {
+        if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
+            state.kind = CefUiStartupStateKind::Failed;
+            state.running_transport = None;
+            state.accelerated_observe_elapsed = Duration::ZERO;
+        }
+        tracing::error!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            fallback_reason = fallback_reason.as_wire_str(),
+            "CEF UI accelerated path stopped in strict mode"
+        );
+        return;
+    }
     if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
         state.kind = CefUiStartupStateKind::StartingCpuFallback {
             reason: fallback_reason,
@@ -1641,6 +1749,7 @@ fn initialize_dx12_cef_interop_slot(
             Ok(interop) => {
                 let native_ptrs = interop.native_pointer_summary();
                 let ring_len = interop.ring_len();
+                let ring_depth = interop.ring_capacity();
                 let next_fence_value = interop.next_fence_value();
                 slot.set_ready_with_interop(Dx12CefInteropReady { generation: 1 }, interop);
                 tracing::info!(
@@ -1652,6 +1761,7 @@ fn initialize_dx12_cef_interop_slot(
                     d3d11_context = native_ptrs.d3d11_context,
                     d3d11_on12 = native_ptrs.d3d11_on12,
                     fence = native_ptrs.fence,
+                    ring_depth,
                     ring_len,
                     next_fence_value,
                     "CEF UI D3D11On12 bridge initialized"
@@ -3150,6 +3260,9 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
         };
         match interop.copy_ready_frame_to_bevy_image(upload.token, gpu_image, target_state_before) {
             Ok(Some(result)) => {
+                if let Some(counters) = counters.as_ref() {
+                    counters.counters.record_gpu_frame_ready();
+                }
                 upload_state.image_id = Some(image_id);
                 upload_state.last_generation = Some(result.generation);
                 upload_state.gpu_copy_failure_logged = false;
@@ -3167,9 +3280,20 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                 );
             }
             Ok(None) => {
+                if let Some(counters) = counters.as_ref() {
+                    counters.counters.record_gpu_frame_not_ready();
+                    counters.counters.record_gpu_frame_reused();
+                }
                 let stale_count =
                     record_cef_gpu_frame_stall(&mut upload_state, upload.token.generation);
-                if stale_count == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK {
+                let blocking_waits_this_frame = 0_u64;
+                debug_assert_eq!(
+                    blocking_waits_this_frame, 0,
+                    "CEF GPU path must not block on frame fences"
+                );
+                if cef_ui_accelerated_strict_enabled()
+                    && stale_count == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK
+                {
                     if let Some(counters) = counters.as_ref() {
                         counters.counters.record_stale_gpu_frame();
                         counters.counters.record_transport_fallback();
@@ -3187,7 +3311,7 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                             stale_frame_count = stale_count,
                             fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
                             fallback_reason = CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout.as_wire_str(),
-                            "CEF UI GPU frame copy stalled before Bevy image sampling"
+                            "CEF UI GPU frame copy stalled in strict mode before Bevy image sampling"
                         );
                     }
                 }
@@ -3249,6 +3373,18 @@ fn record_cef_gpu_frame_stall(
     upload_state.stale_gpu_frame_count_for_current_token
 }
 
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+fn cef_ui_accelerated_strict_enabled() -> bool {
+    std::env::var("FUN_CEF_UI_ACCELERATED_STRICT")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+}
+
 fn sample_cef_ui_transport_counters(
     time: Res<Time>,
     counters: Res<CefUiTransportCountersResource>,
@@ -3281,6 +3417,10 @@ fn sample_cef_ui_transport_counters(
         .gpu_copy_fail_count
         .max(snapshot.cef_gpu_copy_failures);
     stats.cef_gpu_copy_failures = snapshot.cef_gpu_copy_failures;
+    stats.cef_gpu_frame_ready_count = snapshot.cef_gpu_frame_ready_count;
+    stats.cef_gpu_frame_not_ready_count = snapshot.cef_gpu_frame_not_ready_count;
+    stats.cef_gpu_frame_reused_count = snapshot.cef_gpu_frame_reused_count;
+    stats.cef_gpu_frame_blocking_wait_count = snapshot.cef_gpu_frame_blocking_wait_count;
     stats.cpu_fallback_count = stats
         .cpu_fallback_count
         .max(snapshot.cef_transport_fallback_count);
@@ -3303,6 +3443,18 @@ fn sample_cef_ui_transport_counters(
             .gpu_copy_fail_count
             .max(diagnostics.gpu_copy_failure_count);
         stats.cpu_fallback_count = stats.cpu_fallback_count.max(diagnostics.fallback_count);
+        stats.cef_gpu_frame_ready_count = stats
+            .cef_gpu_frame_ready_count
+            .max(diagnostics.gpu_frame_ready_count);
+        stats.cef_gpu_frame_not_ready_count = stats
+            .cef_gpu_frame_not_ready_count
+            .max(diagnostics.gpu_frame_not_ready_count);
+        stats.cef_gpu_frame_reused_count = stats
+            .cef_gpu_frame_reused_count
+            .max(diagnostics.gpu_frame_reused_count);
+        stats.cef_gpu_frame_blocking_wait_count = stats
+            .cef_gpu_frame_blocking_wait_count
+            .max(diagnostics.gpu_frame_blocking_wait_count);
     }
     #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
     let _ = dx12_slot;
@@ -3314,6 +3466,10 @@ fn sample_cef_ui_transport_counters(
         cef_gpu_copy_bytes = stats.cef_gpu_copy_bytes,
         cef_gpu_copy_ns = stats.cef_gpu_copy_ns,
         cef_gpu_copy_failures = stats.cef_gpu_copy_failures,
+        cef_gpu_frame_ready_count = stats.cef_gpu_frame_ready_count,
+        cef_gpu_frame_not_ready_count = stats.cef_gpu_frame_not_ready_count,
+        cef_gpu_frame_reused_count = stats.cef_gpu_frame_reused_count,
+        cef_gpu_frame_blocking_wait_count = stats.cef_gpu_frame_blocking_wait_count,
         cef_transport_fallback_count = stats.cef_transport_fallback_count,
         cef_published_generation = stats.cef_published_generation,
         cef_sampled_generation = stats.cef_sampled_generation,
@@ -3321,13 +3477,17 @@ fn sample_cef_ui_transport_counters(
         "CEF UI transport performance sample"
     );
     game_shared::fun_diag_info!(
-        "[client perf] cef_ui transport: cef_on_paint_fps={} cef_on_accelerated_paint_fps={} cef_cpu_upload_bytes={} cef_gpu_copy_bytes={} cef_gpu_copy_ns={} cef_gpu_copy_failures={} cef_transport_fallback_count={} cef_published_generation={} cef_sampled_generation={} cef_stale_frame_count={}",
+        "[client perf] cef_ui transport: cef_on_paint_fps={} cef_on_accelerated_paint_fps={} cef_cpu_upload_bytes={} cef_gpu_copy_bytes={} cef_gpu_copy_ns={} cef_gpu_copy_failures={} cef_gpu_frame_ready_count={} cef_gpu_frame_not_ready_count={} cef_gpu_frame_reused_count={} cef_gpu_frame_blocking_wait_count={} cef_transport_fallback_count={} cef_published_generation={} cef_sampled_generation={} cef_stale_frame_count={}",
         stats.cef_on_paint_fps,
         stats.cef_on_accelerated_paint_fps,
         stats.cef_cpu_upload_bytes,
         stats.cef_gpu_copy_bytes,
         stats.cef_gpu_copy_ns,
         stats.cef_gpu_copy_failures,
+        stats.cef_gpu_frame_ready_count,
+        stats.cef_gpu_frame_not_ready_count,
+        stats.cef_gpu_frame_reused_count,
+        stats.cef_gpu_frame_blocking_wait_count,
         stats.cef_transport_fallback_count,
         stats.cef_published_generation,
         stats.cef_sampled_generation,

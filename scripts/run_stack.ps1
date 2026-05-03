@@ -5,6 +5,13 @@ param(
     [switch]$Launcher,
     [switch]$CefUi,
     [switch]$CefUiDx12AcceleratedPaint,
+    [ValidateSet("default", "disabled", "cpu", "auto", "d3d11on12")]
+    [string]$CefPaintTransport = "default",
+    [switch]$CefAcceleratedStrict,
+    [ValidateRange(2, 5)]
+    [int]$CefGpuRingDepth = 3,
+    [switch]$CefCopyDirtyRects,
+    [switch]$CefDebugTimings,
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
     [switch]$RenderProfileVerbose,
@@ -145,6 +152,9 @@ $rustToolchainBin = Join-Path $rustSysroot "bin"
 
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
+if (($CefPaintTransport -eq "auto" -or $CefPaintTransport -eq "d3d11on12") -and -not $NoClient) {
+    $CefUiDx12AcceleratedPaint = $true
+}
 if ($CefUiDx12AcceleratedPaint -and -not $NoClient) {
     $CefUi = $true
 }
@@ -194,6 +204,39 @@ else {
     Remove-Item Env:\FUN_RENDER_DIAGNOSTICS -ErrorAction SilentlyContinue
     Remove-Item Env:\FUN_RENDER_UPLOAD_COUNTERS -ErrorAction SilentlyContinue
     Remove-Item Env:\BEVY_RENDER_UPLOAD_COUNTERS -ErrorAction SilentlyContinue
+}
+if ($CefPaintTransport -eq "default") {
+    Remove-Item Env:\FUN_CEF_UI_PAINT_TRANSPORT -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_CEF_UI_ACCELERATED_PAINT -ErrorAction SilentlyContinue
+}
+else {
+    $env:FUN_CEF_UI_PAINT_TRANSPORT = $CefPaintTransport
+    $env:FUN_CEF_UI_ACCELERATED_PAINT = switch ($CefPaintTransport) {
+        "disabled" { "disabled" }
+        "cpu" { "0" }
+        "auto" { "auto" }
+        "d3d11on12" { "1" }
+        default { "" }
+    }
+}
+if ($CefAcceleratedStrict) {
+    $env:FUN_CEF_UI_ACCELERATED_STRICT = "1"
+}
+else {
+    Remove-Item Env:\FUN_CEF_UI_ACCELERATED_STRICT -ErrorAction SilentlyContinue
+}
+$env:FUN_CEF_UI_GPU_RING_DEPTH = [string]$CefGpuRingDepth
+if ($CefCopyDirtyRects) {
+    $env:FUN_CEF_UI_COPY_DIRTY_RECTS = "1"
+}
+else {
+    Remove-Item Env:\FUN_CEF_UI_COPY_DIRTY_RECTS -ErrorAction SilentlyContinue
+}
+if ($CefDebugTimings) {
+    $env:FUN_CEF_UI_DEBUG_TIMINGS = "1"
+}
+else {
+    Remove-Item Env:\FUN_CEF_UI_DEBUG_TIMINGS -ErrorAction SilentlyContinue
 }
 if ($FrameTimeDiagnostics) {
     $env:FUN_FRAME_TIME_DIAGNOSTICS = "1"

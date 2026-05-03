@@ -35,8 +35,13 @@ param(
     [string]$BenchmarkMatrixLane = "",
     [ValidateSet("disabled", "hidden", "static", "animated", "animated_1440p_surface", "animated_4k_surface")]
     [string]$CefUiMode = "disabled",
-    [ValidateSet("default", "cpu", "auto", "d3d11on12")]
+    [ValidateSet("default", "disabled", "cpu", "auto", "d3d11on12")]
     [string]$CefPaintTransport = "default",
+    [switch]$CefAcceleratedStrict,
+    [ValidateRange(2, 5)]
+    [int]$CefGpuRingDepth = 3,
+    [switch]$CefCopyDirtyRects,
+    [switch]$CefDebugTimings,
     [int]$RequestedMaximumFrameLatency = 0,
     [string]$SolariArch = "budgeted",
     [int]$SolariTargetFps = 144,
@@ -322,6 +327,33 @@ function Parse-RenderUploadCallsitesLog {
                 }
             }
     )
+}
+
+function Parse-CefUiTransportSelectionLog {
+    param([string[]]$Lines)
+
+    foreach ($line in $Lines) {
+        $selection = [regex]::Match($line, "\[client perf\] cef_ui transport selected: (?<payload>.*)$")
+        if ($selection.Success) {
+            $result = ConvertTo-KeyValueObject -Payload $selection.Groups["payload"].Value -HashKey "transport_hash"
+            $result["status"] = "found"
+            return $result
+        }
+    }
+
+    return [ordered]@{
+        status = "not_found"
+        requested = $null
+        selected = $null
+        backend = $null
+        bridge_ready = $null
+        cpu_fallback_enabled = $null
+        ring_depth = $null
+        copy_mode = $null
+        strict = $null
+        debug_timings = $null
+        fallback_reason = $null
+    }
 }
 
 function Parse-ClientPerfLog {
@@ -904,7 +936,8 @@ function Write-MarkdownReport {
     $swapchainFormat = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.swapchain_format } else { "n/a" }
     $lines.Add("- Max frame latency: requested=$($Summary.config.requested_maximum_frame_latency) startup=$startupLatency") | Out-Null
     $lines.Add("- Surface present: selected=$surfacePresent swapchain_format=$swapchainFormat") | Out-Null
-    $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) transport=$($Summary.config.cef_paint_transport) enabled=$($Summary.config.cef_ui_enabled)") | Out-Null
+    $selectedTransport = if ($Summary.cef_ui_transport_selection.status -eq "found") { $Summary.cef_ui_transport_selection.selected } else { "not_found" }
+    $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) requested_transport=$($Summary.config.cef_paint_transport) selected_transport=$selectedTransport enabled=$($Summary.config.cef_ui_enabled)") | Out-Null
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
     $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
     $lines.Add("- Clouds: disabled=$($Summary.config.disable_clouds) profile=$($Summary.config.cloud_profile) quality=$($Summary.config.cloud_quality) internal_scale=$($Summary.config.cloud_internal_scale) temporal=$($Summary.config.cloud_temporal) shadows=$($Summary.config.cloud_shadows)") | Out-Null
@@ -994,6 +1027,10 @@ function Write-MarkdownReport {
         "cef_gpu_copy_bytes",
         "cef_gpu_copy_ns",
         "cef_gpu_copy_failures",
+        "cef_gpu_frame_ready_count",
+        "cef_gpu_frame_not_ready_count",
+        "cef_gpu_frame_reused_count",
+        "cef_gpu_frame_blocking_wait_count",
         "cef_transport_fallback_count",
         "cef_published_generation",
         "cef_sampled_generation",
@@ -1239,12 +1276,17 @@ try {
             Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_PAINT_TRANSPORT" -Value $CefPaintTransport
             $acceleratedPaintValue = switch ($CefPaintTransport) {
                 "cpu" { "0" }
+                "disabled" { "disabled" }
                 "auto" { "auto" }
                 "d3d11on12" { "1" }
                 default { "" }
             }
             Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_PAINT" -Value $acceleratedPaintValue
         }
+        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_STRICT" -Value $(if ($CefAcceleratedStrict) { "1" } else { "" })
+        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_GPU_RING_DEPTH" -Value ([string]$CefGpuRingDepth)
+        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_COPY_DIRTY_RECTS" -Value $(if ($CefCopyDirtyRects) { "1" } else { "" })
+        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_DEBUG_TIMINGS" -Value $(if ($CefDebugTimings) { "1" } else { "" })
         if ($RequestedMaximumFrameLatency -gt 0) {
             Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
             Set-BenchmarkProcessEnv -Name "FUN_RENDER_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
@@ -1258,6 +1300,13 @@ try {
         if ($StaticBevy) { $runStackArgs += "-StaticBevy" }
         if ($cefUiEnabled) { $runStackArgs += "-CefUi" }
         if ($cefAcceleratedFeatureRequested) { $runStackArgs += "-CefUiDx12AcceleratedPaint" }
+        if ($CefPaintTransport -ne "default" -and ($cefUiEnabled -or ($CefPaintTransport -ne "auto" -and $CefPaintTransport -ne "d3d11on12"))) {
+            $runStackArgs += @("-CefPaintTransport", $CefPaintTransport)
+        }
+        if ($CefAcceleratedStrict) { $runStackArgs += "-CefAcceleratedStrict" }
+        $runStackArgs += @("-CefGpuRingDepth", "$CefGpuRingDepth")
+        if ($CefCopyDirtyRects) { $runStackArgs += "-CefCopyDirtyRects" }
+        if ($CefDebugTimings) { $runStackArgs += "-CefDebugTimings" }
         if ($EnableDx12DlssRr) { $runStackArgs += "-EnableDx12DlssRr" }
         if ($DisableDlssRr) { $runStackArgs += "-DisableDlssRr" }
         if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
@@ -1372,6 +1421,7 @@ try {
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
+    $cefUiTransportSelection = Parse-CefUiTransportSelectionLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
     $rrAcceptance = New-Dx12DlssRrAcceptance `
@@ -1412,6 +1462,10 @@ try {
             cef_ui_enabled = [bool]$cefUiEnabled
             cef_paint_transport = $CefPaintTransport
             cef_accelerated_feature_requested = [bool]$cefAcceleratedFeatureRequested
+            cef_accelerated_strict = [bool]$CefAcceleratedStrict
+            cef_gpu_ring_depth = $CefGpuRingDepth
+            cef_copy_dirty_rects = [bool]$CefCopyDirtyRects
+            cef_debug_timings = [bool]$CefDebugTimings
             enable_dx12_dlss_rr = [bool]$EnableDx12DlssRr
             require_dx12_dlss_rr_acceptance = [bool]$RequireDx12DlssRrAcceptance
             rr_stress_frame_target = $RrStressFrameTarget
@@ -1463,6 +1517,7 @@ try {
         rt_feature_gates = $rtFeatureGates
         render_presentation = $renderPresentation
         render_upload_callsites = $renderUploadCallsites
+        cef_ui_transport_selection = $cefUiTransportSelection
     }
 
     $jsonPath = Join-Path $outputRoot "summary.json"

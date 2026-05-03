@@ -146,8 +146,11 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   whole-buffer uploads, full material scans, and CPU-side reset write spam.
 - `fun::perf::cef_ui`: CEF UI transport counters sampled separately from Bevy
   FPS: CPU `OnPaint` cadence, accelerated-paint cadence, CPU upload bytes, GPU
-  copy bytes/ns/failures, transport fallback count, published and sampled
-  generations, and stale GPU frame count.
+  copy bytes/ns/failures, GPU frame ready/not-ready/reused/blocking-wait counts,
+  transport fallback count, published and sampled generations, and stale GPU
+  frame count. Startup also emits a parser-stable selected-transport line with
+  requested transport, selected transport, backend, bridge readiness, ring
+  depth, copy mode, strict mode, debug timings, and fallback reason.
 - `fun::render_catalog`: prewarmed render-catalog inventory, per-asset geometry
   class decisions, and runtime catalog usage counts.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,

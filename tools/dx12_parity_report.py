@@ -33,6 +33,10 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("cef_cpu_upload_bytes", "lower", "CEF CPU upload bytes"),
     ("cef_gpu_copy_bytes", "lower", "CEF GPU copy bytes"),
     ("cef_gpu_copy_ns", "lower", "CEF GPU copy"),
+    ("cef_gpu_frame_ready_count", "higher", "CEF GPU ready frames"),
+    ("cef_gpu_frame_not_ready_count", "lower", "CEF GPU not-ready frames"),
+    ("cef_gpu_frame_reused_count", "lower", "CEF GPU reused frames"),
+    ("cef_gpu_frame_blocking_wait_count", "lower", "CEF GPU blocking waits"),
     ("cef_transport_fallback_count", "lower", "CEF fallback count"),
     ("render_upload_write_texture_calls", "lower", "render texture upload calls"),
     ("render_upload_write_texture_bytes", "lower", "render texture upload bytes"),
@@ -151,7 +155,10 @@ def build_delta_rows(vulkan: dict[str, Any], dx12: dict[str, Any]) -> list[dict[
 
 def is_accelerated_cef_lane(summary: dict[str, Any]) -> bool:
     config = summary.get("config", {})
-    transport = str(config.get("cef_paint_transport", "")).lower()
+    selection = summary.get("cef_ui_transport_selection", {})
+    transport = str(
+        selection.get("selected") or config.get("cef_paint_transport", "")
+    ).lower()
     return bool(config.get("cef_accelerated_feature_requested")) or transport in {
         "auto",
         "d3d11on12",
@@ -173,6 +180,7 @@ def summarize_gpu(summary: dict[str, Any]) -> str:
 def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
     config = summary.get("config", {})
     presentation = summary.get("render_presentation", {})
+    cef_selection = summary.get("cef_ui_transport_selection", {})
     width = config.get("window_width") or presentation.get("resolution_width") or "unknown"
     height = config.get("window_height") or presentation.get("resolution_height") or "unknown"
     return {
@@ -187,7 +195,9 @@ def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
             or "unknown"
         ),
         "resolution": f"{width}x{height}",
-        "cef_transport": str(config.get("cef_paint_transport") or "unknown"),
+        "cef_transport": str(
+            cef_selection.get("selected") or config.get("cef_paint_transport") or "unknown"
+        ),
         "cef_mode": str(config.get("cef_ui_mode") or "unknown"),
     }
 

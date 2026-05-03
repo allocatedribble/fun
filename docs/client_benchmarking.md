@@ -183,6 +183,18 @@ The declared lane vocabulary is:
   `meshlets_off`, `meshlets_on`, `editor_preview_off`, `editor_preview_on`,
   `cef_cpu_paint`, and `cef_gpu_accelerated`.
 
+CEF transport controls used by the matrix and direct client benchmark runs:
+
+- `-CefPaintTransport disabled|cpu|auto|d3d11on12`
+- `-CefAcceleratedStrict`
+- `-CefGpuRingDepth 2|3|4|5`
+- `-CefCopyDirtyRects`
+- `-CefDebugTimings`
+
+`auto` never fails the app just because accelerated setup is unavailable;
+`-CefAcceleratedStrict` is the debugging lane that turns accelerated setup or
+copy failures into loud errors instead of quiet CPU fallback.
+
 Every matrix writes:
 
 - `target\benchmarks\dx12_parity\<timestamp>\matrix.json`
@@ -198,9 +210,14 @@ The required metric contract includes `frame_ns.mean/p50/p95/p99`,
 resource request/create/reuse/alias counts, render scheduler pressure, and CEF
 transport counters: `cef_on_paint_fps`, `cef_on_accelerated_paint_fps`,
 `cef_cpu_upload_bytes`, `cef_gpu_copy_bytes`, `cef_gpu_copy_ns`,
+`cef_gpu_frame_ready_count`, `cef_gpu_frame_not_ready_count`,
+`cef_gpu_frame_reused_count`, `cef_gpu_frame_blocking_wait_count`,
 `cef_transport_fallback_count`, `cef_published_generation`,
-`cef_sampled_generation`, and `cef_stale_frame_count`. Render upload counters
-are enabled by `-RenderDiagnostics` and recorded as
+`cef_sampled_generation`, and `cef_stale_frame_count`. `summary.json` also
+records `cef_ui_transport_selection` with the requested transport, selected
+transport, backend, bridge readiness, CPU fallback policy, ring depth, copy
+mode, strict flag, debug-timing flag, and fallback reason. Render upload
+counters are enabled by `-RenderDiagnostics` and recorded as
 `render_upload_write_texture_calls`, `render_upload_write_texture_bytes`,
 `render_upload_write_buffer_calls`, `render_upload_write_buffer_bytes`,
 `render_upload_write_buffer_with_calls`,
@@ -241,6 +258,15 @@ For parser-only checks against an existing client log:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -InputLog target\run-stack\logs\game_client.out.log
+```
+
+For static CPU-vs-GPU CEF visual checks after capturing matched UI screenshots:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare_cef_ui_screenshots.ps1 `
+  -CpuReference target\captures\cef_cpu.png `
+  -GpuCandidate target\captures\cef_gpu.png `
+  -JsonOut target\captures\cef_ui_screenshot_diff.json
 ```
 
 For denoiser and DLSS Ray Reconstruction comparisons:

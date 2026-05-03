@@ -9,6 +9,10 @@ pub struct Dx12CefInteropDiagnostics {
     gpu_copy_bytes: AtomicU64,
     gpu_copy_ns: AtomicU64,
     gpu_copy_failure_count: AtomicU64,
+    gpu_frame_ready_count: AtomicU64,
+    gpu_frame_not_ready_count: AtomicU64,
+    gpu_frame_reused_count: AtomicU64,
+    gpu_frame_blocking_wait_count: AtomicU64,
     fallback_count: AtomicU64,
     last_published_generation: AtomicU64,
     last_fence_value: AtomicU64,
@@ -23,6 +27,10 @@ pub struct Dx12CefInteropDiagnosticSnapshot {
     pub gpu_copy_bytes: u64,
     pub gpu_copy_ns: u64,
     pub gpu_copy_failure_count: u64,
+    pub gpu_frame_ready_count: u64,
+    pub gpu_frame_not_ready_count: u64,
+    pub gpu_frame_reused_count: u64,
+    pub gpu_frame_blocking_wait_count: u64,
     pub fallback_count: u64,
     pub last_published_generation: u64,
     pub last_fence_value: u64,
@@ -57,6 +65,24 @@ impl Dx12CefInteropDiagnostics {
         self.gpu_copy_failure_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_gpu_frame_ready(&self) {
+        self.gpu_frame_ready_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_gpu_frame_not_ready(&self) {
+        self.gpu_frame_not_ready_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_gpu_frame_reused(&self) {
+        self.gpu_frame_reused_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_gpu_frame_blocking_wait(&self) {
+        self.gpu_frame_blocking_wait_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_fallback(&self) {
         self.fallback_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -79,6 +105,12 @@ impl Dx12CefInteropDiagnostics {
             gpu_copy_bytes: self.gpu_copy_bytes.load(Ordering::Relaxed),
             gpu_copy_ns: self.gpu_copy_ns.load(Ordering::Relaxed),
             gpu_copy_failure_count: self.gpu_copy_failure_count.load(Ordering::Relaxed),
+            gpu_frame_ready_count: self.gpu_frame_ready_count.load(Ordering::Relaxed),
+            gpu_frame_not_ready_count: self.gpu_frame_not_ready_count.load(Ordering::Relaxed),
+            gpu_frame_reused_count: self.gpu_frame_reused_count.load(Ordering::Relaxed),
+            gpu_frame_blocking_wait_count: self
+                .gpu_frame_blocking_wait_count
+                .load(Ordering::Relaxed),
             fallback_count: self.fallback_count.load(Ordering::Relaxed),
             last_published_generation: self.last_published_generation.load(Ordering::Relaxed),
             last_fence_value: self.last_fence_value.load(Ordering::Relaxed),
@@ -100,6 +132,10 @@ mod tests {
         diagnostics.record_shared_texture_open_failure();
         diagnostics.record_gpu_copy(4096, 120);
         diagnostics.record_gpu_copy_failure();
+        diagnostics.record_gpu_frame_ready();
+        diagnostics.record_gpu_frame_not_ready();
+        diagnostics.record_gpu_frame_reused();
+        diagnostics.record_gpu_frame_blocking_wait();
         diagnostics.record_fallback();
         diagnostics.record_published_generation(9, 12);
 
@@ -113,6 +149,10 @@ mod tests {
                 gpu_copy_bytes: 4096,
                 gpu_copy_ns: 120,
                 gpu_copy_failure_count: 1,
+                gpu_frame_ready_count: 1,
+                gpu_frame_not_ready_count: 1,
+                gpu_frame_reused_count: 1,
+                gpu_frame_blocking_wait_count: 1,
                 fallback_count: 1,
                 last_published_generation: 9,
                 last_fence_value: 12,

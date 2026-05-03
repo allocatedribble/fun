@@ -28,11 +28,13 @@ pub use bridge::{
     UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet, validate_ui_envelope,
 };
 pub use browser::{
-    BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefBrowserKeyEvent,
+    BrowserUiConfig, BrowserUiPage, CEF_UI_GPU_RING_DEPTH_DEFAULT, CEF_UI_GPU_RING_DEPTH_MAX,
+    CEF_UI_GPU_RING_DEPTH_MIN, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowser,
-    CefUiBrowserError, CefUiBrowserHandle, CefUiFallbackReason, CefUiPaintTransport,
-    CefUiPaintTransportFallbackReason, CefUiRenderBackendHint, CefUiRequestedPaintTransport,
-    MAIN_BROWSER_PAGE,
+    CefUiBrowserError, CefUiBrowserHandle, CefUiFallbackReason, CefUiGpuCopyMode,
+    CefUiPaintTransport, CefUiPaintTransportFallbackReason, CefUiRenderBackendHint,
+    CefUiRequestedPaintTransport, MAIN_BROWSER_PAGE, cef_ui_gpu_ring_depth_from_env,
+    clamp_cef_ui_gpu_ring_depth,
 };
 pub use compositor::{
     CefUiCompositor, CefUiCompositorFrame, CefUiDirtyRectMetadata, CefUiFullUploadReason,
