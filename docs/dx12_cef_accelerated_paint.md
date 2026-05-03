@@ -164,6 +164,41 @@ and must not be enqueued for render-world processing. The future bridge must ope
 the D3D11 shared texture and copy it into a FUN-owned GPU resource before the
 callback returns.
 
+## Startup Bridge Gate
+
+CEF shared texture mode is selected at browser creation time, but the D3D11On12
+bridge needs Bevy/wgpu's active render device and queue. `game_client` therefore
+does not create an accelerated browser from `main` before Bevy render resources
+exist.
+
+The current startup model is:
+
+```text
+main world
+  CefUiStartupState
+  CefUiRequestedPaintTransportResource
+  SharedDx12CefInteropSlot
+
+render world
+  observes RenderDevice + RenderQueue
+  initializes or rejects the D3D11On12 bridge
+  writes Ready/Error into SharedDx12CefInteropSlot
+
+main world
+  starts CPU immediately for cpu requests
+  waits briefly for accelerated/auto requests
+  starts accelerated only after Ready
+  falls back to CPU on Error or timeout
+```
+
+Until the bridge exists, the render-world slot records
+`d3d11on12_bridge_unavailable` after it observes the render device and queue.
+This keeps the browser on the CPU path without enabling CEF shared textures
+blindly. If a future accelerated browser starts and CEF produces CPU `OnPaint`
+frames or no accelerated callbacks during the startup observation window, the
+client tears down that browser and recreates a CPU paint browser with
+`accelerated_paint_not_observed`.
+
 ## Transport Counters
 
 GPU transport claims must use CEF/FUN counters, not the Svelte

@@ -17,7 +17,7 @@ use bevy::{
         render_resource::{
             Extent3d, Origin3d, TexelCopyBufferLayout, TextureDimension, TextureFormat,
         },
-        renderer::RenderQueue,
+        renderer::{RenderDevice, RenderQueue},
         texture::GpuImage,
     },
     window::{CursorMoved, PrimaryWindow},
@@ -35,16 +35,18 @@ use fun_ui_cef::diagnostics::{
 #[cfg(test)]
 use fun_ui_cef::render_handler::CefUiFrameGeneration;
 use fun_ui_cef::{
-    BrowserBridgeError, BrowserUiHitRegion, BrowserUiHitRegionId, BrowserUiHitRegionMode,
-    BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError, BrowserUiRequestId,
-    BrowserUiRouteState, BrowserUiSequence, CefBrowserKeyEvent, CefBrowserKeyEventKind,
-    CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowserHandle, CefUiModel,
-    CefUiSecurityPolicy, FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey,
-    HostCommandError, HostCommandId, HostCommandRejection,
-    HostCommandRequest as CefHostCommandRequest, HostCommandResponse as CefHostCommandResponse,
-    HostDiagnostic, SharedBrowserBridgeQueues, SharedCefUiCompositor, UiControlPayload, UiEnvelope,
-    UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue,
-    UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration, validate_ui_envelope,
+    BrowserBridgeError, BrowserUiConfig, BrowserUiHitRegion, BrowserUiHitRegionId,
+    BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
+    BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefBrowserKeyEvent,
+    CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefMessageLoopStrategy,
+    CefUiBrowser, CefUiBrowserHandle, CefUiModel, CefUiPaintTransport,
+    CefUiPaintTransportFallbackReason, CefUiRequestedPaintTransport, CefUiSecurityPolicy,
+    FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, HostCommandError, HostCommandId,
+    HostCommandRejection, HostCommandRequest as CefHostCommandRequest,
+    HostCommandResponse as CefHostCommandResponse, HostDiagnostic, SharedBrowserBridgeQueues,
+    SharedCefUiCompositor, UiControlPayload, UiEnvelope, UiEnvelopeKind, UiEnvelopePayload,
+    UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue, UiPatchWriteError, UiPatchWriter,
+    UiSurfaceGeneration, validate_ui_envelope,
 };
 use fun_ui_cef::{CefDirtyRect, CefPaintElement, CefUiCompositorFrame};
 use game_shared::{
@@ -62,6 +64,9 @@ const FUN_CLIENT_FPS_COUNTER_WIDTH: f32 = 88.0;
 const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
 const FUN_CLIENT_FPS_COUNTER_MARGIN: f32 = 12.0;
 const CEF_UI_TRANSPORT_COUNTER_REFRESH: Duration = Duration::from_secs(1);
+const CEF_UI_GPU_BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_millis(750);
+
+pub type CefUiFallbackReason = CefUiPaintTransportFallbackReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum GameCefUiSet {
@@ -80,13 +85,21 @@ impl Plugin for GameCefUiPlugin {
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
-        app.add_plugins(ExtractResourcePlugin::<CefUiTextureUploads>::default());
+        app.add_plugins((
+            ExtractResourcePlugin::<CefUiTextureUploads>::default(),
+            ExtractResourcePlugin::<SharedDx12CefInteropSlot>::default(),
+        ));
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .init_resource::<CefUiGpuUploadState>()
                 .add_systems(
                     Render,
-                    upload_cef_ui_texture_to_gpu.in_set(RenderSystems::PrepareResources),
+                    (
+                        initialize_dx12_cef_interop_slot,
+                        upload_cef_ui_texture_to_gpu,
+                    )
+                        .chain()
+                        .in_set(RenderSystems::PrepareResources),
                 );
         }
 
@@ -102,6 +115,8 @@ impl Plugin for GameCefUiPlugin {
             .init_resource::<CefUiFrameStats>()
             .init_resource::<CefUiTransportCountersResource>()
             .init_resource::<CefUiTransportCounterSampler>()
+            .init_resource::<CefUiStartupState>()
+            .init_resource::<SharedDx12CefInteropSlot>()
             .init_resource::<CefUiMessageLoopPump>()
             .init_resource::<CefUiRenderTexture>()
             .init_resource::<CefUiTextureUploads>()
@@ -128,6 +143,16 @@ impl Plugin for GameCefUiPlugin {
                 (GameCefUiSet::CollectModel, GameCefUiSet::FlushBridge).chain(),
             )
             .add_systems(Startup, cef_ui_initialize_service)
+            .add_systems(
+                PreUpdate,
+                drive_cef_ui_browser_startup.before(pump_cef_ui_message_loop),
+            )
+            .add_systems(
+                PreUpdate,
+                monitor_cef_ui_accelerated_paint_observation
+                    .after(drive_cef_ui_browser_startup)
+                    .before(pump_cef_ui_message_loop),
+            )
             .add_systems(
                 PreUpdate,
                 (
@@ -520,6 +545,148 @@ impl CefUiBrowserControl {
 
     pub fn flush_host_envelopes_to_js(&self) -> usize {
         self.browser.flush_host_envelopes_to_js()
+    }
+}
+
+struct CefUiBrowserOwner {
+    _browser: CefUiBrowser,
+}
+
+impl CefUiBrowserOwner {
+    fn new(browser: CefUiBrowser) -> Self {
+        Self { _browser: browser }
+    }
+}
+
+#[derive(Debug, Clone, Resource)]
+pub struct CefUiStartupConfig {
+    browser_config: BrowserUiConfig,
+    compositor: SharedCefUiCompositor,
+    bridge_queues: SharedBrowserBridgeQueues,
+    message_loop_strategy: CefMessageLoopStrategy,
+    gpu_bridge_timeout: Duration,
+}
+
+impl CefUiStartupConfig {
+    #[must_use]
+    pub fn new(
+        browser_config: BrowserUiConfig,
+        compositor: SharedCefUiCompositor,
+        bridge_queues: SharedBrowserBridgeQueues,
+        message_loop_strategy: CefMessageLoopStrategy,
+    ) -> Self {
+        Self {
+            browser_config,
+            compositor,
+            bridge_queues,
+            message_loop_strategy,
+            gpu_bridge_timeout: cef_ui_gpu_bridge_startup_timeout_from_env(),
+        }
+    }
+
+    #[must_use]
+    pub const fn browser_config(&self) -> &BrowserUiConfig {
+        &self.browser_config
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct CefUiRequestedPaintTransportResource {
+    pub requested: CefUiRequestedPaintTransport,
+}
+
+impl CefUiRequestedPaintTransportResource {
+    #[must_use]
+    pub const fn new(requested: CefUiRequestedPaintTransport) -> Self {
+        Self { requested }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefUiStartupStateKind {
+    NotStarted,
+    WaitingForGpuBridge,
+    StartingCpuFallback { reason: CefUiFallbackReason },
+    StartingAccelerated,
+    Running,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct CefUiStartupState {
+    pub kind: CefUiStartupStateKind,
+    waiting_elapsed: Duration,
+    running_transport: Option<CefUiPaintTransport>,
+    accelerated_observe_elapsed: Duration,
+}
+
+impl Default for CefUiStartupState {
+    fn default() -> Self {
+        Self {
+            kind: CefUiStartupStateKind::NotStarted,
+            waiting_elapsed: Duration::ZERO,
+            running_transport: None,
+            accelerated_observe_elapsed: Duration::ZERO,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dx12CefInteropReady {
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dx12CefInteropState {
+    Pending,
+    Ready(Dx12CefInteropReady),
+    Error { reason: CefUiFallbackReason },
+}
+
+#[derive(Debug, Clone, Resource)]
+pub struct SharedDx12CefInteropSlot {
+    state: std::sync::Arc<std::sync::Mutex<Dx12CefInteropState>>,
+}
+
+impl Default for SharedDx12CefInteropSlot {
+    fn default() -> Self {
+        Self {
+            state: std::sync::Arc::new(std::sync::Mutex::new(Dx12CefInteropState::Pending)),
+        }
+    }
+}
+
+impl SharedDx12CefInteropSlot {
+    #[must_use]
+    pub fn snapshot(&self) -> Dx12CefInteropState {
+        self.state
+            .lock()
+            .map(|state| *state)
+            .unwrap_or(Dx12CefInteropState::Error {
+                reason: CefUiPaintTransportFallbackReason::DeviceQueueExtractionFailed,
+            })
+    }
+
+    pub fn set_ready(&self, ready: Dx12CefInteropReady) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = Dx12CefInteropState::Ready(ready);
+        }
+    }
+
+    pub fn set_error(&self, reason: CefUiFallbackReason) {
+        if let Ok(mut state) = self.state.lock() {
+            if matches!(*state, Dx12CefInteropState::Pending) {
+                *state = Dx12CefInteropState::Error { reason };
+            }
+        }
+    }
+}
+
+impl ExtractResource for SharedDx12CefInteropSlot {
+    type Source = Self;
+
+    fn extract_resource(source: &Self::Source) -> Self {
+        source.clone()
     }
 }
 
@@ -1043,6 +1210,296 @@ fn cef_ui_initialize_service(mut status: ResMut<CefUiStatus>) {
     tracing::info!(
         target: FUN_UI_DIAGNOSTICS_TARGET,
         "CEF UI ECS binding initialized"
+    );
+}
+
+fn drive_cef_ui_browser_startup(world: &mut World) {
+    let Some(startup_config) = world.get_resource::<CefUiStartupConfig>().cloned() else {
+        return;
+    };
+    if world.contains_non_send::<CefUiBrowserOwner>() {
+        if let Some(mut startup_state) = world.get_resource_mut::<CefUiStartupState>() {
+            startup_state.kind = CefUiStartupStateKind::Running;
+        }
+        return;
+    }
+    let slot_state = world
+        .get_resource::<SharedDx12CefInteropSlot>()
+        .map(SharedDx12CefInteropSlot::snapshot)
+        .unwrap_or(Dx12CefInteropState::Error {
+            reason: CefUiPaintTransportFallbackReason::DeviceQueueExtractionFailed,
+        });
+    let delta = world
+        .get_resource::<Time>()
+        .map(Time::delta)
+        .unwrap_or_default();
+    let Some(browser_config) =
+        world
+            .get_resource_mut::<CefUiStartupState>()
+            .and_then(|mut state| {
+                cef_ui_startup_next_config(&startup_config, slot_state, delta, &mut state)
+            })
+    else {
+        return;
+    };
+    start_cef_ui_browser(world, startup_config, browser_config);
+}
+
+fn cef_ui_startup_next_config(
+    startup_config: &CefUiStartupConfig,
+    slot_state: Dx12CefInteropState,
+    delta: Duration,
+    state: &mut CefUiStartupState,
+) -> Option<BrowserUiConfig> {
+    match state.kind {
+        CefUiStartupStateKind::NotStarted => {
+            state.waiting_elapsed = Duration::ZERO;
+            match startup_config.browser_config.requested_paint_transport {
+                CefUiRequestedPaintTransport::Cpu => Some(cef_ui_cpu_start_config(
+                    startup_config,
+                    CefUiPaintTransportFallbackReason::None,
+                )),
+                CefUiRequestedPaintTransport::Auto | CefUiRequestedPaintTransport::D3d11On12 => {
+                    if !cfg!(target_os = "windows") {
+                        return Some(cef_ui_cpu_start_config(
+                            startup_config,
+                            CefUiPaintTransportFallbackReason::NonWindows,
+                        ));
+                    }
+                    if !startup_config
+                        .browser_config
+                        .render_backend_hint
+                        .is_dx12_compatible()
+                    {
+                        return Some(cef_ui_cpu_start_config(
+                            startup_config,
+                            CefUiPaintTransportFallbackReason::RenderBackendNotDx12,
+                        ));
+                    }
+                    state.kind = CefUiStartupStateKind::WaitingForGpuBridge;
+                    tracing::info!(
+                        target: FUN_UI_DIAGNOSTICS_TARGET,
+                        requested_transport = startup_config
+                            .browser_config
+                            .requested_paint_transport
+                            .as_wire_str(),
+                        backend = startup_config.browser_config.render_backend_hint.as_wire_str(),
+                        timeout_ms = startup_config.gpu_bridge_timeout.as_millis(),
+                        "CEF UI waiting for DX12 CEF interop bridge"
+                    );
+                    None
+                }
+            }
+        }
+        CefUiStartupStateKind::WaitingForGpuBridge => {
+            state.waiting_elapsed = state.waiting_elapsed.saturating_add(delta);
+            match slot_state {
+                Dx12CefInteropState::Ready(ready) => {
+                    state.kind = CefUiStartupStateKind::StartingAccelerated;
+                    tracing::info!(
+                        target: FUN_UI_DIAGNOSTICS_TARGET,
+                        bridge_generation = ready.generation,
+                        "CEF UI DX12 interop bridge ready"
+                    );
+                    Some(
+                        startup_config
+                            .browser_config
+                            .clone()
+                            .with_paint_transport_decision(
+                                CefUiPaintTransport::D3d11SharedTextureDx12Copy,
+                                CefUiPaintTransportFallbackReason::None,
+                            ),
+                    )
+                }
+                Dx12CefInteropState::Error { reason } => {
+                    Some(cef_ui_cpu_start_config(startup_config, reason))
+                }
+                Dx12CefInteropState::Pending
+                    if state.waiting_elapsed >= startup_config.gpu_bridge_timeout =>
+                {
+                    Some(cef_ui_cpu_start_config(
+                        startup_config,
+                        CefUiPaintTransportFallbackReason::GpuBridgeTimeout,
+                    ))
+                }
+                Dx12CefInteropState::Pending => None,
+            }
+        }
+        CefUiStartupStateKind::StartingCpuFallback { .. }
+        | CefUiStartupStateKind::StartingAccelerated
+        | CefUiStartupStateKind::Running
+        | CefUiStartupStateKind::Failed => None,
+    }
+}
+
+fn cef_ui_cpu_start_config(
+    startup_config: &CefUiStartupConfig,
+    reason: CefUiPaintTransportFallbackReason,
+) -> BrowserUiConfig {
+    let reason = if reason == CefUiPaintTransportFallbackReason::None {
+        CefUiPaintTransportFallbackReason::None
+    } else {
+        tracing::warn!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            fallback_reason = reason.as_wire_str(),
+            requested_transport = startup_config
+                .browser_config
+                .requested_paint_transport
+                .as_wire_str(),
+            "CEF UI starting CPU paint fallback"
+        );
+        reason
+    };
+    startup_config
+        .browser_config
+        .clone()
+        .with_paint_transport_decision(CefUiPaintTransport::CpuPaint, reason)
+}
+
+fn start_cef_ui_browser(
+    world: &mut World,
+    startup_config: CefUiStartupConfig,
+    browser_config: BrowserUiConfig,
+) {
+    if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
+        state.kind = match browser_config.paint_transport {
+            CefUiPaintTransport::CpuPaint => CefUiStartupStateKind::StartingCpuFallback {
+                reason: browser_config.paint_transport_fallback_reason,
+            },
+            CefUiPaintTransport::D3d11SharedTextureDx12Copy => {
+                CefUiStartupStateKind::StartingAccelerated
+            }
+        };
+        state.running_transport = None;
+        state.accelerated_observe_elapsed = Duration::ZERO;
+    }
+
+    let page_url = browser_config.page_url_str().to_owned();
+    let viewport_width = browser_config.viewport_width;
+    let viewport_height = browser_config.viewport_height;
+    let paint_transport = browser_config.paint_transport;
+    let browser = match CefUiBrowser::create_with_bridge(
+        browser_config,
+        startup_config.compositor.clone(),
+        startup_config.bridge_queues.clone(),
+    ) {
+        Ok(browser) => browser,
+        Err(error) => {
+            if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
+                state.kind = CefUiStartupStateKind::Failed;
+            }
+            tracing::error!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                %error,
+                "failed to load CEF UI page"
+            );
+            return;
+        }
+    };
+    let handle = browser.handle();
+    let counters = browser.transport_counters();
+    world.insert_non_send(CefUiBrowserControl::new(handle));
+    world.insert_non_send(CefUiBrowserOwner::new(browser));
+    world.insert_resource(CefUiBridge::new(startup_config.bridge_queues));
+    world.insert_resource(CefUiRenderCompositor::new(startup_config.compositor));
+    world.insert_resource(CefUiTransportCountersResource::new(counters));
+    if matches!(
+        startup_config.message_loop_strategy,
+        CefMessageLoopStrategy::ExternalPump
+    ) {
+        world.insert_resource(CefUiMessageLoopPump::external_pump_60hz());
+    }
+    if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
+        state.kind = CefUiStartupStateKind::Running;
+        state.running_transport = Some(paint_transport);
+        state.accelerated_observe_elapsed = Duration::ZERO;
+    }
+    tracing::info!(
+        target: FUN_UI_DIAGNOSTICS_TARGET,
+        page_url,
+        viewport_width,
+        viewport_height,
+        paint_transport = paint_transport.as_wire_str(),
+        "loaded CEF UI page"
+    );
+}
+
+fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
+    let Some(startup_config) = world.get_resource::<CefUiStartupConfig>().cloned() else {
+        return;
+    };
+    let Some(snapshot) = world
+        .get_resource::<CefUiTransportCountersResource>()
+        .map(CefUiTransportCountersResource::snapshot)
+    else {
+        return;
+    };
+    let delta = world
+        .get_resource::<Time>()
+        .map(Time::delta)
+        .unwrap_or_default();
+    let should_fallback = {
+        let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() else {
+            return;
+        };
+        if state.kind != CefUiStartupStateKind::Running
+            || state.running_transport != Some(CefUiPaintTransport::D3d11SharedTextureDx12Copy)
+        {
+            return;
+        }
+        if snapshot.cef_on_accelerated_paint_count > 0 {
+            return;
+        }
+        state.accelerated_observe_elapsed = state.accelerated_observe_elapsed.saturating_add(delta);
+        snapshot.cef_on_paint_count >= 3
+            || state.accelerated_observe_elapsed >= startup_config.gpu_bridge_timeout
+    };
+    if !should_fallback {
+        return;
+    }
+    let _old_browser = world.remove_non_send::<CefUiBrowserOwner>();
+    let _old_control = world.remove_non_send::<CefUiBrowserControl>();
+    if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
+        state.kind = CefUiStartupStateKind::StartingCpuFallback {
+            reason: CefUiPaintTransportFallbackReason::AcceleratedPaintNotObserved,
+        };
+        state.running_transport = None;
+        state.accelerated_observe_elapsed = Duration::ZERO;
+    }
+    tracing::warn!(
+        target: FUN_UI_DIAGNOSTICS_TARGET,
+        cef_on_paint_count = snapshot.cef_on_paint_count,
+        cef_on_accelerated_paint_count = snapshot.cef_on_accelerated_paint_count,
+        "CEF UI accelerated shared texture callback was not observed; recreating CPU paint browser"
+    );
+    let browser_config = startup_config
+        .browser_config
+        .clone()
+        .with_paint_transport_decision(
+            CefUiPaintTransport::CpuPaint,
+            CefUiPaintTransportFallbackReason::AcceleratedPaintNotObserved,
+        );
+    start_cef_ui_browser(world, startup_config, browser_config);
+}
+
+fn initialize_dx12_cef_interop_slot(
+    slot: Option<Res<SharedDx12CefInteropSlot>>,
+    render_device: Option<Res<RenderDevice>>,
+    render_queue: Option<Res<RenderQueue>>,
+) {
+    let Some(slot) = slot else {
+        return;
+    };
+    if !matches!(slot.snapshot(), Dx12CefInteropState::Pending) {
+        return;
+    }
+    if render_device.is_none() || render_queue.is_none() {
+        return;
+    }
+    slot.set_error(CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable);
+    tracing::info!(
+        target: FUN_UI_DIAGNOSTICS_TARGET,
+        "CEF UI DX12 interop slot observed render device and queue; D3D11On12 bridge is not implemented yet"
     );
 }
 
@@ -2019,6 +2476,15 @@ const CEF_UI_TEXTURE_Z_INDEX: i32 = 900_000;
 
 fn cef_ui_render_interval() -> Duration {
     Duration::from_nanos(1_000_000_000 / CEF_UI_RENDER_RATE_HZ)
+}
+
+fn cef_ui_gpu_bridge_startup_timeout_from_env() -> Duration {
+    std::env::var("FUN_CEF_UI_GPU_BRIDGE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(CEF_UI_GPU_BRIDGE_STARTUP_TIMEOUT)
 }
 
 fn pump_cef_ui_message_loop(time: Res<Time>, mut pump: ResMut<CefUiMessageLoopPump>) {

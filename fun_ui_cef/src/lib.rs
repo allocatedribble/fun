@@ -31,7 +31,7 @@ pub use browser::{
     BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowser,
     CefUiBrowserError, CefUiBrowserHandle, CefUiPaintTransport, CefUiPaintTransportFallbackReason,
-    CefUiRenderBackendHint, MAIN_BROWSER_PAGE,
+    CefUiRenderBackendHint, CefUiRequestedPaintTransport, MAIN_BROWSER_PAGE,
 };
 pub use compositor::{
     CefUiCompositor, CefUiCompositorFrame, CefUiUploadPlan, SharedCefUiCompositor,
