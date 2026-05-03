@@ -3090,6 +3090,7 @@ dependencies = [
  "blake3",
  "clap",
  "fun-warden-core",
+ "fun-warden-protocol",
  "object",
  "serde",
  "serde_json",

@@ -1,13 +1,19 @@
 use bevy::{app::AppExit, prelude::*};
-use fun_warden_client::integrity::verify_current_process_integrity;
-use fun_warden_core::{ExecutableIntegrityManifest, IntegrityStatus};
+use fun_warden_client::{
+    integrity::verify_current_process_integrity,
+    runtime::{
+        WARDEN_CLIENT_DIAGNOSTIC_TARGET, WardenBackendChallengeBindingStatus,
+        WardenProtectedLoaderVerdict, WardenProtectedRuntimeConfig as SharedProtectedRuntimeConfig,
+        WardenProtectedRuntimeStatus as SharedProtectedRuntimeStatus,
+        protected_region_status_report, redacted_protected_runtime_diagnostics_json,
+    },
+};
+use fun_warden_core::{ExecutableIntegrityManifest, IntegrityStatus, ProtectedProtectionProfile};
 use fun_warden_protocol::{
     FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV, FUN_WARDEN_MODE_ENV,
-    FUN_WARDEN_SESSION_ID_ENV, WardenPolicyMode,
+    FUN_WARDEN_SESSION_ID_ENV, ProtectedRegionStatusReport, TicketId16, WardenPolicyMode,
 };
 use tracing::{debug, info, warn};
-
-pub const WARDEN_CLIENT_DIAGNOSTIC_TARGET: &str = "fun::warden::client";
 
 const MAX_WARDEN_SESSION_ID_BYTES: usize = 64;
 const MAX_WARDEN_CHALLENGE_ID_BYTES: usize = 80;
@@ -19,6 +25,8 @@ pub struct ClientWardenPlugin;
 impl Plugin for ClientWardenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WardenClientStatus>()
+            .init_resource::<WardenProtectedRuntimeStatus>()
+            .init_resource::<WardenProtectedServiceReportOutbox>()
             .init_resource::<WardenServiceHeartbeatTimer>()
             .init_resource::<WardenIntegrityRecheckTimer>()
             .add_systems(Startup, initialize_warden_client)
@@ -27,6 +35,7 @@ impl Plugin for ClientWardenPlugin {
                 (
                     warden_service_heartbeat,
                     low_frequency_integrity_recheck,
+                    report_protected_status_to_service,
                     apply_warden_policy_change,
                 ),
             );
@@ -39,6 +48,7 @@ pub struct WardenClientConfig {
     pub session_id: Option<String>,
     pub challenge_id: Option<String>,
     pub mode: WardenPolicyMode,
+    pub protected_runtime: SharedProtectedRuntimeConfig,
 }
 
 impl WardenClientConfig {
@@ -56,11 +66,13 @@ impl WardenClientConfig {
             .ok()
             .and_then(|value| parse_policy_mode(&value))
             .unwrap_or(WardenPolicyMode::Observe);
+        let protected_runtime = SharedProtectedRuntimeConfig::from_env();
         Self {
             enabled,
             session_id,
             challenge_id,
             mode,
+            protected_runtime,
         }
     }
 
@@ -70,9 +82,10 @@ impl WardenClientConfig {
         let mut session_id = None;
         let mut challenge_id = None;
         let mut mode = WardenPolicyMode::Observe;
+        let pairs = pairs.into_iter().collect::<Vec<_>>();
 
-        for (key, value) in pairs {
-            match key {
+        for (key, value) in &pairs {
+            match *key {
                 FUN_WARDEN_ENABLED_ENV => enabled = env_flag_value(value),
                 FUN_WARDEN_SESSION_ID_ENV => {
                     session_id = bounded_env_reference(value, MAX_WARDEN_SESSION_ID_BYTES);
@@ -86,12 +99,14 @@ impl WardenClientConfig {
                 _ => {}
             }
         }
+        let protected_runtime = SharedProtectedRuntimeConfig::from_pairs(pairs);
 
         Self {
             enabled,
             session_id,
             challenge_id,
             mode,
+            protected_runtime,
         }
     }
 }
@@ -138,6 +153,22 @@ pub struct WardenClientStatus {
     pub exit_requested: bool,
 }
 
+#[derive(Debug, Resource)]
+pub struct WardenProtectedRuntimeStatus {
+    pub profile: Option<ProtectedProtectionProfile>,
+    pub loader_verdict: WardenProtectedLoaderVerdict,
+    pub integrity_mesh_status: IntegrityStatus,
+    pub last_check_coarse_timestamp_ms: u64,
+    pub backend_challenge_binding_status: WardenBackendChallengeBindingStatus,
+    pub enforcement_mode: WardenPolicyMode,
+}
+
+#[derive(Debug, Resource, Default)]
+pub struct WardenProtectedServiceReportOutbox {
+    pub last_report: Option<ProtectedRegionStatusReport>,
+    pub report_count: u64,
+}
+
 impl Default for WardenClientStatus {
     fn default() -> Self {
         let config = WardenClientConfig::from_env();
@@ -158,6 +189,39 @@ impl Default for WardenClientStatus {
             backend_decision: WardenClientBackendDecision::Pending,
             heartbeat_count: 0,
             exit_requested: false,
+        }
+    }
+}
+
+impl Default for WardenProtectedRuntimeStatus {
+    fn default() -> Self {
+        let config = SharedProtectedRuntimeConfig::from_env();
+        SharedProtectedRuntimeStatus::from_config(config).into()
+    }
+}
+
+impl From<SharedProtectedRuntimeStatus> for WardenProtectedRuntimeStatus {
+    fn from(status: SharedProtectedRuntimeStatus) -> Self {
+        Self {
+            profile: status.profile,
+            loader_verdict: status.loader_verdict,
+            integrity_mesh_status: status.integrity_mesh_status,
+            last_check_coarse_timestamp_ms: status.last_check_coarse_timestamp_ms,
+            backend_challenge_binding_status: status.backend_challenge_binding_status,
+            enforcement_mode: status.enforcement_mode,
+        }
+    }
+}
+
+impl From<&WardenProtectedRuntimeStatus> for SharedProtectedRuntimeStatus {
+    fn from(status: &WardenProtectedRuntimeStatus) -> Self {
+        Self {
+            profile: status.profile,
+            loader_verdict: status.loader_verdict,
+            integrity_mesh_status: status.integrity_mesh_status,
+            last_check_coarse_timestamp_ms: status.last_check_coarse_timestamp_ms,
+            backend_challenge_binding_status: status.backend_challenge_binding_status,
+            enforcement_mode: status.enforcement_mode,
         }
     }
 }
@@ -188,6 +252,7 @@ impl Default for WardenIntegrityRecheckTimer {
 
 fn initialize_warden_client(
     mut status: ResMut<WardenClientStatus>,
+    mut protected_status: ResMut<WardenProtectedRuntimeStatus>,
     manifest: Option<Res<VerifiedWardenIntegrityManifest>>,
 ) {
     if !status.config.enabled {
@@ -199,10 +264,14 @@ fn initialize_warden_client(
     }
 
     verify_current_process(&mut status, manifest.as_deref());
+    *protected_status =
+        SharedProtectedRuntimeStatus::from_config(status.config.protected_runtime).into();
     status.service_state = WardenClientServiceState::PendingService;
     info!(
         target: WARDEN_CLIENT_DIAGNOSTIC_TARGET,
         mode = ?status.config.mode,
+        protected_profile = ?protected_status.profile,
+        loader_verdict = ?protected_status.loader_verdict,
         has_session_id = status.config.session_id.is_some(),
         has_challenge_id = status.config.challenge_id.is_some(),
         integrity_status = ?status.integrity_status,
@@ -235,6 +304,7 @@ fn low_frequency_integrity_recheck(
     time: Res<Time>,
     mut timer: ResMut<WardenIntegrityRecheckTimer>,
     mut status: ResMut<WardenClientStatus>,
+    mut protected_status: ResMut<WardenProtectedRuntimeStatus>,
     manifest: Option<Res<VerifiedWardenIntegrityManifest>>,
 ) {
     if !status.config.enabled {
@@ -245,6 +315,51 @@ fn low_frequency_integrity_recheck(
     }
 
     verify_current_process(&mut status, manifest.as_deref());
+    protected_status.integrity_mesh_status = status.integrity_status;
+    protected_status.last_check_coarse_timestamp_ms = coarse_now_ms();
+}
+
+fn report_protected_status_to_service(
+    status: Res<WardenClientStatus>,
+    protected_status: Res<WardenProtectedRuntimeStatus>,
+    mut outbox: ResMut<WardenProtectedServiceReportOutbox>,
+) {
+    if !status.config.enabled || !protected_status.is_changed() {
+        return;
+    }
+    let Some(ticket_id) = status
+        .config
+        .session_id
+        .as_deref()
+        .and_then(ticket_id_from_session_reference)
+    else {
+        return;
+    };
+    let shared_status = SharedProtectedRuntimeStatus::from(&*protected_status);
+    let region_failure_count = u32::from(
+        shared_status.integrity_mesh_status == IntegrityStatus::Failed
+            || shared_status.loader_verdict == WardenProtectedLoaderVerdict::Failed,
+    );
+    let Some(report) = protected_region_status_report(
+        ticket_id,
+        status.config.protected_runtime,
+        shared_status,
+        region_failure_count,
+    ) else {
+        return;
+    };
+
+    outbox.last_report = Some(report);
+    outbox.report_count = outbox.report_count.saturating_add(1);
+    if let Ok(json) =
+        redacted_protected_runtime_diagnostics_json(status.config.protected_runtime, shared_status)
+    {
+        debug!(
+            target: WARDEN_CLIENT_DIAGNOSTIC_TARGET,
+            protected_runtime = %json,
+            "queued compact Warden protected status report"
+        );
+    }
 }
 
 fn apply_warden_policy_change(
@@ -334,12 +449,46 @@ fn parse_policy_mode(value: &str) -> Option<WardenPolicyMode> {
     None
 }
 
+fn ticket_id_from_session_reference(value: &str) -> Option<TicketId16> {
+    if value.len() != 32 {
+        return None;
+    }
+    let mut bytes = [0_u8; 16];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = hex_nibble(chunk[0])?;
+        let low = hex_nibble(chunk[1])?;
+        bytes[index] = (high << 4) | low;
+    }
+    Some(TicketId16(bytes))
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn coarse_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{WardenClientConfig, bounded_env_reference, parse_policy_mode};
+    use super::{
+        WardenClientConfig, bounded_env_reference, parse_policy_mode,
+        ticket_id_from_session_reference,
+    };
     use fun_warden_protocol::{
-        FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV, FUN_WARDEN_MODE_ENV,
-        FUN_WARDEN_SESSION_ID_ENV,
+        Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV, FUN_WARDEN_MODE_ENV,
+        FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV, FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV,
+        FUN_WARDEN_PROTECTED_PROFILE_ENV, FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV,
+        FUN_WARDEN_SESSION_ID_ENV, TicketId16,
     };
 
     #[test]
@@ -349,13 +498,29 @@ mod tests {
             (FUN_WARDEN_SESSION_ID_ENV, "session-ref"),
             (FUN_WARDEN_CHALLENGE_ID_ENV, "challenge-ref"),
             (FUN_WARDEN_MODE_ENV, "protect"),
+            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "standard"),
+            (
+                FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
+                "0707070707070707070707070707070707070707070707070707070707070707",
+            ),
+            (FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV, "passed"),
+            (FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV, "0"),
             ("FUN_WARDEN_TOKEN", "must-not-be-read"),
+            ("FUN_WARDEN_HARDWARE_ID", "must-not-be-read"),
         ]);
 
         assert!(config.enabled);
         assert_eq!(config.session_id.as_deref(), Some("session-ref"));
         assert_eq!(config.challenge_id.as_deref(), Some("challenge-ref"));
         assert_eq!(config.mode, fun_warden_protocol::WardenPolicyMode::Protect);
+        assert_eq!(
+            config.protected_runtime.profile,
+            Some(fun_warden_core::ProtectedProtectionProfile::Standard)
+        );
+        assert_eq!(
+            config.protected_runtime.protected_bundle_digest,
+            Some(Digest32([7; 32]))
+        );
     }
 
     #[test]
@@ -375,5 +540,18 @@ mod tests {
             Some(fun_warden_protocol::WardenPolicyMode::EnforceCandidate)
         );
         assert_eq!(parse_policy_mode("unknown"), None);
+    }
+
+    #[test]
+    fn session_reference_decodes_ticket_id_without_accepting_other_text() {
+        assert_eq!(
+            ticket_id_from_session_reference("09090909090909090909090909090909"),
+            Some(TicketId16([9; 16]))
+        );
+        assert_eq!(ticket_id_from_session_reference("session-ref"), None);
+        assert_eq!(
+            ticket_id_from_session_reference("zz090909090909090909090909090909"),
+            None
+        );
     }
 }
