@@ -59,6 +59,25 @@ feature surface and uses its own editor preview renderer crate to render static
 scene manifests into editor-owned targets without Winit, HWND embedding,
 networking, physics, prediction, gameplay, or server systems.
 
+## Browser UI Architecture
+
+`fun_ui_cef` is the game UI browser subsystem. It is a sibling of `fun_render`,
+not a `fun_render` feature and not a Bevy engine feature. `game_client` can opt
+into it with `cef_ui`, which performs the CEF subprocess escape before Bevy app
+construction and then initializes CEF as a separate windowless browser runtime.
+
+CEF owns browser lifetime, page loading, JavaScript bridge messages, offscreen
+paint callbacks, dirty rects, transparent UI buffers, and UI compositor state.
+Bevy ECS owns game state and exchanges typed UI packets with the browser bridge.
+Bevy render owns game rendering only. CEF paint output must not become a Bevy
+RenderGraph node, a Bevy `Image`, a sprite, or a normal ECS-rendered mesh.
+
+The main browser page is `fun-ui://main/index.html`, uses a transparent
+background, and carries HUD, menu, scoreboard, chat, loading, diagnostics, and
+debug overlay state inside the same full-window page. Tauri, WRY, native child
+webviews, `SetParent`, HWND child hosting, browser-window embedding, and process
+or window embedding are not game UI runtime paths.
+
 ## Client Benchmarking
 
 Client changes must be measurable. Use Criterion through

@@ -1,0 +1,16 @@
+[package]
+name = "fun_ui_cef"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+debug_remote = []
+
+[dependencies]
+cef = "147.1.0"
+compactly.workspace = true
+tracing.workspace = true

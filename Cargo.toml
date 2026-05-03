@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "fun_render",
+    "fun_ui_cef",
     "game_client",
     "game_launcher",
     "game_scene",
