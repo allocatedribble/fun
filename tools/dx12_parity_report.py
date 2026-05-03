@@ -62,6 +62,14 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("render_churn_ui_pipeline_key_count", "lower", "UI pipeline keys"),
     ("render_churn_debug_overlay_pipeline_key_count", "lower", "debug overlay pipeline keys"),
     ("render_churn_event_count", "lower", "render churn event count"),
+    ("render_command_command_encoder_creations", "lower", "command encoder creations"),
+    ("render_command_render_passes", "lower", "render passes"),
+    ("render_command_compute_passes", "lower", "compute passes"),
+    ("render_command_command_buffers_submitted", "lower", "command buffers submitted"),
+    ("render_command_queue_submits", "lower", "queue submits"),
+    ("render_command_copy_commands", "lower", "copy commands"),
+    ("render_command_native_interop_command_insertions", "lower", "native interop command insertions"),
+    ("render_command_event_count", "lower", "render command event count"),
     ("transient_texture_creates", "lower", "transient texture creates"),
     ("transient_buffer_creates", "lower", "transient buffer creates"),
     ("transient_texture_descriptor_miss_creates", "lower", "transient texture descriptor misses"),
@@ -340,6 +348,23 @@ def likely_bottleneck(
     if pipeline_misses and pipeline_misses["p95_delta"] is not None and pipeline_misses["p95_delta"] > 0:
         reasons.append("DX12 pipeline cache misses exceeded the Vulkan lane")
         return "pipeline churn", "PIX", reasons
+
+    queue_submits = row_by_metric(rows, "render_command_queue_submits")
+    command_buffers = row_by_metric(rows, "render_command_command_buffers_submitted")
+    encoders = row_by_metric(rows, "render_command_command_encoder_creations")
+    native_interop = row_by_metric(rows, "render_command_native_interop_command_insertions")
+    if queue_submits and queue_submits["p95_delta"] is not None and queue_submits["p95_delta"] > 0:
+        reasons.append("DX12 queue submits exceeded the Vulkan lane")
+        return "submission fragmentation", "PIX or GPUView", reasons
+    if command_buffers and command_buffers["p95_delta"] is not None and command_buffers["p95_delta"] > 0:
+        reasons.append("DX12 submitted more command buffers than the Vulkan lane")
+        return "submission fragmentation", "PIX or GPUView", reasons
+    if encoders and encoders["p95_delta"] is not None and encoders["p95_delta"] > 0:
+        reasons.append("DX12 created more command encoders than the Vulkan lane")
+        return "submission fragmentation", "PIX", reasons
+    if native_interop and native_interop["dx12_p95"] and native_interop["dx12_p95"] > 0:
+        reasons.append("DX12 native interop command insertion was observed; inspect fence and queue overlap")
+        return "CEF/native interop sync", "PIX plus CEF counters", reasons
 
     transient_texture_creates = row_by_metric(rows, "transient_texture_creates")
     transient_buffer_creates = row_by_metric(rows, "transient_buffer_creates")

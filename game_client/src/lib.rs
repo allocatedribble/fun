@@ -3266,6 +3266,43 @@ fn log_render_performance(
         }
         bevy::render::renderer::reset_render_resource_churn_counters();
     }
+    let command_snapshot = bevy::render::renderer::snapshot_render_command_counters();
+    if command_snapshot.enabled {
+        game_shared::fun_diag_info!(
+            target: "fun::perf::render_commands",
+            command_encoder_creations = command_snapshot.command_encoder_creations,
+            render_passes = command_snapshot.render_passes,
+            compute_passes = command_snapshot.compute_passes,
+            command_buffers_submitted = command_snapshot.command_buffers_submitted,
+            queue_submits = command_snapshot.queue_submits,
+            copy_commands = command_snapshot.copy_commands,
+            native_interop_command_insertions = command_snapshot.native_interop_command_insertions,
+            event_count = command_snapshot.events.len(),
+            "render command submission counter sample"
+        );
+        game_shared::fun_diag_info!(
+            "[client perf] render commands: command_encoder_creations={} render_passes={} compute_passes={} command_buffers_submitted={} queue_submits={} copy_commands={} native_interop_command_insertions={} event_count={}",
+            command_snapshot.command_encoder_creations,
+            command_snapshot.render_passes,
+            command_snapshot.compute_passes,
+            command_snapshot.command_buffers_submitted,
+            command_snapshot.queue_submits,
+            command_snapshot.copy_commands,
+            command_snapshot.native_interop_command_insertions,
+            command_snapshot.events.len(),
+        );
+        for (rank, event) in command_snapshot.events.iter().take(10).enumerate() {
+            game_shared::fun_diag_info!(
+                "[client perf] render command top: rank={} operation={} category={} label={} calls={}",
+                rank + 1,
+                event.operation,
+                event.category,
+                event.label,
+                event.calls,
+            );
+        }
+        bevy::render::renderer::reset_render_command_counters();
+    }
     log_schedule_heatmap(schedule_profiler);
 
     if let Some(window) = window {

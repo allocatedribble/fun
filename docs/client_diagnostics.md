@@ -154,6 +154,9 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 - `fun::perf::render_churn`: engine-level descriptor, bind group layout,
   pipeline layout, PSO, and specialized pipeline cache churn sampled by the
   client when render diagnostics enable the churn counters.
+- `fun::perf::render_commands`: command encoder, render pass, compute pass,
+  command buffer, queue submit, copy command, and native interop insertion
+  counters for DX12/Vulkan submission-shape comparisons.
 - `fun::render_catalog`: prewarmed render-catalog inventory, per-asset geometry
   class decisions, and runtime catalog usage counts.
 - `fun::perf::solari`: Solari pass timings in ns, including direct lighting,
@@ -354,6 +357,16 @@ emits `[client perf] render churn:` totals and top-ten
 [`dx12_descriptor_pipeline_churn.md`](dx12_descriptor_pipeline_churn.md) for the
 counter contract, steady-state expectations, and the canonicalization/warmup
 decision path.
+
+## Command Submission Shape
+
+The same flag enables command submission counters through
+`FUN_RENDER_COMMAND_COUNTERS=1` and `BEVY_RENDER_COMMAND_COUNTERS=1`. The client
+emits `[client perf] render commands:` totals and top-ten
+`[client perf] render command top:` rows. Use
+[`dx12_command_submission_strategy.md`](dx12_command_submission_strategy.md) to
+distinguish renderer work from submit fragmentation before changing DX12 queue
+strategy.
 
 ## Denoiser Comparison
 

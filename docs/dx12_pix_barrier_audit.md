@@ -73,6 +73,8 @@ markers and tracing targets:
 - `fun::perf::solari`: Solari pass costs and denoiser guide costs.
 - `fun::perf::render_churn`: sampled descriptor/layout/pipeline creation and
   specialized pipeline cache counters.
+- `fun::perf::render_commands`: command encoder, pass, submit, copy, and native
+  interop insertion counts by coarse render category.
 - `bevy_render::transient`: transient texture/buffer reuse, aliasing,
   descriptor miss reasons, and top descriptor-create rows.
 - `bevy_render::scheduler`: render graph pressure.
@@ -101,6 +103,11 @@ Cross-check PIX PSO/root-signature findings against
 `render_churn_compute_pipeline_creations`,
 `render_churn_bind_group_layout_creations`, and `render_churn_events` in the
 benchmark JSON.
+Check `render_command_queue_submits`,
+`render_command_command_buffers_submitted`,
+`render_command_copy_commands`, and `render_command_events` before attributing
+DX12 p95 loss to barriers. High submit or command-buffer counts should be
+investigated as submission fragmentation with PIX/GPUView evidence.
 
 If a transition appears redundant, record the resource name, before state, after
 state, producing pass, consuming pass, and whether wgpu or a native DX12 interop

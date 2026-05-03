@@ -12,7 +12,9 @@ use std::{
 
 use bevy::render::{
     render_resource::TextureFormat,
-    renderer::{RenderDevice, RenderQueue},
+    renderer::{
+        RenderDevice, RenderQueue, record_render_command_copy, record_render_command_native_interop,
+    },
     texture::GpuImage,
 };
 use fun_ui_cef::{
@@ -871,6 +873,8 @@ impl Dx12CefInterop {
         fence_value: u64,
     ) -> Result<(), Dx12CefInteropError> {
         let wrapped_resources = [Some(slot.wrapped_d3d11_resource.clone())];
+        record_render_command_native_interop(Some("fun.cef.copy_shared_texture_to_ring_slot"));
+        record_render_command_copy(Some("fun.cef.copy_shared_texture_to_ring_slot"));
         unsafe {
             self.d3d11_on12.AcquireWrappedResources(&wrapped_resources);
             self.d3d11_context
@@ -920,6 +924,10 @@ impl Dx12CefInterop {
                     &copy_commands.command_list,
                     "fun.cef.copy_ring_source_to_bevy_image",
                 );
+                record_render_command_native_interop(Some(
+                    "fun.cef.copy_ring_source_to_bevy_image",
+                ));
+                record_render_command_copy(Some("fun.cef.copy_ring_source_to_bevy_image"));
                 resource_barrier(
                     &copy_commands.command_list,
                     target_resource,

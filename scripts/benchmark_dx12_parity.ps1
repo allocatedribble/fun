@@ -305,7 +305,15 @@ function Get-RequiredMetricNames {
         "render_churn_meshlet_pipeline_key_count",
         "render_churn_ui_pipeline_key_count",
         "render_churn_debug_overlay_pipeline_key_count",
-        "render_churn_event_count"
+        "render_churn_event_count",
+        "render_command_command_encoder_creations",
+        "render_command_render_passes",
+        "render_command_compute_passes",
+        "render_command_command_buffers_submitted",
+        "render_command_queue_submits",
+        "render_command_copy_commands",
+        "render_command_native_interop_command_insertions",
+        "render_command_event_count"
     )
 }
 
@@ -360,7 +368,7 @@ function New-MetricPresence {
 function New-KeyMetricSnapshot {
     param([object]$Summary)
 
-    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations")
+    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions")
     $snapshot = [ordered]@{}
     foreach ($name in $names) {
         $property = if ($null -ne $Summary -and $null -ne $Summary.metrics) { $Summary.metrics.PSObject.Properties[$name] } else { $null }

@@ -240,6 +240,14 @@ recorded as `render_churn_bind_group_creations`,
 `render_churn_material_pipeline_key_count` and
 `render_churn_cloud_pipeline_key_count`; `summary.json` also includes
 `render_churn_events` with the top ten creation/cache events.
+Command submission metrics are recorded as
+`render_command_command_encoder_creations`, `render_command_render_passes`,
+`render_command_compute_passes`,
+`render_command_command_buffers_submitted`, `render_command_queue_submits`,
+`render_command_copy_commands`,
+`render_command_native_interop_command_insertions`, and
+`render_command_event_count`; `summary.json` also includes
+`render_command_events` with the top ten operation/category/label rows.
 
 PIX, GPUView, and PresentMon-only values are not guessed from client logs. The
 matrix JSON lists them under `dx12_external_metrics` with
