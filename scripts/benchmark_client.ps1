@@ -375,6 +375,134 @@ function Parse-RenderChurnEventsLog {
     )
 }
 
+function Parse-TransientDescriptorCreateLog {
+    param([string[]]$Lines)
+
+    $events = [ordered]@{}
+    foreach ($line in $Lines) {
+        if (-not $line.Contains("transient descriptor create top")) {
+            continue
+        }
+        $parsed = ConvertTo-KeyValueObject -Payload $line
+        $resource = [string]$parsed.resource
+        $label = [string]$parsed.label
+        $reason = [string]$parsed.reason
+        $nearMiss = [string]$parsed.near_miss
+        $createPattern = [string]$parsed.create_pattern
+        $format = [string]$parsed.format
+        $width = [string]$parsed.width
+        $height = [string]$parsed.height
+        $size = [string]$parsed.size
+        $usageBits = [string]$parsed.usage_bits
+        $key = "$resource`n$label`n$reason`n$nearMiss`n$createPattern`n$format`n$width`n$height`n$size`n$usageBits"
+        if (-not $events.Contains($key)) {
+            $events[$key] = [ordered]@{
+                resource = $resource
+                label = $label
+                reason = $reason
+                near_miss = $nearMiss
+                create_pattern = $createPattern
+                format = $format
+                width = $width
+                height = $height
+                size = $size
+                usage_bits = $usageBits
+                create_count = 0
+                estimated_bytes = 0
+                samples = 0
+            }
+        }
+        $entry = $events[$key]
+        $entry.create_count = [uint64]$entry.create_count + [uint64]$parsed.create_count
+        $entry.estimated_bytes = [uint64]$entry.estimated_bytes + [uint64]$parsed.estimated_bytes
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $events.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.create_count }; Descending = $true }, resource, label, reason, near_miss |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    resource = $_.resource
+                    label = $_.label
+                    reason = $_.reason
+                    near_miss = $_.near_miss
+                    create_pattern = $_.create_pattern
+                    format = $_.format
+                    width = $_.width
+                    height = $_.height
+                    size = $_.size
+                    usage_bits = $_.usage_bits
+                    create_count = $_.create_count
+                    estimated_bytes = $_.estimated_bytes
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
+function Parse-TransientDescriptorLabelVariantLog {
+    param([string[]]$Lines)
+
+    $events = [ordered]@{}
+    foreach ($line in $Lines) {
+        if (-not $line.Contains("transient descriptor label variants")) {
+            continue
+        }
+        $parsed = ConvertTo-KeyValueObject -Payload $line
+        $resource = [string]$parsed.resource
+        $labels = [string]$parsed.labels
+        $format = [string]$parsed.format
+        $width = [string]$parsed.width
+        $height = [string]$parsed.height
+        $size = [string]$parsed.size
+        $usageBits = [string]$parsed.usage_bits
+        $key = "$resource`n$labels`n$format`n$width`n$height`n$size`n$usageBits"
+        if (-not $events.Contains($key)) {
+            $events[$key] = [ordered]@{
+                resource = $resource
+                labels = $labels
+                format = $format
+                width = $width
+                height = $height
+                size = $size
+                usage_bits = $usageBits
+                label_count = 0
+                samples = 0
+            }
+        }
+        $entry = $events[$key]
+        $entry.label_count = [uint64][Math]::Max([uint64]$entry.label_count, [uint64]$parsed.label_count)
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $events.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.label_count }; Descending = $true }, resource, labels |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    resource = $_.resource
+                    labels = $_.labels
+                    format = $_.format
+                    width = $_.width
+                    height = $_.height
+                    size = $_.size
+                    usage_bits = $_.usage_bits
+                    label_count = $_.label_count
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
 function Parse-CefUiTransportSelectionLog {
     param([string[]]$Lines)
 
@@ -1054,6 +1182,24 @@ function Write-MarkdownReport {
         "transient_buffer_aliases",
         "transient_cached_texture_slots",
         "transient_cached_buffer_slots",
+        "transient_texture_descriptor_miss_creates",
+        "transient_texture_lifetime_conflict_creates",
+        "transient_buffer_descriptor_miss_creates",
+        "transient_buffer_lifetime_conflict_creates",
+        "transient_texture_near_miss_size",
+        "transient_texture_near_miss_format",
+        "transient_texture_near_miss_usage",
+        "transient_texture_near_miss_view_formats",
+        "transient_texture_near_miss_other",
+        "transient_buffer_near_miss_size",
+        "transient_buffer_near_miss_usage",
+        "transient_buffer_near_miss_other",
+        "transient_texture_label_variant_descriptors",
+        "transient_buffer_label_variant_descriptors",
+        "transient_texture_every_frame_create_descriptors",
+        "transient_buffer_every_frame_create_descriptors",
+        "transient_texture_resize_like_create_descriptors",
+        "transient_buffer_resize_like_create_descriptors",
         "render_scheduler_pressure",
         "schedule_networking_receive_ns",
         "schedule_world_stream_apply_ns",
@@ -1168,6 +1314,26 @@ function Write-MarkdownReport {
         $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
         foreach ($event in $Summary.render_churn_events) {
             $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
+        }
+    }
+    if ($null -ne $Summary.transient_descriptor_creates -and $Summary.transient_descriptor_creates.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Transient Descriptor Create Top Events") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | resource | label | reason | near miss | pattern | format | width | height | size | usage bits | creates | bytes | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
+        foreach ($event in $Summary.transient_descriptor_creates) {
+            $lines.Add("| $($event.rank) | $($event.resource) | $($event.label) | $($event.reason) | $($event.near_miss) | $($event.create_pattern) | $($event.format) | $($event.width) | $($event.height) | $($event.size) | $($event.usage_bits) | $($event.create_count) | $($event.estimated_bytes) | $($event.samples) |") | Out-Null
+        }
+    }
+    if ($null -ne $Summary.transient_descriptor_label_variants -and $Summary.transient_descriptor_label_variants.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Transient Descriptor Label Variants") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | resource | labels | format | width | height | size | usage bits | label count | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---|---:|---:|---:|---:|---:|---:|") | Out-Null
+        foreach ($event in $Summary.transient_descriptor_label_variants) {
+            $lines.Add("| $($event.rank) | $($event.resource) | $($event.labels) | $($event.format) | $($event.width) | $($event.height) | $($event.size) | $($event.usage_bits) | $($event.label_count) | $($event.samples) |") | Out-Null
         }
     }
 
@@ -1507,6 +1673,8 @@ try {
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
     $renderChurnEvents = Parse-RenderChurnEventsLog -Lines $sampleLines
+    $transientDescriptorCreates = @(Parse-TransientDescriptorCreateLog -Lines $sampleLines)
+    $transientDescriptorLabelVariants = @(Parse-TransientDescriptorLabelVariantLog -Lines $sampleLines)
     $cefUiTransportSelection = Parse-CefUiTransportSelectionLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
@@ -1604,6 +1772,8 @@ try {
         render_presentation = $renderPresentation
         render_upload_callsites = $renderUploadCallsites
         render_churn_events = $renderChurnEvents
+        transient_descriptor_creates = $transientDescriptorCreates
+        transient_descriptor_label_variants = $transientDescriptorLabelVariants
         cef_ui_transport_selection = $cefUiTransportSelection
     }
 

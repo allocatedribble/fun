@@ -73,7 +73,8 @@ markers and tracing targets:
 - `fun::perf::solari`: Solari pass costs and denoiser guide costs.
 - `fun::perf::render_churn`: sampled descriptor/layout/pipeline creation and
   specialized pipeline cache counters.
-- `bevy_render::transient`: transient texture/buffer reuse and aliasing.
+- `bevy_render::transient`: transient texture/buffer reuse, aliasing,
+  descriptor miss reasons, and top descriptor-create rows.
 - `bevy_render::scheduler`: render graph pressure.
 
 Future marker names should follow `fun.<subsystem>.<pass>` and should be added

@@ -64,6 +64,21 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("render_churn_event_count", "lower", "render churn event count"),
     ("transient_texture_creates", "lower", "transient texture creates"),
     ("transient_buffer_creates", "lower", "transient buffer creates"),
+    ("transient_texture_descriptor_miss_creates", "lower", "transient texture descriptor misses"),
+    ("transient_texture_lifetime_conflict_creates", "lower", "transient texture lifetime conflicts"),
+    ("transient_buffer_descriptor_miss_creates", "lower", "transient buffer descriptor misses"),
+    ("transient_buffer_lifetime_conflict_creates", "lower", "transient buffer lifetime conflicts"),
+    ("transient_texture_near_miss_usage", "lower", "transient texture usage near-misses"),
+    ("transient_texture_near_miss_format", "lower", "transient texture format near-misses"),
+    ("transient_texture_near_miss_size", "lower", "transient texture size near-misses"),
+    ("transient_texture_label_variant_descriptors", "lower", "transient texture label variants"),
+    ("transient_texture_every_frame_create_descriptors", "lower", "transient texture every-frame creates"),
+    ("transient_texture_resize_like_create_descriptors", "lower", "transient texture resize-like creates"),
+    ("transient_buffer_near_miss_usage", "lower", "transient buffer usage near-misses"),
+    ("transient_buffer_near_miss_size", "lower", "transient buffer size near-misses"),
+    ("transient_buffer_label_variant_descriptors", "lower", "transient buffer label variants"),
+    ("transient_buffer_every_frame_create_descriptors", "lower", "transient buffer every-frame creates"),
+    ("transient_buffer_resize_like_create_descriptors", "lower", "transient buffer resize-like creates"),
     ("render_scheduler_pressure", "lower", "render scheduler pressure"),
 )
 
@@ -325,6 +340,27 @@ def likely_bottleneck(
     if pipeline_misses and pipeline_misses["p95_delta"] is not None and pipeline_misses["p95_delta"] > 0:
         reasons.append("DX12 pipeline cache misses exceeded the Vulkan lane")
         return "pipeline churn", "PIX", reasons
+
+    transient_texture_creates = row_by_metric(rows, "transient_texture_creates")
+    transient_buffer_creates = row_by_metric(rows, "transient_buffer_creates")
+    transient_texture_misses = row_by_metric(rows, "transient_texture_descriptor_miss_creates")
+    transient_texture_every_frame = row_by_metric(rows, "transient_texture_every_frame_create_descriptors")
+    if transient_texture_creates and transient_texture_creates["p95_delta"] is not None and transient_texture_creates["p95_delta"] > 0:
+        reasons.append("DX12 transient texture creation exceeded the Vulkan lane")
+        return "transient allocation churn", "PIX", reasons
+    if transient_buffer_creates and transient_buffer_creates["p95_delta"] is not None and transient_buffer_creates["p95_delta"] > 0:
+        reasons.append("DX12 transient buffer creation exceeded the Vulkan lane")
+        return "transient allocation churn", "PIX", reasons
+    if transient_texture_misses and transient_texture_misses["dx12_p95"] and transient_texture_misses["dx12_p95"] > 0:
+        reasons.append("DX12 transient texture descriptor misses were observed")
+        return "transient allocation churn", "PIX", reasons
+    if (
+        transient_texture_every_frame
+        and transient_texture_every_frame["dx12_p95"]
+        and transient_texture_every_frame["dx12_p95"] > 0
+    ):
+        reasons.append("DX12 transient texture descriptors are being created every frame")
+        return "transient allocation churn", "PIX", reasons
 
     if pix.get("barrier_count", 0.0) > 0 or pix.get("resource_barrier_count", 0.0) > 0:
         reasons.append("PIX summary includes barrier counters")

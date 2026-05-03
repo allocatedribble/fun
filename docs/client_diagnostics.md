@@ -186,8 +186,9 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 - `bevy_pbr::meshlet::vram`: meshlet persistent GPU buffer allocation changes
   and queued upload counts.
 - `bevy_render::transient`: frame-local render scratch resource requests,
-  creates, previous-frame reuses, same-frame lifetime aliases, and cached slot
-  counts.
+  creates, previous-frame reuses, same-frame lifetime aliases, cached slot
+  counts, descriptor miss/near-miss reasons, top descriptor-create rows, and
+  label-variant rows.
 - `bevy_render::scheduler`: render graph budget pressure.
 - `bevy_render::capabilities`: one startup capability inventory line with the
   backend capability hash, vendor class, RT/AS support, async queue probe state,
@@ -225,8 +226,9 @@ allocation churn without depending on backend-specific explicit heap aliasing.
 Meshlet visibility is the first consumer. Its dummy render target is transient,
 while visibility buffers and cull queues stay persistent because they need stable
 capacity and bind-group behavior. The benchmark parser recognizes
-`bevy_render::transient` logs as `transient_*` metrics when trace diagnostics
-are enabled.
+`bevy_render::transient` logs as `transient_*` metrics when render diagnostics
+are enabled. Descriptor audit details are documented in
+[`dx12_transient_resource_reuse.md`](dx12_transient_resource_reuse.md).
 
 ## GPU Contention
 

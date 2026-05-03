@@ -193,6 +193,9 @@ python tools\dx12_parity_report.py --vulkan target\benchmarks\client\<vulkan>\su
 `RenderQueue::write_texture`, `write_buffer`, and `write_buffer_with`. The
 current upload inventory and cleanup target order are in
 [`docs/dx12_upload_audit.md`](docs/dx12_upload_audit.md).
+It also enables transient render-resource descriptor diagnostics; the reuse,
+near-miss, and aliasing contract is in
+[`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).
 
 Denoiser and DLSS Ray Reconstruction comparison:
 

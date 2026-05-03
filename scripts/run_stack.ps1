@@ -192,6 +192,15 @@ if ($TraceDiagnostics) {
     $env:RUST_LOG = $traceFilter
     $env:BEVY_LOG = $traceFilter
 }
+elseif ($RenderDiagnostics -or $FrameTimeDiagnostics) {
+    $renderFilter = "info,fun::perf=info,fun::render=debug,bevy_render::transient=debug"
+    if (-not $env:RUST_LOG) {
+        $env:RUST_LOG = $renderFilter
+    }
+    if (-not $env:BEVY_LOG) {
+        $env:BEVY_LOG = $renderFilter
+    }
+}
 elseif (-not $env:BEVY_LOG) {
     $env:BEVY_LOG = "info"
 }

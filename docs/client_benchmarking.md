@@ -113,8 +113,9 @@ Performance claims must include `frame_ns.mean/p95`,
 `cloud_weather_profile_id`, `cloud_quality`, `cloud_vram_bytes`,
 `meshlet_path_instance_count`, `raster_path_instance_count`,
 `ray_proxy_only_count`, `standard_raster_gpu_ns`, transient render-resource
-request/create/reuse/alias counts, and render scheduler pressure when
-`-TraceDiagnostics` is enabled. Client CPU schedule work must also report the
+request/create/reuse/alias counts, descriptor miss/near-miss counts, top
+transient descriptor create rows, and render scheduler pressure when render
+diagnostics are enabled. Client CPU schedule work must also report the
 `schedule_*` metrics for networking receive, world-stream apply, movement input,
 look, physics movement, diagnostics logging, render config/window work, Solari
 runtime params, meshlet extraction, and render interpolation. Meshlet hot-path
@@ -400,6 +401,8 @@ Client benchmark:
   - solari_gpu_ns mean: ... -> ... (...%)
   - meshlet_visibility_gpu_ns mean: ... -> ... (...%)
   - transient_texture_creates/reuses/aliases mean: ... -> ... (...%)
+  - transient_texture_descriptor_miss_creates mean: ... -> ... (...%)
+  - transient_texture_every_frame_create_descriptors mean: ... -> ... (...%)
   - render_scheduler_pressure mean: ... -> ... (...%)
   - cloud_total_gpu_ns mean: ... -> ... (...%)
   - cloud_weather_update_gpu_ns mean: ... -> ... (...%)
