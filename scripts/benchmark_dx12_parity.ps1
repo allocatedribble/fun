@@ -314,6 +314,15 @@ function Get-RequiredMetricNames {
         "render_command_copy_commands",
         "render_command_native_interop_command_insertions",
         "render_command_event_count",
+        "render_readback_readback_requested_count",
+        "render_readback_readback_completed_count",
+        "render_readback_readback_dropped_count",
+        "render_readback_readback_blocking_wait_count",
+        "render_readback_readback_latency_frame_sum",
+        "render_readback_readback_latency_frame_max",
+        "render_readback_map_async_count",
+        "render_readback_poll_count",
+        "render_readback_event_count",
         "render_shader_shader_module_creations",
         "render_shader_shader_module_create_ns",
         "render_shader_shader_variant_requests",
@@ -381,7 +390,7 @@ function New-MetricPresence {
 function New-KeyMetricSnapshot {
     param([object]$Summary)
 
-    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions", "render_shader_shader_module_creations", "render_shader_shader_module_create_ns", "render_shader_shader_variant_requests", "render_shader_material_specializations", "render_shader_pipeline_create_count", "render_shader_pipeline_create_ns")
+    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions", "render_readback_readback_requested_count", "render_readback_readback_completed_count", "render_readback_readback_dropped_count", "render_readback_readback_blocking_wait_count", "render_readback_map_async_count", "render_readback_poll_count", "render_shader_shader_module_creations", "render_shader_shader_module_create_ns", "render_shader_shader_variant_requests", "render_shader_material_specializations", "render_shader_pipeline_create_count", "render_shader_pipeline_create_ns")
     $snapshot = [ordered]@{}
     foreach ($name in $names) {
         $property = if ($null -ne $Summary -and $null -ne $Summary.metrics) { $Summary.metrics.PSObject.Properties[$name] } else { $null }

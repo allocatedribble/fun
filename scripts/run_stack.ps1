@@ -212,6 +212,8 @@ if ($RenderDiagnostics -or $FrameTimeDiagnostics) {
     $env:BEVY_RENDER_CHURN_COUNTERS = "1"
     $env:FUN_RENDER_COMMAND_COUNTERS = "1"
     $env:BEVY_RENDER_COMMAND_COUNTERS = "1"
+    $env:FUN_RENDER_READBACK_DIAGNOSTICS = "1"
+    $env:BEVY_RENDER_READBACK_DIAGNOSTICS = "1"
     $env:FUN_RENDER_SHADER_DIAGNOSTICS = "1"
     $env:BEVY_RENDER_SHADER_DIAGNOSTICS = "1"
 }
@@ -223,6 +225,8 @@ else {
     Remove-Item Env:\BEVY_RENDER_CHURN_COUNTERS -ErrorAction SilentlyContinue
     Remove-Item Env:\FUN_RENDER_COMMAND_COUNTERS -ErrorAction SilentlyContinue
     Remove-Item Env:\BEVY_RENDER_COMMAND_COUNTERS -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_RENDER_READBACK_DIAGNOSTICS -ErrorAction SilentlyContinue
+    Remove-Item Env:\BEVY_RENDER_READBACK_DIAGNOSTICS -ErrorAction SilentlyContinue
     Remove-Item Env:\FUN_RENDER_SHADER_DIAGNOSTICS -ErrorAction SilentlyContinue
     Remove-Item Env:\BEVY_RENDER_SHADER_DIAGNOSTICS -ErrorAction SilentlyContinue
 }

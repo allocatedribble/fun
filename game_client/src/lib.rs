@@ -3303,6 +3303,47 @@ fn log_render_performance(
         }
         bevy::render::renderer::reset_render_command_counters();
     }
+    let readback_snapshot = bevy::render::renderer::snapshot_render_readback_diagnostics();
+    if readback_snapshot.enabled {
+        game_shared::fun_diag_info!(
+            target: "fun::perf::render_readbacks",
+            readback_requested_count = readback_snapshot.readback_requested_count,
+            readback_completed_count = readback_snapshot.readback_completed_count,
+            readback_dropped_count = readback_snapshot.readback_dropped_count,
+            readback_blocking_wait_count = readback_snapshot.readback_blocking_wait_count,
+            readback_latency_frame_sum = readback_snapshot.readback_latency_frame_sum,
+            readback_latency_frame_max = readback_snapshot.readback_latency_frame_max,
+            map_async_count = readback_snapshot.map_async_count,
+            poll_count = readback_snapshot.poll_count,
+            event_count = readback_snapshot.events.len(),
+            "render readback diagnostic sample"
+        );
+        game_shared::fun_diag_info!(
+            "[client perf] render readbacks: readback_requested_count={} readback_completed_count={} readback_dropped_count={} readback_blocking_wait_count={} readback_latency_frame_sum={} readback_latency_frame_max={} map_async_count={} poll_count={} event_count={}",
+            readback_snapshot.readback_requested_count,
+            readback_snapshot.readback_completed_count,
+            readback_snapshot.readback_dropped_count,
+            readback_snapshot.readback_blocking_wait_count,
+            readback_snapshot.readback_latency_frame_sum,
+            readback_snapshot.readback_latency_frame_max,
+            readback_snapshot.map_async_count,
+            readback_snapshot.poll_count,
+            readback_snapshot.events.len(),
+        );
+        for (rank, event) in readback_snapshot.events.iter().take(10).enumerate() {
+            game_shared::fun_diag_info!(
+                "[client perf] render readback top: rank={} operation={} category={} label={} calls={} latency_frame_sum={} latency_frame_max={}",
+                rank + 1,
+                event.operation,
+                event.category,
+                event.label,
+                event.calls,
+                event.latency_frame_sum,
+                event.latency_frame_max,
+            );
+        }
+        bevy::render::renderer::reset_render_readback_diagnostics();
+    }
     let shader_snapshot = bevy::render::renderer::snapshot_render_shader_diagnostics();
     if shader_snapshot.enabled {
         let pipeline_create_ns = shader_snapshot

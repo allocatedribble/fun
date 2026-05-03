@@ -70,6 +70,15 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("render_command_copy_commands", "lower", "copy commands"),
     ("render_command_native_interop_command_insertions", "lower", "native interop command insertions"),
     ("render_command_event_count", "lower", "render command event count"),
+    ("render_readback_readback_requested_count", "lower", "readback requests"),
+    ("render_readback_readback_completed_count", "lower", "readback completions"),
+    ("render_readback_readback_dropped_count", "lower", "readback drops"),
+    ("render_readback_readback_blocking_wait_count", "lower", "readback blocking waits"),
+    ("render_readback_readback_latency_frame_sum", "lower", "readback latency frame sum"),
+    ("render_readback_readback_latency_frame_max", "lower", "readback latency frame max"),
+    ("render_readback_map_async_count", "lower", "readback map_async count"),
+    ("render_readback_poll_count", "lower", "readback device polls"),
+    ("render_readback_event_count", "lower", "readback event count"),
     ("render_shader_shader_module_creations", "lower", "shader module creations"),
     ("render_shader_shader_module_create_ns", "lower", "shader module creation time"),
     ("render_shader_shader_variant_requests", "lower", "shader variant requests"),
@@ -320,6 +329,19 @@ def likely_bottleneck(
     if is_accelerated_cef_lane(dx12) and cef_cpu_upload > 0.0:
         reasons.append("accelerated CEF lane still reports CPU upload bytes")
         return "CEF sync", "PIX plus CEF transport counters", reasons
+
+    readback_blocking = metric_value(dx12, "render_readback_readback_blocking_wait_count", "p95") or 0.0
+    if readback_blocking > 0.0:
+        reasons.append("DX12 render readback diagnostics observed blocking waits")
+        return "readback sync", "PIX plus readback event table", reasons
+    readback_requests = row_by_metric(rows, "render_readback_readback_requested_count")
+    readback_maps = row_by_metric(rows, "render_readback_map_async_count")
+    if readback_requests and readback_requests["p95_delta"] is not None and readback_requests["p95_delta"] > 0:
+        reasons.append("DX12 readback requests exceeded the Vulkan lane")
+        return "readback/capture overhead", "benchmark readback top events", reasons
+    if readback_maps and readback_maps["p95_delta"] is not None and readback_maps["p95_delta"] > 0:
+        reasons.append("DX12 map_async activity exceeded the Vulkan lane")
+        return "readback/capture overhead", "benchmark readback top events", reasons
 
     present = row_by_metric(rows, "present_wait_ns")
     if present and present["p95_delta"] is not None and present["p95_delta"] > 500_000:

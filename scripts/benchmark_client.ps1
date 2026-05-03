@@ -187,6 +187,129 @@ function ConvertTo-KeyValueObject {
     return $result
 }
 
+function Get-SummaryMetricValue {
+    param(
+        [System.Collections.IDictionary]$Summary,
+        [string]$Name,
+        [string]$Field = "p95"
+    )
+
+    if ($null -eq $Summary -or -not $Summary.Contains("metrics")) {
+        return $null
+    }
+    $metrics = $Summary["metrics"]
+    $entry = if ($metrics -is [System.Collections.IDictionary] -and $metrics.Contains($Name)) {
+        $metrics[$Name]
+    }
+    else {
+        $property = $metrics.PSObject.Properties[$Name]
+        if ($null -ne $property) { $property.Value } else { $null }
+    }
+    if ($null -eq $entry) {
+        return $null
+    }
+    if ($entry -is [System.Collections.IDictionary] -and $entry.Contains($Field)) {
+        return $entry[$Field]
+    }
+    $fieldProperty = $entry.PSObject.Properties[$Field]
+    if ($null -eq $fieldProperty) {
+        return $null
+    }
+    return $fieldProperty.Value
+}
+
+function New-RenderGraphFlameNode {
+    param(
+        [System.Collections.IDictionary]$Summary,
+        [string]$Id,
+        [string]$Label,
+        [string]$Metric,
+        [string[]]$Reads = @(),
+        [string[]]$Writes = @(),
+        [string]$Interop = "none"
+    )
+
+    return [ordered]@{
+        id = $Id
+        label = $Label
+        metric = $Metric
+        gpu_timing_ns = Get-SummaryMetricValue -Summary $Summary -Name $Metric -Field "p95"
+        cpu_encode_ns = $null
+        reads = @($Reads)
+        writes = @($Writes)
+        barriers_known = $false
+        transient_resource_ids = @()
+        native_interop = $Interop
+    }
+}
+
+function Write-RenderGraphFlameMap {
+    param(
+        [string]$Path,
+        [System.Collections.IDictionary]$Summary
+    )
+
+    $parent = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+
+    $nodes = @(
+        New-RenderGraphFlameNode -Summary $Summary -Id "world_render" -Label "World Render" -Metric "standard_raster_gpu_ns" -Writes @("main_hdr_color", "depth", "motion_vectors")
+        New-RenderGraphFlameNode -Summary $Summary -Id "meshlet_visibility" -Label "Meshlet Visibility" -Metric "meshlet_visibility_gpu_ns" -Reads @("depth") -Writes @("visible_meshlets")
+        New-RenderGraphFlameNode -Summary $Summary -Id "solari_lighting" -Label "Solari Lighting" -Metric "solari_gpu_ns" -Reads @("main_hdr_color", "depth", "motion_vectors") -Writes @("main_hdr_color")
+        New-RenderGraphFlameNode -Summary $Summary -Id "clouds" -Label "Clouds" -Metric "cloud_total_gpu_ns" -Reads @("depth", "weather_state") -Writes @("main_hdr_color", "cloud_history")
+        New-RenderGraphFlameNode -Summary $Summary -Id "post_process" -Label "Post Process" -Metric "post_process_gpu_ns" -Reads @("main_hdr_color") -Writes @("post_processed_color")
+        New-RenderGraphFlameNode -Summary $Summary -Id "cef_ui_composition" -Label "CEF UI Composition" -Metric "cef_gpu_copy_ns" -Reads @("cef_ui_texture", "post_processed_color") -Writes @("present_color") -Interop "cef"
+        New-RenderGraphFlameNode -Summary $Summary -Id "debug_overlays" -Label "Debug Overlays" -Metric "ui_overlay_cpu_ns" -Reads @("present_color") -Writes @("present_color")
+        New-RenderGraphFlameNode -Summary $Summary -Id "readback_capture" -Label "Readback/Capture" -Metric "render_readback_readback_requested_count" -Reads @("query_buffers", "screenshot_targets") -Writes @("cpu_readback_buffers") -Interop "readback"
+        New-RenderGraphFlameNode -Summary $Summary -Id "present" -Label "Present" -Metric "present_wait_ns" -Reads @("present_color") -Writes @("swapchain")
+    )
+
+    $edges = @(
+        [ordered]@{ from = "world_render"; to = "meshlet_visibility"; kind = "depth_dependency" }
+        [ordered]@{ from = "world_render"; to = "solari_lighting"; kind = "lighting_input" }
+        [ordered]@{ from = "solari_lighting"; to = "clouds"; kind = "hdr_color" }
+        [ordered]@{ from = "clouds"; to = "post_process"; kind = "hdr_color" }
+        [ordered]@{ from = "post_process"; to = "cef_ui_composition"; kind = "ui_after_post" }
+        [ordered]@{ from = "cef_ui_composition"; to = "debug_overlays"; kind = "overlay_order" }
+        [ordered]@{ from = "debug_overlays"; to = "present"; kind = "present_color" }
+        [ordered]@{ from = "world_render"; to = "readback_capture"; kind = "diagnostic_copy" }
+    )
+
+    $nativeInterop = @()
+    if ($null -ne $Summary.render_command_events) {
+        $nativeInterop = @(
+            $Summary.render_command_events |
+                Where-Object { $_.category -eq "cef_copy" -or $_.operation -eq "native_interop_command_insertion" } |
+                ForEach-Object {
+                    [ordered]@{
+                        operation = $_.operation
+                        category = $_.category
+                        label = $_.label
+                        calls = $_.calls
+                    }
+                }
+        )
+    }
+
+    $payload = [ordered]@{
+        schema_version = 1
+        frame_index = 0
+        source = "benchmark_client_summary"
+        generated_at = (Get-Date).ToString("o")
+        nodes = $nodes
+        edges = $edges
+        native_interop_points = $nativeInterop
+        ordering_policy = "world->lighting->post->cef_ui->debug->present"
+        notes = @(
+            "barriers_known=false until PIX barrier summaries are imported",
+            "CEF UI is modeled after post-processing and before debug/present so it does not feed DLSS or world temporal inputs",
+            "readback_capture is diagnostic/capture-only and should be empty in performance lanes unless explicitly enabled"
+        )
+    }
+
+    $payload | ConvertTo-Json -Depth 12 | Set-Content -Path $Path -Encoding UTF8
+}
+
 function Parse-RenderCapabilitiesLog {
     param([string[]]$Lines)
 
@@ -415,6 +538,58 @@ function Parse-RenderCommandEventsLog {
                     category = $_.category
                     label = $_.label
                     calls = $_.calls
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
+function Parse-RenderReadbackEventsLog {
+    param([string[]]$Lines)
+
+    $events = [ordered]@{}
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, "\[client perf\] render readback top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+) latency_frame_sum=(?<latency_frame_sum>\d+) latency_frame_max=(?<latency_frame_max>\d+)")
+        if (-not $match.Success) {
+            continue
+        }
+        $operation = $match.Groups["operation"].Value
+        $category = $match.Groups["category"].Value
+        $label = $match.Groups["label"].Value
+        $key = "$operation`n$category`n$label"
+        if (-not $events.Contains($key)) {
+            $events[$key] = [ordered]@{
+                operation = $operation
+                category = $category
+                label = $label
+                calls = 0
+                latency_frame_sum = 0
+                latency_frame_max = 0
+                samples = 0
+            }
+        }
+        $entry = $events[$key]
+        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
+        $entry.latency_frame_sum = [uint64]$entry.latency_frame_sum + [uint64]$match.Groups["latency_frame_sum"].Value
+        $entry.latency_frame_max = [Math]::Max([uint64]$entry.latency_frame_max, [uint64]$match.Groups["latency_frame_max"].Value)
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $events.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, @{ Expression = { [uint64]$_.latency_frame_sum }; Descending = $true }, operation, category, label |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    operation = $_.operation
+                    category = $_.category
+                    label = $_.label
+                    calls = $_.calls
+                    latency_frame_sum = $_.latency_frame_sum
+                    latency_frame_max = $_.latency_frame_max
                     samples = $_.samples
                 }
             }
@@ -738,6 +913,12 @@ function Parse-ClientPerfLog {
         $renderCommands = [regex]::Match($line, "\[client perf\] render commands: (?<payload>.*)$")
         if ($renderCommands.Success) {
             Add-KeyValueMetrics -Sample $current -Payload $renderCommands.Groups["payload"].Value -Prefix "render_command_"
+            continue
+        }
+
+        $renderReadbacks = [regex]::Match($line, "\[client perf\] render readbacks: (?<payload>.*)$")
+        if ($renderReadbacks.Success) {
+            Add-KeyValueMetrics -Sample $current -Payload $renderReadbacks.Groups["payload"].Value -Prefix "render_readback_"
             continue
         }
 
@@ -1381,6 +1562,15 @@ function Write-MarkdownReport {
         "render_command_copy_commands",
         "render_command_native_interop_command_insertions",
         "render_command_event_count",
+        "render_readback_readback_requested_count",
+        "render_readback_readback_completed_count",
+        "render_readback_readback_dropped_count",
+        "render_readback_readback_blocking_wait_count",
+        "render_readback_readback_latency_frame_sum",
+        "render_readback_readback_latency_frame_max",
+        "render_readback_map_async_count",
+        "render_readback_poll_count",
+        "render_readback_event_count",
         "render_shader_shader_module_creations",
         "render_shader_shader_module_create_ns",
         "render_shader_shader_variant_requests",
@@ -1455,6 +1645,16 @@ function Write-MarkdownReport {
         $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
         foreach ($event in $Summary.render_command_events) {
             $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
+        }
+    }
+    if ($null -ne $Summary.render_readback_events -and $Summary.render_readback_events.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Render Readback Top Events") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | operation | category | label | calls | latency frame sum | latency frame max | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---|---:|---:|---:|---:|") | Out-Null
+        foreach ($event in $Summary.render_readback_events) {
+            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.latency_frame_sum) | $($event.latency_frame_max) | $($event.samples) |") | Out-Null
         }
     }
     if ($null -ne $Summary.render_shader_events -and $Summary.render_shader_events.Count -gt 0) {
@@ -1825,6 +2025,7 @@ try {
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
     $renderChurnEvents = Parse-RenderChurnEventsLog -Lines $sampleLines
     $renderCommandEvents = Parse-RenderCommandEventsLog -Lines $sampleLines
+    $renderReadbackEvents = Parse-RenderReadbackEventsLog -Lines $sampleLines
     $renderShaderEvents = Parse-RenderShaderEventsLog -Lines $sampleLines
     $transientDescriptorCreates = @(Parse-TransientDescriptorCreateLog -Lines $sampleLines)
     $transientDescriptorLabelVariants = @(Parse-TransientDescriptorLabelVariantLog -Lines $sampleLines)
@@ -1926,11 +2127,16 @@ try {
         render_upload_callsites = $renderUploadCallsites
         render_churn_events = $renderChurnEvents
         render_command_events = $renderCommandEvents
+        render_readback_events = $renderReadbackEvents
         render_shader_events = $renderShaderEvents
         transient_descriptor_creates = $transientDescriptorCreates
         transient_descriptor_label_variants = $transientDescriptorLabelVariants
         cef_ui_transport_selection = $cefUiTransportSelection
     }
+
+    $flameMapPath = Join-Path $repoRoot "target\dx12\render_graph_frame_0000.json"
+    Write-RenderGraphFlameMap -Path $flameMapPath -Summary $summary
+    $summary["render_graph_flame_map"] = $flameMapPath
 
     $jsonPath = Join-Path $outputRoot "summary.json"
     $markdownPath = Join-Path $outputRoot "summary.md"
