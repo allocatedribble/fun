@@ -16,8 +16,8 @@ use bevy::render::{
     texture::GpuImage,
 };
 use fun_ui_cef::{
-    CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefUiFallbackReason,
-    CefUiPaintTransportFallbackReason, render_handler::CefUiFrameGeneration,
+    CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefUiDirtyRectMetadata,
+    CefUiFallbackReason, CefUiPaintTransportFallbackReason, render_handler::CefUiFrameGeneration,
 };
 use windows::{
     Win32::{
@@ -246,7 +246,7 @@ pub struct Dx12CefReadyFrameToken {
     pub height: u32,
     pub format: DxgiFormat,
     pub fence_value: u64,
-    pub dirty_rect_count: usize,
+    pub dirty_rect_metadata: CefUiDirtyRectMetadata,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,7 +444,7 @@ impl Dx12CefInterop {
             height: slot.height,
             format: slot.format,
             fence_value: slot.fence_value,
-            dirty_rect_count: slot.dirty_rects.len(),
+            dirty_rect_metadata: slot.dirty_rect_metadata,
         })
     }
 
@@ -645,11 +645,13 @@ impl Dx12CefInterop {
         let copy_ns = nanos_u64(copy_start.elapsed().as_nanos());
         let generation =
             CefUiFrameGeneration(self.next_frame_generation.fetch_add(1, Ordering::Relaxed));
+        let dirty_rect_metadata = CefUiDirtyRectMetadata::gpu_full_frame_copy(frame.dirty_rects);
         slot.generation = generation;
         slot.fence_value = fence_value;
         slot.state = Dx12CefSlotState::Ready;
         slot.dirty_rects.clear();
         slot.dirty_rects.extend_from_slice(frame.dirty_rects);
+        slot.dirty_rect_metadata = dirty_rect_metadata;
         self.diagnostics.record_gpu_copy(copied_bytes, copy_ns);
         self.consecutive_accelerated_paint_failures
             .store(0, Ordering::Relaxed);
@@ -777,6 +779,7 @@ impl Dx12CefInterop {
             fence_value: 0,
             state: Dx12CefSlotState::Free,
             dirty_rects: Vec::new(),
+            dirty_rect_metadata: CefUiDirtyRectMetadata::default(),
         })
     }
 

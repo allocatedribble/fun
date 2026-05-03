@@ -19,6 +19,7 @@ pub enum CefUiFullUploadReason {
     ScaleFactorChanged,
     DirtyRectExplosion,
     EmptyDirtyRects,
+    GpuFullFrameFirstPass,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
@@ -46,10 +47,51 @@ impl CefUiUploadPlan {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CefUiDirtyRectMetadata {
+    pub dirty_rect_count: usize,
+    pub dirty_rect_union: Option<CefDirtyRect>,
+    pub dirty_rect_explosion_count: u64,
+    pub full_frame_reason: Option<CefUiFullUploadReason>,
+}
+
+impl CefUiDirtyRectMetadata {
+    #[must_use]
+    pub fn from_upload_plan(dirty_rects: &[CefDirtyRect], upload_plan: &CefUiUploadPlan) -> Self {
+        Self {
+            dirty_rect_count: dirty_rects.len(),
+            dirty_rect_union: union_dirty_rects(dirty_rects),
+            dirty_rect_explosion_count: dirty_rect_explosion_count(dirty_rects),
+            full_frame_reason: match upload_plan {
+                CefUiUploadPlan::FullFrame { reason, .. } => Some(*reason),
+                CefUiUploadPlan::None | CefUiUploadPlan::DirtyRects { .. } => None,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn gpu_full_frame_copy(dirty_rects: &[CefDirtyRect]) -> Self {
+        let full_frame_reason = if dirty_rects.is_empty() {
+            CefUiFullUploadReason::EmptyDirtyRects
+        } else if dirty_rects.len() > DIRTY_RECT_EXPLOSION_THRESHOLD {
+            CefUiFullUploadReason::DirtyRectExplosion
+        } else {
+            CefUiFullUploadReason::GpuFullFrameFirstPass
+        };
+        Self {
+            dirty_rect_count: dirty_rects.len(),
+            dirty_rect_union: union_dirty_rects(dirty_rects),
+            dirty_rect_explosion_count: dirty_rect_explosion_count(dirty_rects),
+            full_frame_reason: Some(full_frame_reason),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CefUiCompositorFrame {
     pub element: CefPaintElement,
     pub metadata: CefUiFrameMetadata,
+    pub dirty_rect_metadata: CefUiDirtyRectMetadata,
     pub upload_plan: CefUiUploadPlan,
     pixels: Vec<u8>,
 }
@@ -134,6 +176,8 @@ impl CefUiCompositor {
         );
         let surface = CefUiSurfaceKey::from_frame(frame);
         let upload_plan = self.upload_plan_for(frame, generation, surface);
+        let dirty_rect_metadata =
+            CefUiDirtyRectMetadata::from_upload_plan(frame.dirty_rects, &upload_plan);
         let dirty_rects = dirty_rects_for_metadata(frame, &upload_plan);
         let metadata = CefUiFrameMetadata::new(
             frame.width,
@@ -148,6 +192,7 @@ impl CefUiCompositor {
         self.write_slot.replace(CefUiCompositorFrame {
             element: frame.element,
             metadata,
+            dirty_rect_metadata,
             upload_plan,
             pixels: frame.bytes.to_vec(),
         });
@@ -334,6 +379,18 @@ fn coalesce_dirty_rects(dirty_rects: &[CefDirtyRect]) -> Vec<CefDirtyRect> {
         .collect()
 }
 
+fn union_dirty_rects(dirty_rects: &[CefDirtyRect]) -> Option<CefDirtyRect> {
+    dirty_rects.iter().copied().reduce(CefDirtyRect::union)
+}
+
+fn dirty_rect_explosion_count(dirty_rects: &[CefDirtyRect]) -> u64 {
+    if dirty_rects.len() > DIRTY_RECT_EXPLOSION_THRESHOLD {
+        1
+    } else {
+        0
+    }
+}
+
 fn dirty_rects_for_metadata(
     frame: CefPaintFrame<'_>,
     upload_plan: &CefUiUploadPlan,
@@ -390,6 +447,15 @@ mod tests {
                 reason: CefUiFullUploadReason::FirstFrame
             }
         );
+        assert_eq!(
+            frame.dirty_rect_metadata,
+            CefUiDirtyRectMetadata {
+                dirty_rect_count: 1,
+                dirty_rect_union: Some(rects[0]),
+                dirty_rect_explosion_count: 0,
+                full_frame_reason: Some(CefUiFullUploadReason::FirstFrame)
+            }
+        );
     }
 
     #[test]
@@ -411,6 +477,15 @@ mod tests {
             CefUiUploadPlan::DirtyRects {
                 generation,
                 rects: rects.to_vec()
+            }
+        );
+        assert_eq!(
+            frame.dirty_rect_metadata,
+            CefUiDirtyRectMetadata {
+                dirty_rect_count: 1,
+                dirty_rect_union: Some(rects[0]),
+                dirty_rect_explosion_count: 0,
+                full_frame_reason: None
             }
         );
     }
@@ -463,6 +538,52 @@ mod tests {
                 generation,
                 reason: CefUiFullUploadReason::Resize
             }
+        );
+    }
+
+    #[test]
+    fn gpu_full_frame_metadata_preserves_dirty_rect_union() {
+        let rects = [
+            CefDirtyRect::new(4, 5, 10, 12),
+            CefDirtyRect::new(20, 2, 3, 4),
+        ];
+        let metadata = CefUiDirtyRectMetadata::gpu_full_frame_copy(&rects);
+
+        assert_eq!(
+            metadata,
+            CefUiDirtyRectMetadata {
+                dirty_rect_count: 2,
+                dirty_rect_union: Some(CefDirtyRect::new(4, 2, 19, 15)),
+                dirty_rect_explosion_count: 0,
+                full_frame_reason: Some(CefUiFullUploadReason::GpuFullFrameFirstPass)
+            }
+        );
+    }
+
+    #[test]
+    fn gpu_full_frame_metadata_records_dirty_rect_explosion() {
+        let rects = (0..=DIRTY_RECT_EXPLOSION_THRESHOLD)
+            .map(|x| CefDirtyRect::new(i32::try_from(x).expect("small x"), 0, 1, 1))
+            .collect::<Vec<_>>();
+        let metadata = CefUiDirtyRectMetadata::gpu_full_frame_copy(&rects);
+
+        assert_eq!(
+            metadata.dirty_rect_count,
+            DIRTY_RECT_EXPLOSION_THRESHOLD + 1
+        );
+        assert_eq!(
+            metadata.full_frame_reason,
+            Some(CefUiFullUploadReason::DirtyRectExplosion)
+        );
+        assert_eq!(metadata.dirty_rect_explosion_count, 1);
+        assert_eq!(
+            metadata.dirty_rect_union,
+            Some(CefDirtyRect::new(
+                0,
+                0,
+                i32::try_from(DIRTY_RECT_EXPLOSION_THRESHOLD + 1).expect("small threshold"),
+                1
+            ))
         );
     }
 

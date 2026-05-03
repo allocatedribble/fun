@@ -299,6 +299,14 @@ new:
 - updates `CefUiGpuUploadState.last_generation` only after the GPU copy has
   been submitted.
 
+The first GPU transport deliberately copies the full CEF frame for correctness.
+Dirty rectangles are still retained as metadata on the safe generation token,
+not as callback-local CEF resources. The token carries the dirty rect count,
+dirty rect union, dirty rect explosion count, and full-frame reason. For normal
+accelerated frames the reason is `GpuFullFrameFirstPass`; empty dirty rect lists
+and dirty rect explosions keep the same full-frame reasons used by the CPU
+compositor.
+
 Resource states for this pass:
 
 - CEF source shared texture: D3D11 resource opened and released only during
@@ -326,6 +334,11 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 - `cef_on_paint_fps`
 - `cef_on_accelerated_paint_fps`
 - `accelerated_paint_count`
+- `dirty_rect_count`
+- `dirty_rect_explosion_count`
+- `last_dirty_rect_union`
+- `full_frame_upload_count`
+- `last_full_frame_reason`
 - `cef_cpu_upload_bytes`
 - `gpu_copied_bytes`
 - `gpu_copy_count`
@@ -397,3 +410,21 @@ Fallback triggers covered by this pass:
   must match the D3D12 states expected by the downstream FUN render path.
 - Dirty rectangles should be preserved for future partial-copy optimization, but
   the first implementation should copy the full CEF frame for correctness.
+
+## Dirty Rectangles After Correctness
+
+The GPU path currently preserves dirty rect metadata but does not do partial GPU
+copies. The callback thread opens the CEF shared texture, copies the full frame
+into a FUN-owned D3D12 ring slot, records the dirty rect metadata on that slot,
+and publishes only the generation token. This keeps the correctness path simple
+and avoids retaining CEF handles, source textures, or borrowed dirty rect slices
+after `OnAcceleratedPaint` returns.
+
+The later optimization path is intentionally narrow:
+
+```text
+CEF dirty rects
+  -> D3D11 CopySubresourceRegion per rect, or D3D12 CopyTextureRegion per rect
+  -> coalesce when rect count exceeds the threshold
+  -> full copy on resize, scale change, empty dirty rects, or dirty rect explosion
+```

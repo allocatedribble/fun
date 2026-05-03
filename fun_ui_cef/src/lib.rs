@@ -35,8 +35,8 @@ pub use browser::{
     MAIN_BROWSER_PAGE,
 };
 pub use compositor::{
-    CefUiCompositor, CefUiCompositorFrame, CefUiUploadPlan, SharedCefUiCompositor,
-    UiCompositorState, UiSurfaceGeneration,
+    CefUiCompositor, CefUiCompositorFrame, CefUiDirtyRectMetadata, CefUiFullUploadReason,
+    CefUiUploadPlan, SharedCefUiCompositor, UiCompositorState, UiSurfaceGeneration,
 };
 pub use diagnostics::{CefUiTransportCounterSnapshot, SharedCefUiTransportCounters};
 pub use input::{BrowserUiInputEvent, BrowserUiInputOwner, validate_input_event};

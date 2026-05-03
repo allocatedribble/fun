@@ -1,4 +1,4 @@
-use fun_ui_cef::{CefDirtyRect, render_handler::CefUiFrameGeneration};
+use fun_ui_cef::{CefDirtyRect, CefUiDirtyRectMetadata, render_handler::CefUiFrameGeneration};
 use windows::Win32::Graphics::{
     Direct3D11::ID3D11Resource,
     Direct3D12::ID3D12Resource,
@@ -34,6 +34,7 @@ pub struct Dx12CefTextureSlot {
     pub fence_value: u64,
     pub state: Dx12CefSlotState,
     pub dirty_rects: Vec<CefDirtyRect>,
+    pub dirty_rect_metadata: CefUiDirtyRectMetadata,
 }
 
 pub struct Dx12CefTextureRing {

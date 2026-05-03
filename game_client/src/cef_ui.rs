@@ -44,14 +44,14 @@ use fun_ui_cef::{
     BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
     BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefMessageLoopStrategy,
-    CefUiBrowser, CefUiBrowserHandle, CefUiFallbackReason, CefUiModel, CefUiPaintTransport,
-    CefUiPaintTransportFallbackReason, CefUiRequestedPaintTransport, CefUiSecurityPolicy,
-    FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, HostCommandError, HostCommandId,
-    HostCommandRejection, HostCommandRequest as CefHostCommandRequest,
-    HostCommandResponse as CefHostCommandResponse, HostDiagnostic, SharedBrowserBridgeQueues,
-    SharedCefUiCompositor, UiControlPayload, UiEnvelope, UiEnvelopeKind, UiEnvelopePayload,
-    UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue, UiPatchWriteError, UiPatchWriter,
-    UiSurfaceGeneration, validate_ui_envelope,
+    CefUiBrowser, CefUiBrowserHandle, CefUiDirtyRectMetadata, CefUiFallbackReason,
+    CefUiFullUploadReason, CefUiModel, CefUiPaintTransport, CefUiPaintTransportFallbackReason,
+    CefUiRequestedPaintTransport, CefUiSecurityPolicy, FunUiNavigationBlockReason, GameUiChannel,
+    GameUiFieldKey, HostCommandError, HostCommandId, HostCommandRejection,
+    HostCommandRequest as CefHostCommandRequest, HostCommandResponse as CefHostCommandResponse,
+    HostDiagnostic, SharedBrowserBridgeQueues, SharedCefUiCompositor, UiControlPayload, UiEnvelope,
+    UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue,
+    UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration, validate_ui_envelope,
 };
 #[cfg(target_os = "windows")]
 use fun_ui_cef::{CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefAcceleratedPaintSink};
@@ -845,6 +845,10 @@ pub struct CefUiFrameStats {
     pub paint_count: u64,
     pub accelerated_paint_count: u64,
     pub dirty_rect_count: u64,
+    pub dirty_rect_explosion_count: u64,
+    pub last_dirty_rect_union: Option<CefDirtyRect>,
+    pub full_frame_upload_count: u64,
+    pub last_full_frame_reason: Option<CefUiFullUploadReason>,
     pub uploaded_bytes: u64,
     pub gpu_copied_bytes: u64,
     pub gpu_copy_count: u64,
@@ -869,6 +873,22 @@ pub struct CefUiFrameStats {
     pub coalesced_patch_count: u64,
     pub overlay_click_through_change_count: u64,
     pub navigation_blocked_count: u64,
+}
+
+fn record_cef_dirty_rect_metadata(stats: &mut CefUiFrameStats, metadata: CefUiDirtyRectMetadata) {
+    stats.dirty_rect_count = stats
+        .dirty_rect_count
+        .saturating_add(metadata.dirty_rect_count as u64);
+    stats.dirty_rect_explosion_count = stats
+        .dirty_rect_explosion_count
+        .saturating_add(metadata.dirty_rect_explosion_count);
+    stats.last_dirty_rect_union = metadata.dirty_rect_union;
+    if let Some(reason) = metadata.full_frame_reason {
+        stats.full_frame_upload_count = stats.full_frame_upload_count.saturating_add(1);
+        stats.last_full_frame_reason = Some(reason);
+    } else {
+        stats.last_full_frame_reason = None;
+    }
 }
 
 #[derive(Debug, Clone, Resource)]
@@ -2944,9 +2964,7 @@ fn upload_cef_ui_frame_to_fun_texture(
         status.compositor_visible = true;
         status.last_frame_generation = Some(token.generation);
         stats.paint_count = stats.paint_count.saturating_add(1);
-        stats.dirty_rect_count = stats
-            .dirty_rect_count
-            .saturating_add(token.dirty_rect_count as u64);
+        record_cef_dirty_rect_metadata(&mut stats, token.dirty_rect_metadata);
         stats.cef_published_generation = token.generation.0;
         stats.cef_sampled_generation = token.generation.0;
         return;
@@ -3045,9 +3063,7 @@ fn upload_cef_ui_frame_to_fun_texture(
     status.compositor_visible = true;
     status.last_frame_generation = Some(frame.metadata.generation);
     stats.paint_count = stats.paint_count.saturating_add(1);
-    stats.dirty_rect_count = stats
-        .dirty_rect_count
-        .saturating_add(frame.metadata.dirty_rects.len() as u64);
+    record_cef_dirty_rect_metadata(&mut stats, frame.dirty_rect_metadata);
     stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(uploaded_bytes as u64);
     stats.cef_published_generation = frame.metadata.generation.0;
     stats.cef_sampled_generation = frame.metadata.generation.0;
@@ -3209,7 +3225,8 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
 
     #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
     {
-        let _ = (uploads, gpu_images, dx12_slot, counters, upload_state);
+        let _ = (uploads, gpu_images, dx12_slot, counters);
+        let _ = &mut upload_state;
     }
 }
 
