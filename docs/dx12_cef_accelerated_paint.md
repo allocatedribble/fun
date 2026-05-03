@@ -125,6 +125,65 @@ Rules:
 - Expose paint callback FPS separately from Svelte `requestAnimationFrame` FPS
   before using it for performance claims.
 
+## Transport Selection Slice
+
+`fun_ui_cef` owns the explicit paint transport contract:
+
+```rust
+pub enum CefUiPaintTransport {
+    CpuPaint,
+    D3d11SharedTextureDx12Copy,
+}
+```
+
+`BrowserUiConfig` carries the selected transport, the render-backend hint, the
+accelerated-paint debug flag, and a typed fallback reason. The current production
+selection still resolves to `cpu_paint` because the D3D11on12 bridge is not
+implemented yet. Explicit accelerated requests therefore fail closed to the CPU
+lane and record `d3d11on12_bridge_unavailable`.
+
+Environment gates:
+
+- `FUN_CEF_UI_PAINT_TRANSPORT=cpu|auto|d3d11on12`
+- `FUN_CEF_UI_ACCELERATED_PAINT=0|1|auto`
+- `FUN_CEF_UI_ACCELERATED_PAINT_DEBUG=0|1`
+
+Startup logs include:
+
+- selected transport
+- backend hint
+- Windows target flag
+- CEF shared-texture flag
+- D3D11on12 readiness
+- fallback reason
+
+The render handler now has an `OnAcceleratedPaint` surface, but it only records
+the callback and rejects it until the GPU bridge exists. This is intentional:
+CEF's shared handle is only valid during the callback, can change every callback,
+and must not be enqueued for render-world processing. The future bridge must open
+the D3D11 shared texture and copy it into a FUN-owned GPU resource before the
+callback returns.
+
+## Transport Counters
+
+GPU transport claims must use CEF/FUN counters, not the Svelte
+`requestAnimationFrame` badge.
+
+Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
+
+- `cef_on_paint_fps`
+- `cef_on_accelerated_paint_fps`
+- `cef_cpu_upload_bytes`
+- `cef_gpu_copy_bytes`
+- `cef_gpu_copy_ns`
+- `cef_gpu_copy_failures`
+- `cef_transport_fallback_count`
+- `cef_published_generation`
+- `cef_sampled_generation`
+
+`cef_gpu_copy_*` remains zero on the CPU path. It should only move once the
+D3D11On12 copy into a FUN-owned D3D12 texture ring exists.
+
 ## Open Risks
 
 - CEF's accelerated texture is D3D11-facing, while Bevy/wgpu DX12 owns D3D12

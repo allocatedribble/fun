@@ -29,7 +29,8 @@ use fun_host::{
 use fun_render::{RenderWorldContext, RenderWorldStatus};
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
 use fun_ui_cef::diagnostics::{
-    CefUiDiagnosticKind, CefUiDiagnosticSeverity, FUN_UI_DIAGNOSTICS_TARGET,
+    CefUiDiagnosticKind, CefUiDiagnosticSeverity, CefUiTransportCounterSnapshot,
+    FUN_UI_DIAGNOSTICS_TARGET, SharedCefUiTransportCounters,
 };
 #[cfg(test)]
 use fun_ui_cef::render_handler::CefUiFrameGeneration;
@@ -60,6 +61,7 @@ const FUN_CLIENT_FPS_COUNTER_REFRESH: Duration = Duration::from_millis(250);
 const FUN_CLIENT_FPS_COUNTER_WIDTH: f32 = 88.0;
 const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
 const FUN_CLIENT_FPS_COUNTER_MARGIN: f32 = 12.0;
+const CEF_UI_TRANSPORT_COUNTER_REFRESH: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum GameCefUiSet {
@@ -98,6 +100,8 @@ impl Plugin for GameCefUiPlugin {
             .init_resource::<CefUiSecurityPolicyResource>()
             .init_resource::<CefUiBridge>()
             .init_resource::<CefUiFrameStats>()
+            .init_resource::<CefUiTransportCountersResource>()
+            .init_resource::<CefUiTransportCounterSampler>()
             .init_resource::<CefUiMessageLoopPump>()
             .init_resource::<CefUiRenderTexture>()
             .init_resource::<CefUiTextureUploads>()
@@ -178,7 +182,9 @@ impl Plugin for GameCefUiPlugin {
             )
             .add_systems(
                 Last,
-                flush_cef_ui_diagnostics.in_set(GameCefUiSet::Diagnostics),
+                (sample_cef_ui_transport_counters, flush_cef_ui_diagnostics)
+                    .chain()
+                    .in_set(GameCefUiSet::Diagnostics),
             );
     }
 }
@@ -618,6 +624,15 @@ pub struct CefUiFrameStats {
     pub paint_count: u64,
     pub dirty_rect_count: u64,
     pub uploaded_bytes: u64,
+    pub cef_on_paint_fps: u64,
+    pub cef_on_accelerated_paint_fps: u64,
+    pub cef_cpu_upload_bytes: u64,
+    pub cef_gpu_copy_bytes: u64,
+    pub cef_gpu_copy_ns: u64,
+    pub cef_gpu_copy_failures: u64,
+    pub cef_transport_fallback_count: u64,
+    pub cef_published_generation: u64,
+    pub cef_sampled_generation: u64,
     pub js_message_count: u64,
     pub js_message_rejected_count: u64,
     pub patch_batch_count: u64,
@@ -625,6 +640,46 @@ pub struct CefUiFrameStats {
     pub coalesced_patch_count: u64,
     pub overlay_click_through_change_count: u64,
     pub navigation_blocked_count: u64,
+}
+
+#[derive(Debug, Clone, Resource)]
+pub struct CefUiTransportCountersResource {
+    counters: SharedCefUiTransportCounters,
+}
+
+impl CefUiTransportCountersResource {
+    #[must_use]
+    pub fn new(counters: SharedCefUiTransportCounters) -> Self {
+        Self { counters }
+    }
+
+    #[must_use]
+    fn snapshot(&self) -> CefUiTransportCounterSnapshot {
+        self.counters.snapshot()
+    }
+}
+
+impl Default for CefUiTransportCountersResource {
+    fn default() -> Self {
+        Self {
+            counters: SharedCefUiTransportCounters::default(),
+        }
+    }
+}
+
+#[derive(Debug, Resource)]
+struct CefUiTransportCounterSampler {
+    sample_timer: Timer,
+    last_snapshot: Option<CefUiTransportCounterSnapshot>,
+}
+
+impl Default for CefUiTransportCounterSampler {
+    fn default() -> Self {
+        Self {
+            sample_timer: Timer::new(CEF_UI_TRANSPORT_COUNTER_REFRESH, TimerMode::Repeating),
+            last_snapshot: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Resource)]
@@ -2254,6 +2309,8 @@ fn upload_cef_ui_frame_to_fun_texture(
         .dirty_rect_count
         .saturating_add(frame.metadata.dirty_rects.len() as u64);
     stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(uploaded_bytes as u64);
+    stats.cef_published_generation = frame.metadata.generation.0;
+    stats.cef_sampled_generation = frame.metadata.generation.0;
 }
 
 fn upload_cef_ui_texture_to_gpu(
@@ -2298,6 +2355,32 @@ fn upload_cef_ui_texture_to_gpu(
         dirty_rect_count = upload.dirty_rects.len(),
         "CEF UI texture uploaded to Bevy GPU image"
     );
+}
+
+fn sample_cef_ui_transport_counters(
+    time: Res<Time>,
+    counters: Res<CefUiTransportCountersResource>,
+    mut sampler: ResMut<CefUiTransportCounterSampler>,
+    mut stats: ResMut<CefUiFrameStats>,
+) {
+    if !sampler.sample_timer.tick(time.delta()).just_finished() {
+        return;
+    }
+    let snapshot = counters.snapshot();
+    if let Some(previous) = sampler.last_snapshot {
+        stats.cef_on_paint_fps = snapshot
+            .cef_on_paint_count
+            .saturating_sub(previous.cef_on_paint_count);
+        stats.cef_on_accelerated_paint_fps = snapshot
+            .cef_on_accelerated_paint_count
+            .saturating_sub(previous.cef_on_accelerated_paint_count);
+    }
+    stats.cef_cpu_upload_bytes = snapshot.cef_cpu_upload_bytes;
+    stats.cef_gpu_copy_bytes = snapshot.cef_gpu_copy_bytes;
+    stats.cef_gpu_copy_ns = snapshot.cef_gpu_copy_ns;
+    stats.cef_gpu_copy_failures = snapshot.cef_gpu_copy_failures;
+    stats.cef_transport_fallback_count = snapshot.cef_transport_fallback_count;
+    sampler.last_snapshot = Some(snapshot);
 }
 
 fn write_cef_ui_upload_to_gpu(
@@ -2672,7 +2755,10 @@ fn write_diagnostic_patch(
         CefUiDiagnosticKind::OutgoingPatchCoalesced => 14,
         CefUiDiagnosticKind::OutgoingPatchDropped => 15,
         CefUiDiagnosticKind::OverlayStateChanged => 16,
-        CefUiDiagnosticKind::ShutdownStarted => 17,
+        CefUiDiagnosticKind::PaintTransportSelected => 17,
+        CefUiDiagnosticKind::AcceleratedPaintReceived => 18,
+        CefUiDiagnosticKind::AcceleratedPaintRejected => 19,
+        CefUiDiagnosticKind::ShutdownStarted => 20,
     };
     let value = diagnostic
         .value

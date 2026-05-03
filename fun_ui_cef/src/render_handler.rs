@@ -4,11 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use cef::rc::Rc;
 use cef::{
-    Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler, ScreenInfo,
-    WrapRenderHandler, wrap_render_handler,
+    AcceleratedPaintInfo, Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler,
+    ScreenInfo, WrapRenderHandler, wrap_render_handler,
 };
 
-use crate::diagnostics::FUN_UI_DIAGNOSTICS_TARGET;
+use crate::diagnostics::{FUN_UI_DIAGNOSTICS_TARGET, SharedCefUiTransportCounters};
 
 pub const CEF_UI_BYTES_PER_PIXEL: usize = 4;
 
@@ -315,14 +315,31 @@ pub trait CefPaintSink: Send + Sync + 'static {
     fn ingest_cef_paint(&self, frame: CefOwnedPaintFrame);
 }
 
+#[derive(Clone)]
+struct FunCefRenderHandlerLogs {
+    view_rect_logged: Arc<AtomicBool>,
+    paint_logged: Arc<AtomicBool>,
+    accelerated_paint_logged: Arc<AtomicBool>,
+}
+
+impl Default for FunCefRenderHandlerLogs {
+    fn default() -> Self {
+        Self {
+            view_rect_logged: Arc::new(AtomicBool::new(false)),
+            paint_logged: Arc::new(AtomicBool::new(false)),
+            accelerated_paint_logged: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 wrap_render_handler! {
     pub struct FunCefRenderHandler {
         paint_sink: Arc<dyn CefPaintSink>,
         scale_factor: CefUiScaleFactor,
         viewport_width: i32,
         viewport_height: i32,
-        view_rect_logged: Arc<AtomicBool>,
-        paint_logged: Arc<AtomicBool>,
+        transport_counters: SharedCefUiTransportCounters,
+        logs: FunCefRenderHandlerLogs,
     }
 
     impl RenderHandler {
@@ -338,7 +355,7 @@ wrap_render_handler! {
         }
 
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
-            if !self.view_rect_logged.swap(true, Ordering::AcqRel) {
+            if !self.logs.view_rect_logged.swap(true, Ordering::AcqRel) {
                 tracing::info!(
                     target: FUN_UI_DIAGNOSTICS_TARGET,
                     width = self.viewport_width,
@@ -410,7 +427,8 @@ wrap_render_handler! {
             let Some(bytes) = copy_cef_paint_buffer(buffer, expected_byte_len) else {
                 return;
             };
-            if !self.paint_logged.swap(true, Ordering::AcqRel) {
+            self.transport_counters.record_on_paint(bytes.len());
+            if !self.logs.paint_logged.swap(true, Ordering::AcqRel) {
                 tracing::info!(
                     target: FUN_UI_DIAGNOSTICS_TARGET,
                     width,
@@ -432,6 +450,26 @@ wrap_render_handler! {
             });
         }
 
+        fn on_accelerated_paint(
+            &self,
+            _browser: Option<&mut Browser>,
+            type_: PaintElementType,
+            dirty_rects: Option<&[Rect]>,
+            info: Option<&AcceleratedPaintInfo>,
+        ) {
+            self.transport_counters.record_on_accelerated_paint();
+            self.transport_counters.record_gpu_copy_failure();
+            if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
+                tracing::warn!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    element = ?CefPaintElement::from_cef(type_),
+                    dirty_rect_count = dirty_rects.unwrap_or_default().len(),
+                    shared_texture_handle_present = accelerated_paint_shared_texture_present(info),
+                    "CEF UI accelerated paint received before GPU transport bridge is ready"
+                );
+            }
+        }
+
     }
 }
 
@@ -450,13 +488,30 @@ pub fn new_fun_cef_render_handler_for_viewport(
     viewport_width: u32,
     viewport_height: u32,
 ) -> RenderHandler {
+    new_fun_cef_render_handler_for_viewport_with_counters(
+        paint_sink,
+        scale_factor,
+        viewport_width,
+        viewport_height,
+        SharedCefUiTransportCounters::default(),
+    )
+}
+
+#[must_use]
+pub fn new_fun_cef_render_handler_for_viewport_with_counters(
+    paint_sink: Arc<dyn CefPaintSink>,
+    scale_factor: CefUiScaleFactor,
+    viewport_width: u32,
+    viewport_height: u32,
+    transport_counters: SharedCefUiTransportCounters,
+) -> RenderHandler {
     FunCefRenderHandler::new(
         paint_sink,
         scale_factor,
         viewport_width.min(i32::MAX as u32) as i32,
         viewport_height.min(i32::MAX as u32) as i32,
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(AtomicBool::new(false)),
+        transport_counters,
+        FunCefRenderHandlerLogs::default(),
     )
 }
 
@@ -490,6 +545,16 @@ fn copy_cef_paint_buffer(buffer: *const u8, expected_byte_len: usize) -> Option<
     }
     // CEF owns `buffer` only for the paint callback; copy it before returning.
     Some(unsafe { std::slice::from_raw_parts(buffer, expected_byte_len) }.to_vec())
+}
+
+#[cfg(target_os = "windows")]
+fn accelerated_paint_shared_texture_present(info: Option<&AcceleratedPaintInfo>) -> bool {
+    info.is_some_and(|info| !info.shared_texture_handle.is_null())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn accelerated_paint_shared_texture_present(_info: Option<&AcceleratedPaintInfo>) -> bool {
+    false
 }
 
 #[must_use]

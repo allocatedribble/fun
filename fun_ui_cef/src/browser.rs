@@ -18,7 +18,7 @@ use cef::{
 };
 use serde_json::{Value, json};
 
-use crate::diagnostics::FUN_UI_DIAGNOSTICS_TARGET;
+use crate::diagnostics::{FUN_UI_DIAGNOSTICS_TARGET, SharedCefUiTransportCounters};
 use crate::render_handler::CefUiScaleFactor;
 use crate::scheme::{
     FUN_UI_MAIN_URL, FunUiDevServerError, FunUiDevServerUrl, fun_ui_dev_server_from_env,
@@ -32,7 +32,7 @@ use crate::{
         UiEnvelope, UiEnvelopeKind,
     },
     compositor::SharedCefUiCompositor,
-    render_handler::{CefPaintSink, new_fun_cef_render_handler_for_viewport},
+    render_handler::{CefPaintSink, new_fun_cef_render_handler_for_viewport_with_counters},
 };
 
 pub const MAIN_BROWSER_PAGE: BrowserUiPage = BrowserUiPage {
@@ -47,6 +47,76 @@ pub struct BrowserUiPage {
     pub transparent_background: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefUiPaintTransport {
+    CpuPaint,
+    D3d11SharedTextureDx12Copy,
+}
+
+impl CefUiPaintTransport {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::CpuPaint => "cpu_paint",
+            Self::D3d11SharedTextureDx12Copy => "d3d11_shared_texture_dx12_copy",
+        }
+    }
+
+    #[must_use]
+    pub const fn shared_texture_enabled(self) -> bool {
+        matches!(self, Self::D3d11SharedTextureDx12Copy)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefUiPaintTransportFallbackReason {
+    None,
+    NonWindows,
+    RenderBackendNotDx12,
+    D3d11On12BridgeUnavailable,
+    SharedTextureUnsupported,
+    OutputTextureAllocationUnavailable,
+}
+
+impl CefUiPaintTransportFallbackReason {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::NonWindows => "non_windows",
+            Self::RenderBackendNotDx12 => "render_backend_not_dx12",
+            Self::D3d11On12BridgeUnavailable => "d3d11on12_bridge_unavailable",
+            Self::SharedTextureUnsupported => "shared_texture_unsupported",
+            Self::OutputTextureAllocationUnavailable => "output_texture_allocation_unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefUiRenderBackendHint {
+    Dx12,
+    Vulkan,
+    Other,
+    Auto,
+}
+
+impl CefUiRenderBackendHint {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Dx12 => "dx12",
+            Self::Vulkan => "vulkan",
+            Self::Other => "other",
+            Self::Auto => "auto",
+        }
+    }
+
+    #[must_use]
+    const fn is_dx12_compatible(self) -> bool {
+        matches!(self, Self::Dx12)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserUiConfig {
     pub page: BrowserUiPage,
@@ -54,6 +124,10 @@ pub struct BrowserUiConfig {
     pub viewport_width: u32,
     pub viewport_height: u32,
     pub windowless_frame_rate: i32,
+    pub paint_transport: CefUiPaintTransport,
+    pub paint_transport_fallback_reason: CefUiPaintTransportFallbackReason,
+    pub render_backend_hint: CefUiRenderBackendHint,
+    pub accelerated_paint_debug: bool,
 }
 
 impl BrowserUiConfig {
@@ -65,6 +139,10 @@ impl BrowserUiConfig {
             viewport_width,
             viewport_height,
             windowless_frame_rate: CEF_UI_WINDOWLESS_FRAME_RATE_HZ,
+            paint_transport: CefUiPaintTransport::CpuPaint,
+            paint_transport_fallback_reason: CefUiPaintTransportFallbackReason::None,
+            render_backend_hint: CefUiRenderBackendHint::Auto,
+            accelerated_paint_debug: false,
         }
     }
 
@@ -72,10 +150,12 @@ impl BrowserUiConfig {
         viewport_width: u32,
         viewport_height: u32,
     ) -> Result<Self, FunUiDevServerError> {
-        Ok(Self {
+        let mut config = Self {
             dev_server_url: fun_ui_dev_server_from_env()?,
             ..Self::main_window(viewport_width, viewport_height)
-        })
+        };
+        config.apply_paint_transport_env();
+        Ok(config)
     }
 
     #[must_use]
@@ -111,11 +191,177 @@ impl BrowserUiConfig {
             ..BrowserSettings::default()
         }
     }
+
+    fn apply_paint_transport_env(&mut self) {
+        self.render_backend_hint = render_backend_hint_from_env();
+        self.accelerated_paint_debug = env_flag_enabled("FUN_CEF_UI_ACCELERATED_PAINT_DEBUG");
+        let request = paint_transport_request_from_env();
+        let decision = select_paint_transport(
+            request,
+            self.render_backend_hint,
+            cfg!(target_os = "windows"),
+            false,
+            true,
+            true,
+        );
+        self.paint_transport = decision.transport;
+        self.paint_transport_fallback_reason = decision.fallback_reason;
+    }
 }
 
 impl Default for BrowserUiConfig {
     fn default() -> Self {
         Self::main_window(1280, 720)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CefUiPaintTransportRequest {
+    Cpu,
+    Auto,
+    D3d11On12,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CefUiPaintTransportDecision {
+    transport: CefUiPaintTransport,
+    fallback_reason: CefUiPaintTransportFallbackReason,
+}
+
+fn paint_transport_request_from_env() -> CefUiPaintTransportRequest {
+    let paint_transport = std::env::var("FUN_CEF_UI_PAINT_TRANSPORT").ok();
+    if let Some(request) = paint_transport
+        .as_deref()
+        .and_then(parse_paint_transport_request)
+    {
+        return request;
+    }
+    if let Some(value) = paint_transport {
+        tracing::warn!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            value,
+            "FUN_CEF_UI_PAINT_TRANSPORT ignored unsupported value"
+        );
+    }
+
+    let accelerated_paint = std::env::var("FUN_CEF_UI_ACCELERATED_PAINT").ok();
+    if let Some(request) = accelerated_paint
+        .as_deref()
+        .and_then(parse_accelerated_paint_request)
+    {
+        return request;
+    }
+    if let Some(value) = accelerated_paint {
+        tracing::warn!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            value,
+            "FUN_CEF_UI_ACCELERATED_PAINT ignored unsupported value"
+        );
+    }
+    CefUiPaintTransportRequest::Cpu
+}
+
+fn parse_paint_transport_request(value: &str) -> Option<CefUiPaintTransportRequest> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "cpu" | "cpu_paint" => Some(CefUiPaintTransportRequest::Cpu),
+        "auto" => Some(CefUiPaintTransportRequest::Auto),
+        "d3d11on12" | "d3d11_shared_texture_dx12_copy" | "d3d11-shared-texture-dx12-copy" => {
+            Some(CefUiPaintTransportRequest::D3d11On12)
+        }
+        _ => None,
+    }
+}
+
+fn parse_accelerated_paint_request(value: &str) -> Option<CefUiPaintTransportRequest> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "off" | "cpu" => Some(CefUiPaintTransportRequest::Cpu),
+        "1" | "true" | "on" | "d3d11on12" => Some(CefUiPaintTransportRequest::D3d11On12),
+        "auto" => Some(CefUiPaintTransportRequest::Auto),
+        _ => None,
+    }
+}
+
+fn render_backend_hint_from_env() -> CefUiRenderBackendHint {
+    let Some(value) = std::env::var("FUN_RENDER_BACKEND").ok() else {
+        return default_render_backend_hint();
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "dx12" | "d3d12" | "directx12" => CefUiRenderBackendHint::Dx12,
+        "vulkan" => CefUiRenderBackendHint::Vulkan,
+        "auto" => default_render_backend_hint(),
+        _ => CefUiRenderBackendHint::Other,
+    }
+}
+
+#[must_use]
+const fn default_render_backend_hint() -> CefUiRenderBackendHint {
+    if cfg!(target_os = "windows") {
+        CefUiRenderBackendHint::Dx12
+    } else {
+        CefUiRenderBackendHint::Auto
+    }
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on"
+        )
+    })
+}
+
+#[must_use]
+const fn select_paint_transport(
+    request: CefUiPaintTransportRequest,
+    backend_hint: CefUiRenderBackendHint,
+    windows: bool,
+    d3d11on12_ready: bool,
+    shared_texture_supported: bool,
+    output_texture_allocation_ready: bool,
+) -> CefUiPaintTransportDecision {
+    match request {
+        CefUiPaintTransportRequest::Cpu => CefUiPaintTransportDecision {
+            transport: CefUiPaintTransport::CpuPaint,
+            fallback_reason: CefUiPaintTransportFallbackReason::None,
+        },
+        CefUiPaintTransportRequest::Auto | CefUiPaintTransportRequest::D3d11On12 => {
+            if !windows {
+                return CefUiPaintTransportDecision {
+                    transport: CefUiPaintTransport::CpuPaint,
+                    fallback_reason: CefUiPaintTransportFallbackReason::NonWindows,
+                };
+            }
+            if !backend_hint.is_dx12_compatible() {
+                return CefUiPaintTransportDecision {
+                    transport: CefUiPaintTransport::CpuPaint,
+                    fallback_reason: CefUiPaintTransportFallbackReason::RenderBackendNotDx12,
+                };
+            }
+            if !d3d11on12_ready {
+                return CefUiPaintTransportDecision {
+                    transport: CefUiPaintTransport::CpuPaint,
+                    fallback_reason: CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable,
+                };
+            }
+            if !shared_texture_supported {
+                return CefUiPaintTransportDecision {
+                    transport: CefUiPaintTransport::CpuPaint,
+                    fallback_reason: CefUiPaintTransportFallbackReason::SharedTextureUnsupported,
+                };
+            }
+            if !output_texture_allocation_ready {
+                return CefUiPaintTransportDecision {
+                    transport: CefUiPaintTransport::CpuPaint,
+                    fallback_reason:
+                        CefUiPaintTransportFallbackReason::OutputTextureAllocationUnavailable,
+                };
+            }
+            CefUiPaintTransportDecision {
+                transport: CefUiPaintTransport::D3d11SharedTextureDx12Copy,
+                fallback_reason: CefUiPaintTransportFallbackReason::None,
+            }
+        }
     }
 }
 
@@ -893,6 +1139,7 @@ pub struct CefUiBrowser {
     config: BrowserUiConfig,
     client: Client,
     compositor: SharedCefUiCompositor,
+    transport_counters: SharedCefUiTransportCounters,
     state: SharedBrowserState,
     bridge_endpoint: BrowserBridgeEndpoint,
 }
@@ -914,12 +1161,17 @@ impl CefUiBrowser {
             return Err(CefUiBrowserError::SchemeFactoryRejected);
         }
 
+        let transport_counters = SharedCefUiTransportCounters::default();
+        if config.paint_transport_fallback_reason != CefUiPaintTransportFallbackReason::None {
+            transport_counters.record_transport_fallback();
+        }
         let paint_sink: Arc<dyn CefPaintSink> = Arc::new(compositor.clone());
-        let render_handler = new_fun_cef_render_handler_for_viewport(
+        let render_handler = new_fun_cef_render_handler_for_viewport_with_counters(
             paint_sink,
             CefUiScaleFactor::ONE,
             config.viewport_width,
             config.viewport_height,
+            transport_counters.clone(),
         );
         let state = Arc::new(Mutex::new(BrowserState::new()));
         with_browser_state(&state, |state| state.lifecycle.mark_creating());
@@ -933,6 +1185,7 @@ impl CefUiBrowser {
         let mut client =
             new_fun_cef_browser_client(render_handler, life_span_handler, message_router);
         let window_info = windowless_window_info(&config);
+        log_paint_transport_selection(&config, &window_info);
         let page_url = config.page_url();
         let settings = config.browser_settings();
         let created = browser_host_create_browser(
@@ -951,6 +1204,7 @@ impl CefUiBrowser {
             config,
             client,
             compositor,
+            transport_counters,
             state,
             bridge_endpoint,
         })
@@ -987,6 +1241,11 @@ impl CefUiBrowser {
     }
 
     #[must_use]
+    pub fn transport_counters(&self) -> SharedCefUiTransportCounters {
+        self.transport_counters.clone()
+    }
+
+    #[must_use]
     pub fn handle(&self) -> CefUiBrowserHandle {
         CefUiBrowserHandle {
             state: Arc::clone(&self.state),
@@ -1019,7 +1278,35 @@ fn windowless_window_info(config: &BrowserUiConfig) -> WindowInfo {
         width: config.viewport_width.min(i32::MAX as u32) as i32,
         height: config.viewport_height.min(i32::MAX as u32) as i32,
     };
+    window_info.shared_texture_enabled = i32::from(config.paint_transport.shared_texture_enabled());
     window_info
+}
+
+fn log_paint_transport_selection(config: &BrowserUiConfig, window_info: &WindowInfo) {
+    let shared_texture_enabled = window_info.shared_texture_enabled != 0;
+    let d3d11on12_ready = config.paint_transport == CefUiPaintTransport::D3d11SharedTextureDx12Copy;
+    match config.paint_transport {
+        CefUiPaintTransport::CpuPaint => tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            backend = config.render_backend_hint.as_wire_str(),
+            windows = cfg!(target_os = "windows"),
+            shared_texture_enabled,
+            d3d11on12_ready,
+            fallback_reason = config.paint_transport_fallback_reason.as_wire_str(),
+            accelerated_paint_debug = config.accelerated_paint_debug,
+            "CEF UI paint transport selected: cpu_paint"
+        ),
+        CefUiPaintTransport::D3d11SharedTextureDx12Copy => tracing::info!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            backend = config.render_backend_hint.as_wire_str(),
+            windows = cfg!(target_os = "windows"),
+            shared_texture_enabled,
+            d3d11on12_ready,
+            fallback_reason = config.paint_transport_fallback_reason.as_wire_str(),
+            accelerated_paint_debug = config.accelerated_paint_debug,
+            "CEF UI paint transport selected: d3d11_shared_texture_dx12_copy"
+        ),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1066,5 +1353,86 @@ mod tests {
 
         assert_eq!(window_info.windowless_rendering_enabled, 1);
         assert_eq!(window_info.shared_texture_enabled, 0);
+    }
+
+    #[test]
+    fn windowless_browser_can_enable_shared_texture_mode() {
+        let config = BrowserUiConfig {
+            paint_transport: CefUiPaintTransport::D3d11SharedTextureDx12Copy,
+            ..BrowserUiConfig::default()
+        };
+
+        let window_info = windowless_window_info(&config);
+
+        assert_eq!(window_info.windowless_rendering_enabled, 1);
+        assert_eq!(window_info.shared_texture_enabled, 1);
+    }
+
+    #[test]
+    fn explicit_d3d11on12_transport_falls_back_until_bridge_exists() {
+        let decision = select_paint_transport(
+            CefUiPaintTransportRequest::D3d11On12,
+            CefUiRenderBackendHint::Dx12,
+            true,
+            false,
+            true,
+            true,
+        );
+
+        assert_eq!(decision.transport, CefUiPaintTransport::CpuPaint);
+        assert_eq!(
+            decision.fallback_reason,
+            CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable
+        );
+    }
+
+    #[test]
+    fn accelerated_transport_requires_windows_dx12() {
+        let non_windows = select_paint_transport(
+            CefUiPaintTransportRequest::Auto,
+            CefUiRenderBackendHint::Dx12,
+            false,
+            true,
+            true,
+            true,
+        );
+        let vulkan = select_paint_transport(
+            CefUiPaintTransportRequest::Auto,
+            CefUiRenderBackendHint::Vulkan,
+            true,
+            true,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            non_windows.fallback_reason,
+            CefUiPaintTransportFallbackReason::NonWindows
+        );
+        assert_eq!(
+            vulkan.fallback_reason,
+            CefUiPaintTransportFallbackReason::RenderBackendNotDx12
+        );
+    }
+
+    #[test]
+    fn accelerated_transport_selects_when_all_gates_are_ready() {
+        let decision = select_paint_transport(
+            CefUiPaintTransportRequest::Auto,
+            CefUiRenderBackendHint::Dx12,
+            true,
+            true,
+            true,
+            true,
+        );
+
+        assert_eq!(
+            decision.transport,
+            CefUiPaintTransport::D3d11SharedTextureDx12Copy
+        );
+        assert_eq!(
+            decision.fallback_reason,
+            CefUiPaintTransportFallbackReason::None
+        );
     }
 }

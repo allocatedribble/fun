@@ -30,12 +30,14 @@ pub use bridge::{
 pub use browser::{
     BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowser,
-    CefUiBrowserError, CefUiBrowserHandle, MAIN_BROWSER_PAGE,
+    CefUiBrowserError, CefUiBrowserHandle, CefUiPaintTransport, CefUiPaintTransportFallbackReason,
+    CefUiRenderBackendHint, MAIN_BROWSER_PAGE,
 };
 pub use compositor::{
     CefUiCompositor, CefUiCompositorFrame, CefUiUploadPlan, SharedCefUiCompositor,
     UiCompositorState, UiSurfaceGeneration,
 };
+pub use diagnostics::{CefUiTransportCounterSnapshot, SharedCefUiTransportCounters};
 pub use input::{BrowserUiInputEvent, BrowserUiInputOwner, validate_input_event};
 pub use model::{
     CefUiModel, DEFAULT_MAX_PATCHES_PER_BATCH, DEFAULT_MAX_PENDING_PATCH_BATCHES,

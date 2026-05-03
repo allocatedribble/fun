@@ -50,6 +50,9 @@ fn main() {
     app.insert_resource(game_client::cef_ui::CefUiRenderCompositor::new(
         cef_ui_compositor,
     ));
+    app.insert_resource(game_client::cef_ui::CefUiTransportCountersResource::new(
+        cef_ui_browser.transport_counters(),
+    ));
     if matches!(
         cef_message_loop_strategy,
         fun_ui_cef::CefMessageLoopStrategy::ExternalPump
