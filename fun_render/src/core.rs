@@ -1,3 +1,7 @@
+#[cfg(debug_assertions)]
+use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::{
     camera::CameraMainTextureUsages,
     pbr::experimental::meshlet::MeshletPlugin,
@@ -10,19 +14,14 @@ use bevy::{
         SolariDenoiseMode, SolariFeaturePolicy, SolariPlugins, SolariRuntimeParams, SolariSettings,
     },
 };
-#[cfg(all(feature = "render_diagnostics", debug_assertions))]
-use bevy::{
-    dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin},
-    render::diagnostic::RenderDiagnosticsPlugin,
-};
 use tracing::info;
 #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
 use tracing::warn;
 
 use crate::{
     ClientOpaqueRenderer, ClientRenderConfig, FunRenderAppOptions, FunRenderRtFeatures,
-    FunSkyPlugin, RenderPathSignature, lighting, prewarm_world_render_catalog,
-    render_path_signature_for_options,
+    FunSkyPlugin, RenderPathSignature, dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting,
+    prewarm_world_render_catalog, render_path_signature_for_options,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
 };
 
@@ -60,7 +59,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     let solari_feature_policy: SolariFeaturePolicy =
         render_config.rt_features.solari_feature_policy();
     let rt_features = render_config.rt_features;
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    #[cfg(debug_assertions)]
     let fps_overlay_enabled = render_config.fps_overlay_enabled;
 
     app.insert_resource(opaque_renderer.method())
@@ -80,7 +79,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
             (lighting::setup_lighting, prewarm_world_render_catalog).chain(),
         );
 
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    #[cfg(debug_assertions)]
     if fps_overlay_enabled && !options.is_editor_preview() {
         app.add_plugins(FpsOverlayPlugin {
             config: FpsOverlayConfig {
@@ -100,6 +99,13 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     if render_config.clouds_enabled {
         app.add_plugins(FunSkyPlugin::new(render_config.cloud_settings()));
     }
+    dlss_correctness::install_dlss_correctness(app);
+    dx12_dlss_sr::install_dx12_native_dlss_sr(app);
+    dx12_dlss_rr::install_dx12_native_dlss_rr(app);
+    dx12_dlss_sr::log_dx12_native_dlss_sr_support_once(
+        render_config.native_dlss,
+        crate::Dx12NativeDlssSrSupport::default(),
+    );
 
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     {

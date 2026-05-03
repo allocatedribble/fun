@@ -17,27 +17,36 @@ fn main() {
         match fun_ui_cef::BrowserUiConfig::main_window_from_env(viewport_width, viewport_height) {
             Ok(config) => config,
             Err(error) => {
-                eprintln!("failed to configure CEF UI page: {error:?}");
+                tracing::error!(target: "fun::cef_ui", ?error, "failed to configure CEF UI page");
                 std::process::exit(71);
             }
         };
     let cef_ui_compositor = fun_ui_cef::SharedCefUiCompositor::default();
-    let cef_ui_browser =
-        match fun_ui_cef::CefUiBrowser::create(cef_ui_config, cef_ui_compositor.clone()) {
-            Ok(browser) => browser,
-            Err(error) => {
-                eprintln!("failed to load CEF UI page: {error}");
-                std::process::exit(71);
-            }
-        };
-    eprintln!(
-        "loaded CEF UI page {} at {}x{}",
-        cef_ui_browser.config().page_url_str(),
+    let cef_ui_bridge_queues = fun_ui_cef::SharedBrowserBridgeQueues::default();
+    let cef_ui_browser = match fun_ui_cef::CefUiBrowser::create_with_bridge(
+        cef_ui_config,
+        cef_ui_compositor.clone(),
+        cef_ui_bridge_queues.clone(),
+    ) {
+        Ok(browser) => browser,
+        Err(error) => {
+            tracing::error!(target: "fun::cef_ui", %error, "failed to load CEF UI page");
+            std::process::exit(71);
+        }
+    };
+    tracing::info!(
+        target: "fun::cef_ui",
+        page_url = cef_ui_browser.config().page_url_str(),
         viewport_width,
-        viewport_height
+        viewport_height,
+        "loaded CEF UI page"
     );
 
     let mut app = game_client::build_client_app();
+    app.insert_non_send(game_client::cef_ui::CefUiBrowserControl::new(
+        cef_ui_browser.handle(),
+    ));
+    app.insert_resource(game_client::cef_ui::CefUiBridge::new(cef_ui_bridge_queues));
     app.insert_resource(game_client::cef_ui::CefUiRenderCompositor::new(
         cef_ui_compositor,
     ));

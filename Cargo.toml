@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "fun_editor_core",
+    "fun_host",
     "fun_render",
     "fun_ui_cef",
     "game_client",
@@ -42,8 +44,13 @@ bevy_quinnet = { path = "../bevy_quinnet" }
 compactly = "0.1.6"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 thunder = { path = "../thunder" }
 tracing = "0.1"
+zeroize = "1"
 
 [patch.crates-io]
 glamx = { path = "../avian/crates/glamx" }

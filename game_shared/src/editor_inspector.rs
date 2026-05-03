@@ -1051,6 +1051,9 @@ fn diagnostic_stream_key(stream: EditorDiagnosticStream) -> &'static str {
         EditorDiagnosticStream::AvianPhysicsStepTiming => "avianphysicssteptiming",
         EditorDiagnosticStream::AvianCollisionDiagnostics => "aviancollisiondiagnostics",
         EditorDiagnosticStream::AvianControllerDiagnostics => "aviancontrollerdiagnostics",
+        EditorDiagnosticStream::AiPresentation => "aipresentation",
+        EditorDiagnosticStream::AiLodDebug => "ailoddebug",
+        EditorDiagnosticStream::SquadAiDebug => "squadaidebug",
     }
 }
 
@@ -1063,6 +1066,9 @@ fn diagnostic_stream_aliases(stream: EditorDiagnosticStream) -> &'static [&'stat
         EditorDiagnosticStream::PacketBytes => &["packet"],
         EditorDiagnosticStream::StreamChunks => &["worldstream", "chunk"],
         EditorDiagnosticStream::WorldStreamRevisions => &["worldstreamrevision"],
+        EditorDiagnosticStream::AiPresentation => &["ai"],
+        EditorDiagnosticStream::AiLodDebug => &["ailod"],
+        EditorDiagnosticStream::SquadAiDebug => &["squad"],
         _ => &[],
     }
 }

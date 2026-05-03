@@ -13,6 +13,7 @@ bevy_debug = ["bevy/debug"]
 cef_ui = ["dep:fun_ui_cef"]
 diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
 dlss = ["bevy/dlss", "fun_render/dlss"]
+dx12_dlss_native = ["fun_render/dx12_dlss_native"]
 force_disable_dlss = ["bevy/force_disable_dlss", "fun_render/force_disable_dlss"]
 render_diagnostics = [
     "diagnostics",
@@ -29,10 +30,12 @@ avian3d.workspace = true
 bevy.workspace = true
 bevy_quinnet.workspace = true
 fun_render = { path = "../fun_render", default-features = false, features = ["winit_presentation"] }
+fun_host = { path = "../fun_host" }
 fun_ui_cef = { path = "../fun_ui_cef", optional = true }
 fun-warden-client = { path = "../../fun-warden/crates/fun-warden-client" }
 fun-warden-core = { path = "../../fun-warden/crates/fun-warden-core" }
 fun-warden-protocol = { path = "../../fun-warden/crates/fun-warden-protocol" }
+fun_ai_core = { path = "../../fun-ai/crates/fun_ai_core" }
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
 log.workspace = true

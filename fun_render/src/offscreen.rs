@@ -9,7 +9,10 @@ use bevy::{
 use tracing::info;
 
 use crate::{
-    config::{client_render_creation, render_plugin},
+    config::{
+        NativeDlssConfig, client_render_creation, log_native_dlss_startup_diagnostics,
+        render_plugin,
+    },
     selected_render_backend,
 };
 
@@ -60,6 +63,7 @@ impl Plugin for FunRenderOffscreenPresentationPlugin {
             format = ?self.target.format,
             "Fun offscreen render backend selected"
         );
+        log_native_dlss_startup_diagnostics(render_backend, NativeDlssConfig::from_env());
         app.insert_resource(self.target);
         app.add_plugins(render_plugin(render_backend))
             .add_message::<WindowResized>()

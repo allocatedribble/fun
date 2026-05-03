@@ -28,3 +28,6 @@ target
 # Local agent scratch/vendor snapshots
 /.codex/
 /vendor/
+
+# Local UI dependency installs
+/game_client/ui/main/node_modules/

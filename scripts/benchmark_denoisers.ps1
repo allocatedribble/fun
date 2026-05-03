@@ -1,6 +1,6 @@
 param(
     [string[]]$Modes = @("off", "cheap-temporal", "balanced-fast", "balanced", "quality", "rr"),
-    [string]$RenderBackend = "vulkan",
+    [string]$RenderBackend = "dx12",
     [string]$PresentMode = "immediate",
     [string]$SolariInternalScale = "1.0",
     [string]$SolariArch = "budgeted",
@@ -251,6 +251,7 @@ foreach ($modeName in $Modes) {
     if ($DisableMeshlets) { $clientArgs += "-DisableMeshlets" }
     if ($TraceDiagnostics) { $clientArgs += "-TraceDiagnostics" }
     if ($mode.disable_dlss_rr) { $clientArgs += "-DisableDlssRr" }
+    else { $clientArgs += "-EnableDx12DlssRr" }
 
     Write-Host "Running denoiser benchmark mode=$($mode.name)..."
     & powershell @clientArgs

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Screwdriver">
+  <path d="M45.5 6.5 57.5 18.5 50 26 38 14z" fill="#d7a85b"/>
+  <path d="M41.2 17.3 46.7 22.8 21.4 48.1 15.9 42.6z" fill="#9fb2bf"/>
+  <path d="M12.2 41.2 22.8 51.8 18.3 56.3c-2.1 2.1-5.5 2.1-7.6 0l-3-3c-2.1-2.1-2.1-5.5 0-7.6z" fill="#5fa8d3"/>
+  <path d="M37.4 13.8 50.2 26.6 46.9 29.9 34.1 17.1z" fill="#36424b"/>
+  <path d="M7.7 45.7 18.3 56.3" stroke="#172028" stroke-width="3" stroke-linecap="round"/>
+</svg>

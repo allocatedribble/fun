@@ -1,4 +1,7 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use crate::model::UiPatchBatch;
 
@@ -7,6 +10,10 @@ const BROWSER_UI_SCHEMA_REVISION: u32 = 1;
 const DEFAULT_MAX_PACKET_BYTES: u32 = 64 * 1024;
 const DEFAULT_MAX_QUEUE_LEN: usize = 256;
 const MAX_UI_HIT_REGIONS: usize = 64;
+const MAX_HOST_COMMAND_ID_BYTES: usize = 128;
+const MAX_HOST_COMMAND_JSON_BYTES: usize = 64 * 1024;
+const MAX_HOST_DIAGNOSTICS: usize = 32;
+const MAX_HOST_DIAGNOSTIC_TEXT_BYTES: usize = 512;
 
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, compactly::v1::Encode,
@@ -148,6 +155,17 @@ pub enum UiControlPayload {
         key: String,
         value_json: Vec<u8>,
     },
+    HostCommand {
+        request: HostCommandRequest,
+    },
+    HostCommandResult {
+        command_id: HostCommandId,
+        response: HostCommandResponse,
+    },
+    HostEvent {
+        event: String,
+        payload: Vec<u8>,
+    },
     Lifecycle {
         state: UiLifecycleState,
     },
@@ -214,6 +232,182 @@ pub enum UiErrorCode {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub struct BrowserUiSizeBudget {
     pub max_bytes: u32,
+}
+
+impl BrowserUiSizeBudget {
+    #[must_use]
+    pub const fn host_command_default() -> Self {
+        Self {
+            max_bytes: MAX_HOST_COMMAND_JSON_BYTES as u32,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum HostCommandTarget {
+    Game,
+    Launcher,
+    Editor,
+    Project,
+    Runtime,
+    Preview,
+    Material,
+    Entity,
+    Diagnostics,
+    Auth,
+    Backend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum HostCapability {
+    ReadLauncher,
+    JoinGame,
+    OpenProject,
+    EditProject,
+    ReadEntities,
+    MutateEntities,
+    ControlRuntime,
+    ReadDiagnostics,
+    MaterialShaderRead,
+    MaterialShaderWrite,
+    RequestBackendTicket,
+    UseDevTools,
+}
+
+impl HostCapability {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::ReadLauncher => "read_launcher",
+            Self::JoinGame => "join_game",
+            Self::OpenProject => "open_project",
+            Self::EditProject => "edit_project",
+            Self::ReadEntities => "read_entities",
+            Self::MutateEntities => "mutate_entities",
+            Self::ControlRuntime => "control_runtime",
+            Self::ReadDiagnostics => "read_diagnostics",
+            Self::MaterialShaderRead => "material_shader_read",
+            Self::MaterialShaderWrite => "material_shader_write",
+            Self::RequestBackendTicket => "request_backend_ticket",
+            Self::UseDevTools => "use_dev_tools",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub struct HostCommandId {
+    value: String,
+}
+
+impl HostCommandId {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+
+    #[must_use]
+    pub fn target(&self) -> Option<HostCommandTarget> {
+        host_command_target(self.as_str())
+    }
+
+    #[must_use]
+    pub fn required_capability(&self) -> Option<HostCapability> {
+        host_command_required_capability(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct HostCommandRequest {
+    pub command_id: HostCommandId,
+    pub request_id: BrowserUiRequestId,
+    pub payload: Vec<u8>,
+    pub capability: HostCapability,
+    pub size_budget: BrowserUiSizeBudget,
+}
+
+impl HostCommandRequest {
+    #[must_use]
+    pub fn new(
+        request_id: BrowserUiRequestId,
+        command_id: impl Into<String>,
+        payload: Vec<u8>,
+    ) -> Option<Self> {
+        let command_id = HostCommandId::new(command_id);
+        let capability = command_id.required_capability()?;
+        Some(Self {
+            command_id,
+            request_id,
+            payload,
+            capability,
+            size_budget: BrowserUiSizeBudget::host_command_default(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub enum HostCommandResponse {
+    Ok {
+        payload: Vec<u8>,
+        diagnostics: Vec<HostDiagnostic>,
+    },
+    Rejected {
+        reason: HostCommandRejection,
+    },
+    Failed {
+        error: HostCommandError,
+        diagnostics: Vec<HostDiagnostic>,
+    },
+}
+
+impl HostCommandResponse {
+    #[must_use]
+    pub fn status_wire_str(&self) -> &'static str {
+        match self {
+            Self::Ok { .. } => "ok",
+            Self::Rejected { .. } => "rejected",
+            Self::Failed { .. } => "error",
+        }
+    }
+
+    #[must_use]
+    pub fn payload_bytes(&self) -> &[u8] {
+        match self {
+            Self::Ok { payload, .. } => payload,
+            Self::Rejected { .. } => &[],
+            Self::Failed { error, .. } => error.message.as_bytes(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct HostDiagnostic {
+    pub code: String,
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+pub enum HostCommandRejection {
+    UnknownCommand,
+    InvalidCommandId,
+    MissingCapability,
+    CapabilityMismatch,
+    OversizePayload,
+    InvalidPayload,
+    HostShuttingDown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, compactly::v1::Encode)]
+pub struct HostCommandError {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
@@ -444,6 +638,7 @@ pub struct DiagnosticsOverlayRow {
 pub struct BrowserUiProtocolValidationContext {
     pub protocol_version: BrowserUiProtocolVersion,
     pub granted_capabilities: Vec<BrowserUiCapability>,
+    pub granted_host_capabilities: Vec<HostCapability>,
     pub revision: BrowserUiRevision,
     pub max_payload_bytes: u32,
 }
@@ -460,6 +655,20 @@ impl BrowserUiProtocolValidationContext {
                 BrowserUiCapability::ControlMenuState,
                 BrowserUiCapability::ReadDiagnostics,
             ],
+            granted_host_capabilities: vec![
+                HostCapability::ReadLauncher,
+                HostCapability::JoinGame,
+                HostCapability::OpenProject,
+                HostCapability::EditProject,
+                HostCapability::ReadEntities,
+                HostCapability::MutateEntities,
+                HostCapability::ControlRuntime,
+                HostCapability::ReadDiagnostics,
+                HostCapability::MaterialShaderRead,
+                HostCapability::MaterialShaderWrite,
+                HostCapability::RequestBackendTicket,
+                HostCapability::UseDevTools,
+            ],
             revision: BrowserUiRevision(0),
             max_payload_bytes: DEFAULT_MAX_PACKET_BYTES,
         }
@@ -468,6 +677,11 @@ impl BrowserUiProtocolValidationContext {
     #[must_use]
     pub fn grants(&self, capability: BrowserUiCapability) -> bool {
         self.granted_capabilities.contains(&capability)
+    }
+
+    #[must_use]
+    pub fn grants_host(&self, capability: HostCapability) -> bool {
+        self.granted_host_capabilities.contains(&capability)
     }
 }
 
@@ -487,6 +701,7 @@ pub enum BrowserUiProtocolValidationError {
     TooManyHitRegions,
     InvalidHitRegion,
     DuplicateHitRegion,
+    InvalidHostCommand,
 }
 
 pub fn validate_browser_ui_packet(
@@ -547,7 +762,8 @@ pub fn validate_ui_envelope(
     validate_envelope_budget(envelope, context)?;
     validate_envelope_request_id(envelope)?;
     validate_envelope_lane(envelope)?;
-    validate_envelope_payload(envelope)
+    validate_envelope_payload(envelope)?;
+    validate_host_command_authority(envelope, context)
 }
 
 fn validate_envelope_budget(
@@ -637,6 +853,37 @@ fn validate_envelope_payload(
         } if has_duplicate_hit_region_ids(regions) => {
             Err(BrowserUiProtocolValidationError::DuplicateHitRegion)
         }
+        UiEnvelopePayload::Control {
+            payload:
+                UiControlPayload::HostCommand {
+                    request:
+                        HostCommandRequest {
+                            command_id,
+                            payload,
+                            size_budget,
+                            ..
+                        },
+                },
+        } if !is_valid_host_command_payload(command_id, payload, *size_budget) => {
+            Err(BrowserUiProtocolValidationError::InvalidHostCommand)
+        }
+        UiEnvelopePayload::Control {
+            payload:
+                UiControlPayload::HostCommandResult {
+                    command_id,
+                    response,
+                },
+        } if !is_valid_host_command_result(command_id, response) => {
+            Err(BrowserUiProtocolValidationError::InvalidHostCommand)
+        }
+        UiEnvelopePayload::Control {
+            payload: UiControlPayload::HostEvent { event, payload },
+        } if event.is_empty()
+            || event.len() > 128
+            || payload.len() > MAX_HOST_COMMAND_JSON_BYTES =>
+        {
+            Err(BrowserUiProtocolValidationError::InvalidHostCommand)
+        }
         UiEnvelopePayload::StatePatch { patch } if patch.patches.is_empty() => {
             Err(BrowserUiProtocolValidationError::EmptyStatePatch)
         }
@@ -666,6 +913,175 @@ fn has_duplicate_hit_region_ids(regions: &[BrowserUiHitRegion]) -> bool {
         }
     }
     false
+}
+
+fn validate_host_command_authority(
+    envelope: &UiEnvelope,
+    context: &BrowserUiProtocolValidationContext,
+) -> Result<(), BrowserUiProtocolValidationError> {
+    match &envelope.payload {
+        UiEnvelopePayload::Control {
+            payload: UiControlPayload::HostCommand { request },
+        } => {
+            if Some(request.request_id) != envelope.request_id {
+                return Err(BrowserUiProtocolValidationError::UnexpectedRequestId);
+            }
+            let Some(required_capability) = request.command_id.required_capability() else {
+                return Err(BrowserUiProtocolValidationError::InvalidHostCommand);
+            };
+            if required_capability != request.capability {
+                return Err(BrowserUiProtocolValidationError::InvalidHostCommand);
+            }
+            if !context.grants_host(required_capability) {
+                return Err(BrowserUiProtocolValidationError::MissingCapability);
+            }
+            Ok(())
+        }
+        UiEnvelopePayload::Empty
+        | UiEnvelopePayload::Control { .. }
+        | UiEnvelopePayload::StatePatch { .. }
+        | UiEnvelopePayload::ModelPatchBatch { .. }
+        | UiEnvelopePayload::Error { .. }
+        | UiEnvelopePayload::JsonBytes { .. } => Ok(()),
+    }
+}
+
+fn is_valid_host_command_payload(
+    command_id: &HostCommandId,
+    payload_json: &[u8],
+    size_budget: BrowserUiSizeBudget,
+) -> bool {
+    is_valid_host_command_id(command_id.as_str())
+        && command_id.target().is_some()
+        && command_id.required_capability().is_some()
+        && size_budget.max_bytes > 0
+        && size_budget.max_bytes as usize <= MAX_HOST_COMMAND_JSON_BYTES
+        && payload_json.len() <= size_budget.max_bytes as usize
+        && payload_json.len() <= MAX_HOST_COMMAND_JSON_BYTES
+}
+
+fn is_valid_host_command_result(
+    command_id: &HostCommandId,
+    response: &HostCommandResponse,
+) -> bool {
+    if !is_valid_host_command_id(command_id.as_str()) {
+        return false;
+    }
+    match response {
+        HostCommandResponse::Ok {
+            payload,
+            diagnostics,
+        } => payload.len() <= MAX_HOST_COMMAND_JSON_BYTES && is_valid_host_diagnostics(diagnostics),
+        HostCommandResponse::Rejected { .. } => true,
+        HostCommandResponse::Failed { error, diagnostics } => {
+            is_valid_host_error(error) && is_valid_host_diagnostics(diagnostics)
+        }
+    }
+}
+
+fn is_valid_host_command_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_HOST_COMMAND_ID_BYTES
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'_'
+        })
+        && value.split('.').all(|segment| !segment.is_empty())
+}
+
+fn is_valid_host_error(error: &HostCommandError) -> bool {
+    is_valid_host_command_id(&error.code)
+        && !error.message.is_empty()
+        && error.message.len() <= MAX_HOST_DIAGNOSTIC_TEXT_BYTES
+}
+
+fn is_valid_host_diagnostics(diagnostics: &[HostDiagnostic]) -> bool {
+    diagnostics.len() <= MAX_HOST_DIAGNOSTICS
+        && diagnostics.iter().all(|diagnostic| {
+            is_valid_host_command_id(&diagnostic.code)
+                && matches!(
+                    diagnostic.level.as_str(),
+                    "error" | "warning" | "info" | "trace"
+                )
+                && diagnostic.message.len() <= MAX_HOST_DIAGNOSTIC_TEXT_BYTES
+        })
+}
+
+fn host_command_target(value: &str) -> Option<HostCommandTarget> {
+    let first_segment = value.split('.').next()?;
+    match first_segment {
+        "game" | "games" => Some(HostCommandTarget::Game),
+        "launcher" => Some(HostCommandTarget::Launcher),
+        "editor" => Some(HostCommandTarget::Editor),
+        "project" | "projects" => Some(HostCommandTarget::Project),
+        "host" | "runtime" | "viewport" => Some(HostCommandTarget::Runtime),
+        "preview" => Some(HostCommandTarget::Preview),
+        "material" => Some(HostCommandTarget::Material),
+        "entity" | "entity_stream" | "live_entity_stream" => Some(HostCommandTarget::Entity),
+        "diagnostics" => Some(HostCommandTarget::Diagnostics),
+        "account" | "auth" => Some(HostCommandTarget::Auth),
+        "backend" => Some(HostCommandTarget::Backend),
+        _ => None,
+    }
+}
+
+fn host_command_required_capability(value: &str) -> Option<HostCapability> {
+    match value {
+        "host.commands.list" | "host.snapshot.get" | "launcher.state.get" | "launcher.show"
+        | "launcher.hide" | "games.list" => Some(HostCapability::ReadLauncher),
+        "games.join" => Some(HostCapability::JoinGame),
+        "projects.authorized.list"
+        | "project.current.get"
+        | "projects.recent.list"
+        | "project.bsn.index"
+        | "project.picker.open" => Some(HostCapability::OpenProject),
+        "project.open" | "project.edit.open" | "editor.activate" | "editor.deactivate" => {
+            Some(HostCapability::EditProject)
+        }
+        "editor.overlay.toggle" => Some(HostCapability::EditProject),
+        "editor.status.get" | "editor.commands.list" | "editor.events.list" => {
+            Some(HostCapability::ReadLauncher)
+        }
+        "entity_stream.open"
+        | "live_entity_stream.open"
+        | "entity_stream.page"
+        | "entity_stream.close"
+        | "entity.details.get" => Some(HostCapability::ReadEntities),
+        "entity.transform.patch" => Some(HostCapability::MutateEntities),
+        "runtime.host.status"
+        | "runtime.status.get"
+        | "runtime.inspector.attach"
+        | "runtime.server.launch"
+        | "runtime.input.set_owner"
+        | "viewport.client.launch"
+        | "viewport.client.stop"
+        | "viewport.client.focus"
+        | "viewport.client.resize"
+        | "preview.viewport.ensure"
+        | "preview.viewport.stop"
+        | "preview.renderer.ensure"
+        | "preview.renderer.resize"
+        | "preview.renderer.frame.get"
+        | "preview.renderer.scene.set"
+        | "preview.renderer.status.get"
+        | "bevy.demo.launch" => Some(HostCapability::ControlRuntime),
+        "runtime.diagnostics.list" | "diagnostics.list" => Some(HostCapability::ReadDiagnostics),
+        "material.shader.list" | "material.shader.load" => Some(HostCapability::MaterialShaderRead),
+        "material.shader.save" => Some(HostCapability::MaterialShaderWrite),
+        "account.login"
+        | "account.register"
+        | "account.logout"
+        | "auth.ticket.request"
+        | "auth.account.ticket.request"
+        | "auth.logout" => Some(HostCapability::RequestBackendTicket),
+        "auth.session.get" | "backend.auth.session.get" | "auth.backend.session.get" => {
+            Some(HostCapability::ReadLauncher)
+        }
+        "host.commandbar.execute" => Some(HostCapability::ControlRuntime),
+        "window.minimize" | "window.maximize.toggle" | "window.hide" | "window.close" => {
+            Some(HostCapability::UseDevTools)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -775,6 +1191,54 @@ impl BrowserBridgeQueues {
 }
 
 impl Default for BrowserBridgeQueues {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedBrowserBridgeQueues {
+    queues: Arc<Mutex<BrowserBridgeQueues>>,
+}
+
+impl SharedBrowserBridgeQueues {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            queues: Arc::new(Mutex::new(BrowserBridgeQueues::new())),
+        }
+    }
+
+    pub fn push_js_envelope(&self, envelope: UiEnvelope) -> Result<(), BrowserBridgeError> {
+        self.queues
+            .lock()
+            .map_err(|_| BrowserBridgeError::Closed)?
+            .push_js_envelope(envelope)
+    }
+
+    pub fn push_host_envelope(&self, envelope: UiEnvelope) -> Result<(), BrowserBridgeError> {
+        self.queues
+            .lock()
+            .map_err(|_| BrowserBridgeError::Closed)?
+            .push_host_envelope(envelope)
+    }
+
+    pub fn pop_js_envelope_for_host(&self) -> Option<UiEnvelope> {
+        self.queues
+            .lock()
+            .ok()
+            .and_then(|mut queues| queues.pop_js_envelope_for_host())
+    }
+
+    pub fn pop_host_envelope_for_js(&self) -> Option<UiEnvelope> {
+        self.queues
+            .lock()
+            .ok()
+            .and_then(|mut queues| queues.pop_host_envelope_for_js())
+    }
+}
+
+impl Default for SharedBrowserBridgeQueues {
     fn default() -> Self {
         Self::new()
     }
@@ -991,6 +1455,107 @@ mod tests {
                 &BrowserUiProtocolValidationContext::local_game_ui()
             ),
             Err(BrowserUiProtocolValidationError::DuplicateHitRegion)
+        );
+    }
+
+    #[test]
+    fn ui_envelope_accepts_bounded_host_command_request() {
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Request,
+            Some(BrowserUiRequestId(11)),
+            BrowserUiSequence(6),
+            UiControlPayload::HostCommand {
+                request: HostCommandRequest::new(
+                    BrowserUiRequestId(11),
+                    "launcher.state.get",
+                    b"{}".to_vec(),
+                )
+                .expect("host command request"),
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn ui_envelope_rejects_oversize_host_command_payload() {
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Request,
+            Some(BrowserUiRequestId(12)),
+            BrowserUiSequence(7),
+            UiControlPayload::HostCommand {
+                request: HostCommandRequest::new(
+                    BrowserUiRequestId(12),
+                    "launcher.state.get",
+                    vec![0; MAX_HOST_COMMAND_JSON_BYTES.saturating_add(1)],
+                )
+                .expect("host command request"),
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Err(BrowserUiProtocolValidationError::InvalidHostCommand)
+        );
+    }
+
+    #[test]
+    fn ui_envelope_rejects_host_command_without_negotiated_capability() {
+        let mut context = BrowserUiProtocolValidationContext::local_game_ui();
+        context
+            .granted_host_capabilities
+            .retain(|capability| *capability != HostCapability::RequestBackendTicket);
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Request,
+            Some(BrowserUiRequestId(13)),
+            BrowserUiSequence(8),
+            UiControlPayload::HostCommand {
+                request: HostCommandRequest::new(
+                    BrowserUiRequestId(13),
+                    "auth.ticket.request",
+                    b"{}".to_vec(),
+                )
+                .expect("host command request"),
+            },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(&envelope, &context),
+            Err(BrowserUiProtocolValidationError::MissingCapability)
+        );
+    }
+
+    #[test]
+    fn ui_envelope_rejects_host_command_capability_spoofing() {
+        let mut request = HostCommandRequest::new(
+            BrowserUiRequestId(14),
+            "auth.ticket.request",
+            b"{}".to_vec(),
+        )
+        .expect("host command request");
+        request.capability = HostCapability::ReadLauncher;
+        let envelope = UiEnvelope::control(
+            UiEnvelopeKind::Request,
+            Some(BrowserUiRequestId(14)),
+            BrowserUiSequence(9),
+            UiControlPayload::HostCommand { request },
+        );
+
+        assert_eq!(
+            validate_ui_envelope(
+                &envelope,
+                &BrowserUiProtocolValidationContext::local_game_ui()
+            ),
+            Err(BrowserUiProtocolValidationError::InvalidHostCommand)
         );
     }
 

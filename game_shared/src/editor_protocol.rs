@@ -489,6 +489,9 @@ pub enum EditorDiagnosticStream {
     AvianPhysicsStepTiming,
     AvianCollisionDiagnostics,
     AvianControllerDiagnostics,
+    AiPresentation,
+    AiLodDebug,
+    SquadAiDebug,
 }
 
 /// Server diagnostics requested by default when an editor attaches to a server.
@@ -1882,10 +1885,13 @@ mod tests {
         assert!(server.contains(&EditorDiagnosticStream::StreamChunks));
         assert!(server.contains(&EditorDiagnosticStream::AvianControllerDiagnostics));
         assert!(!server.contains(&EditorDiagnosticStream::GpuSampleStatus));
+        assert!(!server.contains(&EditorDiagnosticStream::AiLodDebug));
+        assert!(!server.contains(&EditorDiagnosticStream::SquadAiDebug));
 
         assert!(client.contains(&EditorDiagnosticStream::ClientFps));
         assert!(client.contains(&EditorDiagnosticStream::WorldStreamApplyCost));
         assert!(client.contains(&EditorDiagnosticStream::RenderRecovery));
         assert!(!client.contains(&EditorDiagnosticStream::ConnectedClients));
+        assert!(!client.contains(&EditorDiagnosticStream::AiPresentation));
     }
 }

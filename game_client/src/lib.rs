@@ -1,3 +1,4 @@
+pub mod ai_presentation;
 #[cfg(feature = "cef_ui")]
 pub mod cef_ui;
 mod editor_hotkey;
@@ -13,6 +14,7 @@ pub(crate) use frame_profile::{
 use frame_profile::DetailedFrameProfiler;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use frame_profile::install_detailed_frame_profiler;
+use fun_host::{FunClientHostPlugin, FunClientHostStartConfig, FunClientHostState, FunHostMode};
 pub(crate) use fun_render::RenderWorldStatus as ClientWorldStatus;
 #[cfg(any(test, feature = "benchmarks"))]
 pub use fun_render::benchmark_parse_solari_denoise_mode;
@@ -70,6 +72,11 @@ const DLSS_RR_MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
 const MAX_SERVER_CONTROL_PACKET_BYTES: usize = 64 * 1024;
 const MAX_SERVER_SNAPSHOT_PACKET_BYTES: usize = 512 * 1024;
 const MAX_SERVER_WORLD_STREAM_PACKET_BYTES: usize = 1024 * 1024;
+const FUN_GAME_CLIENT_AUTH_TICKET_ENV: &str = "FUN_GAME_CLIENT_AUTH_TICKET";
+const FUN_GAME_CLIENT_LEGACY_SESSION_TOKEN_ENV: &str = "FUN_GAME_CLIENT_SESSION_TOKEN";
+const FUN_WARDEN_ADMISSION_TICKET_ENV: &str = "FUN_WARDEN_ADMISSION_TICKET";
+const MAX_CLIENT_AUTH_TICKET_BYTES: usize = 1024;
+const MAX_CLIENT_WARDEN_ADMISSION_TICKET_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientRuntimeMode {
@@ -155,12 +162,69 @@ impl ClientRuntimeMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunClientStartMode {
+    Launcher,
+    Game,
+    Editor,
+}
+
+impl FunClientStartMode {
+    fn from_env_and_args() -> Self {
+        if let Some(value) = start_mode_from_args(std::env::args().skip(1)) {
+            return value;
+        }
+        let Some(value) = env_non_empty_string("FUN_START_MODE") else {
+            return Self::Launcher;
+        };
+        Self::parse(&value).unwrap_or_else(|| {
+            warn!(
+                target: "fun::client::host",
+                start_mode = value,
+                "unknown FUN_START_MODE; using launcher"
+            );
+            Self::Launcher
+        })
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("launcher") || value.eq_ignore_ascii_case("-launcher") {
+            return Some(Self::Launcher);
+        }
+        if value.eq_ignore_ascii_case("game") || value.eq_ignore_ascii_case("play") {
+            return Some(Self::Game);
+        }
+        if value.eq_ignore_ascii_case("editor") || value.eq_ignore_ascii_case("edit") {
+            return Some(Self::Editor);
+        }
+        None
+    }
+
+    fn host_mode(self) -> FunHostMode {
+        match self {
+            Self::Launcher => FunHostMode::Launcher,
+            Self::Game => FunHostMode::Game,
+            Self::Editor => FunHostMode::Editor,
+        }
+    }
+
+    pub(crate) const fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Launcher => "launcher",
+            Self::Game => "game",
+            Self::Editor => "editor",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Resource)]
 pub struct ClientAppOptions {
     pub mode: ClientRuntimeMode,
+    pub start_mode: FunClientStartMode,
     pub render_profile: ClientRenderProfile,
     pub server_addr: Option<String>,
     pub project_id: Option<String>,
+    pub project_path: Option<String>,
     pub game_session_id: Option<String>,
     pub scene_id: Option<String>,
     pub hosted_by_editor: bool,
@@ -171,21 +235,43 @@ pub struct ClientAppOptions {
 impl ClientAppOptions {
     pub fn from_env() -> Self {
         let mode = ClientRuntimeMode::from_env();
+        let start_mode = FunClientStartMode::from_env_and_args();
+        let legacy_hosted_by_editor_requested = env_flag("FUN_HOSTED_BY_EDITOR")
+            || env_flag("FUN_CLIENT_HOSTED_BY_EDITOR")
+            || matches!(
+                mode,
+                ClientRuntimeMode::EditorHostedClient | ClientRuntimeMode::EditorPreview
+            );
+        if legacy_hosted_by_editor_requested {
+            warn!(
+                target: "fun::client::host",
+                runtime_mode = mode.as_env_value(),
+                "legacy editor-hosted client flags are retired; fun-client is the unified host"
+            );
+        }
+        let legacy_parent_pid = env_host_parent_pid();
+        if legacy_parent_pid.is_some() {
+            warn!(
+                target: "fun::client::host",
+                "FUN_HOST_PARENT_PID is ignored because the merged client is not a child process"
+            );
+        }
         Self {
             mode,
+            start_mode,
             render_profile: ClientRenderProfile::from_env(),
-            server_addr: env_non_empty_string("FUN_SERVER_ADDR"),
-            project_id: env_non_empty_string("FUN_PROJECT_ID"),
-            game_session_id: env_non_empty_string("FUN_GAME_SESSION_ID"),
+            server_addr: option_from_args("server-addr")
+                .or_else(|| env_non_empty_string("FUN_SERVER_ADDR")),
+            project_id: option_from_args("project-id")
+                .or_else(|| env_non_empty_string("FUN_PROJECT_ID")),
+            project_path: option_from_args("project-path")
+                .or_else(|| env_non_empty_string("FUN_PROJECT_PATH")),
+            game_session_id: option_from_args("game-session-id")
+                .or_else(|| env_non_empty_string("FUN_GAME_SESSION_ID")),
             scene_id: env_non_empty_string("FUN_SCENE_ID"),
-            hosted_by_editor: env_flag("FUN_HOSTED_BY_EDITOR")
-                || env_flag("FUN_CLIENT_HOSTED_BY_EDITOR")
-                || matches!(
-                    mode,
-                    ClientRuntimeMode::EditorHostedClient | ClientRuntimeMode::EditorPreview
-                ),
+            hosted_by_editor: false,
             host_instance_id: env_non_empty_string("FUN_HOST_INSTANCE_ID"),
-            host_parent_pid: env_host_parent_pid(),
+            host_parent_pid: None,
         }
     }
 }
@@ -194,9 +280,11 @@ impl Default for ClientAppOptions {
     fn default() -> Self {
         Self {
             mode: ClientRuntimeMode::JoinedGame,
+            start_mode: FunClientStartMode::Launcher,
             render_profile: ClientRenderProfile::Default,
             server_addr: None,
             project_id: None,
+            project_path: None,
             game_session_id: None,
             scene_id: None,
             hosted_by_editor: false,
@@ -236,6 +324,60 @@ fn env_host_parent_pid() -> Option<u32> {
             None
         }
     }
+}
+
+fn start_mode_from_args(args: impl IntoIterator<Item = String>) -> Option<FunClientStartMode> {
+    let mut iter = args.into_iter().peekable();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--start-mode=") {
+            return FunClientStartMode::parse(value);
+        }
+        if arg == "--start-mode" {
+            return iter
+                .next()
+                .and_then(|value| FunClientStartMode::parse(&value));
+        }
+        if matches!(
+            arg.as_str(),
+            "--launcher" | "-Launcher" | "-launcher" | "/Launcher" | "/launcher"
+        ) {
+            return Some(FunClientStartMode::Launcher);
+        }
+        if matches!(
+            arg.as_str(),
+            "--game" | "-Game" | "-game" | "/Game" | "/game"
+        ) {
+            return Some(FunClientStartMode::Game);
+        }
+        if matches!(
+            arg.as_str(),
+            "--editor" | "-Editor" | "-editor" | "/Editor" | "/editor"
+        ) {
+            return Some(FunClientStartMode::Editor);
+        }
+    }
+    None
+}
+
+fn option_from_args(name: &str) -> Option<String> {
+    option_from_args_iter(name, std::env::args().skip(1))
+}
+
+fn option_from_args_iter(name: &str, args: impl IntoIterator<Item = String>) -> Option<String> {
+    let long_name = format!("--{name}");
+    let long_name_with_value = format!("{long_name}=");
+    let mut iter = args.into_iter().peekable();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix(&long_name_with_value)
+            && !value.is_empty()
+        {
+            return Some(value.to_owned());
+        }
+        if arg == long_name {
+            return iter.next().filter(|value| !value.is_empty());
+        }
+    }
+    None
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -310,7 +452,6 @@ struct ClientEditorInspectorState {
 #[derive(Debug, Clone, Resource)]
 pub(crate) struct ClientHostControlState {
     pub(crate) input_owner: EditorInputOwner,
-    pub(crate) embedded: bool,
     pub(crate) visual_paused: bool,
     pub(crate) shutdown_requested: bool,
     host_parent_pid: Option<u32>,
@@ -321,7 +462,6 @@ impl ClientHostControlState {
     fn from_options(options: &ClientAppOptions) -> Self {
         Self {
             input_owner: EditorInputOwner::Game,
-            embedded: options.hosted_by_editor,
             visual_paused: false,
             shutdown_requested: false,
             host_parent_pid: options.host_parent_pid,
@@ -589,6 +729,8 @@ impl Plugin for GameClientPlugin {
             .init_resource::<ClientWorldStreamAckState>()
             .init_resource::<ClientEditorInspectorState>();
 
+        app.add_plugins(crate::ai_presentation::FunAiClientPresentationPlugin);
+
         #[cfg(feature = "cef_ui")]
         app.add_plugins(crate::cef_ui::GameCefUiPlugin);
 
@@ -625,18 +767,18 @@ impl Plugin for GameClientPlugin {
             (watch_host_parent_liveness, apply_editor_runtime_controls),
         );
         if self.options.mode.runs_gameplay_runtime() {
-            app.add_systems(Startup, connect_to_game_server)
-                .add_systems(
-                    Update,
-                    (
-                        apply_startup_window_config,
-                        send_client_hello,
-                        receive_server_control,
-                        receive_server_snapshots,
-                        receive_world_stream,
-                        update_client_editor_inspector_snapshot,
-                    ),
-                );
+            app.add_systems(
+                Update,
+                (
+                    apply_startup_window_config,
+                    connect_to_game_server,
+                    send_client_hello,
+                    receive_server_control,
+                    receive_server_snapshots,
+                    receive_world_stream,
+                    update_client_editor_inspector_snapshot,
+                ),
+            );
         } else {
             app.add_systems(
                 Update,
@@ -721,7 +863,7 @@ fn watch_host_parent_liveness(
     warn!(
         target: "fun::client::host",
         parent_pid,
-        "editor host parent process exited; shutting down managed client"
+        "legacy host parent guard observed exit; shutting down explicit guarded runtime"
     );
     exit.write(AppExit::Success);
 }
@@ -738,8 +880,12 @@ fn apply_editor_runtime_controls(
             game_shared::EditorRuntimeControlCommand::InputSetOwner { owner } => {
                 host_control.input_owner = owner;
             }
-            game_shared::EditorRuntimeControlCommand::WindowSetEmbedded { embedded } => {
-                host_control.embedded = embedded;
+            game_shared::EditorRuntimeControlCommand::WindowSetEmbedded { embedded: _ } => {
+                debug!(
+                    target: "fun::client::host",
+                    command_id,
+                    "ignored legacy embedded-window control; the client is the unified host"
+                );
             }
             game_shared::EditorRuntimeControlCommand::SimulationPauseVisualOnly => {
                 host_control.visual_paused = true;
@@ -755,7 +901,7 @@ fn apply_editor_runtime_controls(
                         target: "fun::client::host",
                         command_id,
                         scene_id = scene_id.as_str(),
-                        "rejected unknown static preview scene"
+                        "rejected unknown current-client preview scene"
                     );
                 }
             }
@@ -768,7 +914,6 @@ fn apply_editor_runtime_controls(
             target: "fun::client::host",
             command_id,
             input_owner = ?host_control.input_owner,
-            embedded = host_control.embedded,
             visual_paused = host_control.visual_paused,
             "applied authenticated editor runtime control command"
         );
@@ -1207,11 +1352,13 @@ pub fn build_client_app_with_options(options: ClientAppOptions) -> App {
     info!(
         target: "fun::client",
         runtime_mode = options.mode.as_env_value(),
+        start_mode = options.start_mode.as_env_value(),
         render_profile = options.render_profile.as_env_value(),
         hosted_by_editor = options.hosted_by_editor,
         has_host_instance_id = options.host_instance_id.is_some(),
         has_host_parent_pid = options.host_parent_pid.is_some(),
         has_project_id = options.project_id.is_some(),
+        has_project_path = options.project_path.is_some(),
         has_scene_id = options.scene_id.is_some(),
         has_server_addr = options.server_addr.is_some(),
         "building Fun client app"
@@ -1219,11 +1366,20 @@ pub fn build_client_app_with_options(options: ClientAppOptions) -> App {
     let render_options = FunRenderAppOptions::winit_client(
         options.mode.as_env_value(),
         options.render_profile,
-        options.hosted_by_editor,
+        false,
     );
+    let host_state = FunClientHostState::from_start_config(FunClientHostStartConfig {
+        mode: options.start_mode.host_mode(),
+        project_id: options.project_id.clone(),
+        project_path: options.project_path.clone(),
+        server_addr: options.server_addr.clone(),
+        game_session_id: options.game_session_id.clone(),
+    });
+    app.insert_resource(host_state);
     app.add_plugins((
         FunRenderWinitPresentationPlugin::new(render_options),
         FunRenderCorePlugin::new(render_options),
+        FunClientHostPlugin,
         GameClientPlugin::new(options),
     ));
 
@@ -1292,23 +1448,63 @@ fn apply_startup_window_config(
     );
 }
 
-fn connect_to_game_server(options: Res<ClientAppOptions>, mut client: ResMut<QuinnetClient>) {
+fn connect_to_game_server(
+    options: Res<ClientAppOptions>,
+    host: Res<FunClientHostState>,
+    mut skipped_mode_log_written: Local<bool>,
+    mut waiting_for_game_log_written: Local<bool>,
+    mut active_connection_log_written: Local<bool>,
+    mut last_attempted_server_addr: Local<Option<String>>,
+    mut client: ResMut<QuinnetClient>,
+) {
     if !options.mode.should_connect_to_game_server() {
-        info!(
-            target: "fun::net",
-            runtime_mode = options.mode.as_env_value(),
-            "client runtime mode does not open a game-server connection"
-        );
+        if !*skipped_mode_log_written {
+            *skipped_mode_log_written = true;
+            info!(
+                target: "fun::net",
+                runtime_mode = options.mode.as_env_value(),
+                "client runtime mode does not open a game-server connection"
+            );
+        }
+        return;
+    }
+
+    if !matches!(
+        host.state.mode,
+        FunHostMode::Game | FunHostMode::EditorOverlay
+    ) {
+        if !*waiting_for_game_log_written {
+            *waiting_for_game_log_written = true;
+            info!(
+                target: "fun::net",
+                start_mode = options.start_mode.as_env_value(),
+                host_mode = host.state.mode.as_wire_str(),
+                "waiting for unified host to enter game mode before connecting"
+            );
+        }
         return;
     }
 
     if !client.is_disconnected() {
-        info!("[client net] Quinnet already has an active connection");
-        debug!(target: "fun::net", "quinnet already has an active connection");
+        if !*active_connection_log_written {
+            *active_connection_log_written = true;
+            info!("[client net] Quinnet already has an active connection");
+            debug!(target: "fun::net", "quinnet already has an active connection");
+        }
         return;
     }
 
-    let server_addr = options.server_addr.as_deref().unwrap_or(GAME_SERVER_ADDR);
+    let server_addr = host
+        .state
+        .runtime
+        .server_addr
+        .as_deref()
+        .or(options.server_addr.as_deref())
+        .unwrap_or(GAME_SERVER_ADDR);
+    if last_attempted_server_addr.as_deref() == Some(server_addr) {
+        return;
+    }
+    *last_attempted_server_addr = Some(server_addr.to_owned());
     info!("[client net] opening connection to {server_addr}");
     info!(target: "fun::net", server_addr, "opening game server connection");
     let limits = ChannelLimits::default();
@@ -1368,8 +1564,9 @@ fn send_client_hello(
 
         let hello = ClientPacket::Hello {
             hello: ClientHello {
-                protocol_version: 1,
-                session_token: client_session_token_from_env(),
+                protocol_version: 2,
+                auth_ticket: client_auth_ticket_from_env(),
+                warden_admission_ticket: client_warden_admission_ticket_from_env(),
                 feature_bits: 0,
                 oldest_input_sequence: PacketSequence(0),
             },
@@ -1399,10 +1596,51 @@ fn send_client_hello(
     }
 }
 
-fn client_session_token_from_env() -> Vec<u8> {
-    std::env::var("FUN_GAME_CLIENT_SESSION_TOKEN")
-        .map(String::into_bytes)
-        .unwrap_or_default()
+fn client_auth_ticket_from_env() -> Vec<u8> {
+    client_ticket_from_env_names(
+        &[
+            FUN_GAME_CLIENT_AUTH_TICKET_ENV,
+            FUN_GAME_CLIENT_LEGACY_SESSION_TOKEN_ENV,
+        ],
+        MAX_CLIENT_AUTH_TICKET_BYTES,
+    )
+}
+
+fn client_warden_admission_ticket_from_env() -> Vec<u8> {
+    client_ticket_from_env_names(
+        &[FUN_WARDEN_ADMISSION_TICKET_ENV],
+        MAX_CLIENT_WARDEN_ADMISSION_TICKET_BYTES,
+    )
+}
+
+fn client_ticket_from_env_names(names: &[&str], max_len: usize) -> Vec<u8> {
+    for name in names {
+        let Ok(value) = std::env::var(name) else {
+            continue;
+        };
+        return bounded_client_ticket_value(name, value, max_len).unwrap_or_default();
+    }
+    Vec::new()
+}
+
+fn bounded_client_ticket_value(name: &str, value: String, max_len: usize) -> Option<Vec<u8>> {
+    if value.is_empty() {
+        return None;
+    }
+    if value.len() > max_len
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii() || byte.is_ascii_control())
+    {
+        warn!(
+            target: "fun::net",
+            env_name = name,
+            max_len,
+            "ignored invalid client ticket environment reference"
+        );
+        return None;
+    }
+    Some(value.into_bytes())
 }
 
 fn receive_server_control(
@@ -1920,8 +2158,13 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
                 "DLSS Ray Reconstruction disabled by active Solari denoiser"
             );
         } else {
-            info!("[client render] DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
-            info!(target: "fun::rr", "DLSS Ray Reconstruction disabled by FUN_DISABLE_DLSS_RR");
+            info!(
+                "[client render] DLSS Ray Reconstruction disabled; set FUN_RENDER_DX12_DLSS_RR=1 after SR is stable"
+            );
+            info!(
+                target: "fun::rr",
+                "DLSS Ray Reconstruction disabled by the explicit runtime gate"
+            );
         }
         return;
     }
@@ -3664,9 +3907,71 @@ mod tests {
     }
 
     #[test]
+    fn fun_client_start_mode_defaults_to_launcher_and_parses_cli_aliases() {
+        assert_eq!(
+            FunClientStartMode::parse("launcher"),
+            Some(FunClientStartMode::Launcher)
+        );
+        assert_eq!(
+            FunClientStartMode::parse("game"),
+            Some(FunClientStartMode::Game)
+        );
+        assert_eq!(
+            FunClientStartMode::parse("editor"),
+            Some(FunClientStartMode::Editor)
+        );
+        assert_eq!(
+            start_mode_from_args(vec![String::from("-Launcher")]),
+            Some(FunClientStartMode::Launcher)
+        );
+        assert_eq!(
+            start_mode_from_args(vec![String::from("--start-mode=game")]),
+            Some(FunClientStartMode::Game)
+        );
+        assert_eq!(
+            ClientAppOptions::default().start_mode,
+            FunClientStartMode::Launcher
+        );
+    }
+
+    #[test]
+    fn fun_client_cli_options_parse_project_and_server_values() {
+        let args = vec![
+            String::from("--server-addr"),
+            String::from("127.0.0.1:5000"),
+            String::from("--project-path=C:\\fun"),
+        ];
+
+        assert_eq!(
+            option_from_args_iter("server-addr", args.clone()),
+            Some(String::from("127.0.0.1:5000"))
+        );
+        assert_eq!(
+            option_from_args_iter("project-path", args),
+            Some(String::from("C:\\fun"))
+        );
+    }
+
+    #[test]
     fn parent_liveness_reports_current_process_alive() {
         assert!(process_is_alive(std::process::id()));
         assert!(!process_is_alive(0));
+    }
+
+    #[test]
+    fn client_ticket_env_values_are_bounded_ascii_only() {
+        assert_eq!(
+            bounded_client_ticket_value("TEST_TICKET", "opaque-ticket".to_owned(), 32),
+            Some(b"opaque-ticket".to_vec())
+        );
+        assert_eq!(
+            bounded_client_ticket_value("TEST_TICKET", "bad\n".to_owned(), 32),
+            None
+        );
+        assert_eq!(
+            bounded_client_ticket_value("TEST_TICKET", "too-large".to_owned(), 4),
+            None
+        );
     }
 
     #[test]

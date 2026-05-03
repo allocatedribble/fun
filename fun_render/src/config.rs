@@ -66,6 +66,7 @@ impl ClientRenderProfile {
 pub struct ClientRenderConfig {
     pub solari_enabled: bool,
     pub dlss_rr_enabled: bool,
+    pub native_dlss: NativeDlssConfig,
     pub meshlets_enabled: bool,
     pub clouds_enabled: bool,
     pub cloud_quality: FunCloudQuality,
@@ -80,16 +81,19 @@ pub struct ClientRenderConfig {
     pub geometry_policy: RenderGeometryPolicy,
     pub meshlet_min_triangles: usize,
     pub rt_features: FunRenderRtFeatures,
-    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    #[cfg(debug_assertions)]
     pub fps_overlay_enabled: bool,
 }
 
 impl ClientRenderConfig {
     pub fn from_env() -> Self {
         let cloud_settings = FunCloudSettings::from_env();
+        let native_dlss = NativeDlssConfig::from_env();
         Self {
             solari_enabled: std::env::var_os("FUN_DISABLE_SOLARI").is_none(),
-            dlss_rr_enabled: std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
+            dlss_rr_enabled: native_dlss.allow_ray_reconstruction
+                && std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
+            native_dlss,
             meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
             clouds_enabled: cloud_settings.enabled,
             cloud_quality: cloud_settings.quality,
@@ -104,8 +108,9 @@ impl ClientRenderConfig {
             geometry_policy: RenderGeometryPolicy::from_env(),
             meshlet_min_triangles: env_usize("FUN_MESHLET_MIN_TRIANGLES", 512),
             rt_features: FunRenderRtFeatures::from_env(),
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-            fps_overlay_enabled: std::env::var_os("FUN_DISABLE_FPS_OVERLAY").is_none(),
+            #[cfg(debug_assertions)]
+            fps_overlay_enabled: std::env::var_os("FUN_ENABLE_FPS_OVERLAY").is_some()
+                && std::env::var_os("FUN_DISABLE_FPS_OVERLAY").is_none(),
         }
     }
 
@@ -118,6 +123,118 @@ impl ClientRenderConfig {
             shadows_enabled: self.cloud_shadows_enabled,
             profile_id: self.cloud_profile_id,
             debug_overlay: self.cloud_debug_overlay,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect)]
+pub enum NativeDlssMode {
+    Quality,
+    Balanced,
+    Performance,
+    UltraPerformance,
+}
+
+impl NativeDlssMode {
+    pub const DEFAULT: Self = Self::Quality;
+
+    #[must_use]
+    pub fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::to_ascii_lowercase).as_deref() {
+            Some("quality") | Some("q") | None => Self::Quality,
+            Some("balanced") | Some("balance") | Some("b") => Self::Balanced,
+            Some("performance") | Some("perf") | Some("p") => Self::Performance,
+            Some("ultra_performance")
+            | Some("ultra-performance")
+            | Some("ultraperformance")
+            | Some("ultra")
+            | Some("up") => Self::UltraPerformance,
+            Some(other) => {
+                warn!(
+                    target: "fun::render",
+                    mode = other,
+                    "unknown FUN_RENDER_DX12_DLSS_MODE; using quality"
+                );
+                Self::Quality
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Quality => "quality",
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
+            Self::UltraPerformance => "ultra_performance",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Resource, ExtractResource)]
+pub struct NativeDlssConfig {
+    pub enabled: bool,
+    pub mode: NativeDlssMode,
+    pub sharpness: f32,
+    pub allow_ray_reconstruction: bool,
+    pub force_reset_next_frame: bool,
+    pub debug_overlay: bool,
+}
+
+impl NativeDlssConfig {
+    pub const DEFAULT_SHARPNESS: f32 = 0.0;
+
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::from_env_reader(|name| std::env::var(name).ok())
+    }
+
+    #[must_use]
+    pub fn from_env_reader(mut read: impl FnMut(&'static str) -> Option<String>) -> Self {
+        Self {
+            enabled: native_dlss_compiled_for_this_target()
+                && native_dlss_enable_value(read("FUN_RENDER_DX12_DLSS").as_deref()),
+            mode: NativeDlssMode::from_env_value(read("FUN_RENDER_DX12_DLSS_MODE").as_deref()),
+            sharpness: env_f32_value(
+                "FUN_RENDER_DX12_DLSS_SHARPNESS",
+                read("FUN_RENDER_DX12_DLSS_SHARPNESS").as_deref(),
+                Self::DEFAULT_SHARPNESS,
+                -1.0,
+                1.0,
+            ),
+            allow_ray_reconstruction: env_bool_value(
+                "FUN_RENDER_DX12_DLSS_RR",
+                read("FUN_RENDER_DX12_DLSS_RR").as_deref(),
+                false,
+            ),
+            force_reset_next_frame: env_bool_value(
+                "FUN_RENDER_DX12_DLSS_RESET",
+                read("FUN_RENDER_DX12_DLSS_RESET").as_deref(),
+                false,
+            ),
+            debug_overlay: env_bool_value(
+                "FUN_RENDER_DX12_DLSS_DEBUG",
+                read("FUN_RENDER_DX12_DLSS_DEBUG").as_deref(),
+                false,
+            ),
+        }
+    }
+
+    #[must_use]
+    pub const fn compiled_for_this_target() -> bool {
+        native_dlss_compiled_for_this_target()
+    }
+}
+
+impl Default for NativeDlssConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: NativeDlssMode::DEFAULT,
+            sharpness: Self::DEFAULT_SHARPNESS,
+            allow_ray_reconstruction: false,
+            force_reset_next_frame: false,
+            debug_overlay: false,
         }
     }
 }
@@ -636,19 +753,104 @@ pub(crate) fn render_plugin(render_backend: Backends) -> RenderPlugin {
 }
 
 pub fn selected_render_backend() -> Backends {
-    match std::env::var("FUN_RENDER_BACKEND")
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Ok("dx12") | Ok("d3d12") | Ok("directx12") => Backends::DX12,
-        Ok("auto") => Backends::VULKAN | Backends::DX12,
-        Ok("vulkan") | Ok("vk") | Ok("") | Err(_) => Backends::VULKAN,
-        Ok(other) => {
-            info!("[fun render] unknown FUN_RENDER_BACKEND={other}; using Vulkan");
-            Backends::VULKAN
-        }
+    match std::env::var("FUN_RENDER_BACKEND") {
+        Ok(value) => match render_backend_from_env_value(Some(&value)) {
+            Some(backend) => backend,
+            None => {
+                info!(
+                    target: "fun::render",
+                    render_backend = value,
+                    fallback = default_render_backend_label(),
+                    "unknown FUN_RENDER_BACKEND; using platform default"
+                );
+                default_render_backend()
+            }
+        },
+        Err(_) => default_render_backend(),
     }
+}
+
+fn render_backend_from_env_value(value: Option<&str>) -> Option<Backends> {
+    let Some(value) = value else {
+        return Some(default_render_backend());
+    };
+    if value.eq_ignore_ascii_case("dx12")
+        || value.eq_ignore_ascii_case("d3d12")
+        || value.eq_ignore_ascii_case("directx12")
+    {
+        Some(Backends::DX12)
+    } else if value.eq_ignore_ascii_case("auto") {
+        Some(Backends::VULKAN | Backends::DX12)
+    } else if value.eq_ignore_ascii_case("vulkan") || value.eq_ignore_ascii_case("vk") {
+        Some(Backends::VULKAN)
+    } else if value.is_empty() {
+        Some(default_render_backend())
+    } else {
+        None
+    }
+}
+
+fn default_render_backend() -> Backends {
+    if cfg!(target_os = "windows") {
+        Backends::DX12
+    } else {
+        Backends::VULKAN
+    }
+}
+
+const fn default_render_backend_label() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "dx12"
+    } else {
+        "vulkan"
+    }
+}
+
+pub fn log_native_dlss_startup_diagnostics(render_backend: Backends, config: NativeDlssConfig) {
+    info!(
+        target: "fun::render",
+        compiled = NativeDlssConfig::compiled_for_this_target(),
+        backend = ?render_backend,
+        runtime_enabled = config.enabled,
+        mode = config.mode.as_env_value(),
+        sharpness = config.sharpness,
+        allow_ray_reconstruction = config.allow_ray_reconstruction,
+        debug_overlay = config.debug_overlay,
+        "FUN DX12 DLSS startup configuration"
+    );
+    if !NativeDlssConfig::compiled_for_this_target() {
+        info!(
+            target: "fun::render",
+            compiled = false,
+            sdk_runtime_found = false,
+            native_handle_extraction_available = false,
+            sr_supported = false,
+            rr_supported = false,
+            "FUN DX12 DLSS native bridge is not compiled"
+        );
+        return;
+    }
+    if render_backend != Backends::DX12 {
+        info!(
+            target: "fun::render",
+            backend = ?render_backend,
+            required_backend = "dx12",
+            "FUN DX12 DLSS disabled because the selected backend is not DX12"
+        );
+        return;
+    }
+    info!(
+        target: "fun::render",
+        sdk_runtime_found = false,
+        native_handle_extraction_available = false,
+        sr_supported = false,
+        rr_supported = false,
+        "FUN DX12 DLSS native bridge pending SDK integration"
+    );
+}
+
+const fn native_dlss_compiled_for_this_target() -> bool {
+    cfg!(all(target_os = "windows", feature = "dx12_dlss_native"))
 }
 
 pub fn selected_present_mode() -> PresentMode {
@@ -706,6 +908,50 @@ fn env_bool_value(name: &'static str, value: Option<&str>, default_value: bool) 
     }
 }
 
+fn native_dlss_enable_value(value: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "auto" => true,
+        "0" | "false" | "no" | "off" | "disabled" => false,
+        other => {
+            warn!(
+                target: "fun::render",
+                value = other,
+                "invalid FUN_RENDER_DX12_DLSS value; disabling native DLSS"
+            );
+            false
+        }
+    }
+}
+
+fn env_f32_value(
+    name: &'static str,
+    value: Option<&str>,
+    default_value: f32,
+    min_value: f32,
+    max_value: f32,
+) -> f32 {
+    let Some(value) = value else {
+        return default_value;
+    };
+    match value.parse::<f32>() {
+        Ok(parsed) if parsed.is_finite() && parsed >= min_value && parsed <= max_value => parsed,
+        _ => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value,
+                min_value,
+                max_value,
+                "ignored invalid floating-point setting"
+            );
+            default_value
+        }
+    }
+}
+
 fn env_usize(name: &str, default_value: usize) -> usize {
     let Ok(value) = std::env::var(name) else {
         return default_value;
@@ -744,8 +990,11 @@ fn hash_byte(hash: &mut u64, byte: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        FunRenderRtFeatures, RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
+        FunRenderRtFeatures, NativeDlssConfig, NativeDlssMode, RtHairMode, RtMegaGeometryMode,
+        RtOpacityMaskMode, RtVendorEmulation, default_render_backend,
+        render_backend_from_env_value,
     };
+    use bevy::render::settings::Backends;
     use bevy::solari::prelude::{SolariGeometryMode, SolariHairMode, SolariOpacityMode};
 
     fn features_from_pairs(pairs: &[(&'static str, &'static str)]) -> FunRenderRtFeatures {
@@ -829,5 +1078,102 @@ mod tests {
 
         assert!(features.sample_direct);
         assert!(!features.async_readback);
+    }
+
+    #[test]
+    fn backend_selection_uses_platform_default_and_preserves_explicit_backends() {
+        assert_eq!(
+            render_backend_from_env_value(None),
+            Some(default_render_backend())
+        );
+        assert_eq!(
+            render_backend_from_env_value(Some("")),
+            Some(default_render_backend())
+        );
+        assert_eq!(
+            render_backend_from_env_value(Some("vulkan")),
+            Some(Backends::VULKAN)
+        );
+        assert_eq!(
+            render_backend_from_env_value(Some("dx12")),
+            Some(Backends::DX12)
+        );
+        assert_eq!(
+            render_backend_from_env_value(Some("d3d12")),
+            Some(Backends::DX12)
+        );
+        assert_eq!(
+            render_backend_from_env_value(Some("directx12")),
+            Some(Backends::DX12)
+        );
+        assert_eq!(
+            render_backend_from_env_value(Some("auto")),
+            Some(Backends::VULKAN | Backends::DX12)
+        );
+        assert_eq!(render_backend_from_env_value(Some("bad")), None);
+    }
+
+    #[test]
+    fn backend_selection_prefers_dx12_by_default_on_windows() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(default_render_backend(), Backends::DX12);
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(default_render_backend(), Backends::VULKAN);
+    }
+
+    #[test]
+    fn native_dlss_config_is_disabled_without_runtime_enable() {
+        let config = NativeDlssConfig::from_env_reader(|_| None);
+
+        assert!(!config.enabled);
+        assert_eq!(config.mode, NativeDlssMode::Quality);
+        assert_eq!(config.sharpness, NativeDlssConfig::DEFAULT_SHARPNESS);
+        assert!(!config.allow_ray_reconstruction);
+        assert!(!config.force_reset_next_frame);
+        assert!(!config.debug_overlay);
+    }
+
+    #[test]
+    fn native_dlss_config_parses_runtime_controls() {
+        let config = NativeDlssConfig::from_env_reader(|name| {
+            match name {
+                "FUN_RENDER_DX12_DLSS" => Some("auto"),
+                "FUN_RENDER_DX12_DLSS_MODE" => Some("balanced"),
+                "FUN_RENDER_DX12_DLSS_SHARPNESS" => Some("0.25"),
+                "FUN_RENDER_DX12_DLSS_RR" => Some("1"),
+                "FUN_RENDER_DX12_DLSS_RESET" => Some("true"),
+                "FUN_RENDER_DX12_DLSS_DEBUG" => Some("on"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+
+        assert_eq!(
+            config.enabled,
+            cfg!(all(target_os = "windows", feature = "dx12_dlss_native"))
+        );
+        assert_eq!(config.mode, NativeDlssMode::Balanced);
+        assert_eq!(config.sharpness, 0.25);
+        assert!(config.allow_ray_reconstruction);
+        assert!(config.force_reset_next_frame);
+        assert!(config.debug_overlay);
+    }
+
+    #[test]
+    fn native_dlss_invalid_values_fall_back_safely() {
+        let config = NativeDlssConfig::from_env_reader(|name| {
+            match name {
+                "FUN_RENDER_DX12_DLSS" => Some("maybe"),
+                "FUN_RENDER_DX12_DLSS_MODE" => Some("cinematic"),
+                "FUN_RENDER_DX12_DLSS_SHARPNESS" => Some("5.0"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+
+        assert!(!config.enabled);
+        assert_eq!(config.mode, NativeDlssMode::Quality);
+        assert_eq!(config.sharpness, NativeDlssConfig::DEFAULT_SHARPNESS);
     }
 }

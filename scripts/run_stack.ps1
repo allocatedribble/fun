@@ -2,6 +2,7 @@ param(
     [switch]$Release,
     [switch]$StaticBevy,
     [switch]$NoClient,
+    [switch]$Launcher,
     [switch]$CefUi,
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
@@ -13,7 +14,9 @@ param(
     [switch]$LogRenderVerbose,
     [switch]$Maximized,
     [switch]$DisableFpsOverlay,
+    [switch]$EnableFpsOverlay,
     [switch]$SolariDebugDirectVisibility,
+    [switch]$EnableDx12DlssRr,
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
@@ -48,7 +51,7 @@ param(
     [int]$MeshletMinTriangles = 512,
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
-    [string]$RenderBackend = "vulkan",
+    [string]$RenderBackend = "dx12",
     [string]$PresentMode = "immediate",
     [int]$FrameTimeDiagnosticInterval = 60,
     [int]$FrameTimeDiagnosticMinNs = 0,
@@ -73,6 +76,18 @@ function Set-OptionalEnvValue {
     }
 
     [System.Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+}
+
+function New-LocalStackSessionToken {
+    $bytes = [byte[]]::new(32)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+        return [Convert]::ToBase64String($bytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
 }
 
 function Copy-CefRuntimeFiles {
@@ -146,6 +161,15 @@ if (Test-Path $pidFile) {
 
 if (-not $env:RUST_BACKTRACE) {
     $env:RUST_BACKTRACE = "1"
+}
+if ($NoClient) {
+    Remove-Item Env:\FUN_START_MODE -ErrorAction SilentlyContinue
+}
+elseif ($Launcher) {
+    $env:FUN_START_MODE = "launcher"
+}
+else {
+    $env:FUN_START_MODE = "game"
 }
 if ($TraceDiagnostics) {
     $traceFilter = "info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun::perf::clouds=info,fun::render::clouds=debug,fun::weather=debug,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug"
@@ -225,11 +249,18 @@ if ($Maximized) {
 else {
     Remove-Item Env:\FUN_WINDOW_MAXIMIZED -ErrorAction SilentlyContinue
 }
-if ($DisableFpsOverlay) {
+if ($DisableFpsOverlay -or ($CefUi -and -not $EnableFpsOverlay)) {
     $env:FUN_DISABLE_FPS_OVERLAY = "1"
+    Remove-Item Env:\FUN_ENABLE_FPS_OVERLAY -ErrorAction SilentlyContinue
 }
 else {
     Remove-Item Env:\FUN_DISABLE_FPS_OVERLAY -ErrorAction SilentlyContinue
+    if (-not $NoClient -and -not $Release) {
+        $env:FUN_ENABLE_FPS_OVERLAY = "1"
+    }
+    else {
+        Remove-Item Env:\FUN_ENABLE_FPS_OVERLAY -ErrorAction SilentlyContinue
+    }
 }
 if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) {
     $env:FUN_WINDOW_WIDTH = [string]$WindowWidth
@@ -262,6 +293,12 @@ if ($DisableDlssRr) {
 }
 else {
     Remove-Item Env:\FUN_DISABLE_DLSS_RR -ErrorAction SilentlyContinue
+}
+if ($EnableDx12DlssRr -and -not $DisableDlssRr) {
+    $env:FUN_RENDER_DX12_DLSS_RR = "1"
+}
+else {
+    Remove-Item Env:\FUN_RENDER_DX12_DLSS_RR -ErrorAction SilentlyContinue
 }
 if ($DisableSolari) {
     $env:FUN_DISABLE_SOLARI = "1"
@@ -372,6 +409,28 @@ else {
 if (-not $env:FUN_GAME_SERVER_TLS_MODE) {
     $env:FUN_GAME_SERVER_TLS_MODE = "development"
 }
+if ($env:FUN_GAME_SERVER_TLS_MODE -ieq "development") {
+    $serverDevToken = $env:FUN_GAME_SERVER_DEV_SESSION_TOKEN
+    $clientSessionToken = $env:FUN_GAME_CLIENT_SESSION_TOKEN
+
+    if ([string]::IsNullOrWhiteSpace($serverDevToken) -and [string]::IsNullOrWhiteSpace($clientSessionToken)) {
+        $localStackToken = New-LocalStackSessionToken
+        $env:FUN_GAME_SERVER_DEV_SESSION_TOKEN = $localStackToken
+        $env:FUN_GAME_CLIENT_SESSION_TOKEN = $localStackToken
+        Write-Host "Using ephemeral local development session token for stack client/server admission."
+    }
+    elseif ([string]::IsNullOrWhiteSpace($serverDevToken)) {
+        $env:FUN_GAME_SERVER_DEV_SESSION_TOKEN = $clientSessionToken
+        Write-Host "Using FUN_GAME_CLIENT_SESSION_TOKEN for local development server admission."
+    }
+    elseif ([string]::IsNullOrWhiteSpace($clientSessionToken)) {
+        $env:FUN_GAME_CLIENT_SESSION_TOKEN = $serverDevToken
+        Write-Host "Using FUN_GAME_SERVER_DEV_SESSION_TOKEN for local development client admission."
+    }
+    elseif ($serverDevToken -cne $clientSessionToken) {
+        Write-Warning "FUN_GAME_SERVER_DEV_SESSION_TOKEN and FUN_GAME_CLIENT_SESSION_TOKEN differ; the local client may be rejected by the development server."
+    }
+}
 
 $env:PATH = @(
     (Join-Path $targetRoot $profile),
@@ -428,6 +487,9 @@ try {
     }
     if ($CefUi -and -not $NoClient) {
         Write-Host "Enabling game_client/cef_ui for the CEF browser UI."
+    }
+    if (-not $NoClient) {
+        Write-Host "Starting unified Fun client in $env:FUN_START_MODE mode."
     }
     if (-not $Release -and $diagnosticsRequested) {
         if ($clientRenderDiagnosticsRequested) {

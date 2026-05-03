@@ -1,12 +1,22 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use cef::rc::Rc as _;
+use cef::wrapper::message_router::{
+    BrowserSideCallback, BrowserSideHandler, BrowserSideRouter, MessageRouterBrowserSide,
+    MessageRouterBrowserSideHandlerCallbacks, MessageRouterConfig,
+};
 use cef::{
-    Browser, BrowserSettings, CefString, Client, ImplBrowser, ImplBrowserHost, ImplClient,
-    ImplLifeSpanHandler, LifeSpanHandler, PaintElementType, Rect, RenderHandler, WindowInfo,
-    WrapClient, WrapLifeSpanHandler, browser_host_create_browser, wrap_client,
+    Browser, BrowserSettings, CefString, Client, DisplayHandler, Frame, ImplBrowser,
+    ImplBrowserHost, ImplClient, ImplDisplayHandler, ImplFrame, ImplLifeSpanHandler, KeyEvent,
+    KeyEventType, LifeSpanHandler, LogSeverity, MouseButtonType, MouseEvent, PaintElementType,
+    ProcessId, ProcessMessage, Rect, RenderHandler, WindowInfo, WrapClient, WrapDisplayHandler,
+    WrapLifeSpanHandler, browser_host_create_browser, wrap_client, wrap_display_handler,
     wrap_life_span_handler,
 };
+use serde_json::{Value, json};
 
 use crate::diagnostics::FUN_UI_DIAGNOSTICS_TARGET;
 use crate::render_handler::CefUiScaleFactor;
@@ -15,6 +25,12 @@ use crate::scheme::{
     register_fun_ui_scheme_handler_factory,
 };
 use crate::{
+    bridge::{
+        BrowserUiHitRegion, BrowserUiHitRegionId, BrowserUiHitRegionMode, BrowserUiRequestId,
+        BrowserUiSequence, HostCommandError, HostCommandRejection, HostCommandRequest,
+        HostCommandResponse, HostDiagnostic, SharedBrowserBridgeQueues, UiControlPayload,
+        UiEnvelope, UiEnvelopeKind,
+    },
     compositor::SharedCefUiCompositor,
     render_handler::{CefPaintSink, new_fun_cef_render_handler_for_viewport},
 };
@@ -176,10 +192,487 @@ impl BrowserState {
 }
 
 type SharedBrowserState = Arc<Mutex<BrowserState>>;
+type BrowserQueryCallback = Arc<Mutex<dyn BrowserSideCallback>>;
 
 fn with_browser_state(state: &SharedBrowserState, update: impl FnOnce(&mut BrowserState)) {
     if let Ok(mut state) = state.lock() {
         update(&mut state);
+    }
+}
+
+fn browser_from_state(state: &SharedBrowserState) -> Option<Browser> {
+    state.lock().ok().and_then(|state| state.browser.clone())
+}
+
+#[derive(Clone)]
+struct BrowserBridgeEndpoint {
+    queues: SharedBrowserBridgeQueues,
+    callbacks: Arc<Mutex<BTreeMap<BrowserUiRequestId, BrowserQueryCallback>>>,
+}
+
+impl BrowserBridgeEndpoint {
+    fn new(queues: SharedBrowserBridgeQueues) -> Self {
+        Self {
+            queues,
+            callbacks: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    fn push_js_query(
+        &self,
+        request: &str,
+        callback: BrowserQueryCallback,
+    ) -> Result<(), BrowserBridgeQueryError> {
+        let Some(envelope) = envelope_from_cef_query(request)? else {
+            callback
+                .lock()
+                .map_err(|_| BrowserBridgeQueryError::CallbackUnavailable)?
+                .success_str("");
+            return Ok(());
+        };
+        if let Some(request_id) = envelope.request_id {
+            self.callbacks
+                .lock()
+                .map_err(|_| BrowserBridgeQueryError::CallbackUnavailable)?
+                .insert(request_id, callback);
+        } else {
+            callback
+                .lock()
+                .map_err(|_| BrowserBridgeQueryError::CallbackUnavailable)?
+                .success_str("");
+        }
+        self.queues
+            .push_js_envelope(envelope)
+            .map_err(|_| BrowserBridgeQueryError::QueueClosed)
+    }
+
+    fn flush_host_envelopes(&self, state: &SharedBrowserState) -> usize {
+        let mut flushed = 0usize;
+        while let Some(envelope) = self.queues.pop_host_envelope_for_js() {
+            let Some(payload) = host_envelope_to_json(&envelope) else {
+                continue;
+            };
+            let delivered = envelope
+                .request_id
+                .and_then(|request_id| {
+                    self.callbacks
+                        .lock()
+                        .ok()
+                        .and_then(|mut callbacks| callbacks.remove(&request_id))
+                })
+                .and_then(|callback| {
+                    callback
+                        .lock()
+                        .ok()
+                        .map(|callback| callback.success_str(&payload))
+                })
+                .is_some();
+            if !delivered {
+                execute_fun_receive_from_host(state, &payload);
+            }
+            flushed = flushed.saturating_add(1);
+        }
+        flushed
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserBridgeQueryError {
+    InvalidJson,
+    InvalidEnvelope,
+    QueueClosed,
+    CallbackUnavailable,
+}
+
+fn envelope_from_cef_query(request: &str) -> Result<Option<UiEnvelope>, BrowserBridgeQueryError> {
+    let value =
+        serde_json::from_str::<Value>(request).map_err(|_| BrowserBridgeQueryError::InvalidJson)?;
+    if let Some(envelope) = host_command_envelope_from_value(&value)? {
+        return Ok(Some(envelope));
+    }
+    event_envelope_from_value(&value)
+}
+
+fn host_command_envelope_from_value(
+    value: &Value,
+) -> Result<Option<UiEnvelope>, BrowserBridgeQueryError> {
+    let Some(request) = value
+        .pointer("/payload/Control/payload/HostCommand/request")
+        .or_else(|| value.pointer("/payload/control/payload/host_command/request"))
+    else {
+        return Ok(None);
+    };
+    let command_id = request
+        .get("command_id")
+        .and_then(Value::as_str)
+        .ok_or(BrowserBridgeQueryError::InvalidEnvelope)?;
+    let request_id = value
+        .get("request_id")
+        .and_then(Value::as_u64)
+        .or_else(|| request.get("request_id").and_then(Value::as_u64))
+        .ok_or(BrowserBridgeQueryError::InvalidEnvelope)?;
+    let sequence = value.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+    let payload = json_bytes_from_value(request.get("payload").unwrap_or(&Value::Null))?;
+    let host_request = HostCommandRequest::new(BrowserUiRequestId(request_id), command_id, payload)
+        .ok_or(BrowserBridgeQueryError::InvalidEnvelope)?;
+    Ok(Some(UiEnvelope::control(
+        UiEnvelopeKind::Request,
+        Some(BrowserUiRequestId(request_id)),
+        BrowserUiSequence(sequence),
+        UiControlPayload::HostCommand {
+            request: host_request,
+        },
+    )))
+}
+
+fn event_envelope_from_value(value: &Value) -> Result<Option<UiEnvelope>, BrowserBridgeQueryError> {
+    if !value
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("event"))
+    {
+        return Ok(None);
+    }
+    let Some(event) = value.get("event").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if event != "ui.hit_regions.changed" {
+        return Ok(None);
+    }
+    let payload = value
+        .get("payload")
+        .ok_or(BrowserBridgeQueryError::InvalidEnvelope)?;
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .and_then(hit_region_mode_from_wire)
+        .ok_or(BrowserBridgeQueryError::InvalidEnvelope)?;
+    let regions = payload
+        .get("regions")
+        .and_then(Value::as_array)
+        .ok_or(BrowserBridgeQueryError::InvalidEnvelope)?
+        .iter()
+        .filter_map(hit_region_from_value)
+        .collect::<Vec<_>>();
+    let sequence = value.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+    Ok(Some(UiEnvelope::control(
+        UiEnvelopeKind::Event,
+        None,
+        BrowserUiSequence(sequence),
+        UiControlPayload::HitRegionsChanged { mode, regions },
+    )))
+}
+
+fn json_bytes_from_value(value: &Value) -> Result<Vec<u8>, BrowserBridgeQueryError> {
+    if let Some(bytes) = value.as_array() {
+        return bytes
+            .iter()
+            .map(|byte| {
+                byte.as_u64()
+                    .and_then(|byte| u8::try_from(byte).ok())
+                    .ok_or(BrowserBridgeQueryError::InvalidEnvelope)
+            })
+            .collect();
+    }
+    if value.is_null() {
+        return Ok(b"null".to_vec());
+    }
+    serde_json::to_vec(value).map_err(|_| BrowserBridgeQueryError::InvalidEnvelope)
+}
+
+fn hit_region_mode_from_wire(value: &str) -> Option<BrowserUiHitRegionMode> {
+    match value {
+        "gameplay" => Some(BrowserUiHitRegionMode::Gameplay),
+        "hud_passive" => Some(BrowserUiHitRegionMode::HudPassive),
+        "ui_modal" => Some(BrowserUiHitRegionMode::UiModal),
+        "text_entry" => Some(BrowserUiHitRegionMode::TextEntry),
+        _ => None,
+    }
+}
+
+fn hit_region_from_value(value: &Value) -> Option<BrowserUiHitRegion> {
+    Some(BrowserUiHitRegion {
+        id: BrowserUiHitRegionId::from_wire_str(value.get("id")?.as_str()?)?,
+        x: i32::try_from(value.get("x")?.as_i64()?).ok()?,
+        y: i32::try_from(value.get("y")?.as_i64()?).ok()?,
+        w: i32::try_from(value.get("w")?.as_i64()?).ok()?,
+        h: i32::try_from(value.get("h")?.as_i64()?).ok()?,
+    })
+}
+
+fn host_envelope_to_json(envelope: &UiEnvelope) -> Option<String> {
+    let kind = match envelope.kind {
+        UiEnvelopeKind::Event => "event",
+        UiEnvelopeKind::Request => "request",
+        UiEnvelopeKind::Response => "response",
+        UiEnvelopeKind::Error => "error",
+        UiEnvelopeKind::Patch => "patch",
+    };
+    let payload = match &envelope.payload {
+        crate::bridge::UiEnvelopePayload::Control {
+            payload:
+                UiControlPayload::HostCommandResult {
+                    command_id,
+                    response,
+                },
+        } => json!({
+            "Control": {
+                "payload": {
+                    "HostCommandResult": {
+                        "command_id": command_id.as_str(),
+                        "response": host_command_response_to_json(response),
+                    }
+                }
+            }
+        }),
+        crate::bridge::UiEnvelopePayload::Control {
+            payload: UiControlPayload::HostEvent { event, payload },
+        } => json!({
+            "Control": {
+                "payload": {
+                    "HostEvent": {
+                        "event": event,
+                        "payload": payload,
+                    }
+                }
+            }
+        }),
+        _ => return None,
+    };
+    serde_json::to_string(&json!({
+        "protocol_version": envelope.protocol_version.0,
+        "schema_revision": envelope.schema_revision.0,
+        "channel": envelope.channel.as_wire_str(),
+        "kind": kind,
+        "request_id": envelope.request_id.map(|request_id| request_id.0),
+        "sequence": envelope.sequence.0,
+        "payload": payload,
+    }))
+    .ok()
+}
+
+fn host_command_response_to_json(response: &HostCommandResponse) -> Value {
+    match response {
+        HostCommandResponse::Ok {
+            payload,
+            diagnostics,
+        } => json!({
+            "Ok": {
+                "payload": payload,
+                "diagnostics": host_diagnostics_to_json(diagnostics),
+            }
+        }),
+        HostCommandResponse::Rejected { reason } => json!({
+            "Rejected": {
+                "reason": host_rejection_to_wire(*reason),
+            }
+        }),
+        HostCommandResponse::Failed { error, diagnostics } => json!({
+            "Failed": {
+                "error": host_error_to_json(error),
+                "diagnostics": host_diagnostics_to_json(diagnostics),
+            }
+        }),
+    }
+}
+
+fn host_diagnostics_to_json(diagnostics: &[HostDiagnostic]) -> Vec<Value> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "code": diagnostic.code,
+                "level": diagnostic.level,
+                "message": diagnostic.message,
+            })
+        })
+        .collect()
+}
+
+fn host_error_to_json(error: &HostCommandError) -> Value {
+    json!({
+        "code": error.code,
+        "message": error.message,
+    })
+}
+
+fn host_rejection_to_wire(reason: HostCommandRejection) -> &'static str {
+    match reason {
+        HostCommandRejection::UnknownCommand => "unknown_command",
+        HostCommandRejection::InvalidCommandId => "invalid_command_id",
+        HostCommandRejection::MissingCapability => "missing_capability",
+        HostCommandRejection::CapabilityMismatch => "capability_mismatch",
+        HostCommandRejection::OversizePayload => "oversize_payload",
+        HostCommandRejection::InvalidPayload => "invalid_payload",
+        HostCommandRejection::HostShuttingDown => "host_shutting_down",
+    }
+}
+
+fn execute_fun_receive_from_host(state: &SharedBrowserState, payload_json: &str) {
+    let Some(frame) = browser_from_state(state).and_then(|browser| browser.main_frame()) else {
+        return;
+    };
+    let code_string = format!(
+        "window.fun && window.fun.receiveFromHost && window.fun.receiveFromHost({payload_json});"
+    );
+    let code = CefString::from(code_string.as_str());
+    frame.execute_java_script(Some(&code), Some(&CefString::from(FUN_UI_MAIN_URL)), 1);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CefBrowserMouseEvent {
+    pub x: i32,
+    pub y: i32,
+    pub modifiers: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefBrowserMouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+impl From<CefBrowserMouseButton> for MouseButtonType {
+    fn from(value: CefBrowserMouseButton) -> Self {
+        match value {
+            CefBrowserMouseButton::Left => Self::LEFT,
+            CefBrowserMouseButton::Right => Self::RIGHT,
+            CefBrowserMouseButton::Middle => Self::MIDDLE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CefBrowserKeyEventKind {
+    RawKeyDown,
+    KeyUp,
+    Char,
+}
+
+impl From<CefBrowserKeyEventKind> for KeyEventType {
+    fn from(value: CefBrowserKeyEventKind) -> Self {
+        match value {
+            CefBrowserKeyEventKind::RawKeyDown => Self::RAWKEYDOWN,
+            CefBrowserKeyEventKind::KeyUp => Self::KEYUP,
+            CefBrowserKeyEventKind::Char => Self::CHAR,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CefBrowserKeyEvent {
+    pub kind: CefBrowserKeyEventKind,
+    pub modifiers: u32,
+    pub windows_key_code: i32,
+    pub native_key_code: i32,
+    pub character: u16,
+    pub unmodified_character: u16,
+    pub is_system_key: bool,
+}
+
+#[derive(Clone)]
+pub struct CefUiBrowserHandle {
+    state: SharedBrowserState,
+    bridge_endpoint: BrowserBridgeEndpoint,
+}
+
+impl CefUiBrowserHandle {
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| matches!(state.lifecycle.state(), BrowserLifecycleState::Ready { .. }))
+            .unwrap_or(false)
+    }
+
+    pub fn set_focus(&self, focused: bool) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.set_focus(i32::from(focused));
+        true
+    }
+
+    pub fn send_mouse_move(&self, event: CefBrowserMouseEvent, mouse_leave: bool) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.send_mouse_move_event(
+            Some(&MouseEvent {
+                x: event.x,
+                y: event.y,
+                modifiers: event.modifiers,
+            }),
+            i32::from(mouse_leave),
+        );
+        true
+    }
+
+    pub fn send_mouse_click(
+        &self,
+        event: CefBrowserMouseEvent,
+        button: CefBrowserMouseButton,
+        mouse_up: bool,
+        click_count: i32,
+    ) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.send_mouse_click_event(
+            Some(&MouseEvent {
+                x: event.x,
+                y: event.y,
+                modifiers: event.modifiers,
+            }),
+            button.into(),
+            i32::from(mouse_up),
+            click_count.max(1),
+        );
+        true
+    }
+
+    pub fn send_mouse_wheel(
+        &self,
+        event: CefBrowserMouseEvent,
+        delta_x: i32,
+        delta_y: i32,
+    ) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.send_mouse_wheel_event(
+            Some(&MouseEvent {
+                x: event.x,
+                y: event.y,
+                modifiers: event.modifiers,
+            }),
+            delta_x,
+            delta_y,
+        );
+        true
+    }
+
+    pub fn send_key_event(&self, event: CefBrowserKeyEvent) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.send_key_event(Some(&KeyEvent {
+            size: std::mem::size_of::<cef::sys::cef_key_event_t>(),
+            type_: event.kind.into(),
+            modifiers: event.modifiers,
+            windows_key_code: event.windows_key_code,
+            native_key_code: event.native_key_code,
+            is_system_key: i32::from(event.is_system_key),
+            character: event.character,
+            unmodified_character: event.unmodified_character,
+            focus_on_editable_field: 0,
+        }));
+        true
+    }
+
+    pub fn flush_host_envelopes_to_js(&self) -> usize {
+        self.bridge_endpoint.flush_host_envelopes(&self.state)
     }
 }
 
@@ -215,6 +708,8 @@ impl From<FunUiDevServerError> for CefUiBrowserError {
 wrap_life_span_handler! {
     struct FunCefLifeSpanHandler {
         state: SharedBrowserState,
+        message_router: Arc<BrowserSideRouter>,
+        bridge_endpoint: BrowserBridgeEndpoint,
     }
 
     impl LifeSpanHandler {
@@ -222,6 +717,12 @@ wrap_life_span_handler! {
             let Some(browser) = browser else {
                 return;
             };
+            let _handler_id = self.message_router.add_handler(
+                Arc::new(FunCefBrowserBridgeHandler {
+                    endpoint: self.bridge_endpoint.clone(),
+                }),
+                true,
+            );
             let browser_id = CefBrowserId(browser.identifier());
             with_browser_state(&self.state, |state| {
                 state.lifecycle.mark_ready(browser_id);
@@ -250,6 +751,8 @@ wrap_life_span_handler! {
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             let browser_id = browser.as_ref().map(|browser| CefBrowserId(browser.identifier()));
+            self.message_router
+                .on_before_close(browser.as_ref().map(|browser| (*browser).clone()));
             with_browser_state(&self.state, |state| {
                 state.browser = None;
                 state.lifecycle.mark_closed();
@@ -264,14 +767,82 @@ wrap_life_span_handler! {
 }
 
 #[must_use]
-fn new_fun_cef_life_span_handler(state: SharedBrowserState) -> LifeSpanHandler {
-    FunCefLifeSpanHandler::new(state)
+fn new_fun_cef_life_span_handler(
+    state: SharedBrowserState,
+    message_router: Arc<BrowserSideRouter>,
+    bridge_endpoint: BrowserBridgeEndpoint,
+) -> LifeSpanHandler {
+    FunCefLifeSpanHandler::new(state, message_router, bridge_endpoint)
+}
+
+wrap_display_handler! {
+    struct FunCefDisplayHandler;
+
+    impl DisplayHandler {
+        fn on_console_message(
+            &self,
+            _browser: Option<&mut Browser>,
+            level: LogSeverity,
+            message: Option<&CefString>,
+            source: Option<&CefString>,
+            line: std::os::raw::c_int,
+        ) -> std::os::raw::c_int {
+            let message = message
+                .map(CefString::to_string)
+                .unwrap_or_else(|| "<empty CEF console message>".to_owned());
+            let source = source
+                .map(CefString::to_string)
+                .unwrap_or_else(|| "<unknown>".to_owned());
+            tracing::warn!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                ?level,
+                source,
+                line,
+                message,
+                "CEF UI console message"
+            );
+            0
+        }
+    }
+}
+
+#[must_use]
+fn new_fun_cef_display_handler() -> DisplayHandler {
+    FunCefDisplayHandler::new()
+}
+
+struct FunCefBrowserBridgeHandler {
+    endpoint: BrowserBridgeEndpoint,
+}
+
+impl BrowserSideHandler for FunCefBrowserBridgeHandler {
+    fn on_query_str(
+        &self,
+        _browser: Option<Browser>,
+        _frame: Option<Frame>,
+        _query_id: i64,
+        request: &str,
+        _persistent: bool,
+        callback: BrowserQueryCallback,
+    ) -> bool {
+        match self.endpoint.push_js_query(request, callback.clone()) {
+            Ok(()) => true,
+            Err(error) => {
+                if let Ok(callback) = callback.lock() {
+                    callback.failure(400, &format!("Fun host bridge query rejected: {error:?}"));
+                }
+                true
+            }
+        }
+    }
 }
 
 wrap_client! {
     pub struct FunCefBrowserClient {
         render_handler: RenderHandler,
         life_span_handler: LifeSpanHandler,
+        display_handler: DisplayHandler,
+        message_router: Arc<BrowserSideRouter>,
     }
 
     impl Client {
@@ -282,6 +853,25 @@ wrap_client! {
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }
+
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            Some(self.display_handler.clone())
+        }
+
+        fn on_process_message_received(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            source_process: ProcessId,
+            message: Option<&mut ProcessMessage>,
+        ) -> std::os::raw::c_int {
+            i32::from(self.message_router.on_process_message_received(
+                browser.map(|browser| browser.clone()),
+                frame.map(|frame| frame.clone()),
+                source_process,
+                message.map(|message| message.clone()),
+            ))
+        }
     }
 }
 
@@ -289,8 +879,14 @@ wrap_client! {
 pub fn new_fun_cef_browser_client(
     render_handler: RenderHandler,
     life_span_handler: LifeSpanHandler,
+    message_router: Arc<BrowserSideRouter>,
 ) -> Client {
-    FunCefBrowserClient::new(render_handler, life_span_handler)
+    FunCefBrowserClient::new(
+        render_handler,
+        life_span_handler,
+        new_fun_cef_display_handler(),
+        message_router,
+    )
 }
 
 pub struct CefUiBrowser {
@@ -298,12 +894,21 @@ pub struct CefUiBrowser {
     client: Client,
     compositor: SharedCefUiCompositor,
     state: SharedBrowserState,
+    bridge_endpoint: BrowserBridgeEndpoint,
 }
 
 impl CefUiBrowser {
     pub fn create(
         config: BrowserUiConfig,
         compositor: SharedCefUiCompositor,
+    ) -> Result<Self, CefUiBrowserError> {
+        Self::create_with_bridge(config, compositor, SharedBrowserBridgeQueues::default())
+    }
+
+    pub fn create_with_bridge(
+        config: BrowserUiConfig,
+        compositor: SharedCefUiCompositor,
+        bridge_queues: SharedBrowserBridgeQueues,
     ) -> Result<Self, CefUiBrowserError> {
         if config.dev_server_url.is_none() && !register_fun_ui_scheme_handler_factory() {
             return Err(CefUiBrowserError::SchemeFactoryRejected);
@@ -318,8 +923,15 @@ impl CefUiBrowser {
         );
         let state = Arc::new(Mutex::new(BrowserState::new()));
         with_browser_state(&state, |state| state.lifecycle.mark_creating());
-        let life_span_handler = new_fun_cef_life_span_handler(Arc::clone(&state));
-        let mut client = new_fun_cef_browser_client(render_handler, life_span_handler);
+        let bridge_endpoint = BrowserBridgeEndpoint::new(bridge_queues);
+        let message_router = BrowserSideRouter::new(MessageRouterConfig::default());
+        let life_span_handler = new_fun_cef_life_span_handler(
+            Arc::clone(&state),
+            Arc::clone(&message_router),
+            bridge_endpoint.clone(),
+        );
+        let mut client =
+            new_fun_cef_browser_client(render_handler, life_span_handler, message_router);
         let window_info = windowless_window_info(&config);
         let page_url = config.page_url();
         let settings = config.browser_settings();
@@ -340,6 +952,7 @@ impl CefUiBrowser {
             client,
             compositor,
             state,
+            bridge_endpoint,
         })
     }
 
@@ -371,6 +984,14 @@ impl CefUiBrowser {
     #[must_use]
     pub const fn compositor(&self) -> &SharedCefUiCompositor {
         &self.compositor
+    }
+
+    #[must_use]
+    pub fn handle(&self) -> CefUiBrowserHandle {
+        CefUiBrowserHandle {
+            state: Arc::clone(&self.state),
+            bridge_endpoint: self.bridge_endpoint.clone(),
+        }
     }
 
     pub fn close(&mut self) {
@@ -436,5 +1057,14 @@ mod tests {
             config.browser_settings().windowless_frame_rate,
             CEF_UI_WINDOWLESS_FRAME_RATE_HZ
         );
+    }
+
+    #[test]
+    fn windowless_browser_uses_cpu_paint_path() {
+        let config = BrowserUiConfig::default();
+        let window_info = windowless_window_info(&config);
+
+        assert_eq!(window_info.windowless_rendering_enabled, 1);
+        assert_eq!(window_info.shared_texture_enabled, 0);
     }
 }

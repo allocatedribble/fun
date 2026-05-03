@@ -7,7 +7,7 @@ the same data is emitted with fields that can be filtered by tracing targets.
 ## Run With Rich Tracing
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend dx12 -PresentMode immediate
 ```
 
 `-TraceDiagnostics` sets both `RUST_LOG` and `BEVY_LOG`. Bevy's log plugin uses
@@ -41,7 +41,7 @@ Use this for a targeted frame tree without launching any separate benchmark
 tool:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -FrameTimeDiagnostics -FrameTimeDiagnosticInterval 60 -FrameTimeDiagnosticMaxDepth 10 -FrameTimeDiagnosticTopChildren 16 -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -FrameTimeDiagnostics -FrameTimeDiagnosticInterval 60 -FrameTimeDiagnosticMaxDepth 10 -FrameTimeDiagnosticTopChildren 16 -RenderBackend dx12 -PresentMode immediate
 ```
 
 Set `-FrameTimeDiagnosticMinNs 6944444` to emit only frames that miss the 144 Hz
@@ -229,7 +229,7 @@ CPU-side meshlet assets for reupload, and reporting every recovery attempt.
 When contention is suspected, keep Solari and meshlets enabled and run with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend dx12 -PresentMode immediate
 ```
 
 Look for `[client render recovery]` lines and `fun::render::recovery` fields.
@@ -353,3 +353,9 @@ Reconstruction is preserved as an explicit `rr`/`dlss-rr` preset, but it is
 currently a known-broken path: it can show a large black square/rectangle and
 leave Solari shadows broken or missing. Use `-SolariDenoiseMode rr` only for
 targeted RR debugging until that issue is fixed.
+
+RR acceptance is stricter than a normal benchmark. The acceptance run must use
+`scripts\benchmark_client.ps1 -EnableDx12DlssRr -SolariDenoiseMode rr
+-RequireDx12DlssRrAcceptance`. The generated `rr_acceptance` JSON block must
+pass and must include `dlss_rr_gpu_ns`,
+`solari_pass_dlss_rr_guide_resolve_ns`, `frame_ns.mean`, and `frame_ns.p95`.

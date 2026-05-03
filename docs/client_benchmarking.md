@@ -87,7 +87,7 @@ Required 144 FPS lanes are run through the same script, not a separate
 measurement universe:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_required_lanes.ps1 -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_required_lanes.ps1 -RenderBackend dx12 -PresentMode immediate
 ```
 
 Each lane writes its own `summary.json`:
@@ -173,7 +173,7 @@ is fixed.
 For the RT/Solari capability matrix:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_rt_matrix.ps1 -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_rt_matrix.ps1 -RenderBackend dx12 -PresentMode immediate
 ```
 
 That matrix records both `rt_feature_gates.rt_feature_hash` from the requested
@@ -190,13 +190,13 @@ the same names.
 The quick iteration benchmark is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend dx12 -PresentMode immediate
 ```
 
 The required performance benchmark for changes that claim client performance is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -Release -StaticBevy -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -Release -StaticBevy -RenderBackend dx12 -PresentMode immediate
 ```
 
 When a change touches one of these systems, also run the matching isolation case:
@@ -207,8 +207,12 @@ When a change touches one of these systems, also run the matching isolation case
   high-motion weather stress.
 - Cloud quality: compare `-CloudQuality cheap` and `-CloudQuality balanced`.
 - Meshlets: add `-DisableMeshlets`.
-- DLSS Ray Reconstruction: run once with `-SolariDenoiseMode rr`, but record
-  the known black square/rectangle and missing-shadow artifact if it appears.
+- DLSS Ray Reconstruction: diagnostic runs must opt in with
+  `-EnableDx12DlssRr -SolariDenoiseMode rr`. Acceptance runs must additionally
+  pass `-RequireDx12DlssRrAcceptance`. The script fails acceptance if
+  `dlss_rr_gpu_ns`,
+  `solari_pass_dlss_rr_guide_resolve_ns`, `frame_ns.mean`, or `frame_ns.p95`
+  is missing, or if fewer than 500 estimated live frames were observed.
 - Denoisers: compare `-SolariDenoiseMode off`, `cheap-temporal`,
   `balanced-fast`, `balanced`, `quality`, and the DLSS RR preset where
   available.

@@ -1,6 +1,9 @@
 param(
     [switch]$Release,
     [switch]$StaticBevy,
+    [switch]$EnableDx12DlssRr,
+    [switch]$RequireDx12DlssRrAcceptance,
+    [int]$RrStressFrameTarget = 500,
     [switch]$DisableDlssRr,
     [switch]$DisableSolari,
     [switch]$DisableMeshlets,
@@ -45,7 +48,7 @@ param(
     [int]$MeshletMinTriangles = 512,
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
-    [string]$RenderBackend = "vulkan",
+    [string]$RenderBackend = "dx12",
     [string]$PresentMode = "immediate",
     [int]$WarmupSeconds = 10,
     [int]$SampleSeconds = 30,
@@ -481,6 +484,120 @@ function New-Comparison {
     return $comparison
 }
 
+function Test-StatsMetric {
+    param(
+        [System.Collections.IDictionary]$Stats,
+        [string]$Metric
+    )
+
+    return $null -ne $Stats -and $Stats.Contains($Metric)
+}
+
+function Get-StatsMetricValue {
+    param(
+        [System.Collections.IDictionary]$Stats,
+        [string]$Metric,
+        [string]$Field
+    )
+
+    if (-not (Test-StatsMetric -Stats $Stats -Metric $Metric)) {
+        return $null
+    }
+
+    $entry = $Stats[$Metric]
+    if ($entry -is [System.Collections.IDictionary]) {
+        if ($entry.Contains($Field)) {
+            return $entry[$Field]
+        }
+        return $null
+    }
+
+    $property = $entry.PSObject.Properties[$Field]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function New-Dx12DlssRrAcceptance {
+    param(
+        [System.Collections.IDictionary]$Stats,
+        [switch]$Required,
+        [switch]$EnableDx12DlssRr,
+        [switch]$DisableDlssRr,
+        [string]$SolariDenoiseMode,
+        [int]$SampleSeconds,
+        [switch]$InputLogMode,
+        [int]$StressFrameTarget
+    )
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $requiredMetrics = [ordered]@{}
+    foreach ($metric in @(
+            "dlss_rr_gpu_ns",
+            "solari_pass_dlss_rr_guide_resolve_ns",
+            "frame_ns"
+        )) {
+        $present = Test-StatsMetric -Stats $Stats -Metric $metric
+        $requiredMetrics[$metric] = [ordered]@{
+            present = $present
+            count = Get-StatsMetricValue -Stats $Stats -Metric $metric -Field "count"
+            mean = Get-StatsMetricValue -Stats $Stats -Metric $metric -Field "mean"
+            p95 = Get-StatsMetricValue -Stats $Stats -Metric $metric -Field "p95"
+        }
+        if ($Required -and -not $present) {
+            $failures.Add("missing_metric:$metric") | Out-Null
+        }
+        if ($Required -and $present) {
+            if ($null -eq $requiredMetrics[$metric]["mean"]) {
+                $failures.Add("missing_metric:$metric.mean") | Out-Null
+            }
+            if ($null -eq $requiredMetrics[$metric]["p95"]) {
+                $failures.Add("missing_metric:$metric.p95") | Out-Null
+            }
+        }
+    }
+
+    if ($Required -and -not (Test-StatsMetric -Stats $Stats -Metric "frame_ns")) {
+        $failures.Add("missing_metric:frame_ns.mean") | Out-Null
+        $failures.Add("missing_metric:frame_ns.p95") | Out-Null
+    }
+
+    $fpsMean = Get-StatsMetricValue -Stats $Stats -Metric "fps" -Field "mean"
+    $estimatedFrames = 0.0
+    if ($null -ne $fpsMean -and -not $InputLogMode -and $SampleSeconds -gt 0) {
+        $estimatedFrames = [double]$fpsMean * [double]$SampleSeconds
+    }
+
+    if ($Required) {
+        if (-not $EnableDx12DlssRr) {
+            $failures.Add("rr_gate_not_enabled") | Out-Null
+        }
+        if ($DisableDlssRr) {
+            $failures.Add("rr_kill_switch_enabled") | Out-Null
+        }
+        if ($SolariDenoiseMode -notin @("rr", "dlss", "dlss-rr", "dlss_rr", "ray-reconstruction")) {
+            $failures.Add("solari_rr_denoise_mode_not_selected") | Out-Null
+        }
+        if ($InputLogMode) {
+            $failures.Add("input_log_cannot_prove_live_500_frame_stress") | Out-Null
+        }
+        if ($estimatedFrames -lt $StressFrameTarget) {
+            $failures.Add("stress_frame_estimate_below_target") | Out-Null
+        }
+    }
+
+    return [ordered]@{
+        schema_version = 1
+        required = [bool]$Required
+        pass = $failures.Count -eq 0
+        failures = @($failures.ToArray())
+        stress_frame_target = $StressFrameTarget
+        estimated_frames = [Math]::Round($estimatedFrames, 0)
+        required_metrics = $requiredMetrics
+    }
+}
+
 function Format-StatValue {
     param(
         [System.Collections.IDictionary]$Stats,
@@ -594,6 +711,7 @@ function Write-MarkdownReport {
         "ui_overlay_cpu_ns",
         "present_wait_ns",
         "dlss_rr_gpu_ns",
+        "solari_pass_dlss_rr_guide_resolve_ns",
         "solari_pass_direct_ns",
         "solari_pass_diffuse_ns",
         "solari_pass_diffuse_initial_ns",
@@ -647,6 +765,28 @@ function Write-MarkdownReport {
         $pass = if ($null -eq $actual) { "n/a" } elseif ($actual -le $target) { "true" } else { "false" }
         $actualText = if ($null -eq $actual) { "n/a" } else { [Math]::Round($actual, 0) }
         $lines.Add("| $metric | $target | $actualText | $pass |") | Out-Null
+    }
+
+    $rrAcceptance = $Summary.rr_acceptance
+    if ($null -ne $rrAcceptance -and $rrAcceptance.required) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## DX12 DLSS RR Acceptance") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("- Pass: $($rrAcceptance.pass)") | Out-Null
+        $lines.Add("- Estimated stress frames: $($rrAcceptance.estimated_frames) / $($rrAcceptance.stress_frame_target)") | Out-Null
+        if ($rrAcceptance.failures.Count -gt 0) {
+            $lines.Add("- Failures: $($rrAcceptance.failures -join ', ')") | Out-Null
+        }
+        else {
+            $lines.Add("- Failures: none") | Out-Null
+        }
+        $lines.Add("") | Out-Null
+        $lines.Add("| required metric | present | mean | p95 | samples |") | Out-Null
+        $lines.Add("|---|---|---:|---:|---:|") | Out-Null
+        foreach ($metric in @("dlss_rr_gpu_ns", "solari_pass_dlss_rr_guide_resolve_ns", "frame_ns")) {
+            $entry = $rrAcceptance.required_metrics[$metric]
+            $lines.Add("| $metric | $($entry["present"]) | $($entry["mean"]) | $($entry["p95"]) | $($entry["count"]) |") | Out-Null
+        }
     }
 
     if ($null -ne $comparison) {
@@ -772,6 +912,7 @@ try {
         )
         if ($Release) { $runStackArgs += "-Release" }
         if ($StaticBevy) { $runStackArgs += "-StaticBevy" }
+        if ($EnableDx12DlssRr) { $runStackArgs += "-EnableDx12DlssRr" }
         if ($DisableDlssRr) { $runStackArgs += "-DisableDlssRr" }
         if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
         if ($DisableMeshlets) { $runStackArgs += "-DisableMeshlets" }
@@ -885,6 +1026,15 @@ try {
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
+    $rrAcceptance = New-Dx12DlssRrAcceptance `
+        -Stats $stats `
+        -Required:$RequireDx12DlssRrAcceptance `
+        -EnableDx12DlssRr:$EnableDx12DlssRr `
+        -DisableDlssRr:$DisableDlssRr `
+        -SolariDenoiseMode $SolariDenoiseMode `
+        -SampleSeconds $SampleSeconds `
+        -InputLogMode:([bool](-not [string]::IsNullOrWhiteSpace($InputLog))) `
+        -StressFrameTarget $RrStressFrameTarget
     $gitCommit = (Get-RepoGitLines -RepoRoot $repoRoot -Arguments @("rev-parse", "HEAD") | Select-Object -First 1)
     $gitDirty = @(Get-RepoGitLines -RepoRoot $repoRoot -Arguments @("status", "--short"))
 
@@ -905,6 +1055,9 @@ try {
             static_bevy = [bool]$StaticBevy
             render_backend = $RenderBackend
             present_mode = $PresentMode
+            enable_dx12_dlss_rr = [bool]$EnableDx12DlssRr
+            require_dx12_dlss_rr_acceptance = [bool]$RequireDx12DlssRrAcceptance
+            rr_stress_frame_target = $RrStressFrameTarget
             disable_dlss_rr = [bool]$DisableDlssRr
             disable_solari = [bool]$DisableSolari
             disable_meshlets = [bool]$DisableMeshlets
@@ -948,6 +1101,7 @@ try {
         }
         metrics = $stats
         comparison = $comparison
+        rr_acceptance = $rrAcceptance
         render_capabilities = $renderCapabilities
         rt_feature_gates = $rtFeatureGates
     }
@@ -959,6 +1113,9 @@ try {
 
     Write-Host "Benchmark summary: $markdownPath"
     Write-Host "Benchmark JSON: $jsonPath"
+    if ($RequireDx12DlssRrAcceptance -and -not $rrAcceptance.pass) {
+        throw "DX12 DLSS RR acceptance failed: $($rrAcceptance.failures -join ', ')"
+    }
 }
 finally {
     if ($ranStack -and -not $KeepRunning) {

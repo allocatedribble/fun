@@ -12,6 +12,7 @@ benchmarks = []
 cloud_diagnostics = ["render_diagnostics"]
 diagnostics = ["game_shared/diagnostics"]
 dlss = ["bevy/dlss"]
+dx12_dlss_native = ["dep:wgpu", "dep:windows-core"]
 force_disable_dlss = ["bevy/force_disable_dlss"]
 offscreen = []
 render_diagnostics = [
@@ -29,3 +30,7 @@ bevy.workspace = true
 game_shared = { path = "../game_shared" }
 thunder.workspace = true
 tracing.workspace = true
+wgpu = { version = "29.0.1", default-features = false, features = ["dx12"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-core = { version = "0.62", optional = true }

@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use crate::{
         FunCloudDebugOverlay, FunCloudInternalScale, FunCloudQuality, FunRenderPresentation,
-        FunRenderRtFeatures, FunWeatherProfileId, RenderGeometryPolicy,
+        FunRenderRtFeatures, FunWeatherProfileId, NativeDlssConfig, RenderGeometryPolicy,
     };
 
     fn render_config_with_clouds(
@@ -102,6 +102,7 @@ mod tests {
         ClientRenderConfig {
             solari_enabled: true,
             dlss_rr_enabled: false,
+            native_dlss: NativeDlssConfig::default(),
             meshlets_enabled: true,
             clouds_enabled: quality != FunCloudQuality::Off,
             cloud_quality: quality,
@@ -116,7 +117,7 @@ mod tests {
             geometry_policy: RenderGeometryPolicy::Hybrid,
             meshlet_min_triangles: 512,
             rt_features: FunRenderRtFeatures::default(),
-            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+            #[cfg(debug_assertions)]
             fps_overlay_enabled: true,
         }
     }

@@ -10,8 +10,9 @@ use fun_warden_client::{
 };
 use fun_warden_core::{ExecutableIntegrityManifest, IntegrityStatus, ProtectedProtectionProfile};
 use fun_warden_protocol::{
-    FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV, FUN_WARDEN_MODE_ENV,
-    FUN_WARDEN_SESSION_ID_ENV, ProtectedRegionStatusReport, TicketId16, WardenPolicyMode,
+    ClientAttestationStatus, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
+    FUN_WARDEN_MODE_ENV, FUN_WARDEN_SESSION_ID_ENV, ProtectedRegionStatusReport, TicketId16,
+    WardenPolicyMode,
 };
 use tracing::{debug, info, warn};
 
@@ -19,6 +20,11 @@ const MAX_WARDEN_SESSION_ID_BYTES: usize = 64;
 const MAX_WARDEN_CHALLENGE_ID_BYTES: usize = 80;
 const WARDEN_HEARTBEAT_SECONDS: f32 = 5.0;
 const WARDEN_INTEGRITY_RECHECK_SECONDS: f32 = 30.0;
+const WARDEN_SERVICE_POLICY_POLL_MIN_SECONDS: f32 = 5.0;
+const WARDEN_SERVICE_POLICY_POLL_JITTER_SECONDS: f32 = 10.0;
+const FUN_WARDEN_SERVICE_DECISION_ENV: &str = "FUN_WARDEN_SERVICE_DECISION";
+const FUN_WARDEN_POLICY_EPOCH_ENV: &str = "FUN_WARDEN_POLICY_EPOCH";
+const FUN_WARDEN_DEVICE_ATTESTATION_STATUS_ENV: &str = "FUN_WARDEN_DEVICE_ATTESTATION_STATUS";
 
 pub struct ClientWardenPlugin;
 
@@ -28,12 +34,14 @@ impl Plugin for ClientWardenPlugin {
             .init_resource::<WardenProtectedRuntimeStatus>()
             .init_resource::<WardenProtectedServiceReportOutbox>()
             .init_resource::<WardenServiceHeartbeatTimer>()
+            .init_resource::<WardenServicePolicyPollTimer>()
             .init_resource::<WardenIntegrityRecheckTimer>()
             .add_systems(Startup, initialize_warden_client)
             .add_systems(
                 Update,
                 (
                     warden_service_heartbeat,
+                    poll_warden_service_policy_update,
                     low_frequency_integrity_recheck,
                     report_protected_status_to_service,
                     apply_warden_policy_change,
@@ -126,6 +134,7 @@ pub enum WardenClientBackendDecision {
     ObserveOnly,
     DenyMatchmaking,
     DenySession,
+    QuarantineToUntrustedPool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,8 +156,12 @@ pub struct WardenClientStatus {
     pub config: WardenClientConfig,
     pub service_state: WardenClientServiceState,
     pub integrity_status: IntegrityStatus,
+    pub device_attestation_status: ClientAttestationStatus,
     pub finding: WardenClientFinding,
     pub backend_decision: WardenClientBackendDecision,
+    pub last_admission_decision: WardenClientBackendDecision,
+    pub last_policy_epoch: u64,
+    pub blocked_by_warden: bool,
     pub heartbeat_count: u64,
     pub exit_requested: bool,
 }
@@ -181,12 +194,16 @@ impl Default for WardenClientStatus {
                 WardenClientServiceState::Disabled
             },
             integrity_status: IntegrityStatus::Unsupported,
+            device_attestation_status: ClientAttestationStatus::Unsupported,
             finding: if enabled {
                 WardenClientFinding::ServiceConnectionPending
             } else {
                 WardenClientFinding::Disabled
             },
             backend_decision: WardenClientBackendDecision::Pending,
+            last_admission_decision: WardenClientBackendDecision::Pending,
+            last_policy_epoch: 0,
+            blocked_by_warden: false,
             heartbeat_count: 0,
             exit_requested: false,
         }
@@ -233,6 +250,18 @@ impl Default for WardenServiceHeartbeatTimer {
     fn default() -> Self {
         Self(Timer::from_seconds(
             WARDEN_HEARTBEAT_SECONDS,
+            TimerMode::Repeating,
+        ))
+    }
+}
+
+#[derive(Debug, Resource)]
+struct WardenServicePolicyPollTimer(Timer);
+
+impl Default for WardenServicePolicyPollTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(
+            warden_policy_poll_interval_seconds(coarse_now_ms()),
             TimerMode::Repeating,
         ))
     }
@@ -298,6 +327,24 @@ fn warden_service_heartbeat(
         service_state = ?status.service_state,
         "Warden service heartbeat tick"
     );
+}
+
+fn poll_warden_service_policy_update(
+    time: Res<Time>,
+    mut timer: ResMut<WardenServicePolicyPollTimer>,
+    mut status: ResMut<WardenClientStatus>,
+) {
+    if !status.config.enabled {
+        return;
+    }
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+
+    let Some(update) = warden_service_policy_update_from_env(status.last_policy_epoch) else {
+        return;
+    };
+    apply_service_policy_update(&mut status, update);
 }
 
 fn low_frequency_integrity_recheck(
@@ -369,18 +416,106 @@ fn apply_warden_policy_change(
     if !status.config.enabled || status.exit_requested {
         return;
     }
-    if status.backend_decision != WardenClientBackendDecision::DenySession {
+    if status.last_admission_decision != WardenClientBackendDecision::DenySession {
         return;
     }
 
     status.finding = WardenClientFinding::EnforcementDenied;
     status.exit_requested = true;
+    status.blocked_by_warden = true;
     warn!(
         target: WARDEN_CLIENT_DIAGNOSTIC_TARGET,
         mode = ?status.config.mode,
         "Warden policy ended this protected session"
     );
     exit.write(AppExit::Success);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WardenServicePolicyUpdate {
+    device_attestation_status: ClientAttestationStatus,
+    admission_decision: WardenClientBackendDecision,
+    policy_epoch: u64,
+}
+
+fn apply_service_policy_update(status: &mut WardenClientStatus, update: WardenServicePolicyUpdate) {
+    if update.policy_epoch <= status.last_policy_epoch {
+        return;
+    }
+    status.service_state = WardenClientServiceState::Connected;
+    status.device_attestation_status = update.device_attestation_status;
+    status.backend_decision = update.admission_decision;
+    status.last_admission_decision = update.admission_decision;
+    status.last_policy_epoch = update.policy_epoch;
+    status.blocked_by_warden =
+        update.admission_decision == WardenClientBackendDecision::DenySession;
+    if update.admission_decision == WardenClientBackendDecision::DenySession {
+        status.finding = WardenClientFinding::EnforcementDenied;
+    }
+    debug!(
+        target: WARDEN_CLIENT_DIAGNOSTIC_TARGET,
+        policy_epoch = status.last_policy_epoch,
+        admission_decision = ?status.last_admission_decision,
+        device_attestation_status = ?status.device_attestation_status,
+        "applied Warden service policy update"
+    );
+}
+
+fn warden_service_policy_update_from_env(current_epoch: u64) -> Option<WardenServicePolicyUpdate> {
+    let pairs = [
+        (
+            FUN_WARDEN_SERVICE_DECISION_ENV,
+            std::env::var(FUN_WARDEN_SERVICE_DECISION_ENV).ok(),
+        ),
+        (
+            FUN_WARDEN_POLICY_EPOCH_ENV,
+            std::env::var(FUN_WARDEN_POLICY_EPOCH_ENV).ok(),
+        ),
+        (
+            FUN_WARDEN_DEVICE_ATTESTATION_STATUS_ENV,
+            std::env::var(FUN_WARDEN_DEVICE_ATTESTATION_STATUS_ENV).ok(),
+        ),
+    ];
+    warden_service_policy_update_from_pairs(
+        pairs
+            .iter()
+            .filter_map(|(name, value)| value.as_deref().map(|value| (*name, value))),
+        current_epoch,
+    )
+}
+
+fn warden_service_policy_update_from_pairs<'a>(
+    pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+    current_epoch: u64,
+) -> Option<WardenServicePolicyUpdate> {
+    let mut admission_decision = None;
+    let mut policy_epoch = None;
+    let mut device_attestation_status = ClientAttestationStatus::Unsupported;
+    for (key, value) in pairs {
+        match key {
+            FUN_WARDEN_SERVICE_DECISION_ENV => {
+                admission_decision = parse_service_admission_decision(value);
+            }
+            FUN_WARDEN_POLICY_EPOCH_ENV => {
+                policy_epoch = value.parse::<u64>().ok();
+            }
+            FUN_WARDEN_DEVICE_ATTESTATION_STATUS_ENV => {
+                device_attestation_status = parse_device_attestation_status(value)
+                    .unwrap_or(ClientAttestationStatus::Unsupported);
+            }
+            _ => {}
+        }
+    }
+    let admission_decision = admission_decision?;
+    let policy_epoch = policy_epoch.unwrap_or_else(|| current_epoch.saturating_add(1));
+    if policy_epoch <= current_epoch {
+        return None;
+    }
+    Some(WardenServicePolicyUpdate {
+        device_attestation_status,
+        admission_decision,
+        policy_epoch,
+    })
 }
 
 fn verify_current_process(
@@ -449,6 +584,43 @@ fn parse_policy_mode(value: &str) -> Option<WardenPolicyMode> {
     None
 }
 
+fn parse_service_admission_decision(value: &str) -> Option<WardenClientBackendDecision> {
+    if value.eq_ignore_ascii_case("allow") {
+        return Some(WardenClientBackendDecision::Allow);
+    }
+    if value.eq_ignore_ascii_case("observe") || value.eq_ignore_ascii_case("observe_only") {
+        return Some(WardenClientBackendDecision::ObserveOnly);
+    }
+    if value.eq_ignore_ascii_case("deny_matchmaking")
+        || value.eq_ignore_ascii_case("deny-matchmaking")
+    {
+        return Some(WardenClientBackendDecision::DenyMatchmaking);
+    }
+    if value.eq_ignore_ascii_case("deny_session") || value.eq_ignore_ascii_case("deny-session") {
+        return Some(WardenClientBackendDecision::DenySession);
+    }
+    if value.eq_ignore_ascii_case("quarantine")
+        || value.eq_ignore_ascii_case("quarantine_to_untrusted_pool")
+        || value.eq_ignore_ascii_case("quarantine-to-untrusted-pool")
+    {
+        return Some(WardenClientBackendDecision::QuarantineToUntrustedPool);
+    }
+    None
+}
+
+fn parse_device_attestation_status(value: &str) -> Option<ClientAttestationStatus> {
+    if value.eq_ignore_ascii_case("passed") {
+        return Some(ClientAttestationStatus::Passed);
+    }
+    if value.eq_ignore_ascii_case("failed") {
+        return Some(ClientAttestationStatus::Failed);
+    }
+    if value.eq_ignore_ascii_case("unsupported") {
+        return Some(ClientAttestationStatus::Unsupported);
+    }
+    None
+}
+
 fn ticket_id_from_session_reference(value: &str) -> Option<TicketId16> {
     if value.len() != 32 {
         return None;
@@ -471,6 +643,12 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+fn warden_policy_poll_interval_seconds(coarse_seed_ms: u64) -> f32 {
+    let jitter_window_ms = (WARDEN_SERVICE_POLICY_POLL_JITTER_SECONDS * 1000.0) as u64;
+    let jitter_millis = (coarse_seed_ms % jitter_window_ms.saturating_add(1)) as f32;
+    WARDEN_SERVICE_POLICY_POLL_MIN_SECONDS + jitter_millis / 1000.0
+}
+
 fn coarse_now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -481,14 +659,16 @@ fn coarse_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        WardenClientConfig, bounded_env_reference, parse_policy_mode,
-        ticket_id_from_session_reference,
+        WardenClientBackendDecision, WardenClientConfig, WardenClientFinding,
+        WardenClientServiceState, WardenClientStatus, apply_service_policy_update,
+        bounded_env_reference, parse_policy_mode, ticket_id_from_session_reference,
+        warden_policy_poll_interval_seconds, warden_service_policy_update_from_pairs,
     };
     use fun_warden_protocol::{
-        Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV, FUN_WARDEN_MODE_ENV,
-        FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV, FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV,
-        FUN_WARDEN_PROTECTED_PROFILE_ENV, FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV,
-        FUN_WARDEN_SESSION_ID_ENV, TicketId16,
+        ClientAttestationStatus, Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
+        FUN_WARDEN_MODE_ENV, FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
+        FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV, FUN_WARDEN_PROTECTED_PROFILE_ENV,
+        FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV, FUN_WARDEN_SESSION_ID_ENV, TicketId16,
     };
 
     #[test]
@@ -553,5 +733,79 @@ mod tests {
             ticket_id_from_session_reference("zz090909090909090909090909090909"),
             None
         );
+    }
+
+    #[test]
+    fn service_policy_update_tracks_quarantine_without_session_exit() {
+        let mut status = enabled_status();
+        let update = warden_service_policy_update_from_pairs(
+            [
+                (
+                    "FUN_WARDEN_SERVICE_DECISION",
+                    "quarantine_to_untrusted_pool",
+                ),
+                ("FUN_WARDEN_POLICY_EPOCH", "7"),
+                ("FUN_WARDEN_DEVICE_ATTESTATION_STATUS", "passed"),
+            ],
+            0,
+        )
+        .expect("policy update");
+
+        apply_service_policy_update(&mut status, update);
+
+        assert_eq!(status.service_state, WardenClientServiceState::Connected);
+        assert_eq!(
+            status.last_admission_decision,
+            WardenClientBackendDecision::QuarantineToUntrustedPool
+        );
+        assert_eq!(
+            status.device_attestation_status,
+            ClientAttestationStatus::Passed
+        );
+        assert_eq!(status.last_policy_epoch, 7);
+        assert!(!status.blocked_by_warden);
+        assert!(!status.exit_requested);
+    }
+
+    #[test]
+    fn service_policy_update_marks_deny_session_as_warden_blocked() {
+        let mut status = enabled_status();
+        let update = warden_service_policy_update_from_pairs(
+            [
+                ("FUN_WARDEN_SERVICE_DECISION", "deny_session"),
+                ("FUN_WARDEN_POLICY_EPOCH", "2"),
+                ("FUN_WARDEN_DEVICE_ATTESTATION_STATUS", "failed"),
+            ],
+            0,
+        )
+        .expect("policy update");
+
+        apply_service_policy_update(&mut status, update);
+
+        assert_eq!(
+            status.last_admission_decision,
+            WardenClientBackendDecision::DenySession
+        );
+        assert_eq!(
+            status.device_attestation_status,
+            ClientAttestationStatus::Failed
+        );
+        assert!(status.blocked_by_warden);
+        assert_eq!(status.finding, WardenClientFinding::EnforcementDenied);
+    }
+
+    #[test]
+    fn service_policy_poll_interval_is_low_frequency_and_jittered() {
+        assert_eq!(warden_policy_poll_interval_seconds(0), 5.0);
+        assert_eq!(warden_policy_poll_interval_seconds(10_000), 15.0);
+        let interval = warden_policy_poll_interval_seconds(4_321);
+        assert!((5.0..=15.0).contains(&interval));
+    }
+
+    fn enabled_status() -> WardenClientStatus {
+        let mut status = WardenClientStatus::default();
+        status.config.enabled = true;
+        status.service_state = WardenClientServiceState::PendingService;
+        status
     }
 }

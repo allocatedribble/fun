@@ -351,15 +351,12 @@ fn solari_denoise_mode_from_env() -> SolariDenoiseMode {
         .ok()
         .map(|mode| mode.to_ascii_lowercase());
 
-    parse_solari_denoise_mode(
-        mode.as_deref(),
-        std::env::var_os("FUN_DISABLE_DLSS_RR").is_some(),
-    )
+    parse_solari_denoise_mode(mode.as_deref(), !dlss_ray_reconstruction_allowed_from_env())
 }
 
 pub fn parse_solari_denoise_mode(
     mode: Option<&str>,
-    _dlss_ray_reconstruction_disabled: bool,
+    dlss_ray_reconstruction_disabled: bool,
 ) -> SolariDenoiseMode {
     let Some(mode) = mode else {
         return SolariDenoiseMode::BalancedFast;
@@ -374,13 +371,47 @@ pub fn parse_solari_denoise_mode(
         "balanced" | "svgf" | "svgf-lite" | "svgf_lite" => SolariDenoiseMode::Balanced,
         "quality" | "svgf-quality" | "svgf_quality" => SolariDenoiseMode::Quality,
         "rr" | "dlss" | "dlss-rr" | "dlss_rr" | "ray-reconstruction" => {
-            SolariDenoiseMode::DlssRayReconstruction
+            if dlss_ray_reconstruction_disabled {
+                warn!(
+                    target: "fun::render",
+                    "FUN_SOLARI_DENOISE_MODE requested DLSS Ray Reconstruction, but FUN_RENDER_DX12_DLSS_RR did not enable it; using balanced-fast"
+                );
+                SolariDenoiseMode::BalancedFast
+            } else {
+                SolariDenoiseMode::DlssRayReconstruction
+            }
         }
         unknown => {
             warn!(
                 "Unknown FUN_SOLARI_DENOISE_MODE={unknown}; falling back to balanced-fast Solari denoising"
             );
             SolariDenoiseMode::BalancedFast
+        }
+    }
+}
+
+fn dlss_ray_reconstruction_allowed_from_env() -> bool {
+    let rr_gate = std::env::var("FUN_RENDER_DX12_DLSS_RR").ok();
+    std::env::var_os("FUN_DISABLE_DLSS_RR").is_none()
+        && env_bool_value("FUN_RENDER_DX12_DLSS_RR", rr_gate.as_deref(), false)
+}
+
+fn env_bool_value(name: &'static str, value: Option<&str>, default_value: bool) -> bool {
+    let Some(value) = value else {
+        return default_value;
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value,
+                default_value,
+                "ignored invalid boolean Solari DLSS Ray Reconstruction setting"
+            );
+            default_value
         }
     }
 }
@@ -396,7 +427,8 @@ pub fn benchmark_parse_solari_denoise_mode(
 mod tests {
     use super::{
         SolariDirectVisibilityMode, SolariSettings, SolariVisualTarget,
-        apply_direct_lighting_visual_target, parse_solari_direct_visibility_mode,
+        apply_direct_lighting_visual_target, parse_solari_denoise_mode,
+        parse_solari_direct_visibility_mode,
     };
 
     #[test]
@@ -431,5 +463,17 @@ mod tests {
             Some(SolariDirectVisibilityMode::None)
         );
         assert_eq!(parse_solari_direct_visibility_mode(Some("all")), None);
+    }
+
+    #[test]
+    fn ray_reconstruction_denoise_mode_requires_explicit_gate() {
+        assert_eq!(
+            parse_solari_denoise_mode(Some("dlss-rr"), true),
+            bevy::solari::prelude::SolariDenoiseMode::BalancedFast
+        );
+        assert_eq!(
+            parse_solari_denoise_mode(Some("dlss-rr"), false),
+            bevy::solari::prelude::SolariDenoiseMode::DlssRayReconstruction
+        );
     }
 }

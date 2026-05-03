@@ -22,12 +22,15 @@ pub use bridge::{
     BrowserBridgeError, BrowserBridgeQueues, BrowserUiCapability, BrowserUiHitRegion,
     BrowserUiHitRegionId, BrowserUiHitRegionMode, BrowserUiPacket,
     BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError, BrowserUiRequestId,
-    BrowserUiRouteState, BrowserUiSequence, UiControlPayload, UiEnvelope, UiEnvelopeChannel,
+    BrowserUiRouteState, BrowserUiSequence, HostCapability, HostCommandError, HostCommandId,
+    HostCommandRejection, HostCommandRequest, HostCommandResponse, HostCommandTarget,
+    HostDiagnostic, SharedBrowserBridgeQueues, UiControlPayload, UiEnvelope, UiEnvelopeChannel,
     UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet, validate_ui_envelope,
 };
 pub use browser::{
-    BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefUiBrowser,
-    CefUiBrowserError, MAIN_BROWSER_PAGE,
+    BrowserUiConfig, BrowserUiPage, CEF_UI_WINDOWLESS_FRAME_RATE_HZ, CefBrowserKeyEvent,
+    CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowser,
+    CefUiBrowserError, CefUiBrowserHandle, MAIN_BROWSER_PAGE,
 };
 pub use compositor::{
     CefUiCompositor, CefUiCompositorFrame, CefUiUploadPlan, SharedCefUiCompositor,

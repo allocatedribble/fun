@@ -20,6 +20,7 @@ use bevy::{
     },
     window::{CursorGrabMode, CursorOptions},
 };
+use fun_host::{FunClientHostState, FunInputOwner};
 use game_shared::{DEFAULT_CORRECTION_HALF_LIFE_SECONDS, PLAYER_SPAWN};
 
 pub struct FirstPersonControllerPlugin {
@@ -374,8 +375,24 @@ fn update_cursor_grab(
     mut cursor_options: Single<&mut CursorOptions>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    host: Option<Res<FunClientHostState>>,
     #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
 ) {
+    if host_input_owner_requires_free_cursor(host.as_deref()) || {
+        #[cfg(feature = "cef_ui")]
+        {
+            cef_ui_gate_requires_free_cursor(ui_input_gate.as_deref())
+        }
+        #[cfg(not(feature = "cef_ui"))]
+        {
+            false
+        }
+    } {
+        cursor_options.visible = true;
+        cursor_options.grab_mode = CursorGrabMode::None;
+        return;
+    }
+
     let pointer_actions_blocked = {
         #[cfg(feature = "cef_ui")]
         {
@@ -410,6 +427,21 @@ fn update_cursor_grab(
         cursor_options.visible = true;
         cursor_options.grab_mode = CursorGrabMode::None;
     }
+}
+
+fn host_input_owner_requires_free_cursor(host: Option<&FunClientHostState>) -> bool {
+    host.is_some_and(|host| !matches!(host.state.input_owner, FunInputOwner::Gameplay))
+}
+
+#[cfg(feature = "cef_ui")]
+fn cef_ui_gate_requires_free_cursor(gate: Option<&crate::cef_ui::GameplayInputGate>) -> bool {
+    gate.is_some_and(|gate| {
+        matches!(
+            gate.reason,
+            crate::cef_ui::GameplayInputBlockReason::UiModal
+                | crate::cef_ui::GameplayInputBlockReason::TextEntry
+        )
+    })
 }
 
 #[allow(
@@ -839,4 +871,25 @@ fn movement_input(keys: &ButtonInput<KeyCode>) -> Vec2 {
 
 fn max_slope_dot() -> f32 {
     MAX_SLOPE_ANGLE.cos()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fun_host::{FunClientHostStartConfig, FunHostMode};
+
+    #[test]
+    fn launcher_and_editor_input_owners_require_free_cursor() {
+        let mut host = FunClientHostState::from_start_config(FunClientHostStartConfig {
+            mode: FunHostMode::Game,
+            ..Default::default()
+        });
+        assert!(!host_input_owner_requires_free_cursor(Some(&host)));
+
+        host.set_input_owner(FunInputOwner::LauncherUi);
+        assert!(host_input_owner_requires_free_cursor(Some(&host)));
+
+        host.set_input_owner(FunInputOwner::EditorUi);
+        assert!(host_input_owner_requires_free_cursor(Some(&host)));
+    }
 }

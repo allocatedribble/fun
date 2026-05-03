@@ -3,20 +3,35 @@ use bevy::{anti_alias::dlss::DlssProjectId, asset::uuid::Uuid};
 use bevy::{
     ecs::world::World,
     prelude::*,
-    render::error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
-    window::WindowResolution,
+    render::{
+        error_handler::{ErrorType, RenderError, RenderErrorHandler, RenderErrorPolicy},
+        settings::Backends,
+    },
+    window::{PresentMode, WindowResolution},
     winit::WinitSettings,
 };
 use tracing::info;
 
 use crate::{
     ClientWindowConfig, FunRenderAppOptions,
-    config::{client_render_creation, render_plugin},
+    config::{
+        NativeDlssConfig, client_render_creation, log_native_dlss_startup_diagnostics,
+        render_plugin,
+    },
     selected_present_mode, selected_render_backend,
 };
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 const DLSS_PROJECT_ID: &str = "7f2c56d9-bbd1-40e6-aeea-ad1cde733e2e";
+
+#[derive(Debug, Clone, Copy, Resource)]
+struct FunWinitRenderStartupDiagnostics {
+    runtime_mode: &'static str,
+    render_profile: crate::ClientRenderProfile,
+    backend: Backends,
+    present_mode: PresentMode,
+    maximized: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct FunRenderWinitPresentationPlugin {
@@ -40,18 +55,6 @@ impl Plugin for FunRenderWinitPresentationPlugin {
             Uuid::parse_str(DLSS_PROJECT_ID).expect("DLSS project ID should be a valid UUID"),
         ));
 
-        info!(
-            target: "fun::render",
-            runtime_mode = self.options.runtime_mode,
-            render_profile = self.options.render_profile.as_env_value(),
-            backend = ?render_backend,
-            present_mode = ?present_mode,
-            vsync = false,
-            max_frame_latency = 3,
-            maximized = window_config.maximized,
-            "Fun Winit render backend selected"
-        );
-
         let title = format!("{} Client", game_shared::GAME_TITLE);
         let default_plugins = DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -66,10 +69,33 @@ impl Plugin for FunRenderWinitPresentationPlugin {
         let default_plugins = default_plugins.set(render_plugin(render_backend));
 
         app.add_plugins(default_plugins)
+            .insert_resource(FunWinitRenderStartupDiagnostics {
+                runtime_mode: self.options.runtime_mode,
+                render_profile: self.options.render_profile,
+                backend: render_backend,
+                present_mode,
+                maximized: window_config.maximized,
+            })
             .insert_resource(window_config)
             .insert_resource(RenderErrorHandler(recover_render_device))
-            .insert_resource(WinitSettings::continuous());
+            .insert_resource(WinitSettings::continuous())
+            .add_systems(Startup, log_winit_render_startup_diagnostics);
     }
+}
+
+fn log_winit_render_startup_diagnostics(diagnostics: Res<FunWinitRenderStartupDiagnostics>) {
+    info!(
+        target: "fun::render",
+        runtime_mode = diagnostics.runtime_mode,
+        render_profile = diagnostics.render_profile.as_env_value(),
+        backend = ?diagnostics.backend,
+        present_mode = ?diagnostics.present_mode,
+        vsync = false,
+        max_frame_latency = 3,
+        maximized = diagnostics.maximized,
+        "Fun Winit render backend selected"
+    );
+    log_native_dlss_startup_diagnostics(diagnostics.backend, NativeDlssConfig::from_env());
 }
 
 fn recover_render_device(

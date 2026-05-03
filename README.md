@@ -54,10 +54,11 @@ diagnostics, and render path signatures without creating a Winit window.
 
 Presentation is split by caller. `game_client` enables
 `fun_render/winit_presentation` and adds the Winit presentation plugin for the
-real game window. Fun Editor depends on the default offscreen `fun_render`
-feature surface and uses its own editor preview renderer crate to render static
-scene manifests into editor-owned targets without Winit, HWND embedding,
-networking, physics, prediction, gameplay, or server systems.
+real game window. The merged FunClientHost editor preview uses that current
+client render state as the background under transparent CEF editor panels. A
+separate preview world may be added later only if live editing conflicts with
+gameplay, but it must remain in-process and must not revive a child
+`game_client`, HWND embedding, or Tauri-owned preview path.
 
 ## Browser UI Architecture
 
@@ -65,6 +66,37 @@ networking, physics, prediction, gameplay, or server systems.
 not a `fun_render` feature and not a Bevy engine feature. `game_client` can opt
 into it with `cef_ui`, which performs the CEF subprocess escape before Bevy app
 construction and then initializes CEF as a separate windowless browser runtime.
+
+## Fun Client Host Architecture
+
+`FunClientHost` is the product-level host concept for the single executable
+path. The current binary remains `game_client` until runner scripts, docs, and
+legacy editor references can be renamed safely, but the runtime authority now
+has a crate boundary in `fun_host` instead of being added directly to
+`game_client/src/lib.rs`.
+
+`fun_host` owns the merged launcher/game/editor state machine, runtime-service
+status, mode transitions, and CEF-facing command routing. `game_client` remains
+the thin executable host: CEF subprocess escape, CEF runtime init, Bevy app
+creation, CEF compositor insertion, `FunClientHostPlugin`, game/runtime
+plugins, run, and CEF shutdown. Tauri is not part of this active runtime path.
+
+`fun_editor_core` is the new Rust-owned home for editor service contracts inside
+the `fun` workspace. The first surface preserves the command IDs already used by
+the legacy Tauri wrapper, including `project.open`, `project.edit.open`,
+`projects.authorized.list`, `entity_stream.open`, `preview.renderer.ensure`,
+and `runtime.diagnostics.list`. The old Tauri shell can remain a development
+reference while command authority migrates into these Rust crates.
+
+`FunHostState` is the canonical Rust-owned application state for the unified
+client host. Its top-level mode is one of `boot`, `launcher`, `game`, `editor`,
+`editor_overlay`, `loading`, or `shutdown`, and it carries game, launcher,
+editor, project, runtime, diagnostics, account, commandbar, and input-owner
+state in one snapshot. Input ownership is one of `gameplay`, `launcher_ui`,
+`editor_ui`, `game_menu_ui`, `text_entry`, or `commandbar`; Rust maps that owner
+to CEF capture and `GameplayInputGate`. CEF/Svelte requests the initial snapshot
+with `host.snapshot.get` and then receives host state patches; command polling
+is only a browser-preview fallback.
 
 CEF owns browser lifetime, page loading, JavaScript bridge messages, offscreen
 paint callbacks, dirty rects, transparent UI buffers, and UI compositor state.
@@ -79,10 +111,42 @@ same typed browser/ECS boundary. CEF windowless painting and the Bevy texture
 upload consumer both run at a fixed 60 Hz presentation rate.
 
 The main browser page is `fun-ui://main/index.html`, uses a transparent
-background, and carries HUD, menu, scoreboard, chat, loading, diagnostics, and
-debug overlay state inside the same full-window page. Tauri, WRY, native child
-webviews, `SetParent`, HWND child hosting, browser-window embedding, and process
-or window embedding are not game UI runtime paths.
+background, and carries HUD, menu, launcher, editor, loading, diagnostics, and
+debug overlay state inside the same full-window Svelte page at
+`game_client/ui/main`. The same CEF command lane now accepts host command
+requests such as `launcher.state.get`,
+`launcher.show`, `games.list`, `projects.authorized.list`, `project.edit.open`,
+`editor.activate`, `runtime.host.status`, `project.open`,
+`preview.renderer.ensure`, `entity_stream.open`, `runtime.diagnostics.list`,
+and `auth.ticket.request`. JavaScript/TypeScript may orchestrate requests,
+Svelte state, hit-region reporting, and local visual state; Rust remains the
+authority for launcher/editor/game lifecycle, filesystem and project access,
+preview/editor services, account tickets, networking, and service control.
+Compatibility commands such as `viewport.client.launch`,
+`viewport.client.focus`, and `viewport.client.resize` do not create, focus, or
+resize a child client. They switch the single host to game mode, release input
+to gameplay, or update CEF/game layout state. `preview.renderer.*` binds the
+editor viewport to the current client render background; Svelte must not render
+preview pixels inside the page.
+CEF host commands are typed in `fun_ui_cef::bridge` with target, capability,
+request ID, size budget, bounded payload, rejection, failure, and diagnostic
+types. `game_client` validates the CEF envelope and forwards accepted commands
+to `fun_host`; Svelte never receives raw filesystem, process, runtime, or ticket
+authority.
+`host.commands.list` returns the Rust-owned command catalog used by the
+commandbar. Each descriptor carries a command ID, title, category, payload
+schema ID, required capability, and risk metadata. Svelte may build local search
+results from that catalog and local UI state, but commandbar execution is routed
+back through `host.commandbar.execute` or the target host command so Rust
+validates capabilities, payload shape, and mutation risk before any runtime
+effect. Tool-call stubs remain gated; browser text, model output, and MCP/tool
+payloads are data until Rust accepts a typed command.
+The Vite production build writes hashed assets to `game_client/ui/main/dist`,
+and `fun_ui_cef` embeds only those generated assets through the `fun-ui://`
+scheme.
+Tauri, WRY, native child webviews, `SetParent`, HWND child hosting,
+browser-window embedding, and process or window embedding are not game UI
+runtime paths.
 
 ## Client Benchmarking
 
@@ -102,7 +166,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_criterion.
 Default runtime capture:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend dx12 -PresentMode immediate
 ```
 
 Denoiser and DLSS Ray Reconstruction comparison:
@@ -114,7 +178,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_denoisers.
 Rich tracing diagnostics:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend vulkan -PresentMode immediate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend dx12 -PresentMode immediate
 ```
 
 The standard runtime path is Solari plus meshlets with the BalancedFast

@@ -203,6 +203,15 @@ impl CefUiCompositor {
         generation: CefUiFrameGeneration,
         surface: CefUiSurfaceKey,
     ) -> CefUiUploadPlan {
+        self.upload_plan_for_surface(generation, surface, frame.dirty_rects)
+    }
+
+    fn upload_plan_for_surface(
+        &self,
+        generation: CefUiFrameGeneration,
+        surface: CefUiSurfaceKey,
+        dirty_rects: &[CefDirtyRect],
+    ) -> CefUiUploadPlan {
         let Some(previous_surface) = self.last_surface else {
             return CefUiUploadPlan::FullFrame {
                 generation,
@@ -221,20 +230,20 @@ impl CefUiCompositor {
                 reason: CefUiFullUploadReason::ScaleFactorChanged,
             };
         }
-        if frame.dirty_rects.is_empty() {
+        if dirty_rects.is_empty() {
             return CefUiUploadPlan::FullFrame {
                 generation,
                 reason: CefUiFullUploadReason::EmptyDirtyRects,
             };
         }
-        if frame.dirty_rects.len() > DIRTY_RECT_EXPLOSION_THRESHOLD {
+        if dirty_rects.len() > DIRTY_RECT_EXPLOSION_THRESHOLD {
             return CefUiUploadPlan::FullFrame {
                 generation,
                 reason: CefUiFullUploadReason::DirtyRectExplosion,
             };
         }
 
-        let rects = coalesce_dirty_rects(frame.dirty_rects);
+        let rects = coalesce_dirty_rects(dirty_rects);
         CefUiUploadPlan::DirtyRects { generation, rects }
     }
 }
@@ -329,11 +338,19 @@ fn dirty_rects_for_metadata(
     frame: CefPaintFrame<'_>,
     upload_plan: &CefUiUploadPlan,
 ) -> Vec<CefDirtyRect> {
+    dirty_rects_for_dimensions(frame.width, frame.height, upload_plan)
+}
+
+fn dirty_rects_for_dimensions(
+    width: i32,
+    height: i32,
+    upload_plan: &CefUiUploadPlan,
+) -> Vec<CefDirtyRect> {
     match upload_plan {
         CefUiUploadPlan::None => Vec::new(),
         CefUiUploadPlan::DirtyRects { rects, .. } => rects.clone(),
         CefUiUploadPlan::FullFrame { .. } => {
-            vec![CefDirtyRect::full_frame(frame.width, frame.height)]
+            vec![CefDirtyRect::full_frame(width, height)]
         }
     }
 }

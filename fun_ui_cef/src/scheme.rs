@@ -12,72 +12,50 @@ use cef::{
 pub const FUN_UI_SCHEME: &str = "fun-ui";
 pub const FUN_UI_HOST: &str = "main";
 pub const FUN_UI_MAIN_PATH: &str = "/index.html";
-pub const FUN_UI_APP_JS_PATH: &str = "/assets/app.js";
-pub const FUN_UI_APP_CSS_PATH: &str = "/assets/app.css";
 pub const FUN_UI_MAIN_URL: &str = "fun-ui://main/index.html";
-pub const FUN_UI_APP_JS_URL: &str = "fun-ui://main/assets/app.js";
-pub const FUN_UI_APP_CSS_URL: &str = "fun-ui://main/assets/app.css";
 pub const FUN_CEF_UI_DEV_SERVER_ENV: &str = "FUN_CEF_UI_DEV_SERVER";
 const FUN_UI_ASSET_CHARSET: &str = "utf-8";
-
-const INDEX_HTML_BYTES: &[u8] = include_bytes!("../../game_client/ui/main/index.html");
-const APP_JS_BYTES: &[u8] = include_bytes!("../../game_client/ui/main/assets/app.js");
-const APP_CSS_BYTES: &[u8] = include_bytes!("../../game_client/ui/main/assets/app.css");
+const FUN_UI_CORS_ALLOW_ORIGIN: &str = "*";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
 pub enum FunUiRoute {
     Main,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
-pub enum FunUiAssetRoute {
-    IndexHtml,
-    AppJs,
-    AppCss,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunUiAssetRoute {
+    path: &'static str,
 }
 
 impl FunUiAssetRoute {
     #[must_use]
+    pub const fn new(path: &'static str) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
     pub const fn path(self) -> &'static str {
-        match self {
-            Self::IndexHtml => FUN_UI_MAIN_PATH,
-            Self::AppJs => FUN_UI_APP_JS_PATH,
-            Self::AppCss => FUN_UI_APP_CSS_PATH,
-        }
-    }
-
-    #[must_use]
-    pub const fn mime_type(self) -> &'static str {
-        match self {
-            Self::IndexHtml => "text/html",
-            Self::AppJs => "text/javascript",
-            Self::AppCss => "text/css",
-        }
-    }
-
-    #[must_use]
-    pub const fn content_type(self) -> &'static str {
-        match self {
-            Self::IndexHtml => "text/html; charset=utf-8",
-            Self::AppJs => "text/javascript; charset=utf-8",
-            Self::AppCss => "text/css; charset=utf-8",
-        }
-    }
-
-    #[must_use]
-    pub const fn bytes(self) -> &'static [u8] {
-        match self {
-            Self::IndexHtml => INDEX_HTML_BYTES,
-            Self::AppJs => APP_JS_BYTES,
-            Self::AppCss => APP_CSS_BYTES,
-        }
+        self.path
     }
 }
+
+pub const FUN_UI_INDEX_HTML_ROUTE: FunUiAssetRoute = FunUiAssetRoute::new(FUN_UI_MAIN_PATH);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratedFunUiAsset {
+    pub path: &'static str,
+    pub mime_type: &'static str,
+    pub content_type: &'static str,
+    pub bytes: &'static [u8],
+}
+
+include!(concat!(env!("OUT_DIR"), "/fun_ui_assets.rs"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunUiAsset {
     pub route: FunUiAssetRoute,
     pub mime_type: &'static str,
+    pub content_type: &'static str,
     pub bytes: &'static [u8],
 }
 
@@ -162,7 +140,7 @@ impl FunUiNavigationPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, compactly::v1::Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunUiSchemeRequestOutcome {
     Served {
         route: FunUiAssetRoute,
@@ -182,37 +160,43 @@ pub fn fun_ui_route_url(route: FunUiRoute) -> &'static str {
 
 #[must_use]
 pub fn fun_ui_asset_url(route: FunUiAssetRoute) -> &'static str {
-    match route {
-        FunUiAssetRoute::IndexHtml => FUN_UI_MAIN_URL,
-        FunUiAssetRoute::AppJs => FUN_UI_APP_JS_URL,
-        FunUiAssetRoute::AppCss => FUN_UI_APP_CSS_URL,
-    }
+    route.path()
 }
 
 pub fn validate_fun_ui_url(url: &str) -> Result<FunUiRoute, FunUiUrlError> {
     match validate_fun_ui_asset_url(url)? {
-        FunUiAssetRoute::IndexHtml => Ok(FunUiRoute::Main),
-        FunUiAssetRoute::AppJs | FunUiAssetRoute::AppCss => Err(FunUiUrlError::UnknownRoute),
-    }
-}
-
-pub fn validate_fun_ui_asset_url(url: &str) -> Result<FunUiAssetRoute, FunUiUrlError> {
-    let route_path = normalized_fun_ui_path(url)?;
-    match route_path {
-        FUN_UI_MAIN_PATH | "/" | "" => Ok(FunUiAssetRoute::IndexHtml),
-        FUN_UI_APP_JS_PATH => Ok(FunUiAssetRoute::AppJs),
-        FUN_UI_APP_CSS_PATH => Ok(FunUiAssetRoute::AppCss),
+        route if route.path() == FUN_UI_MAIN_PATH => Ok(FunUiRoute::Main),
         _ => Err(FunUiUrlError::UnknownRoute),
     }
 }
 
+pub fn validate_fun_ui_asset_url(url: &str) -> Result<FunUiAssetRoute, FunUiUrlError> {
+    let route_path = normalized_fun_ui_asset_path(url)?;
+    generated_fun_ui_asset(route_path)
+        .map(|asset| asset.route)
+        .ok_or(FunUiUrlError::UnknownRoute)
+}
+
 pub fn resolve_fun_ui_asset(url: &str) -> Result<FunUiAsset, FunUiUrlError> {
-    let route = validate_fun_ui_asset_url(url)?;
-    Ok(FunUiAsset {
-        route,
-        mime_type: route.mime_type(),
-        bytes: route.bytes(),
-    })
+    let route_path = normalized_fun_ui_asset_path(url)?;
+    generated_fun_ui_asset(route_path).ok_or(FunUiUrlError::UnknownRoute)
+}
+
+#[must_use]
+pub const fn generated_fun_ui_assets() -> &'static [GeneratedFunUiAsset] {
+    GENERATED_FUN_UI_ASSETS
+}
+
+fn generated_fun_ui_asset(path: &str) -> Option<FunUiAsset> {
+    generated_fun_ui_assets()
+        .iter()
+        .find(|asset| asset.path == path)
+        .map(|asset| FunUiAsset {
+            route: FunUiAssetRoute::new(asset.path),
+            mime_type: asset.mime_type,
+            content_type: asset.content_type,
+            bytes: asset.bytes,
+        })
 }
 
 #[must_use]
@@ -326,6 +310,7 @@ pub fn fun_ui_scheme_options() -> i32 {
     SchemeOptions::STANDARD.get_raw()
         | SchemeOptions::LOCAL.get_raw()
         | SchemeOptions::SECURE.get_raw()
+        | SchemeOptions::CORS_ENABLED.get_raw()
         | SchemeOptions::FETCH_ENABLED.get_raw()
 }
 
@@ -421,7 +406,17 @@ wrap_resource_handler! {
                 );
                 response.set_header_by_name(
                     Some(&CefString::from("Content-Type")),
-                    Some(&CefString::from(state.asset.route.content_type())),
+                    Some(&CefString::from(state.asset.content_type)),
+                    1,
+                );
+                response.set_header_by_name(
+                    Some(&CefString::from("Access-Control-Allow-Origin")),
+                    Some(&CefString::from(FUN_UI_CORS_ALLOW_ORIGIN)),
+                    1,
+                );
+                response.set_header_by_name(
+                    Some(&CefString::from("Cross-Origin-Resource-Policy")),
+                    Some(&CefString::from("same-origin")),
                     1,
                 );
             }
@@ -547,6 +542,13 @@ fn normalized_fun_ui_path(url: &str) -> Result<&str, FunUiUrlError> {
     Ok(route_path)
 }
 
+fn normalized_fun_ui_asset_path(url: &str) -> Result<&str, FunUiUrlError> {
+    match normalized_fun_ui_path(url)? {
+        "" | "/" => Ok(FUN_UI_MAIN_PATH),
+        path => Ok(path),
+    }
+}
+
 fn validate_route_segments(path: &str) -> Result<(), FunUiUrlError> {
     for segment in path.split('/').filter(|segment| !segment.is_empty()) {
         if segment.starts_with('.') {
@@ -615,28 +617,49 @@ mod tests {
     }
 
     #[test]
-    fn resolves_locked_known_assets() {
+    fn resolves_vite_build_assets() {
+        let js_asset = generated_fun_ui_assets()
+            .iter()
+            .find(|asset| asset.path.starts_with("/assets/") && asset.path.ends_with(".js"))
+            .expect("vite js asset");
+        let css_asset = generated_fun_ui_assets()
+            .iter()
+            .find(|asset| asset.path.starts_with("/assets/") && asset.path.ends_with(".css"))
+            .expect("vite css asset");
         assert_eq!(
-            resolve_fun_ui_asset("fun-ui://main/assets/app.js")
-                .expect("app js")
+            resolve_fun_ui_asset(&format!("fun-ui://main{}", js_asset.path))
+                .expect("vite js")
                 .route,
-            FunUiAssetRoute::AppJs
+            FunUiAssetRoute::new(js_asset.path)
         );
         assert_eq!(
-            resolve_fun_ui_asset("fun-ui://main/assets/app.css")
-                .expect("app css")
+            resolve_fun_ui_asset(&format!("fun-ui://main{}", css_asset.path))
+                .expect("vite css")
                 .mime_type,
             "text/css"
         );
         assert_eq!(
-            FunUiAssetRoute::IndexHtml.mime_type(),
+            resolve_fun_ui_asset("fun-ui://main/index.html")
+                .expect("index html")
+                .mime_type,
             "text/html",
             "CEF Response::set_mime_type expects only the MIME token"
         );
         assert_eq!(
-            FunUiAssetRoute::IndexHtml.content_type(),
+            resolve_fun_ui_asset("fun-ui://main/")
+                .expect("main slash")
+                .content_type,
             "text/html; charset=utf-8"
         );
+    }
+
+    #[test]
+    fn fun_ui_scheme_is_cors_enabled_for_vite_module_assets() {
+        let options = fun_ui_scheme_options();
+        assert_ne!(options & SchemeOptions::STANDARD.get_raw(), 0);
+        assert_ne!(options & SchemeOptions::SECURE.get_raw(), 0);
+        assert_ne!(options & SchemeOptions::CORS_ENABLED.get_raw(), 0);
+        assert_ne!(options & SchemeOptions::FETCH_ENABLED.get_raw(), 0);
     }
 
     #[test]
@@ -764,12 +787,16 @@ mod tests {
 
     #[test]
     fn classifies_scheme_requests_without_serving_unknown_paths() {
+        let css_asset = generated_fun_ui_assets()
+            .iter()
+            .find(|asset| asset.path.starts_with("/assets/") && asset.path.ends_with(".css"))
+            .expect("vite css asset");
         assert!(matches!(
-            classify_fun_ui_scheme_request("fun-ui://main/assets/app.css"),
+            classify_fun_ui_scheme_request(&format!("fun-ui://main{}", css_asset.path)),
             FunUiSchemeRequestOutcome::Served {
-                route: FunUiAssetRoute::AppCss,
+                route,
                 ..
-            }
+            } if route.path() == css_asset.path
         ));
         assert_eq!(
             classify_fun_ui_scheme_request("fun-ui://main/.env"),

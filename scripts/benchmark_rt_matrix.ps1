@@ -2,7 +2,7 @@ param(
     [switch]$Release,
     [switch]$StaticBevy,
     [switch]$TraceDiagnostics,
-    [string]$RenderBackend = "vulkan",
+    [string]$RenderBackend = "dx12",
     [string]$PresentMode = "immediate",
     [int]$WarmupSeconds = 10,
     [int]$SampleSeconds = 30
@@ -32,7 +32,7 @@ $matrix = @(
     },
     [ordered]@{
         name = "dlss_rr_diagnostic"
-        args = @("-SolariDenoiseMode", "rr")
+        args = @("-SolariDenoiseMode", "rr", "-EnableDx12DlssRr")
     },
     [ordered]@{
         name = "half_resolution_gi_reservoirs"

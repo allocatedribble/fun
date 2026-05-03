@@ -323,7 +323,6 @@ wrap_render_handler! {
         viewport_height: i32,
         view_rect_logged: Arc<AtomicBool>,
         paint_logged: Arc<AtomicBool>,
-        accelerated_paint_logged: Arc<AtomicBool>,
     }
 
     impl RenderHandler {
@@ -433,21 +432,6 @@ wrap_render_handler! {
             });
         }
 
-        fn on_accelerated_paint(
-            &self,
-            _browser: Option<&mut Browser>,
-            _type_: PaintElementType,
-            dirty_rects: Option<&[Rect]>,
-            _info: Option<&cef::AcceleratedPaintInfo>,
-        ) {
-            if !self.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
-                tracing::warn!(
-                    target: FUN_UI_DIAGNOSTICS_TARGET,
-                    dirty_rect_count = dirty_rects.unwrap_or_default().len(),
-                    "CEF UI accelerated paint callback received without shared-texture support"
-                );
-            }
-        }
     }
 }
 
@@ -471,7 +455,6 @@ pub fn new_fun_cef_render_handler_for_viewport(
         scale_factor,
         viewport_width.min(i32::MAX as u32) as i32,
         viewport_height.min(i32::MAX as u32) as i32,
-        Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
     )

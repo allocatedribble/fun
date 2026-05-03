@@ -1,25 +1,49 @@
 use std::time::Duration;
 
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{AssetId, RenderAssetUsages},
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::system::SystemParam,
+    input::{
+        ButtonInput, ButtonState,
+        keyboard::KeyboardInput,
+        mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel},
+    },
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    window::PrimaryWindow,
+    render::{
+        Render, RenderApp, RenderSystems,
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
+        render_asset::RenderAssets,
+        render_resource::{
+            Extent3d, Origin3d, TexelCopyBufferLayout, TextureDimension, TextureFormat,
+        },
+        renderer::RenderQueue,
+        texture::GpuImage,
+    },
+    window::{CursorMoved, PrimaryWindow},
+};
+use fun_host::{
+    FunClientHostState, FunHostCommandRequest, FunHostCommandResponse, FunHostCommandStatus,
+    FunHostMode, FunInputOwner, FunViewportRect,
 };
 use fun_render::{RenderWorldContext, RenderWorldStatus};
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
 use fun_ui_cef::diagnostics::{
     CefUiDiagnosticKind, CefUiDiagnosticSeverity, FUN_UI_DIAGNOSTICS_TARGET,
 };
+#[cfg(test)]
+use fun_ui_cef::render_handler::CefUiFrameGeneration;
 use fun_ui_cef::{
-    BrowserBridgeError, BrowserBridgeQueues, BrowserUiHitRegion, BrowserUiHitRegionId,
-    BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
-    BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefUiModel, CefUiSecurityPolicy,
-    FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey, SharedCefUiCompositor,
-    UiControlPayload, UiEnvelope, UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue,
-    UiPatchBatch, UiPatchValue, UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration,
-    validate_ui_envelope,
+    BrowserBridgeError, BrowserUiHitRegion, BrowserUiHitRegionId, BrowserUiHitRegionMode,
+    BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError, BrowserUiRequestId,
+    BrowserUiRouteState, BrowserUiSequence, CefBrowserKeyEvent, CefBrowserKeyEventKind,
+    CefBrowserMouseButton, CefBrowserMouseEvent, CefUiBrowserHandle, CefUiModel,
+    CefUiSecurityPolicy, FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey,
+    HostCommandError, HostCommandId, HostCommandRejection,
+    HostCommandRequest as CefHostCommandRequest, HostCommandResponse as CefHostCommandResponse,
+    HostDiagnostic, SharedBrowserBridgeQueues, SharedCefUiCompositor, UiControlPayload, UiEnvelope,
+    UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue,
+    UiPatchWriteError, UiPatchWriter, UiSurfaceGeneration, validate_ui_envelope,
 };
 use fun_ui_cef::{CefDirtyRect, CefPaintElement, CefUiCompositorFrame};
 use game_shared::{
@@ -31,6 +55,11 @@ use game_shared::{
 pub const MAX_CEF_UI_HIT_REGIONS: usize = 64;
 const MAX_JS_MESSAGES_PER_FRAME: usize = 64;
 const CEF_UI_RENDER_RATE_HZ: u64 = fun_ui_cef::CEF_UI_WINDOWLESS_FRAME_RATE_HZ as u64;
+const FUN_CLIENT_FPS_COUNTER_Z_INDEX: i32 = CEF_UI_TEXTURE_Z_INDEX + 20;
+const FUN_CLIENT_FPS_COUNTER_REFRESH: Duration = Duration::from_millis(250);
+const FUN_CLIENT_FPS_COUNTER_WIDTH: f32 = 88.0;
+const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
+const FUN_CLIENT_FPS_COUNTER_MARGIN: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum GameCefUiSet {
@@ -46,6 +75,19 @@ pub struct GameCefUiPlugin;
 
 impl Plugin for GameCefUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
+            app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+        }
+        app.add_plugins(ExtractResourcePlugin::<CefUiTextureUploads>::default());
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .init_resource::<CefUiGpuUploadState>()
+                .add_systems(
+                    Render,
+                    upload_cef_ui_texture_to_gpu.in_set(RenderSystems::PrepareResources),
+                );
+        }
+
         app.init_resource::<CefUiStatus>()
             .init_resource::<CefUiFocusMode>()
             .init_resource::<CefUiInputCapture>()
@@ -58,8 +100,11 @@ impl Plugin for GameCefUiPlugin {
             .init_resource::<CefUiFrameStats>()
             .init_resource::<CefUiMessageLoopPump>()
             .init_resource::<CefUiRenderTexture>()
+            .init_resource::<CefUiTextureUploads>()
             .init_resource::<CefUiModelCache>()
             .init_resource::<CefUiDiagnosticsState>()
+            .init_resource::<CefUiHostStateEventCache>()
+            .init_resource::<FunClientFpsCounterState>()
             .add_message::<CefUiIntent>()
             .add_message::<CefUiRequest>()
             .add_message::<CefUiRouteChanged>()
@@ -100,6 +145,7 @@ impl Plugin for GameCefUiPlugin {
                     update_cef_ui_focus_mode,
                     update_cef_ui_pointer_state,
                     update_cef_ui_input_capture,
+                    forward_bevy_input_to_cef,
                     update_gameplay_input_gate,
                     update_cef_ui_overlay_click_through,
                 )
@@ -112,13 +158,23 @@ impl Plugin for GameCefUiPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (write_cef_ui_outgoing_messages, send_cef_ui_patch_batch)
+                (
+                    push_fun_host_state_events,
+                    write_cef_ui_outgoing_messages,
+                    send_cef_ui_patch_batch,
+                    flush_cef_ui_host_envelopes_to_browser,
+                )
                     .chain()
                     .in_set(GameCefUiSet::FlushBridge),
             )
             .add_systems(
                 PostUpdate,
-                upload_cef_ui_frame_to_fun_texture.after(GameCefUiSet::FlushBridge),
+                (
+                    upload_cef_ui_frame_to_fun_texture,
+                    update_fun_client_fps_counter,
+                )
+                    .chain()
+                    .after(GameCefUiSet::FlushBridge),
             )
             .add_systems(
                 Last,
@@ -440,6 +496,27 @@ impl GameplayInputGate {
     }
 }
 
+#[derive(Clone)]
+pub struct CefUiBrowserControl {
+    browser: CefUiBrowserHandle,
+}
+
+impl CefUiBrowserControl {
+    #[must_use]
+    pub const fn new(browser: CefUiBrowserHandle) -> Self {
+        Self { browser }
+    }
+
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.browser.is_ready()
+    }
+
+    pub fn flush_host_envelopes_to_js(&self) -> usize {
+        self.browser.flush_host_envelopes_to_js()
+    }
+}
+
 #[derive(Debug, Clone, Resource)]
 pub struct CefUiAuthority {
     pub context: GameUiProtocolValidationContext,
@@ -462,13 +539,23 @@ pub struct CefUiSecurityPolicyResource {
 
 #[derive(Debug, Clone, Resource)]
 pub struct CefUiBridge {
-    queues: BrowserBridgeQueues,
+    queues: SharedBrowserBridgeQueues,
     patch_writer: UiPatchWriter,
     patch_queue: UiPatchBackpressureQueue,
     next_sequence: BrowserUiSequence,
 }
 
 impl CefUiBridge {
+    #[must_use]
+    pub fn new(queues: SharedBrowserBridgeQueues) -> Self {
+        Self {
+            queues,
+            patch_writer: UiPatchWriter::default(),
+            patch_queue: UiPatchBackpressureQueue::default(),
+            next_sequence: BrowserUiSequence::default(),
+        }
+    }
+
     pub fn push_js_envelope(&mut self, envelope: UiEnvelope) -> Result<(), BrowserBridgeError> {
         self.queues.push_js_envelope(envelope)
     }
@@ -522,12 +609,7 @@ impl CefUiBridge {
 
 impl Default for CefUiBridge {
     fn default() -> Self {
-        Self {
-            queues: BrowserBridgeQueues::default(),
-            patch_writer: UiPatchWriter::default(),
-            patch_queue: UiPatchBackpressureQueue::default(),
-            next_sequence: BrowserUiSequence(0),
-        }
+        Self::new(SharedBrowserBridgeQueues::default())
     }
 }
 
@@ -629,11 +711,72 @@ impl Default for CefUiRenderTexture {
 #[derive(Debug, Default, Clone, Copy, Component)]
 struct CefUiRenderTextureRoot;
 
+#[derive(Debug, Clone, Default, Resource)]
+struct CefUiTextureUploads {
+    latest: Option<CefUiTextureUpload>,
+}
+
+impl ExtractResource for CefUiTextureUploads {
+    type Source = Self;
+
+    fn extract_resource(source: &Self::Source) -> Self {
+        source.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CefUiTextureUpload {
+    image: Handle<Image>,
+    generation: UiSurfaceGeneration,
+    size: UVec2,
+    pixels: Vec<u8>,
+    dirty_rects: Vec<CefDirtyRect>,
+    force_full_upload: bool,
+}
+
+#[derive(Debug, Default, Resource)]
+struct CefUiGpuUploadState {
+    image_id: Option<AssetId<Image>>,
+    last_generation: Option<UiSurfaceGeneration>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Component)]
+struct FunClientFpsCounterRoot;
+
+#[derive(Debug, Default, Clone, Copy, Component)]
+struct FunClientFpsCounterText;
+
+#[derive(Debug, Resource)]
+struct FunClientFpsCounterState {
+    update_timer: Timer,
+    last_label: String,
+}
+
+impl Default for FunClientFpsCounterState {
+    fn default() -> Self {
+        Self {
+            update_timer: Timer::new(FUN_CLIENT_FPS_COUNTER_REFRESH, TimerMode::Repeating),
+            last_label: "FPS --".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FunClientFpsCounterLayout {
+    left: f32,
+    top: f32,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 struct CefUiDiagnosticsState {
     last_dropped_patch_count: u64,
     last_coalesced_patch_count: u64,
     last_overlay_change_count: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+struct CefUiHostStateEventCache {
+    last_sequence: u64,
 }
 
 #[derive(Debug, Clone, Message)]
@@ -891,6 +1034,7 @@ fn drain_cef_incoming_queue(
 struct CefUiIncomingWriters<'w> {
     intents: MessageWriter<'w, CefUiIntent>,
     requests: MessageWriter<'w, CefUiRequest>,
+    host_commands: MessageWriter<'w, FunHostCommandRequest>,
     routes: MessageWriter<'w, CefUiRouteChanged>,
     hit_regions: MessageWriter<'w, CefUiHitRegionsChanged>,
     text_entry: MessageWriter<'w, CefUiTextEntryChanged>,
@@ -923,7 +1067,12 @@ fn game_ui_request_from_control(
         | UiControlPayload::RouteChanged { .. }
         | UiControlPayload::HitRegionsChanged { .. }
         | UiControlPayload::TextEntryChanged { .. }
+        | UiControlPayload::HostCommand { .. }
+        | UiControlPayload::HostEvent { .. }
         | UiControlPayload::Lifecycle { .. } => return Ok(None),
+        UiControlPayload::HostCommandResult { .. } => {
+            return Err(GameUiRequestRejectionReason::InvalidPayload);
+        }
     };
     Ok(Some(GameUiRequestEnvelope::new(
         GameUiRequestId(request_id.0),
@@ -954,6 +1103,9 @@ fn write_validated_intent(payload: UiControlPayload, intents: &mut MessageWriter
         | UiControlPayload::RouteChanged { .. }
         | UiControlPayload::HitRegionsChanged { .. }
         | UiControlPayload::TextEntryChanged { .. }
+        | UiControlPayload::HostCommand { .. }
+        | UiControlPayload::HostCommandResult { .. }
+        | UiControlPayload::HostEvent { .. }
         | UiControlPayload::Lifecycle { .. } => {}
     }
 }
@@ -970,15 +1122,34 @@ fn drain_validated_envelope(
     match envelope.payload {
         UiEnvelopePayload::Control { payload } if kind == UiEnvelopeKind::Request => {
             if let Some(request_id) = request_id {
-                let Some(request) = game_ui_request_from_control(request_id, sequence, &payload)
-                    .map_err(CefUiError::RejectedUiRequest)?
-                else {
-                    return Ok(());
-                };
-                validate_game_ui_request(&request, authority)
-                    .map_err(CefUiError::RejectedUiRequest)?;
-                writers.requests.write(CefUiRequest { envelope: request });
-                write_validated_intent(payload, &mut writers.intents);
+                match payload {
+                    UiControlPayload::HostCommand {
+                        request:
+                            CefHostCommandRequest {
+                                command_id,
+                                payload,
+                                ..
+                            },
+                    } => {
+                        writers.host_commands.write(FunHostCommandRequest::new(
+                            request_id.0,
+                            String::from(command_id.as_str()),
+                            payload,
+                        ));
+                    }
+                    payload => {
+                        let Some(request) =
+                            game_ui_request_from_control(request_id, sequence, &payload)
+                                .map_err(CefUiError::RejectedUiRequest)?
+                        else {
+                            return Ok(());
+                        };
+                        validate_game_ui_request(&request, authority)
+                            .map_err(CefUiError::RejectedUiRequest)?;
+                        writers.requests.write(CefUiRequest { envelope: request });
+                        write_validated_intent(payload, &mut writers.intents);
+                    }
+                }
             }
         }
         UiEnvelopePayload::Control {
@@ -1010,7 +1181,10 @@ fn drain_validated_envelope(
             payload:
                 UiControlPayload::ChatSubmit { .. }
                 | UiControlPayload::MenuCommand { .. }
-                | UiControlPayload::SettingsChanged { .. },
+                | UiControlPayload::SettingsChanged { .. }
+                | UiControlPayload::HostCommand { .. }
+                | UiControlPayload::HostCommandResult { .. }
+                | UiControlPayload::HostEvent { .. },
         } => {
             return Err(CefUiError::RejectedUiRequest(
                 GameUiRequestRejectionReason::InvalidPayload,
@@ -1076,22 +1250,40 @@ fn apply_cef_ui_text_entry_changes(
 fn update_cef_ui_focus_mode(
     status: Res<CefUiStatus>,
     input_capture: Res<CefUiInputCapture>,
+    host: Option<Res<FunClientHostState>>,
     mut focus_mode: ResMut<CefUiFocusMode>,
 ) {
-    *focus_mode = if input_capture.text_entry_active {
-        CefUiFocusMode::TextEntry
-    } else if status.current_route.modal_reason().is_some()
-        || matches!(
-            input_capture.hit_region_mode,
-            BrowserUiHitRegionMode::UiModal
-        )
-    {
-        CefUiFocusMode::UiModal
-    } else if status.compositor_visible {
-        CefUiFocusMode::HudPassive
-    } else {
-        CefUiFocusMode::Gameplay
-    };
+    *focus_mode = focus_mode_for_owner(status.as_ref(), input_capture.as_ref(), host.as_deref());
+}
+
+fn focus_mode_for_owner(
+    status: &CefUiStatus,
+    input_capture: &CefUiInputCapture,
+    host: Option<&FunClientHostState>,
+) -> CefUiFocusMode {
+    if input_capture.text_entry_active {
+        return CefUiFocusMode::TextEntry;
+    }
+    match host.map(|host| host.state.input_owner) {
+        Some(FunInputOwner::LauncherUi | FunInputOwner::EditorUi | FunInputOwner::GameMenuUi) => {
+            CefUiFocusMode::UiModal
+        }
+        Some(FunInputOwner::TextEntry | FunInputOwner::Commandbar) => CefUiFocusMode::TextEntry,
+        Some(FunInputOwner::Gameplay) | None => {
+            if status.current_route.modal_reason().is_some()
+                || matches!(
+                    input_capture.hit_region_mode,
+                    BrowserUiHitRegionMode::UiModal
+                )
+            {
+                CefUiFocusMode::UiModal
+            } else if status.compositor_visible {
+                CefUiFocusMode::HudPassive
+            } else {
+                CefUiFocusMode::Gameplay
+            }
+        }
+    }
 }
 
 fn update_cef_ui_pointer_state(
@@ -1139,6 +1331,307 @@ fn update_cef_ui_input_capture(
             input_capture.capture_keyboard = true;
             input_capture.capture_pointer = pointer_state.active_hit_region.is_some();
         }
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "CEF OSR input forwarding consumes the window, pointer, mouse, wheel and keyboard lanes together"
+)]
+fn forward_bevy_input_to_cef(
+    browser_control: Option<NonSend<CefUiBrowserControl>>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    focus_mode: Res<CefUiFocusMode>,
+    input_capture: Res<CefUiInputCapture>,
+    pointer_state: Res<CefUiPointerState>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut cursor_moved: MessageReader<CursorMoved>,
+    mut mouse_buttons: MessageReader<MouseButtonInput>,
+    mut mouse_wheel: MessageReader<MouseWheel>,
+    mut keyboard_inputs: MessageReader<KeyboardInput>,
+) {
+    let Some(browser_control) = browser_control else {
+        return;
+    };
+    if !browser_control.is_ready() {
+        return;
+    }
+    let Ok(primary_window_entity) = primary_window.single() else {
+        return;
+    };
+
+    let forward_pointer = should_forward_pointer_to_cef(*focus_mode, input_capture.as_ref());
+    let forward_keyboard = should_forward_keyboard_to_cef(*focus_mode, input_capture.as_ref());
+
+    browser_control
+        .browser
+        .set_focus(forward_keyboard || forward_pointer);
+
+    if forward_pointer {
+        for event in cursor_moved.read() {
+            if event.window != primary_window_entity {
+                continue;
+            }
+            let position = cef_pointer_position_from_vec2(event.position);
+            browser_control.browser.send_mouse_move(
+                CefBrowserMouseEvent {
+                    x: position.x,
+                    y: position.y,
+                    modifiers: cef_event_modifiers(&keys),
+                },
+                false,
+            );
+        }
+
+        let pointer_position = pointer_state
+            .position
+            .unwrap_or(CefUiPointerPosition { x: 0, y: 0 });
+        for event in mouse_buttons.read() {
+            if event.window != primary_window_entity {
+                continue;
+            }
+            let Some(button) = cef_mouse_button(event.button) else {
+                continue;
+            };
+            browser_control.browser.send_mouse_click(
+                CefBrowserMouseEvent {
+                    x: pointer_position.x,
+                    y: pointer_position.y,
+                    modifiers: cef_event_modifiers(&keys),
+                },
+                button,
+                matches!(event.state, ButtonState::Released),
+                1,
+            );
+        }
+
+        for event in mouse_wheel.read() {
+            if event.window != primary_window_entity {
+                continue;
+            }
+            let scale = match event.unit {
+                MouseScrollUnit::Line => MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+                MouseScrollUnit::Pixel => 1.0,
+            };
+            browser_control.browser.send_mouse_wheel(
+                CefBrowserMouseEvent {
+                    x: pointer_position.x,
+                    y: pointer_position.y,
+                    modifiers: cef_event_modifiers(&keys),
+                },
+                scaled_cef_wheel_delta(event.x, scale),
+                scaled_cef_wheel_delta(event.y, scale),
+            );
+        }
+    } else {
+        cursor_moved.clear();
+        mouse_buttons.clear();
+        mouse_wheel.clear();
+    }
+
+    if forward_keyboard {
+        for event in keyboard_inputs.read() {
+            if event.window != primary_window_entity {
+                continue;
+            }
+            let Some(windows_key_code) = windows_virtual_key_code(event.key_code) else {
+                continue;
+            };
+            let modifiers = cef_event_modifiers(&keys);
+            match event.state {
+                ButtonState::Pressed => {
+                    browser_control.browser.send_key_event(CefBrowserKeyEvent {
+                        kind: CefBrowserKeyEventKind::RawKeyDown,
+                        modifiers,
+                        windows_key_code,
+                        native_key_code: windows_key_code,
+                        character: 0,
+                        unmodified_character: 0,
+                        is_system_key: false,
+                    });
+                    if let Some(text) = event.text.as_deref() {
+                        for character in text.encode_utf16() {
+                            browser_control.browser.send_key_event(CefBrowserKeyEvent {
+                                kind: CefBrowserKeyEventKind::Char,
+                                modifiers,
+                                windows_key_code,
+                                native_key_code: windows_key_code,
+                                character,
+                                unmodified_character: character,
+                                is_system_key: false,
+                            });
+                        }
+                    }
+                }
+                ButtonState::Released => {
+                    browser_control.browser.send_key_event(CefBrowserKeyEvent {
+                        kind: CefBrowserKeyEventKind::KeyUp,
+                        modifiers,
+                        windows_key_code,
+                        native_key_code: windows_key_code,
+                        character: 0,
+                        unmodified_character: 0,
+                        is_system_key: false,
+                    });
+                }
+            }
+        }
+    } else {
+        keyboard_inputs.clear();
+    }
+}
+
+fn should_forward_pointer_to_cef(
+    focus_mode: CefUiFocusMode,
+    input_capture: &CefUiInputCapture,
+) -> bool {
+    input_capture.capture_pointer
+        || matches!(
+            focus_mode,
+            CefUiFocusMode::HudPassive | CefUiFocusMode::UiModal | CefUiFocusMode::TextEntry
+        )
+}
+
+fn should_forward_keyboard_to_cef(
+    focus_mode: CefUiFocusMode,
+    input_capture: &CefUiInputCapture,
+) -> bool {
+    input_capture.capture_keyboard
+        || matches!(
+            focus_mode,
+            CefUiFocusMode::UiModal | CefUiFocusMode::TextEntry
+        )
+}
+
+fn cef_pointer_position_from_vec2(position: Vec2) -> CefUiPointerPosition {
+    CefUiPointerPosition {
+        x: position.x.max(0.0).min(i32::MAX as f32) as i32,
+        y: position.y.max(0.0).min(i32::MAX as f32) as i32,
+    }
+}
+
+fn scaled_cef_wheel_delta(value: f32, scale: f32) -> i32 {
+    (value * scale)
+        .round()
+        .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
+fn cef_mouse_button(button: MouseButton) -> Option<CefBrowserMouseButton> {
+    match button {
+        MouseButton::Left => Some(CefBrowserMouseButton::Left),
+        MouseButton::Right => Some(CefBrowserMouseButton::Right),
+        MouseButton::Middle => Some(CefBrowserMouseButton::Middle),
+        MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => None,
+    }
+}
+
+fn cef_event_modifiers(keys: &ButtonInput<KeyCode>) -> u32 {
+    let mut modifiers = 0;
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        modifiers |= 1 << 1;
+    }
+    if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        modifiers |= 1 << 2;
+    }
+    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
+        modifiers |= 1 << 3;
+    }
+    if keys.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight]) {
+        modifiers |= 1 << 7;
+    }
+    modifiers
+}
+
+fn windows_virtual_key_code(key_code: KeyCode) -> Option<i32> {
+    match key_code {
+        KeyCode::Backspace => Some(0x08),
+        KeyCode::Tab => Some(0x09),
+        KeyCode::Enter | KeyCode::NumpadEnter => Some(0x0d),
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(0x10),
+        KeyCode::ControlLeft | KeyCode::ControlRight => Some(0x11),
+        KeyCode::AltLeft | KeyCode::AltRight => Some(0x12),
+        KeyCode::Pause => Some(0x13),
+        KeyCode::CapsLock => Some(0x14),
+        KeyCode::Escape => Some(0x1b),
+        KeyCode::Space => Some(0x20),
+        KeyCode::PageUp => Some(0x21),
+        KeyCode::PageDown => Some(0x22),
+        KeyCode::End => Some(0x23),
+        KeyCode::Home => Some(0x24),
+        KeyCode::ArrowLeft => Some(0x25),
+        KeyCode::ArrowUp => Some(0x26),
+        KeyCode::ArrowRight => Some(0x27),
+        KeyCode::ArrowDown => Some(0x28),
+        KeyCode::Insert => Some(0x2d),
+        KeyCode::Delete => Some(0x2e),
+        KeyCode::Digit0 | KeyCode::Numpad0 => Some(0x30),
+        KeyCode::Digit1 | KeyCode::Numpad1 => Some(0x31),
+        KeyCode::Digit2 | KeyCode::Numpad2 => Some(0x32),
+        KeyCode::Digit3 | KeyCode::Numpad3 => Some(0x33),
+        KeyCode::Digit4 | KeyCode::Numpad4 => Some(0x34),
+        KeyCode::Digit5 | KeyCode::Numpad5 => Some(0x35),
+        KeyCode::Digit6 | KeyCode::Numpad6 => Some(0x36),
+        KeyCode::Digit7 | KeyCode::Numpad7 => Some(0x37),
+        KeyCode::Digit8 | KeyCode::Numpad8 => Some(0x38),
+        KeyCode::Digit9 | KeyCode::Numpad9 => Some(0x39),
+        KeyCode::KeyA => Some(0x41),
+        KeyCode::KeyB => Some(0x42),
+        KeyCode::KeyC => Some(0x43),
+        KeyCode::KeyD => Some(0x44),
+        KeyCode::KeyE => Some(0x45),
+        KeyCode::KeyF => Some(0x46),
+        KeyCode::KeyG => Some(0x47),
+        KeyCode::KeyH => Some(0x48),
+        KeyCode::KeyI => Some(0x49),
+        KeyCode::KeyJ => Some(0x4a),
+        KeyCode::KeyK => Some(0x4b),
+        KeyCode::KeyL => Some(0x4c),
+        KeyCode::KeyM => Some(0x4d),
+        KeyCode::KeyN => Some(0x4e),
+        KeyCode::KeyO => Some(0x4f),
+        KeyCode::KeyP => Some(0x50),
+        KeyCode::KeyQ => Some(0x51),
+        KeyCode::KeyR => Some(0x52),
+        KeyCode::KeyS => Some(0x53),
+        KeyCode::KeyT => Some(0x54),
+        KeyCode::KeyU => Some(0x55),
+        KeyCode::KeyV => Some(0x56),
+        KeyCode::KeyW => Some(0x57),
+        KeyCode::KeyX => Some(0x58),
+        KeyCode::KeyY => Some(0x59),
+        KeyCode::KeyZ => Some(0x5a),
+        KeyCode::SuperLeft | KeyCode::SuperRight => Some(0x5b),
+        KeyCode::NumpadMultiply => Some(0x6a),
+        KeyCode::NumpadAdd => Some(0x6b),
+        KeyCode::NumpadSubtract => Some(0x6d),
+        KeyCode::NumpadDecimal => Some(0x6e),
+        KeyCode::NumpadDivide => Some(0x6f),
+        KeyCode::F1 => Some(0x70),
+        KeyCode::F2 => Some(0x71),
+        KeyCode::F3 => Some(0x72),
+        KeyCode::F4 => Some(0x73),
+        KeyCode::F5 => Some(0x74),
+        KeyCode::F6 => Some(0x75),
+        KeyCode::F7 => Some(0x76),
+        KeyCode::F8 => Some(0x77),
+        KeyCode::F9 => Some(0x78),
+        KeyCode::F10 => Some(0x79),
+        KeyCode::F11 => Some(0x7a),
+        KeyCode::F12 => Some(0x7b),
+        KeyCode::NumLock => Some(0x90),
+        KeyCode::ScrollLock => Some(0x91),
+        KeyCode::Semicolon => Some(0xba),
+        KeyCode::Equal => Some(0xbb),
+        KeyCode::Comma => Some(0xbc),
+        KeyCode::Minus => Some(0xbd),
+        KeyCode::Period => Some(0xbe),
+        KeyCode::Slash => Some(0xbf),
+        KeyCode::Backquote => Some(0xc0),
+        KeyCode::BracketLeft => Some(0xdb),
+        KeyCode::Backslash | KeyCode::IntlBackslash => Some(0xdc),
+        KeyCode::BracketRight => Some(0xdd),
+        KeyCode::Quote => Some(0xde),
+        _ => None,
     }
 }
 
@@ -1230,6 +1723,46 @@ fn collect_gameplay_ui_model(
     cache.previous = Some(model);
 }
 
+fn push_fun_host_state_events(
+    host: Res<FunClientHostState>,
+    mut cache: ResMut<CefUiHostStateEventCache>,
+    mut bridge: ResMut<CefUiBridge>,
+    mut status: ResMut<CefUiStatus>,
+) {
+    let sequence = host.sequence();
+    if sequence == cache.last_sequence {
+        return;
+    }
+    cache.last_sequence = sequence;
+    let payload = match host.snapshot_payload_json() {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                ?error,
+                "failed to encode FunHostState event"
+            );
+            return;
+        }
+    };
+    let envelope = UiEnvelope::control(
+        UiEnvelopeKind::Event,
+        None,
+        bridge.next_sequence(),
+        UiControlPayload::HostEvent {
+            event: String::from("host.state.patch"),
+            payload,
+        },
+    );
+    if let Err(error) = bridge.push_host_envelope(envelope) {
+        status.last_error = Some(CefUiError::from(error));
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters expose each CEF bridge lane directly to scheduler ordering"
+)]
 fn write_cef_ui_outgoing_messages(
     mut bridge: ResMut<CefUiBridge>,
     mut status: ResMut<CefUiStatus>,
@@ -1238,6 +1771,7 @@ fn write_cef_ui_outgoing_messages(
     mut route_sets: MessageReader<CefUiRouteSet>,
     mut modal_sets: MessageReader<CefUiModalSet>,
     mut diagnostics: MessageReader<CefUiDiagnosticPush>,
+    mut host_responses: MessageReader<FunHostCommandResponse>,
 ) {
     for patch in patches.read() {
         if let Err(error) = bridge.push_patch(patch.channel, patch.field, patch.value.clone()) {
@@ -1296,6 +1830,102 @@ fn write_cef_ui_outgoing_messages(
             status.last_error = Some(CefUiError::PatchWrite(error));
         }
     }
+    for response in host_responses.read() {
+        let envelope_kind = match response.status {
+            FunHostCommandStatus::Ok => UiEnvelopeKind::Response,
+            FunHostCommandStatus::Error => UiEnvelopeKind::Error,
+        };
+        let payload = UiControlPayload::HostCommandResult {
+            command_id: HostCommandId::new(response.command_id.clone()),
+            response: cef_host_response_from_fun_host(response),
+        };
+        let envelope = UiEnvelope::control(
+            envelope_kind,
+            Some(BrowserUiRequestId(response.request_id)),
+            bridge.next_sequence(),
+            payload,
+        );
+        if let Err(error) = bridge.push_host_envelope(envelope) {
+            status.last_error = Some(CefUiError::from(error));
+        }
+    }
+}
+
+fn cef_host_response_from_fun_host(response: &FunHostCommandResponse) -> CefHostCommandResponse {
+    match response.status {
+        FunHostCommandStatus::Ok => CefHostCommandResponse::Ok {
+            payload: response.payload_json.clone(),
+            diagnostics: Vec::new(),
+        },
+        FunHostCommandStatus::Error => {
+            let Some(error_code) = response.error_code else {
+                return CefHostCommandResponse::Failed {
+                    error: HostCommandError {
+                        code: String::from("host.unknown_error"),
+                        message: String::from(
+                            "Fun host command failed without a typed error code.",
+                        ),
+                    },
+                    diagnostics: Vec::new(),
+                };
+            };
+            match error_code {
+                fun_host::FunHostCommandErrorCode::UnknownCommand => {
+                    CefHostCommandResponse::Rejected {
+                        reason: HostCommandRejection::UnknownCommand,
+                    }
+                }
+                fun_host::FunHostCommandErrorCode::OversizePayload => {
+                    CefHostCommandResponse::Rejected {
+                        reason: HostCommandRejection::OversizePayload,
+                    }
+                }
+                fun_host::FunHostCommandErrorCode::InvalidPayload => {
+                    CefHostCommandResponse::Rejected {
+                        reason: HostCommandRejection::InvalidPayload,
+                    }
+                }
+                fun_host::FunHostCommandErrorCode::ProjectUnauthorized => {
+                    CefHostCommandResponse::Rejected {
+                        reason: HostCommandRejection::MissingCapability,
+                    }
+                }
+                fun_host::FunHostCommandErrorCode::HostShuttingDown => {
+                    CefHostCommandResponse::Rejected {
+                        reason: HostCommandRejection::HostShuttingDown,
+                    }
+                }
+                fun_host::FunHostCommandErrorCode::BackendSessionRequired
+                | fun_host::FunHostCommandErrorCode::ReturnToGameUnavailable
+                | fun_host::FunHostCommandErrorCode::ResponseEncodingFailed => {
+                    CefHostCommandResponse::Failed {
+                        error: HostCommandError {
+                            code: String::from(error_code.as_wire_str()),
+                            message: format!(
+                                "Fun host command failed: {}",
+                                error_code.as_wire_str()
+                            ),
+                        },
+                        diagnostics: host_diagnostics_from_payload(&response.payload_json),
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn host_diagnostics_from_payload(payload_json: &[u8]) -> Vec<HostDiagnostic> {
+    if payload_json.is_empty() {
+        return Vec::new();
+    }
+    vec![HostDiagnostic {
+        code: String::from("host.command.failed"),
+        level: String::from("warning"),
+        message: String::from_utf8_lossy(payload_json)
+            .chars()
+            .take(512)
+            .collect(),
+    }]
 }
 
 fn send_cef_ui_patch_batch(
@@ -1316,6 +1946,17 @@ fn send_cef_ui_patch_batch(
             status.last_error = Some(CefUiError::from(error));
         }
     }
+}
+
+fn flush_cef_ui_host_envelopes_to_browser(
+    browser_control: Option<NonSend<CefUiBrowserControl>>,
+    mut stats: ResMut<CefUiFrameStats>,
+) {
+    let Some(browser_control) = browser_control else {
+        return;
+    };
+    let flushed = browser_control.flush_host_envelopes_to_js();
+    stats.js_message_count = stats.js_message_count.saturating_add(flushed as u64);
 }
 
 const CEF_UI_TEXTURE_BYTES_PER_PIXEL: usize = 4;
@@ -1342,11 +1983,172 @@ fn pump_cef_ui_message_loop(time: Res<Time>, mut pump: ResMut<CefUiMessageLoopPu
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy UI systems need independent access to host, diagnostics, and spawned UI nodes"
+)]
+fn update_fun_client_fps_counter(
+    mut commands: Commands,
+    time: Res<Time>,
+    host: Option<Res<FunClientHostState>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    diagnostics: Res<DiagnosticsStore>,
+    mut counter: ResMut<FunClientFpsCounterState>,
+    mut roots: Query<(&mut Node, &mut Visibility), With<FunClientFpsCounterRoot>>,
+    mut texts: Query<&mut Text, With<FunClientFpsCounterText>>,
+) {
+    let host = host.as_deref();
+    let mode = host.map_or(FunHostMode::Game, |host| host.state.mode);
+    let preview_rect = host.and_then(|host| host.state.game.viewport_layout.rect);
+    let window_size = windows.single().ok().map(window_logical_size);
+    let layout = fun_client_fps_counter_layout(mode, preview_rect, window_size);
+
+    let Some(layout) = layout else {
+        for (_, mut visibility) in &mut roots {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+
+    counter.update_timer.tick(time.delta());
+    if counter.update_timer.just_finished() || counter.last_label == "FPS --" {
+        counter.last_label = fun_client_fps_label(&diagnostics);
+    }
+
+    let mut positioned_root = false;
+    for (mut node, mut visibility) in &mut roots {
+        if positioned_root {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
+        node.left = px(layout.left);
+        node.top = px(layout.top);
+        *visibility = Visibility::Visible;
+        positioned_root = true;
+    }
+
+    if !positioned_root {
+        spawn_fun_client_fps_counter(&mut commands, layout, &counter.last_label);
+    }
+
+    for mut text in &mut texts {
+        text.0.clone_from(&counter.last_label);
+    }
+}
+
+fn spawn_fun_client_fps_counter(
+    commands: &mut Commands,
+    layout: FunClientFpsCounterLayout,
+    label: &str,
+) {
+    commands
+        .spawn((
+            Name::new("Fun Client FPS Counter"),
+            FunClientFpsCounterRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(layout.left),
+                top: px(layout.top),
+                width: px(FUN_CLIENT_FPS_COUNTER_WIDTH),
+                height: px(FUN_CLIENT_FPS_COUNTER_HEIGHT),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba_u8(5, 9, 13, 184)),
+            GlobalZIndex(FUN_CLIENT_FPS_COUNTER_Z_INDEX),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(12.0),
+                ..default()
+            },
+            TextColor(Color::srgba_u8(218, 235, 248, 255)),
+            FunClientFpsCounterText,
+        ));
+}
+
+fn window_logical_size(window: &Window) -> UVec2 {
+    UVec2::new(
+        window.resolution.width().max(0.0).round() as u32,
+        window.resolution.height().max(0.0).round() as u32,
+    )
+}
+
+fn fun_client_fps_label(diagnostics: &DiagnosticsStore) -> String {
+    diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|diagnostic| diagnostic.smoothed())
+        .map_or_else(|| "FPS --".to_owned(), |fps| format!("{fps:>3.0} FPS"))
+}
+
+fn fun_client_fps_counter_layout(
+    mode: FunHostMode,
+    preview_rect: Option<FunViewportRect>,
+    window_size: Option<UVec2>,
+) -> Option<FunClientFpsCounterLayout> {
+    match mode {
+        FunHostMode::Game => {
+            let window_size = window_size?;
+            if window_size.x == 0 || window_size.y == 0 {
+                return None;
+            }
+            Some(FunClientFpsCounterLayout {
+                left: fps_counter_axis_position(
+                    0.0,
+                    window_size.x as f32,
+                    FUN_CLIENT_FPS_COUNTER_WIDTH,
+                ),
+                top: fps_counter_axis_position(
+                    0.0,
+                    window_size.y as f32,
+                    FUN_CLIENT_FPS_COUNTER_HEIGHT,
+                ),
+            })
+        }
+        FunHostMode::Editor | FunHostMode::EditorOverlay => {
+            let rect = preview_rect?;
+            if rect.width == 0 || rect.height == 0 {
+                return None;
+            }
+            let left = fps_counter_axis_position(
+                rect.x.max(0) as f32,
+                rect.width as f32,
+                FUN_CLIENT_FPS_COUNTER_WIDTH,
+            );
+            let top = fps_counter_axis_position(
+                rect.y.max(0) as f32,
+                rect.height as f32,
+                FUN_CLIENT_FPS_COUNTER_HEIGHT,
+            );
+            Some(FunClientFpsCounterLayout { left, top })
+        }
+        FunHostMode::Boot
+        | FunHostMode::Launcher
+        | FunHostMode::Loading
+        | FunHostMode::Shutdown => None,
+    }
+}
+
+fn fps_counter_axis_position(origin: f32, extent: f32, counter_extent: f32) -> f32 {
+    if extent > counter_extent + FUN_CLIENT_FPS_COUNTER_MARGIN.mul_add(2.0, 0.0) {
+        origin + FUN_CLIENT_FPS_COUNTER_MARGIN
+    } else {
+        origin
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system parameters expose each texture upload resource directly to scheduler ordering"
+)]
 fn upload_cef_ui_frame_to_fun_texture(
     mut commands: Commands,
     render_compositor: Option<Res<CefUiRenderCompositor>>,
     time: Res<Time>,
     mut render_texture: ResMut<CefUiRenderTexture>,
+    mut texture_uploads: ResMut<CefUiTextureUploads>,
     mut images: ResMut<Assets<Image>>,
     mut image_nodes: Query<&mut ImageNode, With<CefUiRenderTextureRoot>>,
     mut status: ResMut<CefUiStatus>,
@@ -1383,9 +2185,32 @@ fn upload_cef_ui_frame_to_fun_texture(
     if frame.pixels().len() != expected_byte_len {
         return;
     }
+    let requires_generation_resync = cef_ui_frame_requires_full_texture_upload(
+        render_texture.last_generation,
+        frame.metadata.generation,
+    );
+    if requires_generation_resync && let Some(previous_generation) = render_texture.last_generation
+    {
+        tracing::debug!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            previous_generation = previous_generation.0,
+            next_generation = frame.metadata.generation.0,
+            "CEF UI full texture resync after skipped paint generation"
+        );
+    }
+    let force_full_upload = requires_generation_resync
+        || frame
+            .metadata
+            .dirty_rects
+            .iter()
+            .any(|rect| cef_dirty_rect_bounds(size, *rect).is_none());
 
-    let uploaded_bytes = if render_texture.image.is_none() || render_texture.size != Some(size) {
-        let image_handle = images.add(new_cef_ui_texture_image(size, frame.pixels().to_vec()));
+    let (image_handle, uploaded_bytes) = if render_texture.image.is_none()
+        || render_texture.size != Some(size)
+    {
+        let image = new_cef_ui_texture_image(size, frame.pixels().to_vec());
+        let image_handle = images.add(image);
+        let upload_handle = image_handle.clone();
         render_texture.image = Some(image_handle.clone());
         render_texture.size = Some(size);
         tracing::info!(
@@ -1401,16 +2226,24 @@ fn upload_cef_ui_frame_to_fun_texture(
             &mut image_nodes,
             image_handle,
         );
-        expected_byte_len
+        (upload_handle, expected_byte_len)
     } else {
         let Some(image_handle) = render_texture.image.as_ref() else {
             return;
         };
-        let Some(mut image) = images.get_mut(image_handle) else {
-            return;
-        };
-        apply_cef_ui_frame_to_texture(&mut image, &frame).unwrap_or(0)
+        let uploaded_bytes =
+            cef_ui_texture_upload_byte_count(size, &frame.metadata.dirty_rects, force_full_upload)
+                .unwrap_or(0);
+        (image_handle.clone(), uploaded_bytes)
     };
+    texture_uploads.latest = Some(CefUiTextureUpload {
+        image: image_handle,
+        generation: frame.metadata.generation,
+        size,
+        pixels: frame.pixels().to_vec(),
+        dirty_rects: frame.metadata.dirty_rects.clone(),
+        force_full_upload,
+    });
 
     render_texture.last_generation = Some(frame.metadata.generation);
     status.browser_loaded = true;
@@ -1421,6 +2254,133 @@ fn upload_cef_ui_frame_to_fun_texture(
         .dirty_rect_count
         .saturating_add(frame.metadata.dirty_rects.len() as u64);
     stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(uploaded_bytes as u64);
+}
+
+fn upload_cef_ui_texture_to_gpu(
+    uploads: Option<Res<CefUiTextureUploads>>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+    render_queue: Res<RenderQueue>,
+    mut upload_state: ResMut<CefUiGpuUploadState>,
+) {
+    let Some(uploads) = uploads else {
+        return;
+    };
+    let Some(upload) = uploads.latest.as_ref() else {
+        return;
+    };
+    let image_id = upload.image.id();
+    if upload_state.image_id == Some(image_id)
+        && upload_state.last_generation == Some(upload.generation)
+    {
+        return;
+    }
+    let force_full_upload = upload.force_full_upload
+        || upload_state.image_id != Some(image_id)
+        || cef_ui_frame_requires_full_texture_upload(
+            upload_state.last_generation,
+            upload.generation,
+        );
+    let Some(gpu_image) = gpu_images.get(&upload.image) else {
+        return;
+    };
+    let Some(uploaded_bytes) =
+        write_cef_ui_upload_to_gpu(&render_queue, gpu_image, upload, force_full_upload)
+    else {
+        return;
+    };
+    upload_state.image_id = Some(image_id);
+    upload_state.last_generation = Some(upload.generation);
+    tracing::trace!(
+        target: FUN_UI_DIAGNOSTICS_TARGET,
+        generation = upload.generation.0,
+        uploaded_bytes,
+        force_full_upload,
+        dirty_rect_count = upload.dirty_rects.len(),
+        "CEF UI texture uploaded to Bevy GPU image"
+    );
+}
+
+fn write_cef_ui_upload_to_gpu(
+    render_queue: &RenderQueue,
+    gpu_image: &GpuImage,
+    upload: &CefUiTextureUpload,
+    force_full_upload: bool,
+) -> Option<usize> {
+    let expected_byte_len = cef_ui_texture_byte_len(upload.size)?;
+    if upload.pixels.len() != expected_byte_len
+        || gpu_image.texture_descriptor.size.width != upload.size.x
+        || gpu_image.texture_descriptor.size.height != upload.size.y
+        || gpu_image.texture_descriptor.format != TextureFormat::Bgra8UnormSrgb
+    {
+        return None;
+    }
+    let dirty_rects_are_valid = upload
+        .dirty_rects
+        .iter()
+        .all(|rect| cef_dirty_rect_bounds(upload.size, *rect).is_some());
+    if force_full_upload || upload.dirty_rects.is_empty() || !dirty_rects_are_valid {
+        write_cef_full_texture_to_gpu(render_queue, gpu_image, upload);
+        return Some(expected_byte_len);
+    }
+
+    let mut uploaded_bytes = 0usize;
+    for rect in &upload.dirty_rects {
+        uploaded_bytes = uploaded_bytes.checked_add(write_cef_dirty_rect_to_gpu(
+            render_queue,
+            gpu_image,
+            upload,
+            *rect,
+        )?)?;
+    }
+    Some(uploaded_bytes)
+}
+
+fn write_cef_full_texture_to_gpu(
+    render_queue: &RenderQueue,
+    gpu_image: &GpuImage,
+    upload: &CefUiTextureUpload,
+) {
+    render_queue.write_texture(
+        gpu_image.texture.as_image_copy(),
+        &upload.pixels,
+        TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(upload.size.x * CEF_UI_TEXTURE_BYTES_PER_PIXEL as u32),
+            rows_per_image: Some(upload.size.y),
+        },
+        Extent3d {
+            width: upload.size.x,
+            height: upload.size.y,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+fn write_cef_dirty_rect_to_gpu(
+    render_queue: &RenderQueue,
+    gpu_image: &GpuImage,
+    upload: &CefUiTextureUpload,
+    rect: CefDirtyRect,
+) -> Option<usize> {
+    let (x, y, width, height) = cef_dirty_rect_bounds(upload.size, rect)?;
+    let offset = cef_dirty_rect_offset_bytes(upload.size, x, y)?;
+    let mut texture_copy = gpu_image.texture.as_image_copy();
+    texture_copy.origin = Origin3d { x, y, z: 0 };
+    render_queue.write_texture(
+        texture_copy,
+        &upload.pixels,
+        TexelCopyBufferLayout {
+            offset,
+            bytes_per_row: Some(upload.size.x * CEF_UI_TEXTURE_BYTES_PER_PIXEL as u32),
+            rows_per_image: Some(upload.size.y),
+        },
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    cef_dirty_rect_byte_len(upload.size, rect)
 }
 
 fn sync_cef_ui_image_node(
@@ -1475,17 +2435,14 @@ fn new_cef_ui_texture_image(size: UVec2, pixels: Vec<u8>) -> Image {
     )
 }
 
-fn apply_cef_ui_frame_to_texture(image: &mut Image, frame: &CefUiCompositorFrame) -> Option<usize> {
-    let size = cef_ui_frame_texture_size(frame)?;
-    if image.texture_descriptor.size.width != size.x
-        || image.texture_descriptor.size.height != size.y
-        || image.texture_descriptor.format != TextureFormat::Bgra8UnormSrgb
-    {
-        *image = new_cef_ui_texture_image(size, frame.pixels().to_vec());
-        return cef_ui_texture_byte_len(size);
+fn cef_ui_frame_requires_full_texture_upload(
+    last_generation: Option<UiSurfaceGeneration>,
+    next_generation: UiSurfaceGeneration,
+) -> bool {
+    match last_generation {
+        None => true,
+        Some(last_generation) => next_generation.0 != last_generation.0.saturating_add(1),
     }
-    let data = image.data.as_mut()?;
-    copy_cef_dirty_rects_to_texture_data(data, frame.pixels(), size, &frame.metadata.dirty_rects)
 }
 
 fn cef_ui_frame_texture_size(frame: &CefUiCompositorFrame) -> Option<UVec2> {
@@ -1505,17 +2462,97 @@ fn cef_ui_texture_byte_len(size: UVec2) -> Option<usize> {
         .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
 }
 
+fn cef_ui_texture_upload_byte_count(
+    size: UVec2,
+    dirty_rects: &[CefDirtyRect],
+    force_full_upload: bool,
+) -> Option<usize> {
+    if force_full_upload || dirty_rects.is_empty() {
+        return cef_ui_texture_byte_len(size);
+    }
+    dirty_rects.iter().try_fold(0usize, |uploaded, rect| {
+        uploaded.checked_add(cef_dirty_rect_byte_len(size, *rect)?)
+    })
+}
+
+fn cef_dirty_rect_byte_len(size: UVec2, rect: CefDirtyRect) -> Option<usize> {
+    let (_, _, width, height) = cef_dirty_rect_bounds(size, rect)?;
+    usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
+}
+
+fn cef_dirty_rect_offset_bytes(size: UVec2, x: u32, y: u32) -> Option<u64> {
+    if x >= size.x || y >= size.y {
+        return None;
+    }
+    let offset = usize::try_from(y)
+        .ok()?
+        .checked_mul(usize::try_from(size.x).ok()?)?
+        .checked_add(usize::try_from(x).ok()?)?
+        .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)?;
+    u64::try_from(offset).ok()
+}
+
+#[cfg(test)]
+fn cef_dirty_rect_bytes(src: &[u8], size: UVec2, rect: CefDirtyRect) -> Option<Vec<u8>> {
+    let (x, y, width, height) = cef_dirty_rect_bounds(size, rect)?;
+    let texture_width = usize::try_from(size.x).ok()?;
+    let x = usize::try_from(x).ok()?;
+    let y = usize::try_from(y).ok()?;
+    let width = usize::try_from(width).ok()?;
+    let height = usize::try_from(height).ok()?;
+    let row_bytes = width.checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)?;
+    let mut bytes = Vec::with_capacity(row_bytes.checked_mul(height)?);
+    for row in y..y.checked_add(height)? {
+        let offset = row
+            .checked_mul(texture_width)?
+            .checked_add(x)?
+            .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)?;
+        let end = offset.checked_add(row_bytes)?;
+        bytes.extend_from_slice(src.get(offset..end)?);
+    }
+    Some(bytes)
+}
+
+fn cef_dirty_rect_bounds(size: UVec2, rect: CefDirtyRect) -> Option<(u32, u32, u32, u32)> {
+    if rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 {
+        return None;
+    }
+    let x = u32::try_from(rect.x).ok()?;
+    let y = u32::try_from(rect.y).ok()?;
+    let width = u32::try_from(rect.width).ok()?;
+    let height = u32::try_from(rect.height).ok()?;
+    if x.checked_add(width)? > size.x || y.checked_add(height)? > size.y {
+        return None;
+    }
+    Some((x, y, width, height))
+}
+
+#[cfg(test)]
 fn copy_cef_dirty_rects_to_texture_data(
     dst: &mut [u8],
     src: &[u8],
     size: UVec2,
     dirty_rects: &[CefDirtyRect],
 ) -> Option<usize> {
+    copy_cef_frame_to_texture_data(dst, src, size, dirty_rects, false)
+}
+
+#[cfg(test)]
+fn copy_cef_frame_to_texture_data(
+    dst: &mut [u8],
+    src: &[u8],
+    size: UVec2,
+    dirty_rects: &[CefDirtyRect],
+    force_full_upload: bool,
+) -> Option<usize> {
     let expected_byte_len = cef_ui_texture_byte_len(size)?;
     if dst.len() != expected_byte_len || src.len() != expected_byte_len {
         return None;
     }
-    if dirty_rects.is_empty() {
+    if force_full_upload || dirty_rects.is_empty() {
         dst.copy_from_slice(src);
         return Some(expected_byte_len);
     }
@@ -1528,6 +2565,7 @@ fn copy_cef_dirty_rects_to_texture_data(
     Some(copied_bytes)
 }
 
+#[cfg(test)]
 fn copy_cef_dirty_rect_to_texture_data(
     dst: &mut [u8],
     src: &[u8],
@@ -1728,6 +2766,40 @@ mod tests {
     }
 
     #[test]
+    fn fun_host_input_owner_controls_cef_focus_mode() {
+        let status = CefUiStatus {
+            initialized: true,
+            browser_loaded: true,
+            current_route: CefUiRoute::Hud,
+            compositor_visible: true,
+            last_frame_generation: None,
+            last_error: None,
+            last_blocked_navigation: None,
+            last_js_error: None,
+        };
+        let input_capture = CefUiInputCapture::default();
+        let mut host = FunClientHostState::default();
+
+        host.set_input_owner(FunInputOwner::EditorUi);
+        assert_eq!(
+            focus_mode_for_owner(&status, &input_capture, Some(&host)),
+            CefUiFocusMode::UiModal
+        );
+
+        host.set_input_owner(FunInputOwner::Commandbar);
+        assert_eq!(
+            focus_mode_for_owner(&status, &input_capture, Some(&host)),
+            CefUiFocusMode::TextEntry
+        );
+
+        host.set_input_owner(FunInputOwner::Gameplay);
+        assert_eq!(
+            focus_mode_for_owner(&status, &input_capture, Some(&host)),
+            CefUiFocusMode::HudPassive
+        );
+    }
+
+    #[test]
     fn modal_focus_disables_overlay_click_through() {
         let mut overlay_state = CefUiOverlayClickThroughState::default();
         let mut stats = CefUiFrameStats::default();
@@ -1751,6 +2823,57 @@ mod tests {
         assert!(!overlay_state.click_through);
         assert_eq!(overlay_state.change_count, 1);
         assert_eq!(stats.overlay_click_through_change_count, 1);
+    }
+
+    #[test]
+    fn cef_input_forwarding_follows_focus_capture_rules() {
+        let mut input_capture = CefUiInputCapture::default();
+
+        assert!(!should_forward_pointer_to_cef(
+            CefUiFocusMode::Gameplay,
+            &input_capture
+        ));
+        assert!(!should_forward_keyboard_to_cef(
+            CefUiFocusMode::Gameplay,
+            &input_capture
+        ));
+
+        assert!(should_forward_pointer_to_cef(
+            CefUiFocusMode::HudPassive,
+            &input_capture
+        ));
+        assert!(!should_forward_keyboard_to_cef(
+            CefUiFocusMode::HudPassive,
+            &input_capture
+        ));
+
+        input_capture.capture_pointer = true;
+        assert!(should_forward_pointer_to_cef(
+            CefUiFocusMode::Gameplay,
+            &input_capture
+        ));
+
+        input_capture.capture_keyboard = true;
+        assert!(should_forward_keyboard_to_cef(
+            CefUiFocusMode::TextEntry,
+            &input_capture
+        ));
+    }
+
+    #[test]
+    fn cef_input_helpers_map_window_coordinates_and_keys() {
+        assert_eq!(
+            cef_pointer_position_from_vec2(Vec2::new(14.8, -8.0)),
+            CefUiPointerPosition { x: 14, y: 0 }
+        );
+        assert_eq!(scaled_cef_wheel_delta(1.25, 100.0), 125);
+        assert_eq!(windows_virtual_key_code(KeyCode::F1), Some(0x70));
+        assert_eq!(windows_virtual_key_code(KeyCode::KeyA), Some(0x41));
+        assert_eq!(
+            cef_mouse_button(MouseButton::Left),
+            Some(CefBrowserMouseButton::Left)
+        );
+        assert_eq!(cef_mouse_button(MouseButton::Back), None);
     }
 
     #[test]
@@ -1788,6 +2911,123 @@ mod tests {
                 &[CefDirtyRect::new(1, 1, 2, 1)]
             ),
             None
+        );
+    }
+
+    #[test]
+    fn cef_texture_copy_can_force_full_frame_after_skipped_generation() {
+        let size = UVec2::new(4, 2);
+        let src = (0..32_u8).collect::<Vec<_>>();
+        let mut dst = vec![0_u8; 32];
+        let copied = copy_cef_frame_to_texture_data(
+            &mut dst,
+            &src,
+            size,
+            &[CefDirtyRect::new(1, 0, 2, 2)],
+            true,
+        )
+        .expect("forced full frame copy");
+
+        assert_eq!(copied, 32);
+        assert_eq!(dst, src);
+    }
+
+    #[test]
+    fn cef_dirty_rect_bytes_extracts_compact_rows_for_render_queue_upload() {
+        let size = UVec2::new(4, 3);
+        let src = (0..48_u8).collect::<Vec<_>>();
+        let bytes = cef_dirty_rect_bytes(&src, size, CefDirtyRect::new(1, 1, 2, 2))
+            .expect("dirty rect bytes");
+
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(&bytes[0..8], &src[20..28]);
+        assert_eq!(&bytes[8..16], &src[36..44]);
+        assert_eq!(
+            cef_dirty_rect_byte_len(size, CefDirtyRect::new(1, 1, 2, 2)),
+            Some(16)
+        );
+        assert_eq!(cef_dirty_rect_offset_bytes(size, 1, 1), Some(20));
+    }
+
+    #[test]
+    fn cef_texture_upload_byte_count_tracks_dirty_or_full_uploads() {
+        let size = UVec2::new(4, 3);
+        assert_eq!(
+            cef_ui_texture_upload_byte_count(size, &[CefDirtyRect::new(1, 1, 2, 2)], false),
+            Some(16)
+        );
+        assert_eq!(
+            cef_ui_texture_upload_byte_count(size, &[CefDirtyRect::new(1, 1, 2, 2)], true),
+            Some(48)
+        );
+        assert_eq!(cef_ui_texture_upload_byte_count(size, &[], false), Some(48));
+        assert_eq!(
+            cef_ui_texture_upload_byte_count(size, &[CefDirtyRect::new(3, 2, 2, 2)], false),
+            None
+        );
+        assert_eq!(
+            cef_ui_texture_upload_byte_count(size, &[CefDirtyRect::new(3, 2, 2, 2)], true),
+            Some(48)
+        );
+    }
+
+    #[test]
+    fn cef_frame_generation_gap_requires_full_texture_upload() {
+        assert!(cef_ui_frame_requires_full_texture_upload(
+            None,
+            CefUiFrameGeneration(1)
+        ));
+        assert!(!cef_ui_frame_requires_full_texture_upload(
+            Some(CefUiFrameGeneration(7)),
+            CefUiFrameGeneration(8)
+        ));
+        assert!(cef_ui_frame_requires_full_texture_upload(
+            Some(CefUiFrameGeneration(7)),
+            CefUiFrameGeneration(9)
+        ));
+        assert!(cef_ui_frame_requires_full_texture_upload(
+            Some(CefUiFrameGeneration(7)),
+            CefUiFrameGeneration(6)
+        ));
+    }
+
+    #[test]
+    fn fps_counter_layout_hides_launcher_and_editor_without_preview() {
+        assert_eq!(
+            fun_client_fps_counter_layout(FunHostMode::Launcher, None, Some(UVec2::new(1280, 720))),
+            None
+        );
+        assert_eq!(
+            fun_client_fps_counter_layout(FunHostMode::Editor, None, Some(UVec2::new(1280, 720))),
+            None
+        );
+    }
+
+    #[test]
+    fn fps_counter_layout_targets_game_or_editor_preview_only() {
+        assert_eq!(
+            fun_client_fps_counter_layout(FunHostMode::Game, None, Some(UVec2::new(1280, 720))),
+            Some(FunClientFpsCounterLayout {
+                left: 12.0,
+                top: 12.0,
+            })
+        );
+        assert_eq!(
+            fun_client_fps_counter_layout(
+                FunHostMode::Editor,
+                Some(FunViewportRect {
+                    x: 320,
+                    y: 120,
+                    width: 640,
+                    height: 360,
+                    scale_factor_milli: 1000,
+                }),
+                Some(UVec2::new(1280, 720))
+            ),
+            Some(FunClientFpsCounterLayout {
+                left: 332.0,
+                top: 132.0,
+            })
         );
     }
 

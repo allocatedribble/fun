@@ -14,8 +14,16 @@ diagnostics = ["game_shared/diagnostics"]
 avian3d.workspace = true
 bevy.workspace = true
 bevy_quinnet.workspace = true
+fun-warden-protocol = { path = "../../fun-warden/crates/fun-warden-protocol" }
+fun-warden-server = { path = "../../fun-warden/crates/fun-warden-server" }
+fun_ai_core = { path = "../../fun-ai/crates/fun_ai_core" }
+fun_ai_inference = { path = "../../fun-ai/crates/fun_ai_inference" }
+fun_ai_tactics = { path = "../../fun-ai/crates/fun_ai_tactics" }
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
 log.workspace = true
+ring = "0.17.14"
+serde.workspace = true
+serde_json.workspace = true
 thunder.workspace = true
 tracing.workspace = true

@@ -17,17 +17,27 @@ use bevy_quinnet::server::{
     QuinnetServerPlugin, ServerEndpointConfiguration, ServerEndpointConfigurationDefaultables,
     certificate::CertificateRetrievalMode,
 };
+use fun_warden_protocol::{
+    BoundedAscii, MAX_MATCH_SESSION_ID_BYTES, WARDEN_PROTOCOL_SCHEMA_VERSION,
+    WardenAdmissionProtectedSummary, WardenAdmissionTicket, WardenDecisionReasonClass,
+    WardenPolicyMode, WardenSessionDecisionKind,
+};
+use fun_warden_server::{GameServerAdmissionDecision, admission_decision_for_game_server};
 use game_scene::StreamedWorldEntity;
 use game_shared::{
     DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_SERVER_CERT_FILE,
     GAME_SERVER_KEY_FILE, GAME_TITLE,
 };
+use ring::hmac;
+use serde::Serialize;
 use thunder::prelude::*;
 use tracing::{error, info};
 
-const GAME_PROTOCOL_VERSION: u32 = 1;
+mod ai;
+
+const GAME_PROTOCOL_VERSION: u32 = 2;
 const MAX_CLIENT_CONTROL_PACKET_BYTES: usize = 64 * 1024;
-const MAX_SESSION_TOKEN_BYTES: usize = 1024;
+const MAX_AUTH_TICKET_BYTES: usize = 1024;
 const MAX_WARDEN_ADMISSION_TICKET_BYTES: usize = 4096;
 const GAME_SERVER_TLS_MODE_ENV: &str = "FUN_GAME_SERVER_TLS_MODE";
 const GAME_SERVER_TLS_MODE_DEVELOPMENT: &str = "development";
@@ -36,7 +46,10 @@ const GAME_SERVER_DEV_TICKET_ENV: &str = "FUN_GAME_SERVER_DEV_SESSION_TOKEN";
 const GAME_SERVER_WARDEN_GATE_ENV: &str = "FUN_WARDEN_SERVER_GATE";
 const GAME_SERVER_WARDEN_GATE_OBSERVE: &str = "observe";
 const GAME_SERVER_WARDEN_GATE_REQUIRE_ADMISSION: &str = "require_admission_ticket";
-const GAME_SERVER_DEV_WARDEN_ADMISSION_TICKET_ENV: &str = "FUN_WARDEN_DEV_ADMISSION_TICKET";
+const GAME_SERVER_WARDEN_ADMISSION_HMAC_KEY_HEX_ENV: &str = "FUN_WARDEN_ADMISSION_HMAC_KEY_HEX";
+const GAME_SERVER_WARDEN_ADMISSION_KEY_ID_ENV: &str = "FUN_WARDEN_ADMISSION_KEY_ID";
+const GAME_SERVER_WARDEN_MATCH_SESSION_ID_ENV: &str = "FUN_WARDEN_MATCH_SESSION_ID";
+const GAME_SERVER_WARDEN_DEFAULT_ADMISSION_KEY_ID: &str = "server_warden_lookup_key:v1";
 
 fn main() {
     let mut app = App::new();
@@ -51,6 +64,7 @@ fn main() {
         PhysicsPlugins::default(),
         QuinnetServerPlugin::default(),
         ThunderPlugin::default(),
+        ai::FunAiServerPlugin,
     ))
     .insert_resource(GameServerSecurityConfig::from_env())
     .init_resource::<ServerWorldStream>()
@@ -496,19 +510,28 @@ enum ClientAdmissionStage {
 #[derive(Debug, Default, Resource)]
 struct ClientAdmissionStates {
     stages: HashMap<u64, ClientAdmissionStage>,
+    warden_decisions: HashMap<u64, WardenSessionDecisionKind>,
+    untrusted_pool: HashSet<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClientHelloRejection {
     WrongProtocolVersion,
-    MissingSessionToken,
-    SessionTokenTooLarge,
+    MissingAuthTicket,
+    AuthTicketTooLarge,
     TicketVerificationUnavailable,
     DevelopmentTicketMismatch,
     MissingWardenAdmissionTicket,
     WardenAdmissionTicketTooLarge,
     WardenAdmissionVerifierUnavailable,
-    DevelopmentWardenAdmissionMismatch,
+    WardenAdmissionMalformed,
+    WardenAdmissionUnsupportedSchema,
+    WardenAdmissionKeyMismatch,
+    WardenAdmissionSignatureMismatch,
+    WardenAdmissionExpired,
+    WardenAdmissionMatchSessionMismatch,
+    WardenAdmissionDeniedMatchmaking,
+    WardenAdmissionDeniedSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,7 +563,17 @@ enum WardenAdmissionGate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WardenAdmissionTicketVerifier {
     FailClosed,
-    DevelopmentTicket { ticket: Vec<u8> },
+    SignedHmacSha256 {
+        key: [u8; 32],
+        key_id: String,
+        match_session_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClientHelloAdmission {
+    warden_decision: WardenSessionDecisionKind,
+    untrusted_pool: bool,
 }
 
 impl ClientTicketVerifier {
@@ -579,43 +612,61 @@ impl WardenAdmissionGate {
         }
     }
 
-    fn validate(&self, hello: &ClientHello) -> Result<(), ClientHelloRejection> {
+    fn validate(&self, hello: &ClientHello) -> Result<ClientHelloAdmission, ClientHelloRejection> {
         match self {
-            Self::Observe => Ok(()),
+            Self::Observe => Ok(ClientHelloAdmission {
+                warden_decision: WardenSessionDecisionKind::ObserveOnly,
+                untrusted_pool: false,
+            }),
             Self::RequireAdmissionTicket { verifier } => {
-                if hello.session_token.is_empty() {
+                if hello.warden_admission_ticket.is_empty() {
                     return Err(ClientHelloRejection::MissingWardenAdmissionTicket);
                 }
-                if hello.session_token.len() > MAX_WARDEN_ADMISSION_TICKET_BYTES {
+                if hello.warden_admission_ticket.len() > MAX_WARDEN_ADMISSION_TICKET_BYTES {
                     return Err(ClientHelloRejection::WardenAdmissionTicketTooLarge);
                 }
-                verifier.verify(&hello.session_token)
+                verifier.verify(&hello.warden_admission_ticket)
             }
         }
     }
 }
 
 impl WardenAdmissionTicketVerifier {
-    fn from_env(tls_mode: GameServerTlsMode) -> Self {
-        match (
-            tls_mode,
-            env::var(GAME_SERVER_DEV_WARDEN_ADMISSION_TICKET_ENV),
-        ) {
-            (GameServerTlsMode::DevelopmentSelfSigned, Ok(ticket)) if !ticket.is_empty() => {
-                Self::DevelopmentTicket {
-                    ticket: ticket.into_bytes(),
-                }
-            }
-            _ => Self::FailClosed,
+    fn from_env(_tls_mode: GameServerTlsMode) -> Self {
+        let Ok(key_hex) = env::var(GAME_SERVER_WARDEN_ADMISSION_HMAC_KEY_HEX_ENV) else {
+            return Self::FailClosed;
+        };
+        let Some(key) = decode_hex_32(&key_hex) else {
+            return Self::FailClosed;
+        };
+        let Ok(match_session_id) = env::var(GAME_SERVER_WARDEN_MATCH_SESSION_ID_ENV) else {
+            return Self::FailClosed;
+        };
+        if BoundedAscii::<MAX_MATCH_SESSION_ID_BYTES>::new(match_session_id.clone()).is_err() {
+            return Self::FailClosed;
+        }
+        let key_id = env::var(GAME_SERVER_WARDEN_ADMISSION_KEY_ID_ENV)
+            .unwrap_or_else(|_| String::from(GAME_SERVER_WARDEN_DEFAULT_ADMISSION_KEY_ID));
+        if BoundedAscii::<32>::new(key_id.clone()).is_err() {
+            return Self::FailClosed;
+        }
+        Self::SignedHmacSha256 {
+            key,
+            key_id,
+            match_session_id,
         }
     }
 
-    fn verify(&self, ticket: &[u8]) -> Result<(), ClientHelloRejection> {
+    fn verify(&self, ticket: &[u8]) -> Result<ClientHelloAdmission, ClientHelloRejection> {
         match self {
             Self::FailClosed => Err(ClientHelloRejection::WardenAdmissionVerifierUnavailable),
-            Self::DevelopmentTicket { ticket: expected } if ticket == expected.as_slice() => Ok(()),
-            Self::DevelopmentTicket { .. } => {
-                Err(ClientHelloRejection::DevelopmentWardenAdmissionMismatch)
+            Self::SignedHmacSha256 {
+                key,
+                key_id,
+                match_session_id,
+            } => {
+                let ticket = parse_warden_admission_ticket(ticket)?;
+                verify_warden_admission_ticket(&ticket, key, key_id, match_session_id)
             }
         }
     }
@@ -625,19 +676,151 @@ fn validate_client_hello(
     hello: &ClientHello,
     ticket_verifier: &ClientTicketVerifier,
     warden_gate: &WardenAdmissionGate,
-) -> Result<(), ClientHelloRejection> {
+) -> Result<ClientHelloAdmission, ClientHelloRejection> {
     if hello.protocol_version != GAME_PROTOCOL_VERSION {
         return Err(ClientHelloRejection::WrongProtocolVersion);
     }
-    if hello.session_token.is_empty() {
-        return Err(ClientHelloRejection::MissingSessionToken);
+    if hello.auth_ticket.is_empty() {
+        return Err(ClientHelloRejection::MissingAuthTicket);
     }
-    if hello.session_token.len() > MAX_SESSION_TOKEN_BYTES {
-        return Err(ClientHelloRejection::SessionTokenTooLarge);
+    if hello.auth_ticket.len() > MAX_AUTH_TICKET_BYTES {
+        return Err(ClientHelloRejection::AuthTicketTooLarge);
     }
-    ticket_verifier.verify(&hello.session_token)?;
-    warden_gate.validate(hello)?;
-    Ok(())
+    ticket_verifier.verify(&hello.auth_ticket)?;
+    warden_gate.validate(hello)
+}
+
+fn parse_warden_admission_ticket(
+    ticket: &[u8],
+) -> Result<WardenAdmissionTicket, ClientHelloRejection> {
+    serde_json::from_slice(ticket).map_err(|_| ClientHelloRejection::WardenAdmissionMalformed)
+}
+
+fn verify_warden_admission_ticket(
+    ticket: &WardenAdmissionTicket,
+    key: &[u8; 32],
+    key_id: &str,
+    match_session_id: &str,
+) -> Result<ClientHelloAdmission, ClientHelloRejection> {
+    if ticket.schema_version != WARDEN_PROTOCOL_SCHEMA_VERSION {
+        return Err(ClientHelloRejection::WardenAdmissionUnsupportedSchema);
+    }
+    if ticket.signature.key_id.as_str() != key_id {
+        return Err(ClientHelloRejection::WardenAdmissionKeyMismatch);
+    }
+    if ticket.match_session_id.as_str() != match_session_id {
+        return Err(ClientHelloRejection::WardenAdmissionMatchSessionMismatch);
+    }
+    if ticket.allowed_until_ms <= current_unix_ms() {
+        return Err(ClientHelloRejection::WardenAdmissionExpired);
+    }
+    let payload = admission_ticket_signature_payload(ticket)?;
+    let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    if hmac::verify(
+        &hmac_key,
+        &payload,
+        ticket.signature.signature_bytes.as_slice(),
+    )
+    .is_err()
+    {
+        return Err(ClientHelloRejection::WardenAdmissionSignatureMismatch);
+    }
+
+    let decision = admission_decision_for_game_server(ticket);
+    admission_outcome_for_decision(decision)
+}
+
+fn admission_outcome_for_decision(
+    decision: GameServerAdmissionDecision,
+) -> Result<ClientHelloAdmission, ClientHelloRejection> {
+    match decision.decision {
+        WardenSessionDecisionKind::Allow | WardenSessionDecisionKind::ObserveOnly => {
+            Ok(ClientHelloAdmission {
+                warden_decision: decision.decision,
+                untrusted_pool: false,
+            })
+        }
+        WardenSessionDecisionKind::QuarantineToUntrustedPool => Ok(ClientHelloAdmission {
+            warden_decision: decision.decision,
+            untrusted_pool: true,
+        }),
+        WardenSessionDecisionKind::DenyMatchmaking => {
+            Err(ClientHelloRejection::WardenAdmissionDeniedMatchmaking)
+        }
+        WardenSessionDecisionKind::DenySession => {
+            Err(ClientHelloRejection::WardenAdmissionDeniedSession)
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SignedWardenAdmissionTicketPayload<'a> {
+    schema_version: u32,
+    pseudonymous_subject_id: &'a str,
+    match_session_id: &'a str,
+    warden_policy_mode: WardenPolicyMode,
+    allowed_until_ms: u64,
+    decision: WardenSessionDecisionKind,
+    reason_class: WardenDecisionReasonClass,
+    protected: Option<WardenAdmissionProtectedSummary>,
+}
+
+#[cfg(test)]
+fn admission_ticket_signature_bytes(
+    ticket: &WardenAdmissionTicket,
+    key: &[u8; 32],
+) -> Result<[u8; 32], ClientHelloRejection> {
+    let bytes = admission_ticket_signature_payload(ticket)?;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    hmac::sign(&key, &bytes)
+        .as_ref()
+        .try_into()
+        .map_err(|_| ClientHelloRejection::WardenAdmissionSignatureMismatch)
+}
+
+fn admission_ticket_signature_payload(
+    ticket: &WardenAdmissionTicket,
+) -> Result<Vec<u8>, ClientHelloRejection> {
+    let payload = SignedWardenAdmissionTicketPayload {
+        schema_version: ticket.schema_version,
+        pseudonymous_subject_id: ticket.pseudonymous_subject_id.as_str(),
+        match_session_id: ticket.match_session_id.as_str(),
+        warden_policy_mode: ticket.warden_policy_mode,
+        allowed_until_ms: ticket.allowed_until_ms,
+        decision: ticket.decision,
+        reason_class: ticket.reason_class,
+        protected: ticket.protected,
+    };
+    serde_json::to_vec(&payload).map_err(|_| ClientHelloRejection::WardenAdmissionMalformed)
+}
+
+fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = hex_nibble(chunk[0])?;
+        let low = hex_nibble(chunk[1])?;
+        bytes[index] = (high << 4) | low;
+    }
+    Some(bytes)
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn current_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn client_can_receive_stream(stage: ClientAdmissionStage) -> bool {
@@ -1076,6 +1259,8 @@ fn queue_world_stream_for_new_clients(
         ready.ids.remove(&event.id);
         relevance.sets.remove(&event.id);
         pending.ids.remove(&event.id);
+        admissions.warden_decisions.remove(&event.id);
+        admissions.untrusted_pool.remove(&event.id);
         admissions
             .stages
             .insert(event.id, ClientAdmissionStage::Unauthenticated);
@@ -1128,6 +1313,8 @@ fn clear_client_state(
     relevance.sets.remove(&client_id);
     pending.ids.remove(&client_id);
     admissions.stages.remove(&client_id);
+    admissions.warden_decisions.remove(&client_id);
+    admissions.untrusted_pool.remove(&client_id);
 }
 
 #[allow(
@@ -1197,27 +1384,52 @@ fn receive_client_control(
                         );
                         continue;
                     }
-                    if let Err(rejection) = validate_client_hello(
+                    let admission = match validate_client_hello(
                         &hello,
                         &security.ticket_verifier,
                         &security.warden_gate,
                     ) {
-                        error!(target: "fun::server::net", client_id, ?rejection, "rejecting invalid client hello");
-                        endpoint.try_disconnect_client(client_id);
-                        clear_client_state(
-                            client_id,
-                            &mut connected,
-                            &mut ready,
-                            &mut relevance,
-                            &mut pending,
-                            &mut admissions,
-                        );
-                        continue;
-                    }
+                        Ok(admission) => admission,
+                        Err(rejection) => {
+                            error!(target: "fun::server::net", client_id, ?rejection, "rejecting invalid client hello");
+                            endpoint.try_disconnect_client(client_id);
+                            clear_client_state(
+                                client_id,
+                                &mut connected,
+                                &mut ready,
+                                &mut relevance,
+                                &mut pending,
+                                &mut admissions,
+                            );
+                            continue;
+                        }
+                    };
                     admissions
                         .stages
                         .insert(client_id, ClientAdmissionStage::Admitted);
+                    admissions
+                        .warden_decisions
+                        .insert(client_id, admission.warden_decision);
+                    if admission.untrusted_pool {
+                        admissions.untrusted_pool.insert(client_id);
+                    } else {
+                        admissions.untrusted_pool.remove(&client_id);
+                    }
                     pending.ids.insert(client_id);
+                    if admission.warden_decision == WardenSessionDecisionKind::ObserveOnly {
+                        info!(
+                            target: "fun::server::net",
+                            client_id,
+                            "client admitted with Warden observe-only decision"
+                        );
+                    }
+                    if admission.untrusted_pool {
+                        info!(
+                            target: "fun::server::net",
+                            client_id,
+                            "client routed to Warden untrusted admission pool"
+                        );
+                    }
                     game_shared::fun_diag_info_if!(
                         _log_config.net_verbose(),
                         target: "fun::server::net",
@@ -1920,6 +2132,12 @@ fn send_pending_world_streams(
             pending.ids.remove(&client_id);
             continue;
         }
+        let warden_pool = if admissions.untrusted_pool.contains(&client_id) {
+            "untrusted"
+        } else {
+            "protected"
+        };
+        let _ = warden_pool;
         ready.ids.remove(&client_id);
         relevance.sets.remove(&client_id);
         game_shared::fun_diag_info_if!(
@@ -1927,6 +2145,7 @@ fn send_pending_world_streams(
             target: "fun::server::stream",
             revision = manifest.revision.0,
             client_id,
+            warden_pool,
             chunks = manifest.chunks.len(),
             "sending world stream"
         );
@@ -2136,27 +2355,67 @@ mod tests {
         }
     }
 
+    const TEST_WARDEN_KEY: [u8; 32] = [9; 32];
+    const TEST_WARDEN_KEY_ID: &str = "server_warden_lookup_key:v1";
+    const TEST_MATCH_SESSION_ID: &str = "match-local-01";
+
+    fn test_hello(auth_ticket: Vec<u8>, warden_admission_ticket: Vec<u8>) -> ClientHello {
+        ClientHello {
+            protocol_version: GAME_PROTOCOL_VERSION,
+            auth_ticket,
+            warden_admission_ticket,
+            feature_bits: 0,
+            oldest_input_sequence: PacketSequence(0),
+        }
+    }
+
+    fn signed_warden_ticket(
+        decision: WardenSessionDecisionKind,
+        match_session_id: &str,
+        key_id: &str,
+        allowed_until_ms: u64,
+    ) -> Vec<u8> {
+        let mut ticket = WardenAdmissionTicket {
+            schema_version: WARDEN_PROTOCOL_SCHEMA_VERSION,
+            pseudonymous_subject_id: BoundedAscii::new(String::from("subject-opaque"))
+                .expect("subject"),
+            match_session_id: BoundedAscii::new(String::from(match_session_id)).expect("match"),
+            warden_policy_mode: WardenPolicyMode::Protect,
+            allowed_until_ms,
+            decision,
+            reason_class: WardenDecisionReasonClass::Clean,
+            protected: None,
+            signature: fun_warden_protocol::WardenAdmissionSignature {
+                key_id: BoundedAscii::new(String::from(key_id)).expect("key id"),
+                signature_bytes: fun_warden_protocol::BoundedVec::empty(),
+            },
+        };
+        let signature =
+            admission_ticket_signature_bytes(&ticket, &TEST_WARDEN_KEY).expect("signature");
+        ticket.signature.signature_bytes =
+            fun_warden_protocol::BoundedVec::new(signature.to_vec()).expect("signature bytes");
+        serde_json::to_vec(&ticket).expect("ticket json")
+    }
+
     #[test]
-    fn client_hello_requires_protocol_session_token_and_ticket_verification() {
+    fn client_hello_requires_protocol_auth_ticket_and_ticket_verification() {
         let verifier = ClientTicketVerifier::DevelopmentToken {
             token: b"dev-ticket".to_vec(),
         };
-        let valid = ClientHello {
-            protocol_version: GAME_PROTOCOL_VERSION,
-            session_token: b"dev-ticket".to_vec(),
-            feature_bits: 0,
-            oldest_input_sequence: PacketSequence(0),
-        };
+        let valid = test_hello(b"dev-ticket".to_vec(), Vec::new());
         assert_eq!(
             validate_client_hello(&valid, &verifier, &WardenAdmissionGate::Observe),
-            Ok(())
+            Ok(ClientHelloAdmission {
+                warden_decision: WardenSessionDecisionKind::ObserveOnly,
+                untrusted_pool: false,
+            })
         );
 
         let mut missing_token = valid.clone();
-        missing_token.session_token.clear();
+        missing_token.auth_ticket.clear();
         assert_eq!(
             validate_client_hello(&missing_token, &verifier, &WardenAdmissionGate::Observe),
-            Err(ClientHelloRejection::MissingSessionToken)
+            Err(ClientHelloRejection::MissingAuthTicket)
         );
 
         let mut wrong_version = valid.clone();
@@ -2167,7 +2426,7 @@ mod tests {
         );
 
         let mut wrong_ticket = valid;
-        wrong_ticket.session_token = b"wrong-ticket".to_vec();
+        wrong_ticket.auth_ticket = b"wrong-ticket".to_vec();
         assert_eq!(
             validate_client_hello(&wrong_ticket, &verifier, &WardenAdmissionGate::Observe),
             Err(ClientHelloRejection::DevelopmentTicketMismatch)
@@ -2188,12 +2447,7 @@ mod tests {
         let verifier = ClientTicketVerifier::DevelopmentToken {
             token: b"dev-ticket".to_vec(),
         };
-        let hello = ClientHello {
-            protocol_version: GAME_PROTOCOL_VERSION,
-            session_token: b"dev-ticket".to_vec(),
-            feature_bits: 0,
-            oldest_input_sequence: PacketSequence(0),
-        };
+        let hello = test_hello(b"dev-ticket".to_vec(), b"opaque-ticket".to_vec());
         let required_gate = WardenAdmissionGate::RequireAdmissionTicket {
             verifier: WardenAdmissionTicketVerifier::FailClosed,
         };
@@ -2205,34 +2459,97 @@ mod tests {
     }
 
     #[test]
-    fn warden_development_admission_gate_requires_exact_backend_ticket() {
+    fn warden_admission_gate_verifies_signed_ticket_decisions() {
         let verifier = ClientTicketVerifier::DevelopmentToken {
             token: b"dev-ticket".to_vec(),
         };
-        let hello = ClientHello {
-            protocol_version: GAME_PROTOCOL_VERSION,
-            session_token: b"dev-ticket".to_vec(),
-            feature_bits: 0,
-            oldest_input_sequence: PacketSequence(0),
-        };
-        let matching_gate = WardenAdmissionGate::RequireAdmissionTicket {
-            verifier: WardenAdmissionTicketVerifier::DevelopmentTicket {
-                ticket: b"dev-ticket".to_vec(),
-            },
-        };
-        let wrong_gate = WardenAdmissionGate::RequireAdmissionTicket {
-            verifier: WardenAdmissionTicketVerifier::DevelopmentTicket {
-                ticket: b"other-ticket".to_vec(),
+        let ticket = signed_warden_ticket(
+            WardenSessionDecisionKind::Allow,
+            TEST_MATCH_SESSION_ID,
+            TEST_WARDEN_KEY_ID,
+            current_unix_ms().saturating_add(60_000),
+        );
+        let hello = test_hello(b"dev-ticket".to_vec(), ticket);
+        let gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::SignedHmacSha256 {
+                key: TEST_WARDEN_KEY,
+                key_id: String::from(TEST_WARDEN_KEY_ID),
+                match_session_id: String::from(TEST_MATCH_SESSION_ID),
             },
         };
 
         assert_eq!(
-            validate_client_hello(&hello, &verifier, &matching_gate),
-            Ok(())
+            validate_client_hello(&hello, &verifier, &gate),
+            Ok(ClientHelloAdmission {
+                warden_decision: WardenSessionDecisionKind::Allow,
+                untrusted_pool: false,
+            })
+        );
+    }
+
+    #[test]
+    fn warden_admission_gate_rejects_match_mismatch_and_denied_sessions() {
+        let verifier = ClientTicketVerifier::DevelopmentToken {
+            token: b"dev-ticket".to_vec(),
+        };
+        let ticket = signed_warden_ticket(
+            WardenSessionDecisionKind::DenySession,
+            TEST_MATCH_SESSION_ID,
+            TEST_WARDEN_KEY_ID,
+            current_unix_ms().saturating_add(60_000),
+        );
+        let hello = test_hello(b"dev-ticket".to_vec(), ticket);
+        let wrong_match_gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::SignedHmacSha256 {
+                key: TEST_WARDEN_KEY,
+                key_id: String::from(TEST_WARDEN_KEY_ID),
+                match_session_id: String::from("other-match"),
+            },
+        };
+        let deny_gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::SignedHmacSha256 {
+                key: TEST_WARDEN_KEY,
+                key_id: String::from(TEST_WARDEN_KEY_ID),
+                match_session_id: String::from(TEST_MATCH_SESSION_ID),
+            },
+        };
+
+        assert_eq!(
+            validate_client_hello(&hello, &verifier, &wrong_match_gate),
+            Err(ClientHelloRejection::WardenAdmissionMatchSessionMismatch)
         );
         assert_eq!(
-            validate_client_hello(&hello, &verifier, &wrong_gate),
-            Err(ClientHelloRejection::DevelopmentWardenAdmissionMismatch)
+            validate_client_hello(&hello, &verifier, &deny_gate),
+            Err(ClientHelloRejection::WardenAdmissionDeniedSession)
+        );
+    }
+
+    #[test]
+    fn warden_admission_gate_routes_quarantine_without_rejecting_session() {
+        let verifier = ClientTicketVerifier::DevelopmentToken {
+            token: b"dev-ticket".to_vec(),
+        };
+        let ticket = signed_warden_ticket(
+            WardenSessionDecisionKind::QuarantineToUntrustedPool,
+            TEST_MATCH_SESSION_ID,
+            TEST_WARDEN_KEY_ID,
+            current_unix_ms().saturating_add(60_000),
+        );
+        let hello = test_hello(b"dev-ticket".to_vec(), ticket);
+        let gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::SignedHmacSha256 {
+                key: TEST_WARDEN_KEY,
+                key_id: String::from(TEST_WARDEN_KEY_ID),
+                match_session_id: String::from(TEST_MATCH_SESSION_ID),
+            },
+        };
+
+        assert_eq!(
+            validate_client_hello(&hello, &verifier, &gate),
+            Ok(ClientHelloAdmission {
+                warden_decision: WardenSessionDecisionKind::QuarantineToUntrustedPool,
+                untrusted_pool: true,
+            })
         );
     }
 
@@ -2343,6 +2660,11 @@ mod tests {
         admissions
             .stages
             .insert(client_id, ClientAdmissionStage::InGame);
+        admissions.warden_decisions.insert(
+            client_id,
+            WardenSessionDecisionKind::QuarantineToUntrustedPool,
+        );
+        admissions.untrusted_pool.insert(client_id);
 
         clear_client_state(
             client_id,
@@ -2358,5 +2680,7 @@ mod tests {
         assert!(!relevance.sets.contains_key(&client_id));
         assert!(!pending.ids.contains(&client_id));
         assert!(!admissions.stages.contains_key(&client_id));
+        assert!(!admissions.warden_decisions.contains_key(&client_id));
+        assert!(!admissions.untrusted_pool.contains(&client_id));
     }
 }

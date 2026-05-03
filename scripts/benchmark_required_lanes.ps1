@@ -2,7 +2,7 @@ param(
     [switch]$Release,
     [switch]$StaticBevy,
     [switch]$TraceDiagnostics,
-    [string]$RenderBackend = "vulkan",
+    [string]$RenderBackend = "dx12",
     [string]$PresentMode = "immediate",
     [int]$WarmupSeconds = 10,
     [int]$SampleSeconds = 30

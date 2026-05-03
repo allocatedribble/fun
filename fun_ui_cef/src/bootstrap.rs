@@ -1,7 +1,15 @@
+use std::sync::Arc;
+
 use cef::rc::Rc;
+use cef::wrapper::message_router::{
+    MessageRouterConfig, MessageRouterRendererSide, MessageRouterRendererSideHandlerCallbacks,
+    RendererSideRouter,
+};
 use cef::{
-    App, CefString, CommandLine, ImplApp, ImplCommandLine, SchemeRegistrar, WrapApp, args::Args,
-    wrap_app,
+    App, Browser, CefString, CommandLine, Frame, ImplApp, ImplCommandLine,
+    ImplRenderProcessHandler, ProcessId, ProcessMessage, RenderProcessHandler, SchemeRegistrar,
+    V8Context, WrapApp, WrapRenderProcessHandler, args::Args, wrap_app,
+    wrap_render_process_handler,
 };
 
 use crate::runtime::configure_cef_api_version;
@@ -20,9 +28,15 @@ const DISABLED_BROWSER_FEATURES: &str =
     "AutofillServerCommunication,MediaRouter,OptimizationHints,Translate";
 
 wrap_app! {
-    pub struct FunCefApp;
+    pub struct FunCefApp {
+        render_process_handler: RenderProcessHandler,
+    }
 
     impl App {
+        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+            Some(self.render_process_handler.clone())
+        }
+
         fn on_before_command_line_processing(
             &self,
             _process_type: Option<&CefString>,
@@ -37,6 +51,55 @@ wrap_app! {
             if let Some(registrar) = registrar {
                 register_fun_ui_custom_scheme(registrar);
             }
+        }
+    }
+}
+
+wrap_render_process_handler! {
+    struct FunCefRenderProcessHandler {
+        router: Arc<RendererSideRouter>,
+    }
+
+    impl RenderProcessHandler {
+        fn on_context_created(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            context: Option<&mut V8Context>,
+        ) {
+            self.router.on_context_created(
+                browser.map(|browser| browser.clone()),
+                frame.map(|frame| frame.clone()),
+                context.map(|context| context.clone()),
+            );
+        }
+
+        fn on_context_released(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            context: Option<&mut V8Context>,
+        ) {
+            self.router.on_context_released(
+                browser.map(|browser| browser.clone()),
+                frame.map(|frame| frame.clone()),
+                context.map(|context| context.clone()),
+            );
+        }
+
+        fn on_process_message_received(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            source_process: ProcessId,
+            message: Option<&mut ProcessMessage>,
+        ) -> std::os::raw::c_int {
+            i32::from(self.router.on_process_message_received(
+                browser.map(|browser| browser.clone()),
+                frame.map(|frame| frame.clone()),
+                Some(source_process),
+                message.map(|message| message.clone()),
+            ))
         }
     }
 }
@@ -79,7 +142,9 @@ pub fn maybe_execute_cef_subprocess_with_args(args: &cef::MainArgs) -> CefSubpro
 
 #[must_use]
 pub fn new_fun_cef_app() -> cef::App {
-    FunCefApp::new()
+    FunCefApp::new(FunCefRenderProcessHandler::new(RendererSideRouter::new(
+        MessageRouterConfig::default(),
+    )))
 }
 
 pub fn apply_default_command_line_policy(command_line: &mut CommandLine) {

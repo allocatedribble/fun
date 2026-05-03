@@ -1,7 +1,15 @@
+#[cfg(all(feature = "dx12_dlss_native", not(target_os = "windows")))]
+compile_error!("fun_render/dx12_dlss_native is a Windows-only experimental feature");
+
 mod catalog;
 mod compiled_world;
 mod config;
 pub mod core;
+mod dlss_correctness;
+mod dx12_dlss_rr;
+mod dx12_dlss_sr;
+#[cfg(all(target_os = "windows", feature = "dx12_dlss_native"))]
+pub mod dx12_native;
 pub mod lighting;
 #[cfg(feature = "offscreen")]
 pub mod offscreen;
@@ -20,13 +28,41 @@ pub use catalog::{
 pub use compiled_world::{CompiledStaticAsset, CompiledWorldPackage, CompiledWorldPackageId};
 pub use config::{
     ClientOpaqueRenderer, ClientRenderConfig, ClientRenderProfile, ClientWindowConfig,
-    FunRenderAppOptions, FunRenderPresentation, FunRenderRtFeatures, RenderGeometryClass,
-    RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
+    FunRenderAppOptions, FunRenderPresentation, FunRenderRtFeatures, NativeDlssConfig,
+    NativeDlssMode, RenderGeometryClass, RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode,
+    RtOpacityMaskMode, RtVendorEmulation, log_native_dlss_startup_diagnostics,
     selected_present_mode, selected_render_backend,
 };
 pub use core::{
     FunRenderCorePlugin, enable_solari_lighting_for_ready_world, install_fun_render_core,
     request_solari_lighting_history_reset,
+};
+pub use dlss_correctness::{
+    DlssCameraValidation, DlssDebugVisualization, DlssDepthConvention, DlssDepthDiagnostics,
+    DlssHistoryReset, DlssMipBiasState, DlssMotionVectorConvention, DlssMotionVectorDirection,
+    DlssMotionVectorUnits, DlssResetReason, Dx12DlssPreviousViewProjection, Dx12NativeDlssCamera,
+    Dx12NativeDlssCameraRuntimeState, is_dlss_supported_color_format, native_dlss_input_resolution,
+    native_dlss_internal_scale_factor, native_dlss_mip_bias, native_dlss_mip_bias_state,
+    validate_camera_for_dx12_dlss,
+};
+pub use dx12_dlss_rr::{
+    Dx12NativeDlssRrGateRejection, Dx12NativeDlssRrGuideSurfaceSpec,
+    Dx12NativeDlssRrGuideSurfaceStatus, Dx12NativeDlssRrStatus, Dx12NativeDlssRrSupport,
+    install_dx12_native_dlss_rr, solari_rr_guide_surface_audit,
+};
+pub use dx12_dlss_sr::{
+    Dx12NativeDlssSrFailure, Dx12NativeDlssSrNode, Dx12NativeDlssSrOutputDescriptor,
+    Dx12NativeDlssSrRuntimeMode, Dx12NativeDlssSrState, Dx12NativeDlssSrStatus,
+    Dx12NativeDlssSrSupport, Dx12NativeDlssSrTransition, Dx12NativeDlssSrView,
+    install_dx12_native_dlss_sr, log_dx12_native_dlss_sr_support_once,
+};
+#[cfg(all(target_os = "windows", feature = "dx12_dlss_native"))]
+pub use dx12_native::{
+    Dx12DlssResourceStatePlan, Dx12DlssResourceStateRules, Dx12NativeHandles,
+    Dx12NativeInteropError, Dx12NativeInteropFailure, Dx12NativeResourceState, Dx12TextureHandle,
+    DxgiFormatLike, extract_dx12_native_handles, extract_dx12_texture_handle,
+    log_dx12_dlss_resource_state_plan_once, validate_dx12_backend, validate_dx12_device_queue,
+    with_dx12_command_list, with_dx12_command_list_checked,
 };
 #[cfg(feature = "offscreen")]
 pub use offscreen::{EditorOffscreenRenderTarget, FunRenderOffscreenPresentationPlugin};
