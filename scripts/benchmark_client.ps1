@@ -218,6 +218,66 @@ function Parse-RenderFeatureGatesLog {
     }
 }
 
+function Parse-RenderPresentationLog {
+    param([string[]]$Lines)
+
+    $result = [ordered]@{
+        status = "not_found"
+        startup_status = "not_found"
+        surface_status = "not_found"
+        backend = $null
+        adapter = $null
+        driver = $null
+        present_mode = $null
+        desired_maximum_frame_latency = $null
+        vrr_detected = $null
+        hdr_active = $null
+        swapchain_format = $null
+        window_mode = $null
+        resolution_width = $null
+        resolution_height = $null
+        surface_requested_present_mode = $null
+        surface_selected_present_mode = $null
+        surface_available_present_modes = $null
+    }
+
+    foreach ($line in $Lines) {
+        $presentation = [regex]::Match($line, "\[fun render\] presentation: (?<payload>.*)$")
+        if ($presentation.Success) {
+            $parsed = ConvertTo-KeyValueObject -Payload $presentation.Groups["payload"].Value -HashKey "presentation_hash"
+            foreach ($property in $parsed.GetEnumerator()) {
+                $result[$property.Key] = $property.Value
+            }
+            $result["startup_status"] = "found"
+            $result["status"] = "found"
+            continue
+        }
+
+        $surface = [regex]::Match($line, "\[bevy render\] surface present mode requested (?<requested>[^;]+); selected (?<selected>[^;]+); available (?<available>.+)$")
+        if ($surface.Success) {
+            $result["surface_requested_present_mode"] = $surface.Groups["requested"].Value.Trim()
+            $result["surface_selected_present_mode"] = $surface.Groups["selected"].Value.Trim()
+            $result["surface_available_present_modes"] = $surface.Groups["available"].Value.Trim()
+            $result["surface_status"] = "found"
+            $result["status"] = "found"
+            continue
+        }
+
+        $surfaceConfig = [regex]::Match($line, "\[bevy render\] surface config: format (?<format>[^;]+); width (?<width>\d+); height (?<height>\d+); present_mode (?<present>[^;]+); desired_maximum_frame_latency (?<latency>\d+)")
+        if ($surfaceConfig.Success) {
+            $result["swapchain_format"] = $surfaceConfig.Groups["format"].Value.Trim()
+            $result["resolution_width"] = $surfaceConfig.Groups["width"].Value.Trim()
+            $result["resolution_height"] = $surfaceConfig.Groups["height"].Value.Trim()
+            $result["surface_selected_present_mode"] = $surfaceConfig.Groups["present"].Value.Trim()
+            $result["desired_maximum_frame_latency"] = $surfaceConfig.Groups["latency"].Value.Trim()
+            $result["surface_status"] = "found"
+            $result["status"] = "found"
+        }
+    }
+
+    return $result
+}
+
 function Parse-ClientPerfLog {
     param([string[]]$Lines)
 
@@ -787,6 +847,11 @@ function Write-MarkdownReport {
     }
     $lines.Add("- Backend: $($Summary.config.render_backend)") | Out-Null
     $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
+    $startupLatency = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.desired_maximum_frame_latency } else { "n/a" }
+    $surfacePresent = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.surface_selected_present_mode } else { "n/a" }
+    $swapchainFormat = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.swapchain_format } else { "n/a" }
+    $lines.Add("- Max frame latency: requested=$($Summary.config.requested_maximum_frame_latency) startup=$startupLatency") | Out-Null
+    $lines.Add("- Surface present: selected=$surfacePresent swapchain_format=$swapchainFormat") | Out-Null
     $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) transport=$($Summary.config.cef_paint_transport) enabled=$($Summary.config.cef_ui_enabled)") | Out-Null
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
     $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
@@ -1113,9 +1178,12 @@ try {
         }
         if ($RequestedMaximumFrameLatency -gt 0) {
             Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
+            Set-BenchmarkProcessEnv -Name "FUN_RENDER_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
+            $runStackArgs += @("-RenderMaxFrameLatency", "$RequestedMaximumFrameLatency")
         }
         else {
             Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ""
+            Set-BenchmarkProcessEnv -Name "FUN_RENDER_MAX_FRAME_LATENCY" -Value ""
         }
         if ($Release) { $runStackArgs += "-Release" }
         if ($StaticBevy) { $runStackArgs += "-StaticBevy" }
@@ -1233,6 +1301,7 @@ try {
 
     $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
+    $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
     $rrAcceptance = New-Dx12DlssRrAcceptance `
@@ -1322,6 +1391,7 @@ try {
         rr_acceptance = $rrAcceptance
         render_capabilities = $renderCapabilities
         rt_feature_gates = $rtFeatureGates
+        render_presentation = $renderPresentation
     }
 
     $jsonPath = Join-Path $outputRoot "summary.json"

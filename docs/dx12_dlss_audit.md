@@ -26,7 +26,7 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 
 ## Render Plugin Entry Points
 
-- `fun_render::FunRenderWinitPresentationPlugin`: selects `FUN_RENDER_BACKEND`, `FUN_PRESENT_MODE`, creates the Winit window, injects the Bevy render plugin, and logs native DX12 DLSS startup status.
+- `fun_render::FunRenderWinitPresentationPlugin`: selects `FUN_RENDER_BACKEND`, canonical `FUN_RENDER_PRESENT_MODE` with the legacy `FUN_PRESENT_MODE` alias, creates the Winit window, injects the Bevy render plugin, and logs native DX12 DLSS startup status.
 - `fun_render::FunRenderOffscreenPresentationPlugin`: selects the same backend for editor/offscreen presentation, inserts the offscreen target, and logs native DX12 DLSS startup status.
 - `fun_render::FunRenderCorePlugin`: installs render policy, Solari plugins, diagnostics resources, render path signature, world-stream activation, and temporal reset systems.
 - `game_client::build_app_with_options`: adds `FunRenderWinitPresentationPlugin` and `FunRenderCorePlugin` for the product client.

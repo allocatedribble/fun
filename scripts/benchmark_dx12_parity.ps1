@@ -3,7 +3,7 @@ param(
     [switch]$StaticBevy,
     [switch]$TraceDiagnostics,
     [switch]$FrameTimeDiagnostics,
-    [ValidateSet("quick", "full")]
+    [ValidateSet("quick", "full", "present")]
     [string]$MatrixSize = "quick",
     [string[]]$Lane = @(),
     [switch]$PlanOnly,
@@ -126,6 +126,8 @@ function New-Dx12ParityLane {
         [bool]$DisableFpsOverlay = $false,
         [int]$LaneWindowWidth = 0,
         [int]$LaneWindowHeight = 0,
+        [int]$MaxFrameLatency = 0,
+        [string]$WindowMode = "windowed",
         [string]$EditorPreview = "off",
         [string]$Notes = ""
     )
@@ -144,6 +146,8 @@ function New-Dx12ParityLane {
         disable_fps_overlay = $DisableFpsOverlay
         window_width = $LaneWindowWidth
         window_height = $LaneWindowHeight
+        max_frame_latency = $MaxFrameLatency
+        window_mode = $WindowMode
         editor_preview = $EditorPreview
         notes = $Notes
     }
@@ -176,6 +180,41 @@ function Get-Dx12ParityLaneDefinitions {
     $lanes.Add((New-Dx12ParityLane -Name "editor_preview_on" -Category "feature_toggle" -EditorPreview "on" -Notes "metadata lane until merged editor preview exposes a benchmarkable switch")) | Out-Null
     $lanes.Add((New-Dx12ParityLane -Name "cef_cpu_paint" -Category "feature_toggle" -CefUiMode "animated" -CefPaintTransport "cpu")) | Out-Null
     $lanes.Add((New-Dx12ParityLane -Name "cef_gpu_accelerated" -Category "feature_toggle" -CefUiMode "animated" -CefPaintTransport "d3d11on12")) | Out-Null
+
+    return @($lanes.ToArray())
+}
+
+function Get-Dx12PresentLaneDefinitions {
+    $lanes = New-Object "System.Collections.Generic.List[object]"
+    $backends = @("vulkan", "dx12")
+    $presentModes = @("immediate", "auto_no_vsync", "fifo", "auto_vsync")
+    $frameLatencies = @(1, 2, 3, 4)
+    $uiModes = @(
+        @{ name = "ui_hidden"; mode = "hidden"; transport = "default"; disable_fps = $true },
+        @{ name = "ui_static"; mode = "static"; transport = "cpu"; disable_fps = $false },
+        @{ name = "ui_animated"; mode = "animated"; transport = "cpu"; disable_fps = $false }
+    )
+
+    foreach ($backend in $backends) {
+        foreach ($presentMode in $presentModes) {
+            foreach ($latency in $frameLatencies) {
+                foreach ($ui in $uiModes) {
+                    $laneName = "present_${backend}_${presentMode}_fl${latency}_$($ui.name)"
+                    $lanes.Add((New-Dx12ParityLane `
+                                -Name $laneName `
+                                -Category "present_matrix" `
+                                -RenderBackend $backend `
+                                -PresentMode $presentMode `
+                                -MaxFrameLatency $latency `
+                                -CefUiMode $ui.mode `
+                                -CefPaintTransport $ui.transport `
+                                -DisableFpsOverlay $ui.disable_fps `
+                                -WindowMode "windowed" `
+                                -Notes "windowed lane; borderless fullscreen is not yet exposed by the stack runner")) | Out-Null
+                }
+            }
+        }
+    }
 
     return @($lanes.ToArray())
 }
@@ -295,6 +334,67 @@ function New-KeyMetricSnapshot {
     return $snapshot
 }
 
+function Get-LaneMetricField {
+    param(
+        [object]$Lane,
+        [string]$Metric,
+        [string]$Field,
+        [double]$MissingValue
+    )
+
+    if ($null -eq $Lane -or $null -eq $Lane.key_metrics) {
+        return $MissingValue
+    }
+    $metricEntry = $Lane.key_metrics.$Metric
+    if ($null -eq $metricEntry) {
+        return $MissingValue
+    }
+    $value = $metricEntry.$Field
+    if ($null -eq $value) {
+        return $MissingValue
+    }
+    return [double]$value
+}
+
+function Format-Dx12PresentRecommendation {
+    param(
+        [object]$Lane,
+        [string]$Metric,
+        [string]$Field
+    )
+
+    if ($null -eq $Lane) {
+        return "not enough passing DX12 lanes"
+    }
+    $value = Get-LaneMetricField -Lane $Lane -Metric $Metric -Field $Field -MissingValue ([double]::NaN)
+    return "$($Lane.name) present=$($Lane.present_mode) max_latency=$($Lane.max_frame_latency) ui=$($Lane.cef_ui_mode) $Metric.$Field=$value"
+}
+
+function New-Dx12PresentRecommendations {
+    param([object[]]$LaneResults)
+
+    $dx12Lanes = @($LaneResults | Where-Object { $_.status -eq "passed" -and $_.render_backend -eq "dx12" })
+    if ($dx12Lanes.Count -eq 0) {
+        return [ordered]@{
+            maximum_fps = "not enough passing DX12 lanes"
+            best_p95 = "not enough passing DX12 lanes"
+            lowest_present_wait = "not enough passing DX12 lanes"
+            default_decision = "unchanged; collect present-matrix evidence first"
+        }
+    }
+
+    $bestFps = @($dx12Lanes | Sort-Object -Property { Get-LaneMetricField -Lane $_ -Metric "fps" -Field "mean" -MissingValue -1.0 } -Descending | Select-Object -First 1)
+    $bestP95 = @($dx12Lanes | Sort-Object -Property { Get-LaneMetricField -Lane $_ -Metric "frame_ns" -Field "p95" -MissingValue ([double]::PositiveInfinity) } | Select-Object -First 1)
+    $lowestPresentWait = @($dx12Lanes | Sort-Object -Property { Get-LaneMetricField -Lane $_ -Metric "present_wait_ns" -Field "p95" -MissingValue ([double]::PositiveInfinity) } | Select-Object -First 1)
+
+    return [ordered]@{
+        maximum_fps = Format-Dx12PresentRecommendation -Lane $bestFps[0] -Metric "fps" -Field "mean"
+        best_p95 = Format-Dx12PresentRecommendation -Lane $bestP95[0] -Metric "frame_ns" -Field "p95"
+        lowest_present_wait = Format-Dx12PresentRecommendation -Lane $lowestPresentWait[0] -Metric "present_wait_ns" -Field "p95"
+        default_decision = "unchanged; do not promote a present-mode default until this matrix has comparable live data"
+    }
+}
+
 function Convert-LaneToBenchmarkArgs {
     param(
         [System.Collections.IDictionary]$LaneDefinition,
@@ -334,6 +434,9 @@ function Convert-LaneToBenchmarkArgs {
         "-WindowHeight",
         "$laneHeight"
     )
+    if ([int]$LaneDefinition.max_frame_latency -gt 0) {
+        $args += @("-RequestedMaximumFrameLatency", "$($LaneDefinition.max_frame_latency)")
+    }
 
     if ($Release) { $args += "-Release" }
     if ($StaticBevy) { $args += "-StaticBevy" }
@@ -362,15 +465,24 @@ function Write-Dx12ParityMarkdown {
     $lines.Add("- Plan only: $($Summary.plan_only)") | Out-Null
     $lines.Add("- Required metrics: $($Summary.required_metrics -join ', ')") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| lane | status | backend | present | cef mode | cef transport | fps mean | frame p95 ns | present p95 ns | summary |") | Out-Null
-    $lines.Add("|---|---|---|---|---|---|---:|---:|---:|---|") | Out-Null
+    $lines.Add("| lane | status | backend | present | max latency | cef mode | cef transport | fps mean | frame p95 ns | present p95 ns | summary |") | Out-Null
+    $lines.Add("|---|---|---|---|---:|---|---|---:|---:|---:|---|") | Out-Null
     foreach ($lane in $Summary.lanes) {
         $metrics = $lane.key_metrics
         $fpsMean = if ($null -ne $metrics.fps) { $metrics.fps.mean } else { "n/a" }
         $frameP95 = if ($null -ne $metrics.frame_ns) { $metrics.frame_ns.p95 } else { "n/a" }
         $presentP95 = if ($null -ne $metrics.present_wait_ns) { $metrics.present_wait_ns.p95 } else { "n/a" }
         $summaryPath = if ([string]::IsNullOrWhiteSpace($lane.summary_json)) { "n/a" } else { $lane.summary_json }
-        $lines.Add("| $($lane.name) | $($lane.status) | $($lane.render_backend) | $($lane.present_mode) | $($lane.cef_ui_mode) | $($lane.cef_paint_transport) | $fpsMean | $frameP95 | $presentP95 | $summaryPath |") | Out-Null
+        $lines.Add("| $($lane.name) | $($lane.status) | $($lane.render_backend) | $($lane.present_mode) | $($lane.max_frame_latency) | $($lane.cef_ui_mode) | $($lane.cef_paint_transport) | $fpsMean | $frameP95 | $presentP95 | $summaryPath |") | Out-Null
+    }
+    if ($null -ne $Summary.dx12_present_recommendations) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## DX12 Present Recommendations") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("- Maximum FPS: $($Summary.dx12_present_recommendations.maximum_fps)") | Out-Null
+        $lines.Add("- Best p95: $($Summary.dx12_present_recommendations.best_p95)") | Out-Null
+        $lines.Add("- Lowest present wait: $($Summary.dx12_present_recommendations.lowest_present_wait)") | Out-Null
+        $lines.Add("- Default decision: $($Summary.dx12_present_recommendations.default_decision)") | Out-Null
     }
     $lines.Add("") | Out-Null
     $lines.Add("DX12 PIX/GPUView-only counters are listed in `dx12_external_metrics` and are not inferred from client logs.") | Out-Null
@@ -392,9 +504,19 @@ else {
 New-Item -ItemType Directory -Force -Path $matrixRoot | Out-Null
 
 $benchmarkClientPath = Join-Path $scriptRoot "benchmark_client.ps1"
-$allLanes = @(Get-Dx12ParityLaneDefinitions)
+$baseLanes = @(Get-Dx12ParityLaneDefinitions)
+$presentLanes = @(Get-Dx12PresentLaneDefinitions)
+$allLanes = if ($MatrixSize -eq "present" -or ($Lane | Where-Object { $_ -like "present_*" }).Count -gt 0) {
+    @($baseLanes + $presentLanes)
+}
+else {
+    $baseLanes
+}
 $selectedNames = if ($Lane.Count -gt 0) {
     @($Lane)
+}
+elseif ($MatrixSize -eq "present") {
+    @($presentLanes | ForEach-Object { $_.name })
 }
 elseif ($MatrixSize -eq "quick") {
     @(Get-QuickLaneNames)
@@ -467,6 +589,8 @@ foreach ($laneDefinition in $selectedLanes) {
         exit_code = $exitCode
         render_backend = $laneDefinition.render_backend
         present_mode = $laneDefinition.present_mode
+        max_frame_latency = $laneDefinition.max_frame_latency
+        window_mode = $laneDefinition.window_mode
         cef_ui_mode = $laneDefinition.cef_ui_mode
         cef_paint_transport = $laneDefinition.cef_paint_transport
         benchmark_lane = $laneDefinition.benchmark_lane
@@ -512,6 +636,7 @@ $matrixSummary = [ordered]@{
     environment = Get-Dx12ParityEnvironment
     lanes_defined = $allLanes
     lanes = @($laneResults.ToArray())
+    dx12_present_recommendations = New-Dx12PresentRecommendations -LaneResults @($laneResults.ToArray())
 }
 
 $matrixJsonPath = Join-Path $matrixRoot "matrix.json"

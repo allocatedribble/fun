@@ -18,7 +18,7 @@ use crate::{
         NativeDlssConfig, client_render_creation, log_native_dlss_startup_diagnostics,
         render_plugin,
     },
-    selected_present_mode, selected_render_backend,
+    selected_max_frame_latency, selected_present_mode, selected_render_backend,
 };
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -30,7 +30,10 @@ struct FunWinitRenderStartupDiagnostics {
     render_profile: crate::ClientRenderProfile,
     backend: Backends,
     present_mode: PresentMode,
+    max_frame_latency: std::num::NonZeroU32,
     maximized: bool,
+    requested_width: Option<u32>,
+    requested_height: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +51,7 @@ impl Plugin for FunRenderWinitPresentationPlugin {
     fn build(&self, app: &mut App) {
         let render_backend = selected_render_backend();
         let present_mode = selected_present_mode();
+        let max_frame_latency = selected_max_frame_latency();
         let window_config = ClientWindowConfig::from_env();
 
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -61,7 +65,7 @@ impl Plugin for FunRenderWinitPresentationPlugin {
                 title,
                 present_mode,
                 resolution: window_config.resolution(),
-                desired_maximum_frame_latency: std::num::NonZeroU32::new(3),
+                desired_maximum_frame_latency: Some(max_frame_latency),
                 ..default()
             }),
             ..default()
@@ -74,7 +78,10 @@ impl Plugin for FunRenderWinitPresentationPlugin {
                 render_profile: self.options.render_profile,
                 backend: render_backend,
                 present_mode,
+                max_frame_latency,
                 maximized: window_config.maximized,
+                requested_width: window_config.requested_width(),
+                requested_height: window_config.requested_height(),
             })
             .insert_resource(window_config)
             .insert_resource(RenderErrorHandler(recover_render_device))
@@ -91,9 +98,19 @@ fn log_winit_render_startup_diagnostics(diagnostics: Res<FunWinitRenderStartupDi
         backend = ?diagnostics.backend,
         present_mode = ?diagnostics.present_mode,
         vsync = false,
-        max_frame_latency = 3,
+        max_frame_latency = diagnostics.max_frame_latency.get(),
         maximized = diagnostics.maximized,
         "Fun Winit render backend selected"
+    );
+    info!(
+        target: "fun::render",
+        "[fun render] presentation: render.backend={:?} render.adapter=unknown render.driver=unknown render.present_mode={:?} render.desired_maximum_frame_latency={} render.vrr_detected=unknown render.hdr_active=unknown render.swapchain_format=unknown render.window_mode={} render.resolution_width={} render.resolution_height={}",
+        diagnostics.backend,
+        diagnostics.present_mode,
+        diagnostics.max_frame_latency.get(),
+        if diagnostics.maximized { "maximized_window" } else { "windowed" },
+        diagnostics.requested_width.unwrap_or(0),
+        diagnostics.requested_height.unwrap_or(0),
     );
     log_native_dlss_startup_diagnostics(diagnostics.backend, NativeDlssConfig::from_env());
 }

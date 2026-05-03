@@ -182,6 +182,13 @@ Windows DX12/Vulkan parity capture:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1
 ```
 
+Present pacing matrix and dashboard artifact:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize present -ContinueOnFailure
+python tools\dx12_parity_report.py --vulkan target\benchmarks\client\<vulkan>\summary.json --dx12 target\benchmarks\client\<dx12>\summary.json --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
+```
+
 Denoiser and DLSS Ray Reconstruction comparison:
 
 ```powershell

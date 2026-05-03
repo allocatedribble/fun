@@ -10,6 +10,7 @@ use bevy::{
     solari::prelude::{SolariFeaturePolicy, SolariGeometryMode, SolariHairMode, SolariOpacityMode},
     window::{PresentMode, WindowResolution},
 };
+use std::num::NonZeroU32;
 use tracing::{info, warn};
 
 use crate::{
@@ -19,6 +20,7 @@ use crate::{
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+pub const DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientRenderProfile {
@@ -662,6 +664,14 @@ impl ClientWindowConfig {
             _ => WindowResolution::default(),
         }
     }
+
+    pub const fn requested_width(&self) -> Option<u32> {
+        self.width
+    }
+
+    pub const fn requested_height(&self) -> Option<u32> {
+        self.height
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -854,22 +864,81 @@ const fn native_dlss_compiled_for_this_target() -> bool {
 }
 
 pub fn selected_present_mode() -> PresentMode {
-    match std::env::var("FUN_PRESENT_MODE")
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Ok("auto_no_vsync") | Ok("autonovsync") | Ok("auto-no-vsync") => PresentMode::AutoNoVsync,
-        Ok("auto_vsync") | Ok("autovsync") | Ok("auto-vsync") => PresentMode::AutoVsync,
-        Ok("fifo") | Ok("vsync") => PresentMode::Fifo,
-        Ok("fifo_relaxed") | Ok("fifo-relaxed") => PresentMode::FifoRelaxed,
-        Ok("mailbox") => PresentMode::Mailbox,
-        Ok("immediate") | Ok("") | Err(_) => PresentMode::Immediate,
-        Ok(other) => {
-            info!("[fun render] unknown FUN_PRESENT_MODE={other}; using Immediate");
+    selected_present_mode_from_env_reader(|name| std::env::var(name).ok())
+}
+
+fn selected_present_mode_from_env_reader(
+    mut read: impl FnMut(&'static str) -> Option<String>,
+) -> PresentMode {
+    let Some((name, value)) = read("FUN_RENDER_PRESENT_MODE")
+        .map(|value| ("FUN_RENDER_PRESENT_MODE", value))
+        .or_else(|| read("FUN_PRESENT_MODE").map(|value| ("FUN_PRESENT_MODE", value)))
+    else {
+        return PresentMode::Immediate;
+    };
+
+    match present_mode_from_env_value(Some(&value)) {
+        Some(mode) => mode,
+        None => {
+            info!("[fun render] unknown {name}={value}; using Immediate");
             PresentMode::Immediate
         }
     }
+}
+
+fn present_mode_from_env_value(value: Option<&str>) -> Option<PresentMode> {
+    let Some(value) = value else {
+        return Some(PresentMode::Immediate);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "auto_no_vsync" | "autonovsync" | "auto-no-vsync" => Some(PresentMode::AutoNoVsync),
+        "auto_vsync" | "autovsync" | "auto-vsync" => Some(PresentMode::AutoVsync),
+        "fifo" | "vsync" => Some(PresentMode::Fifo),
+        "fifo_relaxed" | "fifo-relaxed" => Some(PresentMode::FifoRelaxed),
+        "mailbox" => Some(PresentMode::Mailbox),
+        "immediate" | "" => Some(PresentMode::Immediate),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(feature = "winit_presentation"), allow(dead_code))]
+pub fn selected_max_frame_latency() -> NonZeroU32 {
+    selected_max_frame_latency_from_env_reader(|name| std::env::var(name).ok())
+}
+
+fn selected_max_frame_latency_from_env_reader(
+    mut read: impl FnMut(&'static str) -> Option<String>,
+) -> NonZeroU32 {
+    let Some((name, value)) = read("FUN_RENDER_MAX_FRAME_LATENCY")
+        .map(|value| ("FUN_RENDER_MAX_FRAME_LATENCY", value))
+        .or_else(|| {
+            read("FUN_PRESENT_MAX_FRAME_LATENCY")
+                .map(|value| ("FUN_PRESENT_MAX_FRAME_LATENCY", value))
+        })
+    else {
+        return default_max_frame_latency();
+    };
+
+    match value.parse::<u32>() {
+        Ok(parsed) if parsed > 0 => {
+            NonZeroU32::new(parsed).unwrap_or_else(default_max_frame_latency)
+        }
+        _ => {
+            warn!(
+                target: "fun::render",
+                setting = name,
+                value,
+                default_value = DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY,
+                "ignored invalid maximum frame latency setting"
+            );
+            default_max_frame_latency()
+        }
+    }
+}
+
+fn default_max_frame_latency() -> NonZeroU32 {
+    NonZeroU32::new(DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY)
+        .expect("default maximum frame latency must be non-zero")
 }
 
 fn env_u32_opt(name: &str) -> Option<u32> {
@@ -990,12 +1059,14 @@ fn hash_byte(hash: &mut u64, byte: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        FunRenderRtFeatures, NativeDlssConfig, NativeDlssMode, RtHairMode, RtMegaGeometryMode,
-        RtOpacityMaskMode, RtVendorEmulation, default_render_backend,
-        render_backend_from_env_value,
+        DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY, FunRenderRtFeatures, NativeDlssConfig,
+        NativeDlssMode, RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
+        default_render_backend, present_mode_from_env_value, render_backend_from_env_value,
+        selected_max_frame_latency_from_env_reader, selected_present_mode_from_env_reader,
     };
     use bevy::render::settings::Backends;
     use bevy::solari::prelude::{SolariGeometryMode, SolariHairMode, SolariOpacityMode};
+    use bevy::window::PresentMode;
 
     fn features_from_pairs(pairs: &[(&'static str, &'static str)]) -> FunRenderRtFeatures {
         FunRenderRtFeatures::from_env_reader(|name| {
@@ -1120,6 +1191,88 @@ mod tests {
 
         #[cfg(not(target_os = "windows"))]
         assert_eq!(default_render_backend(), Backends::VULKAN);
+    }
+
+    #[test]
+    fn present_mode_selection_preserves_legacy_alias_and_prefers_render_env() {
+        assert_eq!(
+            present_mode_from_env_value(None),
+            Some(PresentMode::Immediate)
+        );
+        assert_eq!(
+            present_mode_from_env_value(Some("auto_no_vsync")),
+            Some(PresentMode::AutoNoVsync)
+        );
+        assert_eq!(
+            present_mode_from_env_value(Some("auto-vsync")),
+            Some(PresentMode::AutoVsync)
+        );
+        assert_eq!(
+            present_mode_from_env_value(Some("fifo")),
+            Some(PresentMode::Fifo)
+        );
+        assert_eq!(
+            present_mode_from_env_value(Some("fifo_relaxed")),
+            Some(PresentMode::FifoRelaxed)
+        );
+        assert_eq!(
+            present_mode_from_env_value(Some("mailbox")),
+            Some(PresentMode::Mailbox)
+        );
+        assert_eq!(present_mode_from_env_value(Some("bad")), None);
+
+        let selected = selected_present_mode_from_env_reader(|name| {
+            match name {
+                "FUN_RENDER_PRESENT_MODE" => Some("auto_no_vsync"),
+                "FUN_PRESENT_MODE" => Some("fifo"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+        assert_eq!(selected, PresentMode::AutoNoVsync);
+
+        let legacy = selected_present_mode_from_env_reader(|name| {
+            match name {
+                "FUN_PRESENT_MODE" => Some("fifo"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+        assert_eq!(legacy, PresentMode::Fifo);
+    }
+
+    #[test]
+    fn maximum_frame_latency_uses_render_env_then_legacy_env() {
+        let default = selected_max_frame_latency_from_env_reader(|_| None);
+        assert_eq!(default.get(), DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY);
+
+        let selected = selected_max_frame_latency_from_env_reader(|name| {
+            match name {
+                "FUN_RENDER_MAX_FRAME_LATENCY" => Some("2"),
+                "FUN_PRESENT_MAX_FRAME_LATENCY" => Some("4"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+        assert_eq!(selected.get(), 2);
+
+        let legacy = selected_max_frame_latency_from_env_reader(|name| {
+            match name {
+                "FUN_PRESENT_MAX_FRAME_LATENCY" => Some("4"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+        assert_eq!(legacy.get(), 4);
+
+        let invalid = selected_max_frame_latency_from_env_reader(|name| {
+            match name {
+                "FUN_RENDER_MAX_FRAME_LATENCY" => Some("0"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+        assert_eq!(invalid.get(), DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY);
     }
 
     #[test]

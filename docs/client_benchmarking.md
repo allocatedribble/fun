@@ -162,6 +162,16 @@ highest-risk UI and feature lanes. The full profile adds every declared lane:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize full -ContinueOnFailure
 ```
 
+Use the present matrix before changing any Windows present defaults. It expands
+Vulkan/DX12 across `immediate`, `auto_no_vsync`, `fifo`, and `auto_vsync`,
+frame latency `1..4`, and hidden/static/animated CEF lanes. Current stack
+support records these as windowed lanes; borderless fullscreen still needs a
+dedicated host/window-mode switch before it can be included as a live lane.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize present -ContinueOnFailure
+```
+
 The declared lane vocabulary is:
 
 - Backend/present: `vulkan_immediate`, `vulkan_fifo`,
@@ -177,6 +187,10 @@ Every matrix writes:
 
 - `target\benchmarks\dx12_parity\<timestamp>\matrix.json`
 - `target\benchmarks\dx12_parity\<timestamp>\summary.md`
+
+The matrix summary reports the best observed DX12 lane for maximum FPS, frame
+p95, and present-wait p95. It intentionally keeps the product default unchanged
+until those recommendations come from comparable live runs.
 
 The required metric contract includes `frame_ns.mean/p50/p95/p99`,
 `fps.mean/p95`, `present_wait_ns.mean/p95`,
@@ -198,6 +212,22 @@ Use the JSON file as the baseline for a second run:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -Baseline target\benchmarks\client\<baseline>\summary.json
 ```
+
+For a generated DX12 parity dashboard from one Vulkan JSON and one DX12 JSON:
+
+```powershell
+python tools\dx12_parity_report.py `
+  --vulkan target\benchmarks\client\<vulkan>\summary.json `
+  --dx12 target\benchmarks\client\<dx12>\summary.json `
+  --markdown target\benchmarks\dx12_parity\dashboard.md `
+  --csv target\benchmarks\dx12_parity\dashboard.csv
+```
+
+Optional `--pix` and `--presentmon` CSV inputs are parsed into the report as
+external trace evidence. The dashboard marks red/yellow/green regressions,
+prints a likely bottleneck category when DX12 loses, calls out the special case
+where DX12 wins average FPS but loses frame p95, and fails accelerated CEF lanes
+that still report nonzero `cef_cpu_upload_bytes`.
 
 For parser-only checks against an existing client log:
 

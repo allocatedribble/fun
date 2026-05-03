@@ -54,6 +54,7 @@ param(
     [int]$WindowHeight = 0,
     [string]$RenderBackend = "dx12",
     [string]$PresentMode = "immediate",
+    [int]$RenderMaxFrameLatency = 0,
     [int]$FrameTimeDiagnosticInterval = 60,
     [int]$FrameTimeDiagnosticMinNs = 0,
     [int]$FrameTimeDiagnosticMaxDepth = 10,
@@ -407,9 +408,19 @@ else {
 }
 if ($PresentMode) {
     $env:FUN_PRESENT_MODE = $PresentMode
+    $env:FUN_RENDER_PRESENT_MODE = $PresentMode
 }
 else {
     Remove-Item Env:\FUN_PRESENT_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_RENDER_PRESENT_MODE -ErrorAction SilentlyContinue
+}
+if ($RenderMaxFrameLatency -gt 0) {
+    $env:FUN_RENDER_MAX_FRAME_LATENCY = [string]$RenderMaxFrameLatency
+    $env:FUN_PRESENT_MAX_FRAME_LATENCY = [string]$RenderMaxFrameLatency
+}
+else {
+    Remove-Item Env:\FUN_RENDER_MAX_FRAME_LATENCY -ErrorAction SilentlyContinue
+    Remove-Item Env:\FUN_PRESENT_MAX_FRAME_LATENCY -ErrorAction SilentlyContinue
 }
 if (-not $env:FUN_GAME_SERVER_TLS_MODE) {
     $env:FUN_GAME_SERVER_TLS_MODE = "development"
