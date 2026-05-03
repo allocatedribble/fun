@@ -2,6 +2,7 @@ param(
     [switch]$Release,
     [switch]$StaticBevy,
     [switch]$NoClient,
+    [switch]$CefUi,
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
     [switch]$RenderProfileVerbose,
@@ -72,6 +73,41 @@ function Set-OptionalEnvValue {
     }
 
     [System.Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+}
+
+function Copy-CefRuntimeFiles {
+    param(
+        [string]$ProfileTargetDir
+    )
+
+    $buildDir = Join-Path $ProfileTargetDir "build"
+    if (-not (Test-Path $buildDir)) {
+        throw "CEF runtime build directory was not found: $buildDir"
+    }
+
+    $cefRuntime = Get-ChildItem -Path $buildDir -Directory -Filter "cef-dll-sys-*" |
+        ForEach-Object { Join-Path $_.FullName "out\cef_windows_x86_64" } |
+        Where-Object { Test-Path (Join-Path $_ "libcef.dll") } |
+        Sort-Object { (Get-Item (Join-Path $_ "libcef.dll")).LastWriteTimeUtc } -Descending |
+        Select-Object -First 1
+
+    if ([string]::IsNullOrWhiteSpace($cefRuntime)) {
+        throw "CEF runtime files were not found under $buildDir"
+    }
+
+    $runtimePatterns = @("*.dll", "*.pak", "*.dat", "*.bin", "*.json")
+    foreach ($pattern in $runtimePatterns) {
+        Get-ChildItem -Path $cefRuntime -File -Filter $pattern | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $ProfileTargetDir -Force
+        }
+    }
+
+    $localesSource = Join-Path $cefRuntime "locales"
+    if (Test-Path $localesSource) {
+        Copy-Item -LiteralPath $localesSource -Destination $ProfileTargetDir -Recurse -Force
+    }
+
+    Write-Host "Bundled CEF runtime files from $cefRuntime"
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -359,8 +395,14 @@ if ($Release) {
 if (-not $Release -and -not $StaticBevy) {
     $buildArgs += @("--features", "bevy/dynamic_linking")
 }
+if ($CefUi -and -not $NoClient) {
+    $buildArgs += @("--features", "game_client/cef_ui")
+}
 if ($diagnosticsRequested -and $Release) {
     Write-Warning "Diagnostic flags are debug-build only; no diagnostic features will be compiled into this release build."
+}
+if ($CefUi -and $NoClient) {
+    Write-Warning "Ignoring -CefUi because -NoClient was requested."
 }
 if (-not $Release) {
     $diagnosticFeatures = @()
@@ -384,6 +426,9 @@ try {
     if (-not $Release -and -not $StaticBevy) {
         Write-Host "Using Bevy dynamic linking for faster iterative stack builds."
     }
+    if ($CefUi -and -not $NoClient) {
+        Write-Host "Enabling game_client/cef_ui for the CEF browser UI."
+    }
     if (-not $Release -and $diagnosticsRequested) {
         if ($clientRenderDiagnosticsRequested) {
             Write-Host "Enabling game_client/render_diagnostics for diagnostic build."
@@ -404,6 +449,9 @@ try {
         Get-ChildItem -Path $rustTargetLibDir -Filter "std-*.dll" | ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $targetRoot $profile) -Force
         }
+    }
+    if ($CefUi -and -not $NoClient) {
+        Copy-CefRuntimeFiles -ProfileTargetDir (Join-Path $targetRoot $profile)
     }
 }
 finally {

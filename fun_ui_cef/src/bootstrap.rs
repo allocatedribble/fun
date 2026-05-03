@@ -4,6 +4,7 @@ use cef::{
     wrap_app,
 };
 
+use crate::runtime::configure_cef_api_version;
 use crate::scheme::register_fun_ui_custom_scheme;
 
 const DISABLED_BROWSER_SWITCHES: &[&str] = &[
@@ -66,6 +67,7 @@ pub fn maybe_execute_cef_subprocess() -> CefSubprocessExit {
 
 #[must_use]
 pub fn maybe_execute_cef_subprocess_with_args(args: &cef::MainArgs) -> CefSubprocessExit {
+    configure_cef_api_version();
     let mut app = new_fun_cef_app();
     let exit_code = cef::execute_process(Some(args), Some(&mut app), std::ptr::null_mut());
     if exit_code >= 0 {

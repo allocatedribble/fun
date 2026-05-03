@@ -23,7 +23,9 @@ pub use bridge::{
     BrowserUiRouteState, BrowserUiSequence, UiControlPayload, UiEnvelope, UiEnvelopeChannel,
     UiEnvelopeKind, UiEnvelopePayload, validate_browser_ui_packet, validate_ui_envelope,
 };
-pub use browser::{BrowserUiConfig, BrowserUiPage, MAIN_BROWSER_PAGE};
+pub use browser::{
+    BrowserUiConfig, BrowserUiPage, CefUiBrowser, CefUiBrowserError, MAIN_BROWSER_PAGE,
+};
 pub use compositor::{
     CefUiCompositor, CefUiOverlayMode, CefUiOverlaySurface, SharedCefUiCompositor,
     UiCompositorState, UiSurfaceGeneration,
@@ -40,7 +42,8 @@ pub use runtime::{CefRuntime, CefRuntimeConfig, CefRuntimeError};
 pub use scheme::{
     FUN_UI_MAIN_URL, FUN_UI_SCHEME, FunUiAssetRoute, FunUiNavigationBlockReason,
     FunUiNavigationDecision, FunUiNavigationPolicy, FunUiNavigationTarget, FunUiRoute,
-    FunUiSchemeRequestOutcome, classify_fun_ui_scheme_request, validate_fun_ui_navigation,
+    FunUiSchemeRequestOutcome, classify_fun_ui_scheme_request,
+    register_fun_ui_scheme_handler_factory, validate_fun_ui_navigation,
 };
 pub use security::{
     CefUiHelperProcessPolicy, CefUiJavaScriptAuthority, CefUiSecurityPolicy,

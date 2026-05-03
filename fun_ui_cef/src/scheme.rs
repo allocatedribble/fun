@@ -1,4 +1,13 @@
-use cef::{CefString, ImplSchemeRegistrar, SchemeOptions, SchemeRegistrar};
+use std::sync::{Arc, Mutex};
+
+use cef::rc::Rc as _;
+use cef::{
+    Browser, Callback, CefString, Frame, ImplRequest, ImplResourceHandler, ImplResponse,
+    ImplSchemeHandlerFactory, ImplSchemeRegistrar, Request, ResourceHandler, ResourceReadCallback,
+    ResourceSkipCallback, Response, SchemeHandlerFactory, SchemeOptions, SchemeRegistrar,
+    WrapResourceHandler, WrapSchemeHandlerFactory, register_scheme_handler_factory,
+    wrap_resource_handler, wrap_scheme_handler_factory,
+};
 
 pub const FUN_UI_SCHEME: &str = "fun-ui";
 pub const FUN_UI_HOST: &str = "main";
@@ -315,6 +324,182 @@ pub fn register_fun_ui_custom_scheme(registrar: &mut SchemeRegistrar) -> bool {
         Some(&CefString::from(FUN_UI_SCHEME)),
         fun_ui_scheme_options(),
     ) != 0
+}
+
+pub fn register_fun_ui_scheme_handler_factory() -> bool {
+    let scheme_name = CefString::from(FUN_UI_SCHEME);
+    let domain_name = CefString::from(FUN_UI_HOST);
+    let mut factory = new_fun_ui_scheme_handler_factory();
+    register_scheme_handler_factory(Some(&scheme_name), Some(&domain_name), Some(&mut factory)) != 0
+}
+
+#[must_use]
+pub fn new_fun_ui_scheme_handler_factory() -> SchemeHandlerFactory {
+    FunUiSchemeHandlerFactory::new()
+}
+
+wrap_scheme_handler_factory! {
+    pub struct FunUiSchemeHandlerFactory;
+
+    impl SchemeHandlerFactory {
+        fn create(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _scheme_name: Option<&CefString>,
+            request: Option<&mut Request>,
+        ) -> Option<ResourceHandler> {
+            let request = request?;
+            let url = CefString::from(&request.url()).to_string();
+            resolve_fun_ui_asset(&url)
+                .ok()
+                .map(new_fun_ui_resource_handler)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FunUiResourceState {
+    asset: FunUiAsset,
+    cursor: usize,
+}
+
+wrap_resource_handler! {
+    pub struct FunUiResourceHandler {
+        state: Arc<Mutex<FunUiResourceState>>,
+    }
+
+    impl ResourceHandler {
+        fn open(
+            &self,
+            _request: Option<&mut Request>,
+            handle_request: Option<&mut i32>,
+            _callback: Option<&mut Callback>,
+        ) -> i32 {
+            if let Some(handle_request) = handle_request {
+                *handle_request = 1;
+            }
+            1
+        }
+
+        fn process_request(
+            &self,
+            _request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> i32 {
+            1
+        }
+
+        fn response_headers(
+            &self,
+            response: Option<&mut Response>,
+            response_length: Option<&mut i64>,
+            _redirect_url: Option<&mut CefString>,
+        ) {
+            let Ok(state) = self.state.lock() else {
+                return;
+            };
+            if let Some(response) = response {
+                response.set_status(200);
+                response.set_status_text(Some(&CefString::from("OK")));
+                response.set_mime_type(Some(&CefString::from(state.asset.mime_type)));
+                response.set_header_by_name(
+                    Some(&CefString::from("Cache-Control")),
+                    Some(&CefString::from("no-store")),
+                    1,
+                );
+            }
+            if let Some(response_length) = response_length {
+                *response_length = state.asset.bytes.len().min(i64::MAX as usize) as i64;
+            }
+        }
+
+        fn skip(
+            &self,
+            bytes_to_skip: i64,
+            bytes_skipped: Option<&mut i64>,
+            _callback: Option<&mut ResourceSkipCallback>,
+        ) -> i32 {
+            let Ok(mut state) = self.state.lock() else {
+                return 0;
+            };
+            let skip = usize::try_from(bytes_to_skip.max(0)).unwrap_or(usize::MAX);
+            let remaining = state.asset.bytes.len().saturating_sub(state.cursor);
+            let skipped = skip.min(remaining);
+            state.cursor = state.cursor.saturating_add(skipped);
+            if let Some(bytes_skipped) = bytes_skipped {
+                *bytes_skipped = skipped.min(i64::MAX as usize) as i64;
+            }
+            1
+        }
+
+        fn read(
+            &self,
+            data_out: *mut u8,
+            bytes_to_read: i32,
+            bytes_read: Option<&mut i32>,
+            _callback: Option<&mut ResourceReadCallback>,
+        ) -> i32 {
+            read_fun_ui_resource(&self.state, data_out, bytes_to_read, bytes_read)
+        }
+
+        fn read_response(
+            &self,
+            data_out: *mut u8,
+            bytes_to_read: i32,
+            bytes_read: Option<&mut i32>,
+            _callback: Option<&mut Callback>,
+        ) -> i32 {
+            read_fun_ui_resource(&self.state, data_out, bytes_to_read, bytes_read)
+        }
+
+        fn cancel(&self) {}
+    }
+}
+
+fn new_fun_ui_resource_handler(asset: FunUiAsset) -> ResourceHandler {
+    FunUiResourceHandler::new(Arc::new(Mutex::new(FunUiResourceState {
+        asset,
+        cursor: 0,
+    })))
+}
+
+fn read_fun_ui_resource(
+    state: &Arc<Mutex<FunUiResourceState>>,
+    data_out: *mut u8,
+    bytes_to_read: i32,
+    bytes_read: Option<&mut i32>,
+) -> i32 {
+    if data_out.is_null() || bytes_to_read <= 0 {
+        if let Some(bytes_read) = bytes_read {
+            *bytes_read = 0;
+        }
+        return 0;
+    }
+    let Ok(mut state) = state.lock() else {
+        return 0;
+    };
+    let remaining = state.asset.bytes.len().saturating_sub(state.cursor);
+    if remaining == 0 {
+        if let Some(bytes_read) = bytes_read {
+            *bytes_read = 0;
+        }
+        return 0;
+    }
+    let requested = usize::try_from(bytes_to_read).unwrap_or(0);
+    let count = requested.min(remaining);
+    let start = state.cursor;
+    let end = start.saturating_add(count);
+    // CEF provides `data_out` as a writable buffer of at least `bytes_to_read`
+    // bytes for the duration of this callback.
+    unsafe {
+        std::ptr::copy_nonoverlapping(state.asset.bytes[start..end].as_ptr(), data_out, count);
+    }
+    state.cursor = end;
+    if let Some(bytes_read) = bytes_read {
+        *bytes_read = count.min(i32::MAX as usize) as i32;
+    }
+    1
 }
 
 fn normalized_fun_ui_path(url: &str) -> Result<&str, FunUiUrlError> {

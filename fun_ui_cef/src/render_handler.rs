@@ -316,9 +316,22 @@ wrap_render_handler! {
     pub struct FunCefRenderHandler {
         paint_sink: Arc<dyn CefPaintSink>,
         scale_factor: CefUiScaleFactor,
+        viewport_width: i32,
+        viewport_height: i32,
     }
 
     impl RenderHandler {
+        fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
+            if let Some(rect) = rect {
+                *rect = Rect {
+                    x: 0,
+                    y: 0,
+                    width: self.viewport_width,
+                    height: self.viewport_height,
+                };
+            }
+        }
+
         fn on_paint(
             &self,
             _browser: Option<&mut Browser>,
@@ -361,7 +374,22 @@ pub fn new_fun_cef_render_handler(
     paint_sink: Arc<dyn CefPaintSink>,
     scale_factor: CefUiScaleFactor,
 ) -> RenderHandler {
-    FunCefRenderHandler::new(paint_sink, scale_factor)
+    new_fun_cef_render_handler_for_viewport(paint_sink, scale_factor, 1280, 720)
+}
+
+#[must_use]
+pub fn new_fun_cef_render_handler_for_viewport(
+    paint_sink: Arc<dyn CefPaintSink>,
+    scale_factor: CefUiScaleFactor,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> RenderHandler {
+    FunCefRenderHandler::new(
+        paint_sink,
+        scale_factor,
+        viewport_width.min(i32::MAX as u32) as i32,
+        viewport_height.min(i32::MAX as u32) as i32,
+    )
 }
 
 fn copy_cef_paint_buffer(buffer: *const u8, expected_byte_len: usize) -> Option<Vec<u8>> {

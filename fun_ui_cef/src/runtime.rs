@@ -110,7 +110,10 @@ pub struct CefRuntime {
 }
 
 impl CefRuntime {
-    pub fn initialize(config: CefRuntimeConfig) -> Result<Self, CefRuntimeError> {
+    pub fn initialize(mut config: CefRuntimeConfig) -> Result<Self, CefRuntimeError> {
+        configure_cef_api_version();
+        config.cache_path = absolutize_cache_path(config.cache_path);
+
         if CEF_INITIALIZED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
@@ -174,6 +177,10 @@ impl CefRuntime {
     }
 }
 
+pub(crate) fn configure_cef_api_version() {
+    let _ = cef::api_hash(cef::sys::CEF_API_VERSION, 0);
+}
+
 fn drain_shutdown_callbacks(duration: Duration) {
     if duration.is_zero() {
         return;
@@ -187,17 +194,28 @@ fn drain_shutdown_callbacks(duration: Duration) {
 
 fn cache_path_from_env() -> PathBuf {
     if let Some(path) = env::var_os(FUN_CEF_USER_DATA_DIR).filter(|value| !value.is_empty()) {
-        return PathBuf::from(path);
+        return absolutize_cache_path(PathBuf::from(path));
     }
 
-    if cfg!(debug_assertions) {
-        return PathBuf::from(DEV_CACHE_DIR);
+    let cache_path = if cfg!(debug_assertions) {
+        PathBuf::from(DEV_CACHE_DIR)
+    } else {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join(PROD_CACHE_DIR)
+    };
+    absolutize_cache_path(cache_path)
+}
+
+fn absolutize_cache_path(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
     }
 
-    env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
-        .join(PROD_CACHE_DIR)
+    env::current_dir()
+        .map(|current_dir| current_dir.join(&path))
+        .unwrap_or(path)
 }
 
 fn message_loop_strategy_from_env() -> CefMessageLoopStrategy {
@@ -278,5 +296,13 @@ mod tests {
         };
 
         assert_eq!(config.cef_settings().remote_debugging_port, 9223);
+    }
+
+    #[test]
+    fn relative_cache_paths_are_made_absolute_for_cef() {
+        let cache_path = absolutize_cache_path(PathBuf::from("target/fun-cef-test"));
+
+        assert!(cache_path.is_absolute());
+        assert!(cache_path.ends_with("target/fun-cef-test"));
     }
 }
