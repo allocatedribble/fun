@@ -18,18 +18,18 @@ use bevy_quinnet::server::{
     certificate::CertificateRetrievalMode,
 };
 use fun_warden_protocol::{
-    BoundedAscii, MAX_MATCH_SESSION_ID_BYTES, WARDEN_PROTOCOL_SCHEMA_VERSION,
-    WardenAdmissionProtectedSummary, WardenAdmissionTicket, WardenDecisionReasonClass,
-    WardenPolicyMode, WardenSessionDecisionKind,
+    BoundedAscii, MAX_MATCH_SESSION_ID_BYTES, WardenAdmissionTicket, WardenSessionDecisionKind,
 };
-use fun_warden_server::{GameServerAdmissionDecision, admission_decision_for_game_server};
+use fun_warden_server::{
+    GameServerAdmissionDecision, VerifiedAdmissionTicket, WardenAdmissionTicketSignatureVerifier,
+    WardenAdmissionVerificationError, admission_decision_for_game_server,
+};
 use game_scene::StreamedWorldEntity;
 use game_shared::{
     DEFAULT_TICK_RATE_HZ, DEMO_LEVEL_ID, GAME_SERVER_BIND_ADDR, GAME_SERVER_CERT_FILE,
     GAME_SERVER_KEY_FILE, GAME_TITLE,
 };
 use ring::hmac;
-use serde::Serialize;
 use thunder::prelude::*;
 use tracing::{error, info};
 
@@ -666,7 +666,7 @@ impl WardenAdmissionTicketVerifier {
                 match_session_id,
             } => {
                 let ticket = parse_warden_admission_ticket(ticket)?;
-                verify_warden_admission_ticket(&ticket, key, key_id, match_session_id)
+                verify_warden_admission_ticket(ticket, key, key_id, match_session_id)
             }
         }
     }
@@ -697,36 +697,19 @@ fn parse_warden_admission_ticket(
 }
 
 fn verify_warden_admission_ticket(
-    ticket: &WardenAdmissionTicket,
+    ticket: WardenAdmissionTicket,
     key: &[u8; 32],
     key_id: &str,
     match_session_id: &str,
 ) -> Result<ClientHelloAdmission, ClientHelloRejection> {
-    if ticket.schema_version != WARDEN_PROTOCOL_SCHEMA_VERSION {
-        return Err(ClientHelloRejection::WardenAdmissionUnsupportedSchema);
-    }
     if ticket.signature.key_id.as_str() != key_id {
         return Err(ClientHelloRejection::WardenAdmissionKeyMismatch);
     }
-    if ticket.match_session_id.as_str() != match_session_id {
-        return Err(ClientHelloRejection::WardenAdmissionMatchSessionMismatch);
-    }
-    if ticket.allowed_until_ms <= current_unix_ms() {
-        return Err(ClientHelloRejection::WardenAdmissionExpired);
-    }
-    let payload = admission_ticket_signature_payload(ticket)?;
-    let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
-    if hmac::verify(
-        &hmac_key,
-        &payload,
-        ticket.signature.signature_bytes.as_slice(),
-    )
-    .is_err()
-    {
-        return Err(ClientHelloRejection::WardenAdmissionSignatureMismatch);
-    }
-
-    let decision = admission_decision_for_game_server(ticket);
+    let verifier = HmacWardenAdmissionVerifier { key, key_id };
+    let verified =
+        VerifiedAdmissionTicket::verify(ticket, match_session_id, current_unix_ms(), &verifier)
+            .map_err(map_warden_admission_verification_error)?;
+    let decision = admission_decision_for_game_server(&verified);
     admission_outcome_for_decision(decision)
 }
 
@@ -753,16 +736,43 @@ fn admission_outcome_for_decision(
     }
 }
 
-#[derive(Serialize)]
-struct SignedWardenAdmissionTicketPayload<'a> {
-    schema_version: u32,
-    pseudonymous_subject_id: &'a str,
-    match_session_id: &'a str,
-    warden_policy_mode: WardenPolicyMode,
-    allowed_until_ms: u64,
-    decision: WardenSessionDecisionKind,
-    reason_class: WardenDecisionReasonClass,
-    protected: Option<WardenAdmissionProtectedSummary>,
+struct HmacWardenAdmissionVerifier<'a> {
+    key: &'a [u8; 32],
+    key_id: &'a str,
+}
+
+impl WardenAdmissionTicketSignatureVerifier for HmacWardenAdmissionVerifier<'_> {
+    fn verify_admission_signature(&self, key_id: &str, payload: &[u8], signature: &[u8]) -> bool {
+        if key_id != self.key_id {
+            return false;
+        }
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, self.key);
+        hmac::verify(&hmac_key, payload, signature).is_ok()
+    }
+}
+
+fn map_warden_admission_verification_error(
+    error: WardenAdmissionVerificationError,
+) -> ClientHelloRejection {
+    match error {
+        WardenAdmissionVerificationError::UnsupportedSchemaVersion => {
+            ClientHelloRejection::WardenAdmissionUnsupportedSchema
+        }
+        WardenAdmissionVerificationError::Expired => ClientHelloRejection::WardenAdmissionExpired,
+        WardenAdmissionVerificationError::MatchSessionMismatch => {
+            ClientHelloRejection::WardenAdmissionMatchSessionMismatch
+        }
+        WardenAdmissionVerificationError::EmptySignatureKeyId => {
+            ClientHelloRejection::WardenAdmissionKeyMismatch
+        }
+        WardenAdmissionVerificationError::EmptySignature
+        | WardenAdmissionVerificationError::SignatureInvalid => {
+            ClientHelloRejection::WardenAdmissionSignatureMismatch
+        }
+        WardenAdmissionVerificationError::ProtectedSummaryInvalid => {
+            ClientHelloRejection::WardenAdmissionMalformed
+        }
+    }
 }
 
 #[cfg(test)]
@@ -770,28 +780,12 @@ fn admission_ticket_signature_bytes(
     ticket: &WardenAdmissionTicket,
     key: &[u8; 32],
 ) -> Result<[u8; 32], ClientHelloRejection> {
-    let bytes = admission_ticket_signature_payload(ticket)?;
+    let bytes = fun_warden_server::admission_ticket_signing_payload(ticket);
     let key = hmac::Key::new(hmac::HMAC_SHA256, key);
     hmac::sign(&key, &bytes)
         .as_ref()
         .try_into()
         .map_err(|_| ClientHelloRejection::WardenAdmissionSignatureMismatch)
-}
-
-fn admission_ticket_signature_payload(
-    ticket: &WardenAdmissionTicket,
-) -> Result<Vec<u8>, ClientHelloRejection> {
-    let payload = SignedWardenAdmissionTicketPayload {
-        schema_version: ticket.schema_version,
-        pseudonymous_subject_id: ticket.pseudonymous_subject_id.as_str(),
-        match_session_id: ticket.match_session_id.as_str(),
-        warden_policy_mode: ticket.warden_policy_mode,
-        allowed_until_ms: ticket.allowed_until_ms,
-        decision: ticket.decision,
-        reason_class: ticket.reason_class,
-        protected: ticket.protected,
-    };
-    serde_json::to_vec(&payload).map_err(|_| ClientHelloRejection::WardenAdmissionMalformed)
 }
 
 fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
@@ -2328,6 +2322,10 @@ fn unix_ns() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fun_warden_protocol::{
+        Digest32, IntegrityStatus, ProtectedProtectionProfile, WARDEN_PROTOCOL_SCHEMA_VERSION,
+        WardenAdmissionProtectedSummary, WardenDecisionReasonClass, WardenPolicyMode,
+    };
 
     fn test_manifest() -> ServerWorldStream {
         ServerWorldStream {
@@ -2384,7 +2382,11 @@ mod tests {
             allowed_until_ms,
             decision,
             reason_class: WardenDecisionReasonClass::Clean,
-            protected: None,
+            protected: Some(WardenAdmissionProtectedSummary {
+                protected_profile: ProtectedProtectionProfile::Ranked,
+                protected_bundle_digest: Digest32([9; 32]),
+                protected_integrity_status: IntegrityStatus::Passed,
+            }),
             signature: fun_warden_protocol::WardenAdmissionSignature {
                 key_id: BoundedAscii::new(String::from(key_id)).expect("key id"),
                 signature_bytes: fun_warden_protocol::BoundedVec::empty(),
