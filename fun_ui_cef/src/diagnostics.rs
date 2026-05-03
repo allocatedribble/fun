@@ -49,10 +49,12 @@ pub struct CefUiTransportCounterSnapshot {
     pub cef_on_paint_count: u64,
     pub cef_on_accelerated_paint_count: u64,
     pub cef_cpu_upload_bytes: u64,
+    pub cef_gpu_copy_count: u64,
     pub cef_gpu_copy_bytes: u64,
     pub cef_gpu_copy_ns: u64,
     pub cef_gpu_copy_failures: u64,
     pub cef_transport_fallback_count: u64,
+    pub cef_stale_gpu_frame_count: u64,
     pub cef_published_generation: u64,
 }
 
@@ -61,10 +63,12 @@ struct CefUiTransportCounters {
     cef_on_paint_count: AtomicU64,
     cef_on_accelerated_paint_count: AtomicU64,
     cef_cpu_upload_bytes: AtomicU64,
+    cef_gpu_copy_count: AtomicU64,
     cef_gpu_copy_bytes: AtomicU64,
     cef_gpu_copy_ns: AtomicU64,
     cef_gpu_copy_failures: AtomicU64,
     cef_transport_fallback_count: AtomicU64,
+    cef_stale_gpu_frame_count: AtomicU64,
     cef_published_generation: AtomicU64,
 }
 
@@ -92,6 +96,9 @@ impl SharedCefUiTransportCounters {
 
     pub fn record_gpu_copy(&self, copied_bytes: u64, copy_ns: u64) {
         self.counters
+            .cef_gpu_copy_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.counters
             .cef_gpu_copy_bytes
             .fetch_add(copied_bytes, Ordering::Relaxed);
         self.counters
@@ -111,6 +118,12 @@ impl SharedCefUiTransportCounters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_stale_gpu_frame(&self) {
+        self.counters
+            .cef_stale_gpu_frame_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_published_generation(&self, generation: u64) {
         self.counters
             .cef_published_generation
@@ -126,12 +139,17 @@ impl SharedCefUiTransportCounters {
                 .cef_on_accelerated_paint_count
                 .load(Ordering::Relaxed),
             cef_cpu_upload_bytes: self.counters.cef_cpu_upload_bytes.load(Ordering::Relaxed),
+            cef_gpu_copy_count: self.counters.cef_gpu_copy_count.load(Ordering::Relaxed),
             cef_gpu_copy_bytes: self.counters.cef_gpu_copy_bytes.load(Ordering::Relaxed),
             cef_gpu_copy_ns: self.counters.cef_gpu_copy_ns.load(Ordering::Relaxed),
             cef_gpu_copy_failures: self.counters.cef_gpu_copy_failures.load(Ordering::Relaxed),
             cef_transport_fallback_count: self
                 .counters
                 .cef_transport_fallback_count
+                .load(Ordering::Relaxed),
+            cef_stale_gpu_frame_count: self
+                .counters
+                .cef_stale_gpu_frame_count
                 .load(Ordering::Relaxed),
             cef_published_generation: self
                 .counters
@@ -181,6 +199,7 @@ mod tests {
         counters.record_gpu_copy(32, 40);
         counters.record_gpu_copy_failure();
         counters.record_transport_fallback();
+        counters.record_stale_gpu_frame();
         counters.record_published_generation(11);
 
         assert_eq!(
@@ -189,10 +208,12 @@ mod tests {
                 cef_on_paint_count: 1,
                 cef_on_accelerated_paint_count: 1,
                 cef_cpu_upload_bytes: 16,
+                cef_gpu_copy_count: 1,
                 cef_gpu_copy_bytes: 32,
                 cef_gpu_copy_ns: 40,
                 cef_gpu_copy_failures: 1,
                 cef_transport_fallback_count: 1,
+                cef_stale_gpu_frame_count: 1,
                 cef_published_generation: 11,
             }
         );

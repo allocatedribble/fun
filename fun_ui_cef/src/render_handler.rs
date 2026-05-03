@@ -341,6 +341,7 @@ pub enum CefAcceleratedPaintDropReason {
     MissingSharedHandle,
     InvalidSize,
     DirtyRectOutOfBounds,
+    GpuCopyFailed,
 }
 
 #[cfg(target_os = "windows")]

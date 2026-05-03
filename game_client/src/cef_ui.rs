@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
 use crate::cef_ui_dx12::{
     Dx12CefBevyImageState, Dx12CefInterop, Dx12CefInteropError, Dx12CefReadyFrameToken,
+    MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
 };
 use bevy::{
     asset::{AssetId, RenderAssetUsages},
@@ -92,6 +93,7 @@ impl Plugin for GameCefUiPlugin {
         app.add_plugins((
             ExtractResourcePlugin::<CefUiTextureUploads>::default(),
             ExtractResourcePlugin::<SharedDx12CefInteropSlot>::default(),
+            ExtractResourcePlugin::<CefUiTransportCountersResource>::default(),
         ));
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
@@ -841,11 +843,19 @@ impl Default for CefUiBridge {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct CefUiFrameStats {
     pub paint_count: u64,
+    pub accelerated_paint_count: u64,
     pub dirty_rect_count: u64,
     pub uploaded_bytes: u64,
+    pub gpu_copied_bytes: u64,
+    pub gpu_copy_count: u64,
+    pub gpu_copy_fail_count: u64,
+    pub cpu_fallback_count: u64,
+    pub shared_texture_open_fail_count: u64,
+    pub stale_gpu_frame_count: u64,
     pub cef_on_paint_fps: u64,
     pub cef_on_accelerated_paint_fps: u64,
     pub cef_cpu_upload_bytes: u64,
+    pub cef_gpu_copy_count: u64,
     pub cef_gpu_copy_bytes: u64,
     pub cef_gpu_copy_ns: u64,
     pub cef_gpu_copy_failures: u64,
@@ -883,6 +893,14 @@ impl Default for CefUiTransportCountersResource {
         Self {
             counters: SharedCefUiTransportCounters::default(),
         }
+    }
+}
+
+impl ExtractResource for CefUiTransportCountersResource {
+    type Source = Self;
+
+    fn extract_resource(source: &Self::Source) -> Self {
+        source.clone()
     }
 }
 
@@ -1022,6 +1040,9 @@ struct CefUiGpuUploadState {
     image_id: Option<AssetId<Image>>,
     last_generation: Option<UiSurfaceGeneration>,
     gpu_copy_failure_logged: bool,
+    gpu_copy_failure_count: u32,
+    stale_gpu_frame_count_for_current_token: u32,
+    stale_gpu_frame_token: Option<UiSurfaceGeneration>,
 }
 
 #[derive(Debug, Default, Clone, Copy, Component)]
@@ -1556,6 +1577,12 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
         };
         state.running_transport = None;
         state.accelerated_observe_elapsed = Duration::ZERO;
+    }
+    if let Some(mut stats) = world.get_resource_mut::<CefUiFrameStats>() {
+        stats.cpu_fallback_count = stats.cpu_fallback_count.saturating_add(1);
+        if fallback_reason == CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout {
+            stats.stale_gpu_frame_count = stats.stale_gpu_frame_count.saturating_add(1);
+        }
     }
     tracing::warn!(
         target: FUN_UI_DIAGNOSTICS_TARGET,
@@ -3074,6 +3101,7 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
     uploads: Option<Res<CefUiTextureUploads>>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     dx12_slot: Option<Res<SharedDx12CefInteropSlot>>,
+    counters: Option<Res<CefUiTransportCountersResource>>,
     mut upload_state: ResMut<CefUiGpuUploadState>,
 ) {
     #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
@@ -3106,6 +3134,9 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                 upload_state.image_id = Some(image_id);
                 upload_state.last_generation = Some(result.generation);
                 upload_state.gpu_copy_failure_logged = false;
+                upload_state.gpu_copy_failure_count = 0;
+                upload_state.stale_gpu_frame_count_for_current_token = 0;
+                upload_state.stale_gpu_frame_token = None;
                 tracing::trace!(
                     target: FUN_UI_DIAGNOSTICS_TARGET,
                     generation = result.generation.0,
@@ -3116,10 +3147,47 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                     "CEF UI GPU frame sampled by Bevy image"
                 );
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let stale_count =
+                    record_cef_gpu_frame_stall(&mut upload_state, upload.token.generation);
+                if stale_count == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK {
+                    if let Some(counters) = counters.as_ref() {
+                        counters.counters.record_stale_gpu_frame();
+                        counters.counters.record_transport_fallback();
+                    }
+                    if let Some(slot) = dx12_slot.as_ref() {
+                        slot.request_fallback(
+                            CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout,
+                        );
+                    }
+                    if !upload_state.gpu_copy_failure_logged {
+                        upload_state.gpu_copy_failure_logged = true;
+                        tracing::warn!(
+                            target: FUN_UI_DIAGNOSTICS_TARGET,
+                            generation = upload.token.generation.0,
+                            stale_frame_count = stale_count,
+                            fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
+                            fallback_reason = CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout.as_wire_str(),
+                            "CEF UI GPU frame copy stalled before Bevy image sampling"
+                        );
+                    }
+                }
+            }
             Err(error) => {
+                if let Some(counters) = counters.as_ref() {
+                    counters.counters.record_gpu_copy_failure();
+                }
+                upload_state.gpu_copy_failure_count =
+                    upload_state.gpu_copy_failure_count.saturating_add(1);
                 if let Some(slot) = dx12_slot.as_ref() {
-                    slot.request_fallback(dx12_cef_interop_fallback_reason(error));
+                    if upload_state.gpu_copy_failure_count
+                        == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK
+                    {
+                        if let Some(counters) = counters.as_ref() {
+                            counters.counters.record_transport_fallback();
+                        }
+                        slot.request_fallback(dx12_cef_interop_fallback_reason(error));
+                    }
                 }
                 if !upload_state.gpu_copy_failure_logged {
                     upload_state.gpu_copy_failure_logged = true;
@@ -3129,6 +3197,8 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                         failure = error.failure.as_str(),
                         detail = error.detail,
                         hresult = error.hresult,
+                        consecutive_failures = upload_state.gpu_copy_failure_count,
+                        fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
                         "CEF UI GPU frame copy to Bevy image failed"
                     );
                 }
@@ -3139,13 +3209,30 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
 
     #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
     {
-        let _ = (uploads, gpu_images, dx12_slot, upload_state);
+        let _ = (uploads, gpu_images, dx12_slot, counters, upload_state);
     }
+}
+
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+fn record_cef_gpu_frame_stall(
+    upload_state: &mut CefUiGpuUploadState,
+    generation: UiSurfaceGeneration,
+) -> u32 {
+    if upload_state.stale_gpu_frame_token == Some(generation) {
+        upload_state.stale_gpu_frame_count_for_current_token = upload_state
+            .stale_gpu_frame_count_for_current_token
+            .saturating_add(1);
+    } else {
+        upload_state.stale_gpu_frame_token = Some(generation);
+        upload_state.stale_gpu_frame_count_for_current_token = 1;
+    }
+    upload_state.stale_gpu_frame_count_for_current_token
 }
 
 fn sample_cef_ui_transport_counters(
     time: Res<Time>,
     counters: Res<CefUiTransportCountersResource>,
+    dx12_slot: Option<Res<SharedDx12CefInteropSlot>>,
     mut sampler: ResMut<CefUiTransportCounterSampler>,
     mut stats: ResMut<CefUiFrameStats>,
 ) {
@@ -3161,14 +3248,44 @@ fn sample_cef_ui_transport_counters(
             .cef_on_accelerated_paint_count
             .saturating_sub(previous.cef_on_accelerated_paint_count);
     }
+    stats.accelerated_paint_count = stats
+        .accelerated_paint_count
+        .max(snapshot.cef_on_accelerated_paint_count);
     stats.cef_cpu_upload_bytes = snapshot.cef_cpu_upload_bytes;
+    stats.gpu_copy_count = stats.gpu_copy_count.max(snapshot.cef_gpu_copy_count);
+    stats.cef_gpu_copy_count = snapshot.cef_gpu_copy_count;
+    stats.gpu_copied_bytes = stats.gpu_copied_bytes.max(snapshot.cef_gpu_copy_bytes);
     stats.cef_gpu_copy_bytes = snapshot.cef_gpu_copy_bytes;
     stats.cef_gpu_copy_ns = snapshot.cef_gpu_copy_ns;
+    stats.gpu_copy_fail_count = stats
+        .gpu_copy_fail_count
+        .max(snapshot.cef_gpu_copy_failures);
     stats.cef_gpu_copy_failures = snapshot.cef_gpu_copy_failures;
+    stats.cpu_fallback_count = stats
+        .cpu_fallback_count
+        .max(snapshot.cef_transport_fallback_count);
     stats.cef_transport_fallback_count = snapshot.cef_transport_fallback_count;
+    stats.stale_gpu_frame_count = stats
+        .stale_gpu_frame_count
+        .max(snapshot.cef_stale_gpu_frame_count);
     if snapshot.cef_published_generation != 0 {
         stats.cef_published_generation = snapshot.cef_published_generation;
     }
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+    if let Some(diagnostics) = dx12_slot
+        .as_ref()
+        .and_then(|slot| slot.interop())
+        .map(|interop| interop.diagnostics_snapshot())
+    {
+        stats.shared_texture_open_fail_count = diagnostics.shared_texture_open_failure_count;
+        stats.gpu_copied_bytes = stats.gpu_copied_bytes.max(diagnostics.gpu_copy_bytes);
+        stats.gpu_copy_fail_count = stats
+            .gpu_copy_fail_count
+            .max(diagnostics.gpu_copy_failure_count);
+        stats.cpu_fallback_count = stats.cpu_fallback_count.max(diagnostics.fallback_count);
+    }
+    #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
+    let _ = dx12_slot;
     sampler.last_snapshot = Some(snapshot);
 }
 

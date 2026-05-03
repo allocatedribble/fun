@@ -325,7 +325,15 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 
 - `cef_on_paint_fps`
 - `cef_on_accelerated_paint_fps`
+- `accelerated_paint_count`
 - `cef_cpu_upload_bytes`
+- `gpu_copied_bytes`
+- `gpu_copy_count`
+- `gpu_copy_fail_count`
+- `cpu_fallback_count`
+- `shared_texture_open_fail_count`
+- `stale_gpu_frame_count`
+- `cef_gpu_copy_count`
 - `cef_gpu_copy_bytes`
 - `cef_gpu_copy_ns`
 - `cef_gpu_copy_failures`
@@ -337,6 +345,47 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 copy into a FUN-owned D3D12 texture ring succeeds. The current bridge has its
 own startup/copy diagnostic counters in `game_client/src/cef_ui_dx12`, including
 the last published generation and fence value.
+
+Keep FPS readings separate:
+
+- UI RAF FPS: the Svelte page's `requestAnimationFrame` responsiveness.
+- CEF paint FPS: the CPU `OnPaint` callback cadence.
+- CEF accelerated paint FPS: the `OnAcceleratedPaint` callback cadence.
+- Bevy FPS: the game/render frame cadence.
+
+The UI RAF badge is not evidence of CEF paint callback cadence or GPU transport.
+
+## Fallback Policy
+
+The accelerated path is experimental and must never crash the app. CPU paint
+remains the compatibility lane. `game_client/src/cef_ui_dx12` exposes:
+
+```rust
+pub const MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK: u32 = 8;
+```
+
+The accelerated callback copy records failures but does not request CPU fallback
+until the same accelerated transport has failed eight consecutive callback
+copies. A successful callback copy resets the budget. The Bevy-image GPU feed
+uses the same eight-frame budget for native copy errors and for ready ring-slot
+tokens that remain unsampled long enough to imply a stalled fence or stale GPU
+frame. When the budget is exhausted, the shared interop slot records a typed
+fallback reason and the main-world startup monitor recreates the browser on the
+CPU paint path.
+
+Fallback triggers covered by this pass:
+
+- D3D11On12 initialization failure.
+- null or missing accelerated shared texture handle.
+- repeated `OpenSharedResource` failures.
+- unsupported source format.
+- invalid accelerated frame dimensions.
+- Bevy target texture or native texture extraction failure.
+- ring-slot/output texture allocation failure.
+- copy fence or ready GPU frame stalling past the frame budget.
+- DX12 device/queue extraction failure.
+- backend mismatch before accelerated browser creation.
+- accelerated callback not observed after browser creation.
 
 ## Open Risks
 

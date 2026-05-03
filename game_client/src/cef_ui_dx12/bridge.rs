@@ -5,7 +5,7 @@ use std::{
     mem::ManuallyDrop,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -57,6 +57,8 @@ use super::{
         DxgiFormat,
     },
 };
+
+pub const MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dx12CefInteropFailure {
@@ -268,6 +270,7 @@ pub struct Dx12CefInterop {
     slots: Mutex<Dx12CefTextureRing>,
     copy_commands: Mutex<Dx12CefCopyCommandState>,
     diagnostics: Dx12CefInteropDiagnostics,
+    consecutive_accelerated_paint_failures: AtomicU32,
     gpu_copy_ready_logged: AtomicBool,
     bevy_copy_logged: AtomicBool,
 }
@@ -383,6 +386,7 @@ impl Dx12CefInterop {
             slots: Mutex::new(Dx12CefTextureRing::empty()),
             copy_commands: Mutex::new(copy_commands),
             diagnostics: Dx12CefInteropDiagnostics::default(),
+            consecutive_accelerated_paint_failures: AtomicU32::new(0),
             gpu_copy_ready_logged: AtomicBool::new(false),
             bevy_copy_logged: AtomicBool::new(false),
         };
@@ -550,17 +554,27 @@ impl Dx12CefInterop {
             },
             Err(error) => {
                 self.diagnostics.record_gpu_copy_failure();
-                self.diagnostics.record_fallback();
+                let failure_count = self.record_accelerated_paint_failure();
+                let fallback_reason = Self::fallback_reason_for_copy_error(error);
                 tracing::debug!(
                     target: "fun::ui",
                     failure = error.failure.as_str(),
                     detail = error.detail,
                     hresult = error.hresult,
-                    fallback_reason = Self::fallback_reason_for_copy_error(error).as_wire_str(),
+                    consecutive_failures = failure_count,
+                    fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
+                    fallback_reason = fallback_reason.as_wire_str(),
                     "CEF UI accelerated paint GPU copy failed"
                 );
-                CefAcceleratedPaintOutcome::FallbackRequested {
-                    reason: Self::fallback_reason_for_copy_error(error),
+                if failure_count == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK {
+                    self.diagnostics.record_fallback();
+                    CefAcceleratedPaintOutcome::FallbackRequested {
+                        reason: fallback_reason,
+                    }
+                } else {
+                    CefAcceleratedPaintOutcome::Dropped {
+                        reason: fun_ui_cef::CefAcceleratedPaintDropReason::GpuCopyFailed,
+                    }
                 }
             }
         }
@@ -637,6 +651,8 @@ impl Dx12CefInterop {
         slot.dirty_rects.clear();
         slot.dirty_rects.extend_from_slice(frame.dirty_rects);
         self.diagnostics.record_gpu_copy(copied_bytes, copy_ns);
+        self.consecutive_accelerated_paint_failures
+            .store(0, Ordering::Relaxed);
         self.diagnostics
             .record_published_generation(generation.0, fence_value);
         if !self.gpu_copy_ready_logged.swap(true, Ordering::AcqRel) {
@@ -971,6 +987,16 @@ impl Dx12CefInterop {
             "CEF UI GPU format"
         );
     }
+
+    fn record_accelerated_paint_failure(&self) -> u32 {
+        let previous = self
+            .consecutive_accelerated_paint_failures
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(1))
+            })
+            .unwrap_or(u32::MAX);
+        previous.saturating_add(1)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1269,5 +1295,10 @@ mod tests {
         assert_eq!(CEF_GPU_FORMAT_POLICY.target_label(), "BGRA8");
         assert_eq!(CEF_GPU_FORMAT_POLICY.conversion.as_str(), "none");
         assert_eq!(CEF_GPU_FORMAT_POLICY.alpha.as_str(), "premultiplied");
+    }
+
+    #[test]
+    fn accelerated_paint_failure_budget_is_eight_frames() {
+        assert_eq!(MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK, 8);
     }
 }
