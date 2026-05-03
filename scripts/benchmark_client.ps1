@@ -30,6 +30,14 @@ param(
     [switch]$FrameTimeDiagnosticRowEvents,
     [ValidateSet("full_runtime", "solari_floor", "meshlet_floor", "cpu_floor", "streaming_spike", "presentation_floor")]
     [string]$BenchmarkLane = "full_runtime",
+    [string]$BenchmarkProfile = "",
+    [string]$BenchmarkScenario = "",
+    [string]$BenchmarkMatrixLane = "",
+    [ValidateSet("disabled", "hidden", "static", "animated", "animated_1440p_surface", "animated_4k_surface")]
+    [string]$CefUiMode = "disabled",
+    [ValidateSet("default", "cpu", "auto", "d3d11on12")]
+    [string]$CefPaintTransport = "default",
+    [int]$RequestedMaximumFrameLatency = 0,
     [string]$SolariArch = "budgeted",
     [int]$SolariTargetFps = 144,
     [int]$SolariFrameBudgetNs = 6944444,
@@ -82,6 +90,20 @@ function Resolve-RepoPath {
     }
 
     return Normalize-WorkspacePath ((Resolve-Path (Join-Path $RepoRoot $Path)).Path)
+}
+
+function Set-BenchmarkProcessEnv {
+    param(
+        [string]$Name,
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        Remove-Item "Env:\$Name" -ErrorAction SilentlyContinue
+        return
+    }
+
+    [System.Environment]::SetEnvironmentVariable($Name, $Value, "Process")
 }
 
 function Add-Metric {
@@ -201,6 +223,7 @@ function Parse-ClientPerfLog {
 
     $samples = New-Object "System.Collections.Generic.List[object]"
     $current = $null
+    $pendingCefUiMetrics = $null
 
     foreach ($line in $Lines) {
         $main = [regex]::Match($line, "\[client perf\] fps=(?<fps>\S+) frame_ms=(?<frame_ms>\S+) solari_gpu_ms=(?<solari>\S+) meshlet_visibility_gpu_ms=(?<meshlet>\S+) dlss_rr_gpu_ms=(?<dlss>\S+)")
@@ -211,6 +234,12 @@ function Parse-ClientPerfLog {
             Add-Metric -Sample $current -Name "solari_gpu_ms" -Text $main.Groups["solari"].Value -Milliseconds
             Add-Metric -Sample $current -Name "meshlet_visibility_gpu_ms" -Text $main.Groups["meshlet"].Value -Milliseconds
             Add-Metric -Sample $current -Name "dlss_rr_gpu_ms" -Text $main.Groups["dlss"].Value -Milliseconds
+            if ($null -ne $pendingCefUiMetrics) {
+                foreach ($key in $pendingCefUiMetrics.Keys) {
+                    $current[$key] = $pendingCefUiMetrics[$key]
+                }
+                $pendingCefUiMetrics = $null
+            }
             $samples.Add($current) | Out-Null
             continue
         }
@@ -311,6 +340,18 @@ function Parse-ClientPerfLog {
             Add-KeyValueMetrics -Sample $current -Payload $scheduleDetail.Groups["payload"].Value -Prefix "schedule_"
             continue
         }
+
+        $cefUi = [regex]::Match($line, "\[client perf\] cef_ui transport: (?<payload>.*)$")
+        if ($cefUi.Success) {
+            if ($null -eq $current) {
+                $pendingCefUiMetrics = [ordered]@{}
+                Add-KeyValueMetrics -Sample $pendingCefUiMetrics -Payload $cefUi.Groups["payload"].Value -Prefix ""
+            }
+            else {
+                Add-KeyValueMetrics -Sample $current -Payload $cefUi.Groups["payload"].Value -Prefix ""
+            }
+            continue
+        }
     }
 
     return $samples
@@ -376,6 +417,7 @@ function Get-SummaryStats {
             max = Round-Metric -Value ([double]$measure.Maximum) -MetricName $metricName
             p50 = Round-Metric -Value (Get-Percentile -Values $values -Percentile 50) -MetricName $metricName
             p95 = Round-Metric -Value (Get-Percentile -Values $values -Percentile 95) -MetricName $metricName
+            p99 = Round-Metric -Value (Get-Percentile -Values $values -Percentile 99) -MetricName $metricName
         }
     }
 
@@ -425,6 +467,118 @@ function Get-HardwareInfo {
     return [ordered]@{
         cpu = $cpu
         gpu = $gpu
+    }
+}
+
+function Get-BenchmarkEnvValue {
+    param(
+        [string]$Name,
+        [string]$Default = "not_collected"
+    )
+
+    $value = [System.Environment]::GetEnvironmentVariable($Name, "Process")
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $Default
+    }
+    return $value
+}
+
+function Get-ActivePowerScheme {
+    try {
+        $line = (& powercfg /getactivescheme 2>$null | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            return [ordered]@{ status = "not_found" }
+        }
+        $match = [regex]::Match($line, "Power Scheme GUID:\s*(?<guid>[A-Fa-f0-9-]+)\s*\((?<name>[^)]+)\)")
+        if ($match.Success) {
+            return [ordered]@{
+                status = "found"
+                guid = $match.Groups["guid"].Value
+                name = $match.Groups["name"].Value
+            }
+        }
+        return [ordered]@{
+            status = "unparsed"
+            raw = $line
+        }
+    }
+    catch {
+        return [ordered]@{ status = "not_collected" }
+    }
+}
+
+function Get-ChassisClass {
+    try {
+        $chassis = @(Get-CimInstance Win32_SystemEnclosure | ForEach-Object { $_.ChassisTypes } | ForEach-Object { $_ })
+        $laptopTypes = @(8, 9, 10, 14, 30, 31, 32)
+        if (($chassis | Where-Object { $laptopTypes -contains [int]$_ }).Count -gt 0) {
+            return "laptop_or_portable"
+        }
+        if ($chassis.Count -gt 0) {
+            return "desktop_or_workstation"
+        }
+    }
+    catch {
+    }
+    return "not_collected"
+}
+
+function Test-CommandAvailable {
+    param([string]$Name)
+
+    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Get-BenchmarkEnvironmentInfo {
+    $operatingSystem = $null
+    try {
+        $operatingSystem = Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption, Version, BuildNumber
+    }
+    catch {
+        $operatingSystem = $null
+    }
+
+    $gpuCount = 0
+    try {
+        $gpuCount = @(Get-CimInstance Win32_VideoController).Count
+    }
+    catch {
+        $gpuCount = 0
+    }
+
+    return [ordered]@{
+        windows = [ordered]@{
+            os = $operatingSystem
+            build = if ($null -ne $operatingSystem) { $operatingSystem.BuildNumber } else { "not_collected" }
+            hags_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_HAGS"
+            hdr_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_HDR"
+            vrr_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_VRR"
+            rebar_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_REBAR"
+        }
+        machine = [ordered]@{
+            chassis_class = Get-ChassisClass
+            gpu_adapter_count = $gpuCount
+            hybrid_graphics_state = if ($gpuCount -gt 1) { "multiple_adapters_observed" } elseif ($gpuCount -eq 1) { "single_adapter_observed" } else { "not_collected" }
+            power_profile = Get-ActivePowerScheme
+        }
+        display = [ordered]@{
+            monitor_refresh_hz = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_MONITOR_REFRESH_HZ"
+            monitor_vrr_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_MONITOR_VRR"
+        }
+        tools = [ordered]@{
+            presentmon_available = Test-CommandAvailable -Name "PresentMon"
+            pix_attached = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_PIX_ATTACHED" -Default "false"
+            renderdoc_attached = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_RENDERDOC_ATTACHED" -Default "false"
+        }
+        overlays = [ordered]@{
+            status = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAYS"
+            steam = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_STEAM"
+            discord = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_DISCORD"
+            geforce_experience = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_GFE"
+            amd = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_AMD"
+            xbox_game_bar = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_XBOX_GAME_BAR"
+        }
     }
 }
 
@@ -625,8 +779,15 @@ function Write-MarkdownReport {
     $lines.Add("- Created: $($Summary.created_at)") | Out-Null
     $lines.Add("- Git: $($Summary.git.commit)") | Out-Null
     $lines.Add("- Dirty files: $($Summary.git.dirty_count)") | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($Summary.config.benchmark_profile)) {
+        $lines.Add("- Benchmark profile: $($Summary.config.benchmark_profile)") | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Summary.config.benchmark_matrix_lane)) {
+        $lines.Add("- Matrix lane: $($Summary.config.benchmark_matrix_lane)") | Out-Null
+    }
     $lines.Add("- Backend: $($Summary.config.render_backend)") | Out-Null
     $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
+    $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) transport=$($Summary.config.cef_paint_transport) enabled=$($Summary.config.cef_ui_enabled)") | Out-Null
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
     $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
     $lines.Add("- Clouds: disabled=$($Summary.config.disable_clouds) profile=$($Summary.config.cloud_profile) quality=$($Summary.config.cloud_quality) internal_scale=$($Summary.config.cloud_internal_scale) temporal=$($Summary.config.cloud_temporal) shadows=$($Summary.config.cloud_shadows)") | Out-Null
@@ -710,6 +871,16 @@ function Write-MarkdownReport {
         "post_process_gpu_ns",
         "ui_overlay_cpu_ns",
         "present_wait_ns",
+        "cef_on_paint_fps",
+        "cef_on_accelerated_paint_fps",
+        "cef_cpu_upload_bytes",
+        "cef_gpu_copy_bytes",
+        "cef_gpu_copy_ns",
+        "cef_gpu_copy_failures",
+        "cef_transport_fallback_count",
+        "cef_published_generation",
+        "cef_sampled_generation",
+        "cef_stale_frame_count",
         "dlss_rr_gpu_ns",
         "solari_pass_dlss_rr_guide_resolve_ns",
         "solari_pass_direct_ns",
@@ -727,15 +898,16 @@ function Write-MarkdownReport {
 
     $lines.Add("## Primary Metrics") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| metric | mean | p50 | p95 | min | max | samples |") | Out-Null
-    $lines.Add("|---|---:|---:|---:|---:|---:|---:|") | Out-Null
+    $lines.Add("| metric | mean | p50 | p95 | p99 | min | max | samples |") | Out-Null
+    $lines.Add("|---|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
     foreach ($metric in $primaryMetrics) {
         if ($stats.Contains($metric)) {
-            $row = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} |" -f `
+            $row = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} |" -f `
                 $metric, `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "mean"), `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "p50"), `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "p95"), `
+                (Format-StatValue -Stats $stats -Metric $metric -Field "p99"), `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "min"), `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "max"), `
                 (Format-StatValue -Stats $stats -Metric $metric -Field "count")
@@ -890,6 +1062,17 @@ switch ($BenchmarkLane) {
     }
 }
 
+$cefUiEnabled = $CefUiMode -ne "disabled" -and $CefUiMode -ne "hidden"
+if ($CefUiMode -eq "animated_1440p_surface") {
+    if ($WindowWidth -le 0) { $WindowWidth = 2560 }
+    if ($WindowHeight -le 0) { $WindowHeight = 1440 }
+}
+elseif ($CefUiMode -eq "animated_4k_surface") {
+    if ($WindowWidth -le 0) { $WindowWidth = 3840 }
+    if ($WindowHeight -le 0) { $WindowHeight = 2160 }
+}
+$cefAcceleratedFeatureRequested = $cefUiEnabled -and ($CefPaintTransport -eq "auto" -or $CefPaintTransport -eq "d3d11on12")
+
 try {
     if ([string]::IsNullOrWhiteSpace($InputLog)) {
         $runStackPath = Join-Path $scriptRoot "run_stack.ps1"
@@ -910,8 +1093,34 @@ try {
             "-PresentMode",
             $PresentMode
         )
+        Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_PROFILE" -Value $BenchmarkProfile
+        Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_SCENARIO" -Value $BenchmarkScenario
+        Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_MATRIX_LANE" -Value $BenchmarkMatrixLane
+        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_BENCHMARK_MODE" -Value $CefUiMode
+        if ($CefPaintTransport -eq "default") {
+            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_PAINT_TRANSPORT" -Value ""
+            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_PAINT" -Value ""
+        }
+        else {
+            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_PAINT_TRANSPORT" -Value $CefPaintTransport
+            $acceleratedPaintValue = switch ($CefPaintTransport) {
+                "cpu" { "0" }
+                "auto" { "auto" }
+                "d3d11on12" { "1" }
+                default { "" }
+            }
+            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_PAINT" -Value $acceleratedPaintValue
+        }
+        if ($RequestedMaximumFrameLatency -gt 0) {
+            Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
+        }
+        else {
+            Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ""
+        }
         if ($Release) { $runStackArgs += "-Release" }
         if ($StaticBevy) { $runStackArgs += "-StaticBevy" }
+        if ($cefUiEnabled) { $runStackArgs += "-CefUi" }
+        if ($cefAcceleratedFeatureRequested) { $runStackArgs += "-CefUiDx12AcceleratedPaint" }
         if ($EnableDx12DlssRr) { $runStackArgs += "-EnableDx12DlssRr" }
         if ($DisableDlssRr) { $runStackArgs += "-DisableDlssRr" }
         if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
@@ -1049,12 +1258,21 @@ try {
             dirty = $gitDirty
         }
         hardware = Get-HardwareInfo
+        environment = Get-BenchmarkEnvironmentInfo
         config = [ordered]@{
+            benchmark_profile = $BenchmarkProfile
+            benchmark_scenario = $BenchmarkScenario
+            benchmark_matrix_lane = $BenchmarkMatrixLane
             benchmark_lane = $BenchmarkLane
             profile = if ($Release) { "release" } else { "debug" }
             static_bevy = [bool]$StaticBevy
             render_backend = $RenderBackend
             present_mode = $PresentMode
+            requested_maximum_frame_latency = $RequestedMaximumFrameLatency
+            cef_ui_mode = $CefUiMode
+            cef_ui_enabled = [bool]$cefUiEnabled
+            cef_paint_transport = $CefPaintTransport
+            cef_accelerated_feature_requested = [bool]$cefAcceleratedFeatureRequested
             enable_dx12_dlss_rr = [bool]$EnableDx12DlssRr
             require_dx12_dlss_rr_acceptance = [bool]$RequireDx12DlssRrAcceptance
             rr_stress_frame_target = $RrStressFrameTarget

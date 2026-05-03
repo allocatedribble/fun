@@ -3306,6 +3306,33 @@ fn sample_cef_ui_transport_counters(
     }
     #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
     let _ = dx12_slot;
+    game_shared::fun_diag_info!(
+        target: "fun::perf::cef_ui",
+        cef_on_paint_fps = stats.cef_on_paint_fps,
+        cef_on_accelerated_paint_fps = stats.cef_on_accelerated_paint_fps,
+        cef_cpu_upload_bytes = stats.cef_cpu_upload_bytes,
+        cef_gpu_copy_bytes = stats.cef_gpu_copy_bytes,
+        cef_gpu_copy_ns = stats.cef_gpu_copy_ns,
+        cef_gpu_copy_failures = stats.cef_gpu_copy_failures,
+        cef_transport_fallback_count = stats.cef_transport_fallback_count,
+        cef_published_generation = stats.cef_published_generation,
+        cef_sampled_generation = stats.cef_sampled_generation,
+        cef_stale_frame_count = stats.stale_gpu_frame_count,
+        "CEF UI transport performance sample"
+    );
+    game_shared::fun_diag_info!(
+        "[client perf] cef_ui transport: cef_on_paint_fps={} cef_on_accelerated_paint_fps={} cef_cpu_upload_bytes={} cef_gpu_copy_bytes={} cef_gpu_copy_ns={} cef_gpu_copy_failures={} cef_transport_fallback_count={} cef_published_generation={} cef_sampled_generation={} cef_stale_frame_count={}",
+        stats.cef_on_paint_fps,
+        stats.cef_on_accelerated_paint_fps,
+        stats.cef_cpu_upload_bytes,
+        stats.cef_gpu_copy_bytes,
+        stats.cef_gpu_copy_ns,
+        stats.cef_gpu_copy_failures,
+        stats.cef_transport_fallback_count,
+        stats.cef_published_generation,
+        stats.cef_sampled_generation,
+        stats.stale_gpu_frame_count,
+    );
     sampler.last_snapshot = Some(snapshot);
 }
 

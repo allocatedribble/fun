@@ -176,6 +176,12 @@ Default runtime capture:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend dx12 -PresentMode immediate
 ```
 
+Windows DX12/Vulkan parity capture:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1
+```
+
 Denoiser and DLSS Ray Reconstruction comparison:
 
 ```powershell

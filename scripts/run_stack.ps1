@@ -4,6 +4,7 @@ param(
     [switch]$NoClient,
     [switch]$Launcher,
     [switch]$CefUi,
+    [switch]$CefUiDx12AcceleratedPaint,
     [switch]$RenderDiagnostics,
     [switch]$TraceDiagnostics,
     [switch]$RenderProfileVerbose,
@@ -142,6 +143,10 @@ $rustTargetLibDir = (& rustc --print target-libdir).Trim()
 $rustToolchainBin = Join-Path $rustSysroot "bin"
 
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+
+if ($CefUiDx12AcceleratedPaint -and -not $NoClient) {
+    $CefUi = $true
+}
 
 if (Test-Path $pidFile) {
     try {
@@ -454,7 +459,10 @@ if ($Release) {
 if (-not $Release -and -not $StaticBevy) {
     $buildArgs += @("--features", "bevy/dynamic_linking")
 }
-if ($CefUi -and -not $NoClient) {
+if ($CefUiDx12AcceleratedPaint -and -not $NoClient) {
+    $buildArgs += @("--features", "game_client/cef_ui_dx12_accelerated_paint")
+}
+elseif ($CefUi -and -not $NoClient) {
     $buildArgs += @("--features", "game_client/cef_ui")
 }
 if ($diagnosticsRequested -and $Release) {

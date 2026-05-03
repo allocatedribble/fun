@@ -137,6 +137,62 @@ single multiline report.
 The benchmark report includes a 144 FPS budget ledger and marks p95 pass/fail
 for the buckets that are currently measurable.
 
+## DX12 Parity Matrix
+
+Use the DX12 parity matrix when comparing Windows DX12 against the Vulkan
+control lane. It is measurement-first: every lane is routed through
+`scripts\benchmark_client.ps1`, every lane records backend, present mode, CEF
+visibility/transport, feature toggles, hardware, Windows build, manual display
+annotations, and metric presence.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1
+```
+
+For script/schema validation without launching the client:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -PlanOnly
+```
+
+The quick profile captures the Vulkan and DX12 present-mode controls plus the
+highest-risk UI and feature lanes. The full profile adds every declared lane:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize full -ContinueOnFailure
+```
+
+The declared lane vocabulary is:
+
+- Backend/present: `vulkan_immediate`, `vulkan_fifo`,
+  `vulkan_auto_no_vsync`, `dx12_immediate`, `dx12_fifo`,
+  `dx12_auto_no_vsync`, and `dx12_mailbox_if_available`.
+- CEF visibility: `ui_hidden`, `ui_static`, `ui_animated`,
+  `ui_animated_1440p_surface`, and `ui_animated_4k_surface`.
+- Feature isolation: `clouds_off`, `clouds_on`, `solari_off`, `solari_on`,
+  `meshlets_off`, `meshlets_on`, `editor_preview_off`, `editor_preview_on`,
+  `cef_cpu_paint`, and `cef_gpu_accelerated`.
+
+Every matrix writes:
+
+- `target\benchmarks\dx12_parity\<timestamp>\matrix.json`
+- `target\benchmarks\dx12_parity\<timestamp>\summary.md`
+
+The required metric contract includes `frame_ns.mean/p50/p95/p99`,
+`fps.mean/p95`, `present_wait_ns.mean/p95`,
+`post_process_gpu_ns`, cloud/Solari/meshlet GPU timings, transient
+resource request/create/reuse/alias counts, render scheduler pressure, and CEF
+transport counters: `cef_on_paint_fps`, `cef_on_accelerated_paint_fps`,
+`cef_cpu_upload_bytes`, `cef_gpu_copy_bytes`, `cef_gpu_copy_ns`,
+`cef_transport_fallback_count`, `cef_published_generation`,
+`cef_sampled_generation`, and `cef_stale_frame_count`.
+
+PIX, GPUView, and PresentMon-only values are not guessed from client logs. The
+matrix JSON lists them under `dx12_external_metrics` with
+`status=requires_pix_presentmon_or_gpuview_capture`; attach those tools for
+barrier counts, descriptor heap switches, command-list counts, fence waits,
+submit counts, and GPU queue idle intervals.
+
 Use the JSON file as the baseline for a second run:
 
 ```powershell
