@@ -2,14 +2,19 @@ use std::{
     cmp,
     error::Error,
     fmt,
+    mem::ManuallyDrop,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
 
-use bevy::render::renderer::{RenderDevice, RenderQueue};
+use bevy::render::{
+    render_resource::TextureFormat,
+    renderer::{RenderDevice, RenderQueue},
+    texture::GpuImage,
+};
 use fun_ui_cef::{
     CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefUiFallbackReason,
     CefUiPaintTransportFallbackReason, render_handler::CefUiFrameGeneration,
@@ -25,12 +30,18 @@ use windows::{
             },
             Direct3D11on12::{D3D11_RESOURCE_FLAGS, D3D11On12CreateDevice, ID3D11On12Device},
             Direct3D12::{
-                D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
-                D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_MEMORY_POOL_UNKNOWN,
+                D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES,
+                D3D12_HEAP_TYPE_DEFAULT, D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_BARRIER,
+                D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
                 D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_TEXTURE_LAYOUT_UNKNOWN,
-                ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON,
+                D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES,
+                D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue, ID3D12Device,
+                ID3D12Fence, ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource,
             },
             Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
         },
@@ -63,6 +74,13 @@ pub enum Dx12CefInteropFailure {
     InvalidFrameDimensions,
     DestinationTextureCreateFailed,
     DestinationTextureWrapFailed,
+    CopyCommandAllocatorCreateFailed,
+    CopyCommandListCreateFailed,
+    CopyCommandListCloseFailed,
+    CopyCommandListResetFailed,
+    BevyTargetTextureHalUnavailable,
+    BevyTargetTextureUnsupported,
+    BevyTextureCopyFailed,
     FenceSignalFailed,
     OutputTextureRingUnavailable,
 }
@@ -85,6 +103,13 @@ impl Dx12CefInteropFailure {
             Self::InvalidFrameDimensions => "invalid_frame_dimensions",
             Self::DestinationTextureCreateFailed => "destination_texture_create_failed",
             Self::DestinationTextureWrapFailed => "destination_texture_wrap_failed",
+            Self::CopyCommandAllocatorCreateFailed => "copy_command_allocator_create_failed",
+            Self::CopyCommandListCreateFailed => "copy_command_list_create_failed",
+            Self::CopyCommandListCloseFailed => "copy_command_list_close_failed",
+            Self::CopyCommandListResetFailed => "copy_command_list_reset_failed",
+            Self::BevyTargetTextureHalUnavailable => "bevy_target_texture_hal_unavailable",
+            Self::BevyTargetTextureUnsupported => "bevy_target_texture_unsupported",
+            Self::BevyTextureCopyFailed => "bevy_texture_copy_failed",
             Self::FenceSignalFailed => "fence_signal_failed",
             Self::OutputTextureRingUnavailable => "output_texture_ring_unavailable",
         }
@@ -195,6 +220,42 @@ impl Dx12CefAlphaMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dx12CefBevyImageState {
+    Common,
+    PixelShaderResource,
+}
+
+impl Dx12CefBevyImageState {
+    #[must_use]
+    const fn as_d3d12_state(self) -> D3D12_RESOURCE_STATES {
+        match self {
+            Self::Common => D3D12_RESOURCE_STATE_COMMON,
+            Self::PixelShaderResource => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dx12CefReadyFrameToken {
+    pub generation: CefUiFrameGeneration,
+    pub slot_index: usize,
+    pub width: u32,
+    pub height: u32,
+    pub format: DxgiFormat,
+    pub fence_value: u64,
+    pub dirty_rect_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dx12CefBevyCopyResult {
+    pub generation: CefUiFrameGeneration,
+    pub width: u32,
+    pub height: u32,
+    pub target_format: TextureFormat,
+    pub fence_value: u64,
+}
+
 pub struct Dx12CefInterop {
     d3d12_device: ID3D12Device,
     d3d12_queue: ID3D12CommandQueue,
@@ -205,7 +266,10 @@ pub struct Dx12CefInterop {
     next_fence_value: AtomicU64,
     next_frame_generation: AtomicU64,
     slots: Mutex<Dx12CefTextureRing>,
+    copy_commands: Mutex<Dx12CefCopyCommandState>,
     diagnostics: Dx12CefInteropDiagnostics,
+    gpu_copy_ready_logged: AtomicBool,
+    bevy_copy_logged: AtomicBool,
 }
 
 impl fmt::Debug for Dx12CefInterop {
@@ -306,6 +370,7 @@ impl Dx12CefInterop {
                 error,
             )
         })?;
+        let copy_commands = Dx12CefCopyCommandState::create(&handles.d3d12_device)?;
         let interop = Self {
             d3d12_device: handles.d3d12_device,
             d3d12_queue: handles.d3d12_queue,
@@ -316,7 +381,10 @@ impl Dx12CefInterop {
             next_fence_value: AtomicU64::new(1),
             next_frame_generation: AtomicU64::new(1),
             slots: Mutex::new(Dx12CefTextureRing::empty()),
+            copy_commands: Mutex::new(copy_commands),
             diagnostics: Dx12CefInteropDiagnostics::default(),
+            gpu_copy_ready_logged: AtomicBool::new(false),
+            bevy_copy_logged: AtomicBool::new(false),
         };
         interop.diagnostics.record_init_success();
         interop.log_gpu_format_policy();
@@ -355,6 +423,118 @@ impl Dx12CefInterop {
             d3d11_context: self.d3d11_context.as_raw() as usize,
             d3d11_on12: self.d3d11_on12.as_raw() as usize,
             fence: self.fence.as_raw() as usize,
+        }
+    }
+
+    #[must_use]
+    pub fn latest_ready_frame_token(&self) -> Option<Dx12CefReadyFrameToken> {
+        let completed_fence_value = self.completed_fence_value();
+        let mut slots = self.slots.lock().ok()?;
+        slots.retire_completed_copying_slots(completed_fence_value);
+        let slot_index = slots.latest_ready_slot_index()?;
+        let slot = slots.slot(slot_index)?;
+        Some(Dx12CefReadyFrameToken {
+            generation: slot.generation,
+            slot_index,
+            width: slot.width,
+            height: slot.height,
+            format: slot.format,
+            fence_value: slot.fence_value,
+            dirty_rect_count: slot.dirty_rects.len(),
+        })
+    }
+
+    pub fn copy_ready_frame_to_bevy_image(
+        &self,
+        token: Dx12CefReadyFrameToken,
+        gpu_image: &GpuImage,
+        target_state_before: Dx12CefBevyImageState,
+    ) -> Result<Option<Dx12CefBevyCopyResult>, Dx12CefInteropError> {
+        validate_bevy_target(gpu_image, token)?;
+        let completed_fence_value = self.completed_fence_value();
+        let mut copy_commands = self.copy_commands.lock().map_err(|_| {
+            Dx12CefInteropError::new(
+                Dx12CefInteropFailure::BevyTextureCopyFailed,
+                "CEF DX12 copy command state lock is poisoned",
+                None,
+            )
+        })?;
+        if !copy_commands.can_reset(completed_fence_value) {
+            return Ok(None);
+        }
+
+        let target_resource = bevy_gpu_image_dx12_resource(gpu_image)?;
+        let source = {
+            let mut slots = self.slots.lock().map_err(|_| {
+                Dx12CefInteropError::new(
+                    Dx12CefInteropFailure::OutputTextureRingUnavailable,
+                    "CEF DX12 texture ring lock is poisoned",
+                    None,
+                )
+            })?;
+            slots.retire_completed_copying_slots(completed_fence_value);
+            let Some(slot_index) = slots.ready_slot_index_by_generation(token.generation) else {
+                return Ok(None);
+            };
+            let slot = slots.slot_mut(slot_index).ok_or_else(|| {
+                Dx12CefInteropError::new(
+                    Dx12CefInteropFailure::OutputTextureRingUnavailable,
+                    "CEF DX12 texture ring returned no ready slot",
+                    None,
+                )
+            })?;
+            if completed_fence_value < slot.fence_value {
+                return Ok(None);
+            }
+            if slot.width != token.width
+                || slot.height != token.height
+                || slot.format != token.format
+            {
+                return Err(Dx12CefInteropError::new(
+                    Dx12CefInteropFailure::OutputTextureRingUnavailable,
+                    "CEF DX12 ready slot metadata changed before Bevy copy",
+                    None,
+                ));
+            }
+            slot.state = Dx12CefSlotState::Copying;
+            Dx12CefBevyCopySource {
+                slot_index,
+                generation: slot.generation,
+                width: slot.width,
+                height: slot.height,
+                resource: slot.d3d12_resource.clone(),
+                previous_fence_value: slot.fence_value,
+            }
+        };
+
+        let copy_result = self.copy_ring_source_to_bevy_target(
+            &mut copy_commands,
+            &source,
+            &target_resource,
+            gpu_image.texture_descriptor.format,
+            target_state_before,
+        );
+        match copy_result {
+            Ok(result) => {
+                if let Ok(mut slots) = self.slots.lock()
+                    && let Some(slot) = slots.slot_mut(source.slot_index)
+                    && slot.generation == source.generation
+                {
+                    slot.fence_value = result.fence_value;
+                    slot.state = Dx12CefSlotState::Copying;
+                }
+                Ok(Some(result))
+            }
+            Err(error) => {
+                if let Ok(mut slots) = self.slots.lock()
+                    && let Some(slot) = slots.slot_mut(source.slot_index)
+                    && slot.generation == source.generation
+                {
+                    slot.fence_value = source.previous_fence_value;
+                    slot.state = Dx12CefSlotState::Ready;
+                }
+                Err(error)
+            }
         }
     }
 
@@ -415,6 +595,7 @@ impl Dx12CefInterop {
                 None,
             )
         })?;
+        slots.retire_completed_copying_slots(self.completed_fence_value());
         let slot_index =
             match slots.next_copy_slot_request(width, height, CEF_GPU_FORMAT_POLICY.target) {
                 Dx12CefRingSlotRequest::Reuse { index } => index,
@@ -453,9 +634,22 @@ impl Dx12CefInterop {
         slot.generation = generation;
         slot.fence_value = fence_value;
         slot.state = Dx12CefSlotState::Ready;
+        slot.dirty_rects.clear();
+        slot.dirty_rects.extend_from_slice(frame.dirty_rects);
         self.diagnostics.record_gpu_copy(copied_bytes, copy_ns);
         self.diagnostics
             .record_published_generation(generation.0, fence_value);
+        if !self.gpu_copy_ready_logged.swap(true, Ordering::AcqRel) {
+            tracing::info!(
+                target: "fun::ui",
+                generation = generation.0,
+                width,
+                height,
+                source = "cef_d3d11_shared",
+                target_slot = %format_args!("dx12_ring_slot_{slot_index}"),
+                "CEF UI GPU copy ready"
+            );
+        }
 
         Ok(Dx12CefCopyResult {
             generation,
@@ -536,7 +730,7 @@ impl Dx12CefInterop {
                 &heap_properties,
                 D3D12_HEAP_FLAG_NONE,
                 &resource_desc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
                 None,
                 &mut d3d12_resource,
             )
@@ -566,6 +760,7 @@ impl Dx12CefInterop {
             wrapped_d3d11_resource,
             fence_value: 0,
             state: Dx12CefSlotState::Free,
+            dirty_rects: Vec::new(),
         })
     }
 
@@ -591,8 +786,8 @@ impl Dx12CefInterop {
             self.d3d11_on12.CreateWrappedResource::<_, ID3D11Resource>(
                 &resource_unknown,
                 &flags,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
                 &mut wrapped_resource,
             )
         }
@@ -636,6 +831,95 @@ impl Dx12CefInterop {
         })
     }
 
+    fn copy_ring_source_to_bevy_target(
+        &self,
+        copy_commands: &mut Dx12CefCopyCommandState,
+        source: &Dx12CefBevyCopySource,
+        target_resource: &ID3D12Resource,
+        target_format: TextureFormat,
+        target_state_before: Dx12CefBevyImageState,
+    ) -> Result<Dx12CefBevyCopyResult, Dx12CefInteropError> {
+        let fence_value = self.next_fence_value.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            copy_commands.allocator.Reset().map_err(|error| {
+                Dx12CefInteropError::from_windows(
+                    Dx12CefInteropFailure::CopyCommandListResetFailed,
+                    "failed to reset CEF DX12 copy command allocator",
+                    error,
+                )
+            })?;
+            copy_commands
+                .command_list
+                .Reset(&copy_commands.allocator, None::<&ID3D12PipelineState>)
+                .map_err(|error| {
+                    Dx12CefInteropError::from_windows(
+                        Dx12CefInteropFailure::CopyCommandListResetFailed,
+                        "failed to reset CEF DX12 copy command list",
+                        error,
+                    )
+                })?;
+            resource_barrier(
+                &copy_commands.command_list,
+                target_resource,
+                target_state_before.as_d3d12_state(),
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            );
+            copy_commands
+                .command_list
+                .CopyResource(target_resource, &source.resource);
+            resource_barrier(
+                &copy_commands.command_list,
+                target_resource,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            copy_commands.command_list.Close().map_err(|error| {
+                Dx12CefInteropError::from_windows(
+                    Dx12CefInteropFailure::CopyCommandListCloseFailed,
+                    "failed to close CEF DX12 copy command list",
+                    error,
+                )
+            })?;
+            let command_list = copy_commands
+                .command_list
+                .cast::<ID3D12CommandList>()
+                .map_err(|error| {
+                    Dx12CefInteropError::from_windows(
+                        Dx12CefInteropFailure::BevyTextureCopyFailed,
+                        "failed to cast CEF DX12 copy command list",
+                        error,
+                    )
+                })?;
+            self.d3d12_queue.ExecuteCommandLists(&[Some(command_list)]);
+            self.d3d12_queue
+                .Signal(&self.fence, fence_value)
+                .map_err(|error| {
+                    Dx12CefInteropError::from_windows(
+                        Dx12CefInteropFailure::FenceSignalFailed,
+                        "failed to signal D3D12 fence after copying CEF GPU frame to Bevy image",
+                        error,
+                    )
+                })?;
+        }
+        copy_commands.pending_fence_value = fence_value;
+        if !self.bevy_copy_logged.swap(true, Ordering::AcqRel) {
+            tracing::info!(
+                target: "fun::ui",
+                generation = source.generation.0,
+                target_format = texture_format_label(target_format),
+                "CEF UI GPU frame copied to Bevy image"
+            );
+        }
+
+        Ok(Dx12CefBevyCopyResult {
+            generation: source.generation,
+            width: source.width,
+            height: source.height,
+            target_format,
+            fence_value,
+        })
+    }
+
     #[must_use]
     const fn fallback_reason_for_copy_error(
         error: Dx12CefInteropError,
@@ -649,6 +933,9 @@ impl Dx12CefInterop {
             }
             Dx12CefInteropFailure::DestinationTextureCreateFailed
             | Dx12CefInteropFailure::DestinationTextureWrapFailed
+            | Dx12CefInteropFailure::BevyTargetTextureHalUnavailable
+            | Dx12CefInteropFailure::BevyTargetTextureUnsupported
+            | Dx12CefInteropFailure::BevyTextureCopyFailed
             | Dx12CefInteropFailure::FenceSignalFailed
             | Dx12CefInteropFailure::OutputTextureRingUnavailable => {
                 CefUiPaintTransportFallbackReason::OutputTextureAllocationUnavailable
@@ -664,7 +951,11 @@ impl Dx12CefInterop {
             | Dx12CefInteropFailure::D3d11DeviceMissing
             | Dx12CefInteropFailure::D3d11ImmediateContextMissing
             | Dx12CefInteropFailure::D3d11On12QueryFailed
-            | Dx12CefInteropFailure::FenceCreateFailed => {
+            | Dx12CefInteropFailure::FenceCreateFailed
+            | Dx12CefInteropFailure::CopyCommandAllocatorCreateFailed
+            | Dx12CefInteropFailure::CopyCommandListCreateFailed
+            | Dx12CefInteropFailure::CopyCommandListCloseFailed
+            | Dx12CefInteropFailure::CopyCommandListResetFailed => {
                 CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable
             }
         }
@@ -689,6 +980,72 @@ struct Dx12CefCopyResult {
     copy_ns: u64,
 }
 
+#[derive(Debug, Clone)]
+struct Dx12CefBevyCopySource {
+    slot_index: usize,
+    generation: CefUiFrameGeneration,
+    width: u32,
+    height: u32,
+    resource: ID3D12Resource,
+    previous_fence_value: u64,
+}
+
+#[derive(Debug)]
+struct Dx12CefCopyCommandState {
+    allocator: ID3D12CommandAllocator,
+    command_list: ID3D12GraphicsCommandList,
+    pending_fence_value: u64,
+}
+
+impl Dx12CefCopyCommandState {
+    fn create(device: &ID3D12Device) -> Result<Self, Dx12CefInteropError> {
+        let allocator = unsafe {
+            device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+        }
+        .map_err(|error| {
+            Dx12CefInteropError::from_windows(
+                Dx12CefInteropFailure::CopyCommandAllocatorCreateFailed,
+                "failed to create CEF DX12 copy command allocator",
+                error,
+            )
+        })?;
+        let command_list = unsafe {
+            device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+                0,
+                D3D12_COMMAND_LIST_TYPE_DIRECT,
+                &allocator,
+                None::<&ID3D12PipelineState>,
+            )
+        }
+        .map_err(|error| {
+            Dx12CefInteropError::from_windows(
+                Dx12CefInteropFailure::CopyCommandListCreateFailed,
+                "failed to create CEF DX12 copy command list",
+                error,
+            )
+        })?;
+        unsafe {
+            command_list.Close().map_err(|error| {
+                Dx12CefInteropError::from_windows(
+                    Dx12CefInteropFailure::CopyCommandListCloseFailed,
+                    "failed to close initial CEF DX12 copy command list",
+                    error,
+                )
+            })?;
+        }
+        Ok(Self {
+            allocator,
+            command_list,
+            pending_fence_value: 0,
+        })
+    }
+
+    #[must_use]
+    const fn can_reset(&self, completed_fence_value: u64) -> bool {
+        self.pending_fence_value == 0 || self.pending_fence_value <= completed_fence_value
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dx12CefNativePointerSummary {
     pub d3d12_device: usize,
@@ -697,6 +1054,100 @@ pub struct Dx12CefNativePointerSummary {
     pub d3d11_context: usize,
     pub d3d11_on12: usize,
     pub fence: usize,
+}
+
+impl Dx12CefInterop {
+    #[must_use]
+    fn completed_fence_value(&self) -> u64 {
+        unsafe { self.fence.GetCompletedValue() }
+    }
+}
+
+fn validate_bevy_target(
+    gpu_image: &GpuImage,
+    token: Dx12CefReadyFrameToken,
+) -> Result<(), Dx12CefInteropError> {
+    if gpu_image.texture_descriptor.format != TextureFormat::Bgra8UnormSrgb {
+        return Err(Dx12CefInteropError::new(
+            Dx12CefInteropFailure::BevyTargetTextureUnsupported,
+            "CEF GPU copy currently supports only Bgra8UnormSrgb Bevy UI images",
+            None,
+        ));
+    }
+    if gpu_image.texture_descriptor.size.width != token.width
+        || gpu_image.texture_descriptor.size.height != token.height
+        || gpu_image.texture_descriptor.size.depth_or_array_layers != 1
+    {
+        return Err(Dx12CefInteropError::new(
+            Dx12CefInteropFailure::BevyTargetTextureUnsupported,
+            "CEF GPU frame size did not match the Bevy UI image",
+            None,
+        ));
+    }
+    if token.format != CEF_GPU_FORMAT_POLICY.target {
+        return Err(Dx12CefInteropError::new(
+            Dx12CefInteropFailure::SharedTextureUnsupportedFormat,
+            "CEF DX12 ring slot format does not match the Bevy GPU copy policy",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn bevy_gpu_image_dx12_resource(
+    gpu_image: &GpuImage,
+) -> Result<ID3D12Resource, Dx12CefInteropError> {
+    unsafe {
+        let Some(hal_texture) = gpu_image.texture.as_hal::<wgpu::hal::api::Dx12>() else {
+            return Err(Dx12CefInteropError::new(
+                Dx12CefInteropFailure::BevyTargetTextureHalUnavailable,
+                "Bevy UI image texture did not expose a DX12 HAL texture",
+                None,
+            ));
+        };
+        Ok(hal_texture.raw_resource().clone())
+    }
+}
+
+fn resource_barrier(
+    command_list: &ID3D12GraphicsCommandList,
+    resource: &ID3D12Resource,
+    before: D3D12_RESOURCE_STATES,
+    after: D3D12_RESOURCE_STATES,
+) {
+    if before == after {
+        return;
+    }
+    let mut barrier = transition_barrier(resource, before, after);
+    unsafe {
+        command_list.ResourceBarrier(std::slice::from_ref(&barrier));
+        drop_transition_barrier_resource(&mut barrier);
+    }
+}
+
+fn transition_barrier(
+    resource: &ID3D12Resource,
+    before: D3D12_RESOURCE_STATES,
+    after: D3D12_RESOURCE_STATES,
+) -> D3D12_RESOURCE_BARRIER {
+    D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                pResource: ManuallyDrop::new(Some(resource.clone())),
+                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                StateBefore: before,
+                StateAfter: after,
+            }),
+        },
+    }
+}
+
+unsafe fn drop_transition_barrier_resource(barrier: &mut D3D12_RESOURCE_BARRIER) {
+    unsafe {
+        ManuallyDrop::drop(&mut (*barrier.Anonymous.Transition).pResource);
+    }
 }
 
 fn validated_frame_extent(width: i32, height: i32) -> Result<(u32, u32), Dx12CefInteropError> {
@@ -760,6 +1211,16 @@ fn nanos_u64(nanos: u128) -> u64 {
 const fn dxgi_format_label(format: DxgiFormat) -> &'static str {
     match format.0 {
         87 => "BGRA8",
+        _ => "unsupported",
+    }
+}
+
+const fn texture_format_label(format: TextureFormat) -> &'static str {
+    match format {
+        TextureFormat::Bgra8UnormSrgb => "Bgra8UnormSrgb",
+        TextureFormat::Bgra8Unorm => "Bgra8Unorm",
+        TextureFormat::Rgba8UnormSrgb => "Rgba8UnormSrgb",
+        TextureFormat::Rgba8Unorm => "Rgba8Unorm",
         _ => "unsupported",
     }
 }

@@ -10,7 +10,10 @@ pub mod diagnostics;
 pub mod handles;
 pub mod ring;
 
-pub use bridge::{Dx12CefInterop, Dx12CefInteropError, Dx12CefInteropFailure};
+pub use bridge::{
+    Dx12CefBevyImageState, Dx12CefInterop, Dx12CefInteropError, Dx12CefInteropFailure,
+    Dx12CefReadyFrameToken,
+};
 pub use diagnostics::{Dx12CefInteropDiagnosticSnapshot, Dx12CefInteropDiagnostics};
 pub use handles::{Dx12CefNativeHandles, extract_wgpu_dx12_handles};
 pub use ring::{

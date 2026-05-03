@@ -1,4 +1,4 @@
-use fun_ui_cef::render_handler::CefUiFrameGeneration;
+use fun_ui_cef::{CefDirtyRect, render_handler::CefUiFrameGeneration};
 use windows::Win32::Graphics::{
     Direct3D11::ID3D11Resource,
     Direct3D12::ID3D12Resource,
@@ -33,6 +33,7 @@ pub struct Dx12CefTextureSlot {
     pub wrapped_d3d11_resource: ID3D11Resource,
     pub fence_value: u64,
     pub state: Dx12CefSlotState,
+    pub dirty_rects: Vec<CefDirtyRect>,
 }
 
 pub struct Dx12CefTextureRing {
@@ -106,7 +107,10 @@ impl Dx12CefTextureRing {
                 slot.width == width
                     && slot.height == height
                     && slot.format == format
-                    && slot.state != Dx12CefSlotState::Copying
+                    && matches!(
+                        slot.state,
+                        Dx12CefSlotState::Free | Dx12CefSlotState::Consumed
+                    )
             })
         }) {
             self.cursor = (index + 1) % CEF_GPU_RING_LEN;
@@ -122,7 +126,7 @@ impl Dx12CefTextureRing {
             let index = (self.cursor + offset) % CEF_GPU_RING_LEN;
             if self.slots[index]
                 .as_ref()
-                .is_some_and(|slot| slot.state != Dx12CefSlotState::Copying)
+                .is_some_and(|slot| matches!(slot.state, Dx12CefSlotState::Consumed))
             {
                 self.cursor = (index + 1) % CEF_GPU_RING_LEN;
                 return Dx12CefRingSlotRequest::Allocate { index };
@@ -141,6 +145,48 @@ impl Dx12CefTextureRing {
     #[must_use]
     pub fn slot_mut(&mut self, index: usize) -> Option<&mut Dx12CefTextureSlot> {
         self.slots.get_mut(index).and_then(Option::as_mut)
+    }
+
+    #[must_use]
+    pub fn slot(&self, index: usize) -> Option<&Dx12CefTextureSlot> {
+        self.slots.get(index).and_then(Option::as_ref)
+    }
+
+    #[must_use]
+    pub fn latest_ready_slot_index(&self) -> Option<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                slot.as_ref()
+                    .filter(|slot| slot.state == Dx12CefSlotState::Ready)
+                    .map(|slot| (index, slot.generation))
+            })
+            .max_by_key(|(_, generation)| generation.0)
+            .map(|(index, _)| index)
+    }
+
+    #[must_use]
+    pub fn ready_slot_index_by_generation(
+        &self,
+        generation: CefUiFrameGeneration,
+    ) -> Option<usize> {
+        self.slots.iter().enumerate().find_map(|(index, slot)| {
+            slot.as_ref()
+                .filter(|slot| {
+                    slot.state == Dx12CefSlotState::Ready && slot.generation == generation
+                })
+                .map(|_| index)
+        })
+    }
+
+    pub fn retire_completed_copying_slots(&mut self, completed_fence_value: u64) {
+        for slot in self.slots.iter_mut().flatten() {
+            if slot.state == Dx12CefSlotState::Copying && slot.fence_value <= completed_fence_value
+            {
+                slot.state = Dx12CefSlotState::Consumed;
+            }
+        }
     }
 
     #[must_use]

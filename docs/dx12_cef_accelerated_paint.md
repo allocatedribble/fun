@@ -21,7 +21,11 @@ Evidence in the current code:
 - `game_client/src/cef_ui_dx12` opens CEF's accelerated D3D11 shared texture
   handle inside `OnAcceleratedPaint`, copies immediately into a FUN-owned
   D3D12-backed texture ring through D3D11On12, signals a D3D12 fence, and
-  publishes only the resulting frame generation to the rest of the UI bridge.
+  publishes only a safe frame token to the rest of the UI bridge.
+- `game_client::cef_ui` consumes that safe token in the existing Bevy UI texture
+  composition path. The main world creates an uninitialized BGRA `Image`, and
+  the render world copies the ready DX12 ring slot into the same Bevy GPU image
+  that the CPU fallback path uses.
 
 This means DX12 is hardware accelerated for the Bevy renderer. The default CEF
 handoff remains the CPU path:
@@ -52,7 +56,9 @@ CEF windowless OnAcceleratedPaint
   -> ReleaseWrappedResources
   -> Flush
   -> ID3D12CommandQueue::Signal
-  -> publish CefUiFrameGeneration
+  -> publish CefUiFrameGeneration + ring slot token
+  -> render-world D3D12 CopyResource into the Bevy UI Image texture
+  -> Bevy/FUN render composition
 ```
 
 The CEF handle, source `ID3D11Texture2D`, dirty-rect slice, and
@@ -164,10 +170,11 @@ pub enum CefUiPaintTransport {
 ```
 
 `BrowserUiConfig` carries the selected transport, the render-backend hint, the
-accelerated-paint debug flag, and a typed fallback reason. The current production
-selection still resolves to `cpu_paint` because the D3D11on12 bridge is not
-implemented yet. Explicit accelerated requests therefore fail closed to the CPU
-lane and record `d3d11on12_bridge_unavailable`.
+accelerated-paint debug flag, and a typed fallback reason. The production
+default remains the CPU lane, but explicit or auto accelerated requests can now
+start the shared-texture browser after the render-world D3D11on12 bridge reports
+ready. If that bridge is unavailable, the request still fails closed to the CPU
+lane with a typed fallback reason.
 
 Environment gates:
 
@@ -188,8 +195,8 @@ The render handler now has an `OnAcceleratedPaint` surface, but it only records
 the callback and dispatches a borrowed `CefAcceleratedPaintFrame` to an optional
 Windows-only sink. This is intentional: CEF's shared handle is only valid during
 the callback, can change every callback, and must not be enqueued for
-render-world processing. The future bridge must open the D3D11 shared texture
-and copy it into a FUN-owned GPU resource before the callback returns.
+render-world processing. The `game_client` bridge opens the D3D11 shared texture
+and copies it into a FUN-owned GPU resource before the callback returns.
 
 The accelerated callback surface is callback-only:
 
@@ -253,6 +260,8 @@ module that extracts wgpu DX12 HAL handles. It:
 - calls `D3D11On12CreateDevice` with `D3D11_CREATE_DEVICE_BGRA_SUPPORT`;
 - queries `ID3D11On12Device`;
 - creates an `ID3D12Fence`;
+- creates a reusable direct command allocator/list pair for ring-slot to Bevy
+  texture copies;
 - initializes an empty triple-buffer texture ring.
 - logs the first-pass GPU format policy:
   `CEF UI GPU format source=BGRA8 target=BGRA8 conversion=none alpha=premultiplied`.
@@ -263,6 +272,49 @@ fallback reason. If an accelerated browser starts and CEF produces CPU `OnPaint`
 frames or no accelerated callbacks during the startup observation window, the
 client tears down that browser and recreates a CPU paint browser with
 `accelerated_paint_not_observed`.
+
+## Render-World Bevy Texture Feed
+
+The first accelerated feed keeps the existing Bevy UI image composition. It only
+replaces the transport into that image:
+
+```text
+old:
+  CPU pixels -> RenderQueue::write_texture -> Bevy Image
+
+new:
+  D3D12 ring slot -> native D3D12 copy -> Bevy Image
+```
+
+`copy_latest_cef_gpu_frame_to_bevy_image` runs in
+`RenderSystems::PrepareResources` after the CPU upload lane. It:
+
+- reads the extracted `CefUiGpuTextureUpload` token;
+- waits until the CEF callback fence has completed;
+- validates BGRA8 source and `Bgra8UnormSrgb` target formats;
+- uses the active Bevy `GpuImage` texture as the copy target;
+- records a native DX12 `CopyResource` through the isolated interop module;
+- transitions the target texture to `COPY_DEST` for the copy and back to
+  `PIXEL_SHADER_RESOURCE` for Bevy UI sampling;
+- updates `CefUiGpuUploadState.last_generation` only after the GPU copy has
+  been submitted.
+
+Resource states for this pass:
+
+- CEF source shared texture: D3D11 resource opened and released only during
+  `OnAcceleratedPaint`; never cached.
+- FUN ring slot: copied through D3D11On12, released in
+  `D3D12_RESOURCE_STATE_COPY_SOURCE`, and held until the Bevy copy fence retires.
+- Bevy UI target texture: treated as `COMMON` on first allocation and
+  `PIXEL_SHADER_RESOURCE` on later copies, transitioned to `COPY_DEST` for the
+  native copy, then restored to `PIXEL_SHADER_RESOURCE`.
+
+First successful frames log:
+
+```text
+CEF UI GPU copy ready generation=... size=... source=cef_d3d11_shared target_slot=dx12_ring_slot_N
+CEF UI GPU frame copied to Bevy image generation=... target_format=Bgra8UnormSrgb
+```
 
 ## Transport Counters
 
