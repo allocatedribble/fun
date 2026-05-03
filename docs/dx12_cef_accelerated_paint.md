@@ -4,8 +4,8 @@
 
 `game_client` can run the Bevy/wgpu renderer on DX12. The default CEF UI
 transport is still the CPU paint path, but an experimental Windows-only
-`cef_ui_dx12_accelerated_paint` feature now builds the first D3D11On12 bridge
-boundary.
+`cef_ui_dx12_accelerated_paint` feature now builds the D3D11On12 bridge and
+per-callback GPU copy boundary.
 
 Evidence in the current code:
 
@@ -16,11 +16,15 @@ Evidence in the current code:
   accelerated transport enables them.
 - `fun_ui_cef::render_handler::on_paint` receives a BGRA buffer from CEF and
   copies it into a Rust-owned frame.
-- `game_client::cef_ui` copies that frame into a Bevy `Image` and uploads it
-  with `RenderQueue::write_texture`.
+- `game_client::cef_ui` copies CPU frames into a Bevy `Image` and uploads them
+  with `RenderQueue::write_texture` on the CPU fallback path.
+- `game_client/src/cef_ui_dx12` opens CEF's accelerated D3D11 shared texture
+  handle inside `OnAcceleratedPaint`, copies immediately into a FUN-owned
+  D3D12-backed texture ring through D3D11On12, signals a D3D12 fence, and
+  publishes only the resulting frame generation to the rest of the UI bridge.
 
-This means DX12 is hardware accelerated for the Bevy renderer, but the CEF to
-Bevy handoff is not. The current handoff is:
+This means DX12 is hardware accelerated for the Bevy renderer. The default CEF
+handoff remains the CPU path:
 
 ```text
 CEF windowless OnPaint
@@ -34,6 +38,26 @@ CEF windowless OnPaint
 `CEF_UI_WINDOWLESS_FRAME_RATE_HZ` and `CEF_UI_RENDER_RATE_HZ` are both 60, so the
 browser is configured to request 60 Hz paints. That value is a target, not proof
 that the CEF UI is producing or presenting 60 unique frames under load.
+
+With `cef_ui_dx12_accelerated_paint` and the accelerated transport selected, the
+callback-local path is:
+
+```text
+CEF windowless OnAcceleratedPaint
+  -> per-callback D3D11 shared texture handle
+  -> ID3D11Device::OpenSharedResource
+  -> FUN-owned D3D12-backed ring slot wrapped by D3D11On12
+  -> AcquireWrappedResources
+  -> ID3D11DeviceContext::CopyResource
+  -> ReleaseWrappedResources
+  -> Flush
+  -> ID3D12CommandQueue::Signal
+  -> publish CefUiFrameGeneration
+```
+
+The CEF handle, source `ID3D11Texture2D`, dirty-rect slice, and
+`CefAcceleratedPaintInfo` are callback-local. They are not cached or enqueued
+for later render-world processing.
 
 ## User-Visible FPS
 
@@ -183,11 +207,14 @@ pub struct CefAcceleratedPaintFrame<'a> {
 ```
 
 The CPU sink remains unchanged. The optional accelerated sink returns
-`Accepted`, `Dropped`, or `FallbackRequested`. With the
+`Accepted`, `Dropped`, or `FallbackRequested`. `Accepted` carries the published
+generation plus copy byte/time counters, but never carries CEF's source handle
+or source texture. With the
 `cef_ui_dx12_accelerated_paint` feature, `game_client` installs the shared
 interop slot as that sink. The sink dispatches to the bridge when initialized;
-until the output texture copy is implemented, the bridge requests CPU fallback
-with `output_texture_allocation_unavailable`.
+after the bridge opens and copies the shared texture, it returns `Accepted`.
+Failures request CPU fallback with typed reasons such as
+`shared_texture_unsupported` or `output_texture_allocation_unavailable`.
 
 ## Startup Bridge Gate
 
@@ -227,6 +254,8 @@ module that extracts wgpu DX12 HAL handles. It:
 - queries `ID3D11On12Device`;
 - creates an `ID3D12Fence`;
 - initializes an empty triple-buffer texture ring.
+- logs the first-pass GPU format policy:
+  `CEF UI GPU format source=BGRA8 target=BGRA8 conversion=none alpha=premultiplied`.
 
 The main world starts accelerated CEF only after the slot reports `Ready`. If
 bridge initialization fails, the client starts a CPU browser with a typed
@@ -252,11 +281,10 @@ Current counters exposed through `game_client::cef_ui::CefUiFrameStats`:
 - `cef_published_generation`
 - `cef_sampled_generation`
 
-`cef_gpu_copy_*` remains zero on the CPU path. It should only move once the
-D3D11On12 copy into a FUN-owned D3D12 texture ring exists. The current bridge
-has its own startup/copy diagnostic counters in `game_client/src/cef_ui_dx12`,
-but the accelerated copy currently fails closed because no output resources are
-allocated yet.
+`cef_gpu_copy_*` remains zero on the CPU path. It moves only when the D3D11On12
+copy into a FUN-owned D3D12 texture ring succeeds. The current bridge has its
+own startup/copy diagnostic counters in `game_client/src/cef_ui_dx12`, including
+the last published generation and fence value.
 
 ## Open Risks
 

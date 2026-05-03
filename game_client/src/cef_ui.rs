@@ -1642,7 +1642,15 @@ const fn dx12_cef_interop_fallback_reason(
         crate::cef_ui_dx12::Dx12CefInteropFailure::SharedTextureHandleMissing => {
             CefUiPaintTransportFallbackReason::SharedTextureUnsupported
         }
-        crate::cef_ui_dx12::Dx12CefInteropFailure::OutputTextureRingUnavailable => {
+        crate::cef_ui_dx12::Dx12CefInteropFailure::SharedTextureOpenFailed
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::SharedTextureUnsupportedFormat
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::InvalidFrameDimensions => {
+            CefUiPaintTransportFallbackReason::SharedTextureUnsupported
+        }
+        crate::cef_ui_dx12::Dx12CefInteropFailure::DestinationTextureCreateFailed
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::DestinationTextureWrapFailed
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::FenceSignalFailed
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::OutputTextureRingUnavailable => {
             CefUiPaintTransportFallbackReason::OutputTextureAllocationUnavailable
         }
     }
@@ -2991,6 +2999,9 @@ fn sample_cef_ui_transport_counters(
     stats.cef_gpu_copy_ns = snapshot.cef_gpu_copy_ns;
     stats.cef_gpu_copy_failures = snapshot.cef_gpu_copy_failures;
     stats.cef_transport_fallback_count = snapshot.cef_transport_fallback_count;
+    if snapshot.cef_published_generation != 0 {
+        stats.cef_published_generation = snapshot.cef_published_generation;
+    }
     sampler.last_snapshot = Some(snapshot);
 }
 

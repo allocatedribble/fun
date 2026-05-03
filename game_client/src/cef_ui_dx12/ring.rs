@@ -10,6 +10,13 @@ pub const CEF_GPU_RING_LEN: usize = 3;
 pub type DxgiFormat = DXGI_FORMAT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dx12CefRingSlotRequest {
+    Reuse { index: usize },
+    Allocate { index: usize },
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dx12CefSlotState {
     Free,
     Copying,
@@ -88,6 +95,55 @@ impl Dx12CefTextureRing {
     }
 
     #[must_use]
+    pub fn next_copy_slot_request(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: DxgiFormat,
+    ) -> Dx12CefRingSlotRequest {
+        if let Some((index, _)) = self.slots.iter().enumerate().find(|(_, slot)| {
+            slot.as_ref().is_some_and(|slot| {
+                slot.width == width
+                    && slot.height == height
+                    && slot.format == format
+                    && slot.state != Dx12CefSlotState::Copying
+            })
+        }) {
+            self.cursor = (index + 1) % CEF_GPU_RING_LEN;
+            return Dx12CefRingSlotRequest::Reuse { index };
+        }
+
+        if let Some(index) = self.slots.iter().position(Option::is_none) {
+            self.cursor = (index + 1) % CEF_GPU_RING_LEN;
+            return Dx12CefRingSlotRequest::Allocate { index };
+        }
+
+        for offset in 0..CEF_GPU_RING_LEN {
+            let index = (self.cursor + offset) % CEF_GPU_RING_LEN;
+            if self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| slot.state != Dx12CefSlotState::Copying)
+            {
+                self.cursor = (index + 1) % CEF_GPU_RING_LEN;
+                return Dx12CefRingSlotRequest::Allocate { index };
+            }
+        }
+
+        Dx12CefRingSlotRequest::Unavailable
+    }
+
+    pub fn install_slot(&mut self, index: usize, slot: Dx12CefTextureSlot) {
+        if index < CEF_GPU_RING_LEN {
+            self.slots[index] = Some(slot);
+        }
+    }
+
+    #[must_use]
+    pub fn slot_mut(&mut self, index: usize) -> Option<&mut Dx12CefTextureSlot> {
+        self.slots.get_mut(index).and_then(Option::as_mut)
+    }
+
+    #[must_use]
     pub fn debug_slot_summary(&self) -> Dx12CefTextureRingSummary {
         Dx12CefTextureRingSummary {
             capacity: self.capacity(),
@@ -120,12 +176,16 @@ mod tests {
 
     #[test]
     fn dx12_cef_texture_ring_starts_empty_and_triple_buffered() {
-        let ring = Dx12CefTextureRing::default();
+        let mut ring = Dx12CefTextureRing::default();
 
         assert_eq!(ring.capacity(), CEF_GPU_RING_LEN);
         assert_eq!(ring.capacity(), 3);
         assert!(ring.is_empty());
         assert_eq!(ring.debug_slot_summary().ready_count, 0);
         assert_eq!(ring.ready_generation(), None);
+        assert_eq!(
+            ring.next_copy_slot_request(1280, 720, DXGI_FORMAT_B8G8R8A8_UNORM),
+            Dx12CefRingSlotRequest::Allocate { index: 0 }
+        );
     }
 }

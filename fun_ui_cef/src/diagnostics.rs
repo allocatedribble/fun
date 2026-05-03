@@ -53,6 +53,7 @@ pub struct CefUiTransportCounterSnapshot {
     pub cef_gpu_copy_ns: u64,
     pub cef_gpu_copy_failures: u64,
     pub cef_transport_fallback_count: u64,
+    pub cef_published_generation: u64,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +65,7 @@ struct CefUiTransportCounters {
     cef_gpu_copy_ns: AtomicU64,
     cef_gpu_copy_failures: AtomicU64,
     cef_transport_fallback_count: AtomicU64,
+    cef_published_generation: AtomicU64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -109,6 +111,12 @@ impl SharedCefUiTransportCounters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_published_generation(&self, generation: u64) {
+        self.counters
+            .cef_published_generation
+            .store(generation, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> CefUiTransportCounterSnapshot {
         CefUiTransportCounterSnapshot {
@@ -124,6 +132,10 @@ impl SharedCefUiTransportCounters {
             cef_transport_fallback_count: self
                 .counters
                 .cef_transport_fallback_count
+                .load(Ordering::Relaxed),
+            cef_published_generation: self
+                .counters
+                .cef_published_generation
                 .load(Ordering::Relaxed),
         }
     }
@@ -169,6 +181,7 @@ mod tests {
         counters.record_gpu_copy(32, 40);
         counters.record_gpu_copy_failure();
         counters.record_transport_fallback();
+        counters.record_published_generation(11);
 
         assert_eq!(
             counters.snapshot(),
@@ -180,6 +193,7 @@ mod tests {
                 cef_gpu_copy_ns: 40,
                 cef_gpu_copy_failures: 1,
                 cef_transport_fallback_count: 1,
+                cef_published_generation: 11,
             }
         );
     }

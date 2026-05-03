@@ -10,6 +10,8 @@ pub struct Dx12CefInteropDiagnostics {
     gpu_copy_ns: AtomicU64,
     gpu_copy_failure_count: AtomicU64,
     fallback_count: AtomicU64,
+    last_published_generation: AtomicU64,
+    last_fence_value: AtomicU64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +24,8 @@ pub struct Dx12CefInteropDiagnosticSnapshot {
     pub gpu_copy_ns: u64,
     pub gpu_copy_failure_count: u64,
     pub fallback_count: u64,
+    pub last_published_generation: u64,
+    pub last_fence_value: u64,
 }
 
 impl Dx12CefInteropDiagnostics {
@@ -57,6 +61,12 @@ impl Dx12CefInteropDiagnostics {
         self.fallback_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_published_generation(&self, generation: u64, fence_value: u64) {
+        self.last_published_generation
+            .store(generation, Ordering::Relaxed);
+        self.last_fence_value.store(fence_value, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> Dx12CefInteropDiagnosticSnapshot {
         Dx12CefInteropDiagnosticSnapshot {
@@ -70,6 +80,8 @@ impl Dx12CefInteropDiagnostics {
             gpu_copy_ns: self.gpu_copy_ns.load(Ordering::Relaxed),
             gpu_copy_failure_count: self.gpu_copy_failure_count.load(Ordering::Relaxed),
             fallback_count: self.fallback_count.load(Ordering::Relaxed),
+            last_published_generation: self.last_published_generation.load(Ordering::Relaxed),
+            last_fence_value: self.last_fence_value.load(Ordering::Relaxed),
         }
     }
 }
@@ -89,6 +101,7 @@ mod tests {
         diagnostics.record_gpu_copy(4096, 120);
         diagnostics.record_gpu_copy_failure();
         diagnostics.record_fallback();
+        diagnostics.record_published_generation(9, 12);
 
         assert_eq!(
             diagnostics.snapshot(),
@@ -101,6 +114,8 @@ mod tests {
                 gpu_copy_ns: 120,
                 gpu_copy_failure_count: 1,
                 fallback_count: 1,
+                last_published_generation: 9,
+                last_fence_value: 12,
             }
         );
     }

@@ -348,6 +348,8 @@ pub enum CefAcceleratedPaintDropReason {
 pub enum CefAcceleratedPaintOutcome {
     Accepted {
         generation: CefUiFrameGeneration,
+        copied_bytes: u64,
+        copy_ns: u64,
     },
     Dropped {
         reason: CefAcceleratedPaintDropReason,
@@ -530,11 +532,21 @@ wrap_render_handler! {
                     info,
                 );
                 match outcome {
-                    CefAcceleratedPaintOutcome::Accepted { generation } => {
+                    CefAcceleratedPaintOutcome::Accepted {
+                        generation,
+                        copied_bytes,
+                        copy_ns,
+                    } => {
+                        self.transport_counters
+                            .record_gpu_copy(copied_bytes, copy_ns);
+                        self.transport_counters
+                            .record_published_generation(generation.0);
                         if !self.logs.accelerated_paint_logged.swap(true, Ordering::AcqRel) {
                             tracing::info!(
                                 target: FUN_UI_DIAGNOSTICS_TARGET,
                                 generation = generation.0,
+                                copied_bytes,
+                                copy_ns,
                                 dirty_rect_count = dirty_rects.len(),
                                 "CEF UI accelerated paint accepted"
                             );
@@ -858,6 +870,8 @@ mod tests {
                 assert!(!frame.shared_handle.is_null());
                 CefAcceleratedPaintOutcome::Accepted {
                     generation: CefUiFrameGeneration(7),
+                    copied_bytes: 64,
+                    copy_ns: 20,
                 }
             }
         }
@@ -869,7 +883,9 @@ mod tests {
         assert_eq!(
             dispatch_accelerated_paint(Some(&sink), CefPaintElement::View, &rects, Some(&info)),
             CefAcceleratedPaintOutcome::Accepted {
-                generation: CefUiFrameGeneration(7)
+                generation: CefUiFrameGeneration(7),
+                copied_bytes: 64,
+                copy_ns: 20
             }
         );
     }
