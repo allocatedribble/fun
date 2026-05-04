@@ -51,7 +51,7 @@ game_shared = { path = "../game_shared" }
 log.workspace = true
 thunder.workspace = true
 tracing.workspace = true
-wgpu = { version = "29.0.1", default-features = false, features = ["dx12"], optional = true }
+wgpu = { version = "29.0.3", default-features = false, features = ["dx12"], optional = true }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.dependencies]

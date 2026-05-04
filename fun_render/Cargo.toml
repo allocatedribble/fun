@@ -33,7 +33,7 @@ fun_dx12_dlss = { path = "../fun_dx12_dlss", optional = true }
 game_shared = { path = "../game_shared" }
 thunder.workspace = true
 tracing.workspace = true
-wgpu = { version = "29.0.1", default-features = false }
+wgpu = { version = "29.0.3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = { version = "0.62", optional = true }
