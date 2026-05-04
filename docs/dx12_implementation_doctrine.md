@@ -69,6 +69,11 @@ Every DX12 performance patch states one category:
 - `dlss-rr`
 - `moonshot`
 
+The category lives in `.dx12_change_category` as the first non-comment line.
+`tools\check_dx12_doctrine.ps1` validates the category, required gate files,
+accelerated CEF CPU-upload evidence when benchmark summaries are supplied, and
+the DX12 native interop boundary.
+
 Every non-measurement category includes:
 
 - before and after DX12 JSON;

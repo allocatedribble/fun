@@ -341,6 +341,22 @@ CI runs correctness-only self-tests on normal Windows runners:
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -SelfTest
 ```
 
+## DX12 Doctrine Gate
+
+Use the doctrine gate for hardware-free PR checks and to validate supplied CEF
+summary artifacts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1 -SelfTest
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1 -SummaryPath target\benchmarks\client\<candidate>\summary.json
+```
+
+The checker requires `.dx12_change_category`, blocks `dlss-sr` changes until
+`docs\dx12_dlss_boundary_gate.md` says the baseline is ready, denies raw DX12
+HAL extraction outside `fun_render\src\dx12_native`, and fails accelerated CEF
+summary artifacts that report nonzero `cef_cpu_upload_bytes`.
+
 The `.github/workflows/dx12-perf-gates.yml` hardware job is manual and
 non-blocking. It targets self-hosted runners labeled `windows` and `dx12-perf`;
 those runners can execute the full benchmark matrix when the sibling path

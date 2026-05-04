@@ -4,9 +4,14 @@ on:
   pull_request:
     paths:
       - ".github/workflows/dx12-perf-gates.yml"
+      - ".dx12_change_category"
       - "docs/client_benchmarking.md"
+      - "docs/dx12_dlss_boundary_gate.md"
+      - "docs/dx12_implementation_doctrine.md"
+      - "docs/dx12_parity_decision_pass.md"
       - "scripts/benchmark_client.ps1"
       - "scripts/benchmark_dx12_parity.ps1"
+      - "tools/check_dx12_doctrine.ps1"
       - "tools/check_dx12_perf_regression.ps1"
       - "tools/dx12_perf_baseline_envelopes.json"
       - "tools/dx12_parity_report.py"
@@ -15,9 +20,14 @@ on:
       - main
     paths:
       - ".github/workflows/dx12-perf-gates.yml"
+      - ".dx12_change_category"
       - "docs/client_benchmarking.md"
+      - "docs/dx12_dlss_boundary_gate.md"
+      - "docs/dx12_implementation_doctrine.md"
+      - "docs/dx12_parity_decision_pass.md"
       - "scripts/benchmark_client.ps1"
       - "scripts/benchmark_dx12_parity.ps1"
+      - "tools/check_dx12_doctrine.ps1"
       - "tools/check_dx12_perf_regression.ps1"
       - "tools/dx12_perf_baseline_envelopes.json"
       - "tools/dx12_parity_report.py"
@@ -59,6 +69,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check DX12 doctrine gate
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1 -SelfTest
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1
       - name: Check local DX12 perf gate script
         shell: pwsh
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -SelfTest

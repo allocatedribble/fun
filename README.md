@@ -204,6 +204,9 @@ The DX12 implementation order is governed by
 observe first, remove hot uploads, harden CEF GPU transport, reduce
 barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
 native interop, then bring up DLSS SR before RR.
+The live pass checklist is
+[`docs/dx12_parity_decision_pass.md`](docs/dx12_parity_decision_pass.md), and
+the hardware-free doctrine checker is `tools\check_dx12_doctrine.ps1`.
 It also enables transient render-resource descriptor diagnostics; the reuse,
 near-miss, and aliasing contract is in
 [`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).
