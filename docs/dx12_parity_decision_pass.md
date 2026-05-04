@@ -8,8 +8,8 @@ scope: live pass-control checklist for the next DX12 parity implementation campa
 
 | repo | commit | status |
 | --- | --- | --- |
-| project-FUN root | `cbb1492` | umbrella baseline before command/readback decision pass |
-| fun | `9e7f0dd` | present and transient decision reports baseline before edits |
+| project-FUN root | `6b1c966` | umbrella baseline before meshlet/world-stream pressure pass |
+| fun | `f90d367` | command/readback decision report baseline before Tier 11 edits |
 | bevy | `020d7d6` | root gitlink baseline before this pass |
 | fun-warden | `4faff82` | dependency baseline before this pass |
 
@@ -34,6 +34,9 @@ renderer behavior was intentionally changed.
 | transient reuse report | measured | `target\dx12-parity\current\dx12_transient_reuse_report.md` |
 | command/readback report | measured | `target\dx12-parity\current\dx12_command_readback_report.md` |
 | command/readback smoke report | measured | `target\dx12-parity\present-smoke-auto-no-vsync-fl2\dx12_command_readback_report.md` |
+| stream-pressure matrix mode | measured | `target\dx12-parity\stream-pressure-plan-validation\matrix.json` |
+| stream-pressure decision report smoke | measured | `target\dx12-parity\current\dx12_meshlet_stream_pressure_report.md` |
+| stream-pressure DX12/Vulkan control smoke | measured | `target\dx12-parity\stream-pressure-smoke-capture-from-start\dx12_meshlet_stream_pressure_report.md` |
 | CEF transport matrix mode | measured | `scripts\benchmark_dx12_parity.ps1 -MatrixSize cef_transport -PlanOnly` |
 | CEF accelerated live lane | measured_blocked | `target\benchmarks\client\20260504-005500-247\summary.json` |
 | PIX barrier summary | blocked | `target\dx12-pix\barrier_summary.md` |
@@ -73,6 +76,7 @@ fallback with `cef_cpu_upload_bytes.mean=44236800`.
 | present matrix | measured | selected immediate/fifo/auto-no-vsync lanes ran; required scenario plan exists; DX12 smoke slice ran all four scenarios at `auto_no_vsync`/latency `2` |
 | upload top-callsite table | measured | current `summary.json` files include render upload counters; top-callsite review is still pending |
 | command/readback decision report | measured | current report says `candidate_needs_pix_before_behavior_change` for command submission and `nonblocking_proven` for readback; no submit reduction is selected |
+| meshlet/world-stream pressure report | measured | DX12/Vulkan control smoke exists at `target\dx12-parity\stream-pressure-smoke-capture-from-start\dx12_meshlet_stream_pressure_report.md`; full budget/chunk-cap expansion and matched before/after baseline remain missing |
 | CEF accelerated health report | blocked | latest present smoke `d3d11on12` request selected CPU fallback with `cef_cpu_upload_bytes.mean=44236800`, `cef_gpu_copy_bytes.mean=0`, `cef_on_accelerated_paint_fps.mean=0`, and health `fallback`; new `cef_ui_transport_health` badge and `-MatrixSize cef_transport` lanes are ready for the next live capture |
 | PIX barrier summary | blocked | blocked artifact written to `target\dx12-pix\barrier_summary.md`; no PIX CSV was available locally |
 | steady-state pipeline creation report | measured | `target\dx12-pix\pipeline_cardinality_report.md` reports render pipeline p95 `22`, compute pipeline p95 `82`, shader pipeline p95 `104`; shader creation families are led by PBR, Solari, meshlet, and UI pipelines |
@@ -104,6 +108,7 @@ Allowed statuses: `missing`, `measured`, `optimized`, `blocked`,
 | PSO/churn decision | measured | runtime PSO churn is a current bottleneck candidate; use `FUN_RENDER_PIPELINE_WARMUP=observed` for the next measured lane before layout canonicalization | rerun benchmark after creation-focused churn rows are present, then compare before/after observed warmup |
 | transient reuse decision | measured | no transient descriptor canonicalization selected; current matrix has no descriptor-create rows, and native interop resources remain excluded from aliasing | rerun a transient-focused lane with `bevy_render::transient=debug` before normalizing another texture family |
 | command/readback decision | measured | command counters are high but no submit reduction is selected without PIX/GPUView queue-idle evidence; readback is nonblocking with p95 blocking waits at `0` in current and present-smoke lanes | attach PIX/GPUView queue-idle span before moving copy-only work or merging tiny passes; keep diagnostic readback overhead visible |
+| meshlet/world-stream pressure decision | measured | control smoke reports `reallocations_disappeared`, no render-prep limiter, DX12 `frame_ns.p95=102210000`, Vulkan `frame_ns.p95=27000000`, and no matched baseline for before/after improvement claims; remaining top upload offenders are generic Bevy texture/uniform/buffer uploads, not semantic meshlet stream labels | run the full budget/chunk-cap expansion and attach a matched baseline before promoting tuning defaults |
 | DLSS gate decision | blocked | DLSS SR remains fail-closed | boundary gate changes from baseline ready `no` to `yes` with attached evidence |
 
 ## Live Gate Controls

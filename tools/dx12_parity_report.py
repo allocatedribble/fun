@@ -8,7 +8,6 @@ import csv
 import json
 import math
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +36,12 @@ DELTA_METRICS: tuple[tuple[str, str, str], ...] = (
     ("meshlet_asset_buffer_grow_copies", "lower", "meshlet asset grow copies"),
     ("meshlet_asset_buffer_capacity_bytes", "lower", "meshlet asset buffer capacity"),
     ("world_stream_apply_cpu_ns", "lower", "world stream CPU"),
+    ("world_stream_render_prep_budget_ns", "lower", "world stream render-prep budget"),
+    ("world_stream_render_prep_max_chunks_per_frame", "lower", "world stream render-prep chunk cap"),
+    ("world_stream_render_prep_limit_reason_code", "lower", "world stream render-prep limiter"),
     ("world_stream_render_prep_queue_depth", "lower", "world stream render-prep queue"),
     ("world_stream_render_prep_deferred_chunks", "lower", "world stream deferred chunks"),
+    ("world_stream_render_prep_applied_chunks", "higher", "world stream applied chunks"),
     ("world_stream_render_prep_dynamic_mesh_assets", "lower", "world stream dynamic mesh assets"),
     ("physics_fixed_update_cpu_ns", "lower", "physics CPU"),
     ("network_receive_cpu_ns", "lower", "network receive CPU"),
@@ -204,8 +207,10 @@ MESHLET_OR_STREAM_UPLOAD_METRICS: tuple[str, ...] = (
     "meshlet_indirect_draw_buffer_writes",
     "meshlet_asset_buffer_upload_bytes",
     "meshlet_asset_buffer_grow_copies",
+    "world_stream_render_prep_limit_reason_code",
     "world_stream_render_prep_queue_depth",
     "world_stream_render_prep_deferred_chunks",
+    "world_stream_render_prep_applied_chunks",
     "world_stream_render_prep_dynamic_mesh_assets",
 )
 
@@ -1304,6 +1309,34 @@ def build_next_action_recommendation(
             evidence,
         )
 
+    render_prep_limit = metric_best_stat(dx12, "world_stream_render_prep_limit_reason_code") or 0.0
+    render_prep_queue = metric_best_stat(dx12, "world_stream_render_prep_queue_depth") or 0.0
+    render_prep_deferred = metric_best_stat(dx12, "world_stream_render_prep_deferred_chunks") or 0.0
+    if render_prep_limit == 1.0:
+        return make_recommendation(
+            "meshlet_or_stream_upload_bound",
+            "run the stream-pressure budget matrix; raise FUN_STREAM_RENDER_PREP_BUDGET_MS only when time-to-ready matters more than p95 stability",
+            "stream_pressure_matrix",
+            "high" if render_prep_deferred > 0.0 else "medium",
+            [
+                "world_stream_render_prep_limit_reason_code=1",
+                f"world_stream_render_prep_queue_depth={render_prep_queue:g}",
+                f"world_stream_render_prep_deferred_chunks={render_prep_deferred:g}",
+            ],
+        )
+    if render_prep_limit == 2.0:
+        return make_recommendation(
+            "meshlet_or_stream_upload_bound",
+            "run the stream-pressure chunk-cap lanes; raise FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME only when time-to-ready matters more than p95 stability",
+            "stream_pressure_matrix",
+            "high" if render_prep_deferred > 0.0 else "medium",
+            [
+                "world_stream_render_prep_limit_reason_code=2",
+                f"world_stream_render_prep_queue_depth={render_prep_queue:g}",
+                f"world_stream_render_prep_deferred_chunks={render_prep_deferred:g}",
+            ],
+        )
+
     meshlet_or_stream_metric = first_regressed_row(rows, MESHLET_OR_STREAM_UPLOAD_METRICS, 0.0)
     if not meshlet_or_stream_metric:
         meshlet_or_stream_metric = first_metric_evidence(dx12, MESHLET_OR_STREAM_UPLOAD_METRICS)
@@ -1863,224 +1896,257 @@ def write_sample_summary(
 
 
 def self_test() -> int:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        vulkan = root / "vulkan.json"
-        dx12 = root / "dx12.json"
-        markdown = root / "report.md"
-        summary_csv = root / "summary.csv"
-        recommendation_json = root / "recommendation.json"
-        write_sample_summary(vulkan, "vulkan", fps=100.0, frame_p95=10_000_000.0, cef_cpu_bytes=0.0)
-        write_sample_summary(
-            dx12,
-            "dx12",
-            fps=105.0,
-            frame_p95=15_000_000.0,
-            cef_cpu_bytes=4096.0,
-            memory_budget=8_589_934_592.0,
-            memory_usage=4_294_967_296.0,
+    root = Path.cwd() / "target" / "tool-self-tests" / "dx12_parity_report"
+    root.mkdir(parents=True, exist_ok=True)
+    vulkan = root / "vulkan.json"
+    dx12 = root / "dx12.json"
+    markdown = root / "report.md"
+    summary_csv = root / "summary.csv"
+    recommendation_json = root / "recommendation.json"
+    write_sample_summary(vulkan, "vulkan", fps=100.0, frame_p95=10_000_000.0, cef_cpu_bytes=0.0)
+    write_sample_summary(
+        dx12,
+        "dx12",
+        fps=105.0,
+        frame_p95=15_000_000.0,
+        cef_cpu_bytes=4096.0,
+        memory_budget=8_589_934_592.0,
+        memory_usage=4_294_967_296.0,
+    )
+    code = run_report(
+        argparse.Namespace(
+            vulkan_json=str(vulkan),
+            dx12_json=str(dx12),
+            markdown_report=str(markdown),
+            csv_summary=str(summary_csv),
+            json_report=str(recommendation_json),
+            pix_csv="",
+            presentmon_csv="",
         )
-        code = run_report(
-            argparse.Namespace(
-                vulkan_json=str(vulkan),
-                dx12_json=str(dx12),
-                markdown_report=str(markdown),
-                csv_summary=str(summary_csv),
-                json_report=str(recommendation_json),
-                pix_csv="",
-                presentmon_csv="",
-            )
-        )
-        text = markdown.read_text(encoding="utf-8")
-        recommendation = json.loads(recommendation_json.read_text(encoding="utf-8"))
-        if code != 2:
-            raise AssertionError("accelerated CEF CPU upload failure did not produce exit code 2")
-        if "P95 regression" not in text:
-            raise AssertionError("p95 regression was not reported")
-        if "CEF accelerated lane failed" not in text:
-            raise AssertionError("CEF accelerated lane failure was not reported")
-        if "CEF Transport Health" not in text:
-            raise AssertionError("CEF transport health section was not rendered")
-        if recommendation.get("cef_transport_health", {}).get("decision") != "fallback":
-            raise AssertionError("CEF transport health did not identify fallback")
-        if recommendation["dx12_classification"] != "cef_transport_bound":
-            raise AssertionError("CEF CPU upload did not produce a CEF transport recommendation")
-        if "CEF" not in recommendation["next_action"]:
-            raise AssertionError("CEF CPU upload recommendation did not mention CEF transport work")
-        if "Vendor-Specific Follow-Up" not in text:
-            raise AssertionError("vendor follow-up section was not rendered")
-        if "DX12 Memory Budget" not in text or "4.00 GiB" not in text:
-            raise AssertionError("DX12 memory budget section was not rendered")
-        if "Moonshot Experiments" not in text:
-            raise AssertionError("moonshot section was not rendered")
+    )
+    text = markdown.read_text(encoding="utf-8")
+    recommendation = json.loads(recommendation_json.read_text(encoding="utf-8"))
+    if code != 2:
+        raise AssertionError("accelerated CEF CPU upload failure did not produce exit code 2")
+    if "P95 regression" not in text:
+        raise AssertionError("p95 regression was not reported")
+    if "CEF accelerated lane failed" not in text:
+        raise AssertionError("CEF accelerated lane failure was not reported")
+    if "CEF Transport Health" not in text:
+        raise AssertionError("CEF transport health section was not rendered")
+    if recommendation.get("cef_transport_health", {}).get("decision") != "fallback":
+        raise AssertionError("CEF transport health did not identify fallback")
+    if recommendation["dx12_classification"] != "cef_transport_bound":
+        raise AssertionError("CEF CPU upload did not produce a CEF transport recommendation")
+    if "CEF" not in recommendation["next_action"]:
+        raise AssertionError("CEF CPU upload recommendation did not mention CEF transport work")
+    if "Vendor-Specific Follow-Up" not in text:
+        raise AssertionError("vendor follow-up section was not rendered")
+    if "DX12 Memory Budget" not in text or "4.00 GiB" not in text:
+        raise AssertionError("DX12 memory budget section was not rendered")
+    if "Moonshot Experiments" not in text:
+        raise AssertionError("moonshot section was not rendered")
 
-        nvidia_dx12 = root / "dx12_nvidia_pipeline.json"
-        nvidia_markdown = root / "nvidia_report.md"
-        nvidia_json = root / "nvidia_report.json"
-        write_sample_summary(
-            nvidia_dx12,
-            "dx12",
-            fps=90.0,
-            frame_p95=16_000_000.0,
-            cef_cpu_bytes=0.0,
-            gpu_name="NVIDIA GeForce RTX Synthetic",
-            extra_metrics={
-                "render_churn_render_pipeline_creations": {"mean": 1.0, "p95": 1.0},
+    nvidia_dx12 = root / "dx12_nvidia_pipeline.json"
+    nvidia_markdown = root / "nvidia_report.md"
+    nvidia_json = root / "nvidia_report.json"
+    write_sample_summary(
+        nvidia_dx12,
+        "dx12",
+        fps=90.0,
+        frame_p95=16_000_000.0,
+        cef_cpu_bytes=0.0,
+        gpu_name="NVIDIA GeForce RTX Synthetic",
+        extra_metrics={
+            "render_churn_render_pipeline_creations": {"mean": 1.0, "p95": 1.0},
+        },
+    )
+    code = run_report(
+        argparse.Namespace(
+            vulkan_json=str(vulkan),
+            dx12_json=str(nvidia_dx12),
+            markdown_report=str(nvidia_markdown),
+            csv_summary=str(summary_csv),
+            json_report=str(nvidia_json),
+            pix_csv="",
+            presentmon_csv="",
+        )
+    )
+    text = nvidia_markdown.read_text(encoding="utf-8")
+    recommendation = json.loads(nvidia_json.read_text(encoding="utf-8"))
+    if code != 0:
+        raise AssertionError("NVIDIA pipeline follow-up scenario should not fail the lane")
+    if recommendation["dx12_classification"] != "runtime_pipeline_creation_bound":
+        raise AssertionError("runtime pipeline creation did not produce the pipeline recommendation")
+    if "pipeline warmup" not in recommendation["next_action"]:
+        raise AssertionError("pipeline recommendation did not mention warmup")
+    if "Status: eligible_optional_nvidia_experiment" not in text:
+        raise AssertionError("NVIDIA follow-up gate was not marked eligible")
+    if "persistent PSO cache" not in text:
+        raise AssertionError("NVIDIA PSO follow-up action was not reported")
+
+    present_dx12 = root / "dx12_present.json"
+    present_json = root / "present_report.json"
+    write_sample_summary(
+        present_dx12,
+        "dx12",
+        fps=90.0,
+        frame_p95=16_000_000.0,
+        cef_cpu_bytes=0.0,
+        extra_metrics={
+            "present_wait_ns": {"mean": 6_000_000.0, "p95": 8_000_000.0},
+            "render_upload_write_texture_bytes": {"mean": 0.0, "p95": 0.0},
+        },
+    )
+    code = run_report(
+        argparse.Namespace(
+            vulkan_json=str(vulkan),
+            dx12_json=str(present_dx12),
+            markdown_report=str(root / "present_report.md"),
+            csv_summary=str(summary_csv),
+            json_report=str(present_json),
+            pix_csv="",
+            presentmon_csv="",
+        )
+    )
+    recommendation = json.loads(present_json.read_text(encoding="utf-8"))
+    if code != 0:
+        raise AssertionError("present-bound scenario should not fail the lane")
+    if recommendation["dx12_classification"] != "present_bound":
+        raise AssertionError("dominant present_wait_ns did not produce a present-bound recommendation")
+    if "present matrix" not in recommendation["next_action"]:
+        raise AssertionError("present-bound recommendation did not mention the present matrix")
+
+    upload_dx12 = root / "dx12_upload.json"
+    upload_json = root / "upload_report.json"
+    write_sample_summary(
+        upload_dx12,
+        "dx12",
+        fps=92.0,
+        frame_p95=13_000_000.0,
+        cef_cpu_bytes=0.0,
+        extra_metrics={
+            "render_upload_write_texture_bytes": {"mean": 4_194_304.0, "p95": 4_194_304.0},
+        },
+        render_upload_callsites=[
+            {
+                "rank": 1,
+                "operation": "write_texture",
+                "label": "cef_ui.cpu_paint.full_frame@game_client\\src\\cef_ui.rs:3539",
+                "calls": 16,
+                "bytes": 67_108_864,
+                "samples": 4,
             },
-        )
-        code = run_report(
-            argparse.Namespace(
-                vulkan_json=str(vulkan),
-                dx12_json=str(nvidia_dx12),
-                markdown_report=str(nvidia_markdown),
-                csv_summary=str(summary_csv),
-                json_report=str(nvidia_json),
-                pix_csv="",
-                presentmon_csv="",
-            )
-        )
-        text = nvidia_markdown.read_text(encoding="utf-8")
-        recommendation = json.loads(nvidia_json.read_text(encoding="utf-8"))
-        if code != 0:
-            raise AssertionError("NVIDIA pipeline follow-up scenario should not fail the lane")
-        if recommendation["dx12_classification"] != "runtime_pipeline_creation_bound":
-            raise AssertionError("runtime pipeline creation did not produce the pipeline recommendation")
-        if "pipeline warmup" not in recommendation["next_action"]:
-            raise AssertionError("pipeline recommendation did not mention warmup")
-        if "Status: eligible_optional_nvidia_experiment" not in text:
-            raise AssertionError("NVIDIA follow-up gate was not marked eligible")
-        if "persistent PSO cache" not in text:
-            raise AssertionError("NVIDIA PSO follow-up action was not reported")
-
-        present_dx12 = root / "dx12_present.json"
-        present_json = root / "present_report.json"
-        write_sample_summary(
-            present_dx12,
-            "dx12",
-            fps=90.0,
-            frame_p95=16_000_000.0,
-            cef_cpu_bytes=0.0,
-            extra_metrics={
-                "present_wait_ns": {"mean": 6_000_000.0, "p95": 8_000_000.0},
-                "render_upload_write_texture_bytes": {"mean": 0.0, "p95": 0.0},
+            {
+                "rank": 2,
+                "operation": "write_buffer",
+                "label": "bevy\\crates\\bevy_render\\src\\render_resource\\buffer_vec.rs:183",
+                "calls": 400,
+                "bytes": 262_144,
+                "samples": 4,
             },
-        )
-        code = run_report(
-            argparse.Namespace(
-                vulkan_json=str(vulkan),
-                dx12_json=str(present_dx12),
-                markdown_report=str(root / "present_report.md"),
-                csv_summary=str(summary_csv),
-                json_report=str(present_json),
-                pix_csv="",
-                presentmon_csv="",
-            )
-        )
-        recommendation = json.loads(present_json.read_text(encoding="utf-8"))
-        if code != 0:
-            raise AssertionError("present-bound scenario should not fail the lane")
-        if recommendation["dx12_classification"] != "present_bound":
-            raise AssertionError("dominant present_wait_ns did not produce a present-bound recommendation")
-        if "present matrix" not in recommendation["next_action"]:
-            raise AssertionError("present-bound recommendation did not mention the present matrix")
-
-        upload_dx12 = root / "dx12_upload.json"
-        upload_json = root / "upload_report.json"
-        write_sample_summary(
-            upload_dx12,
-            "dx12",
-            fps=92.0,
-            frame_p95=13_000_000.0,
-            cef_cpu_bytes=0.0,
-            extra_metrics={
-                "render_upload_write_texture_bytes": {"mean": 4_194_304.0, "p95": 4_194_304.0},
+            {
+                "rank": 3,
+                "operation": "write_buffer",
+                "label": "bevy\\crates\\bevy_render\\src\\render_resource\\buffer_vec.rs:183",
+                "calls": 100,
+                "bytes": 131_072,
+                "samples": 1,
             },
-            render_upload_callsites=[
-                {
-                    "rank": 1,
-                    "operation": "write_texture",
-                    "label": "cef_ui.cpu_paint.full_frame@game_client\\src\\cef_ui.rs:3539",
-                    "calls": 16,
-                    "bytes": 67_108_864,
-                    "samples": 4,
-                },
-                {
-                    "rank": 2,
-                    "operation": "write_buffer",
-                    "label": "bevy\\crates\\bevy_render\\src\\render_resource\\buffer_vec.rs:183",
-                    "calls": 400,
-                    "bytes": 262_144,
-                    "samples": 4,
-                },
-                {
-                    "rank": 3,
-                    "operation": "write_buffer",
-                    "label": "bevy\\crates\\bevy_render\\src\\render_resource\\buffer_vec.rs:183",
-                    "calls": 100,
-                    "bytes": 131_072,
-                    "samples": 1,
-                },
-            ],
+        ],
+    )
+    code = run_report(
+        argparse.Namespace(
+            vulkan_json=str(vulkan),
+            dx12_json=str(upload_dx12),
+            markdown_report=str(root / "upload_report.md"),
+            csv_summary=str(summary_csv),
+            json_report=str(upload_json),
+            pix_csv="",
+            presentmon_csv="",
         )
-        code = run_report(
-            argparse.Namespace(
-                vulkan_json=str(vulkan),
-                dx12_json=str(upload_dx12),
-                markdown_report=str(root / "upload_report.md"),
-                csv_summary=str(summary_csv),
-                json_report=str(upload_json),
-                pix_csv="",
-                presentmon_csv="",
-            )
-        )
-        upload_markdown = (root / "upload_report.md").read_text(encoding="utf-8")
-        recommendation = json.loads(upload_json.read_text(encoding="utf-8"))
-        if code != 0:
-            raise AssertionError("generic CPU upload scenario should not fail the lane")
-        if recommendation["dx12_classification"] != "cpu_upload_bound":
-            raise AssertionError("high write_texture bytes did not produce the CPU upload recommendation")
-        if recommendation["required_trace"] != "upload_callsite_table":
-            raise AssertionError("CPU upload recommendation did not require the upload callsite table")
-        if "## Top Upload Callsites" not in upload_markdown:
-            raise AssertionError("top upload callsite table was not rendered")
-        if not recommendation["top_upload_callsites"]:
-            raise AssertionError("top upload callsites were not written to JSON")
-        if recommendation["top_upload_callsites"][0]["fix"] != "accelerated CEF or persistent texture upload ring":
-            raise AssertionError("CEF upload callsite did not get the CEF transport fix")
-        if recommendation["top_upload_callsites"][1]["calls"] != 500:
-            raise AssertionError("duplicate upload callsite labels were not merged")
+    )
+    upload_markdown = (root / "upload_report.md").read_text(encoding="utf-8")
+    recommendation = json.loads(upload_json.read_text(encoding="utf-8"))
+    if code != 0:
+        raise AssertionError("generic CPU upload scenario should not fail the lane")
+    if recommendation["dx12_classification"] != "cpu_upload_bound":
+        raise AssertionError("high write_texture bytes did not produce the CPU upload recommendation")
+    if recommendation["required_trace"] != "upload_callsite_table":
+        raise AssertionError("CPU upload recommendation did not require the upload callsite table")
+    if "## Top Upload Callsites" not in upload_markdown:
+        raise AssertionError("top upload callsite table was not rendered")
+    if not recommendation["top_upload_callsites"]:
+        raise AssertionError("top upload callsites were not written to JSON")
+    if recommendation["top_upload_callsites"][0]["fix"] != "accelerated CEF or persistent texture upload ring":
+        raise AssertionError("CEF upload callsite did not get the CEF transport fix")
+    if recommendation["top_upload_callsites"][1]["calls"] != 500:
+        raise AssertionError("duplicate upload callsite labels were not merged")
 
-        inconclusive_dx12 = root / "dx12_missing_present.json"
-        inconclusive_json = root / "missing_present_report.json"
-        write_sample_summary(
-            inconclusive_dx12,
-            "dx12",
-            fps=80.0,
-            frame_p95=14_000_000.0,
-            cef_cpu_bytes=0.0,
+    stream_dx12 = root / "dx12_stream_limit.json"
+    stream_json = root / "stream_report.json"
+    write_sample_summary(
+        stream_dx12,
+        "dx12",
+        fps=100.0,
+        frame_p95=10_000_000.0,
+        cef_cpu_bytes=0.0,
+        extra_metrics={
+            "world_stream_render_prep_limit_reason_code": {"mean": 1.0, "p95": 1.0},
+            "world_stream_render_prep_queue_depth": {"mean": 4.0, "p95": 4.0},
+            "world_stream_render_prep_deferred_chunks": {"mean": 2.0, "p95": 2.0},
+        },
+    )
+    code = run_report(
+        argparse.Namespace(
+            vulkan_json=str(vulkan),
+            dx12_json=str(stream_dx12),
+            markdown_report=str(root / "stream_report.md"),
+            csv_summary=str(summary_csv),
+            json_report=str(stream_json),
+            pix_csv="",
+            presentmon_csv="",
         )
-        inconclusive_payload = json.loads(inconclusive_dx12.read_text(encoding="utf-8"))
-        inconclusive_payload["metrics"].pop("present_wait_ns", None)
-        inconclusive_payload["metrics"].pop("cef_cpu_upload_bytes", None)
-        inconclusive_dx12.write_text(json.dumps(inconclusive_payload), encoding="utf-8")
-        code = run_report(
-            argparse.Namespace(
-                vulkan_json=str(vulkan),
-                dx12_json=str(inconclusive_dx12),
-                markdown_report=str(root / "missing_present_report.md"),
-                csv_summary=str(summary_csv),
-                json_report=str(inconclusive_json),
-                pix_csv="",
-                presentmon_csv="",
-            )
+    )
+    recommendation = json.loads(stream_json.read_text(encoding="utf-8"))
+    if code != 0:
+        raise AssertionError("stream render-prep limiter scenario should not fail the lane")
+    if recommendation["dx12_classification"] != "meshlet_or_stream_upload_bound":
+        raise AssertionError("render-prep limit did not produce a stream-pressure recommendation")
+    if "FUN_STREAM_RENDER_PREP_BUDGET_MS" not in recommendation["next_action"]:
+        raise AssertionError("time-budget recommendation did not mention the budget control")
+
+    inconclusive_dx12 = root / "dx12_missing_present.json"
+    inconclusive_json = root / "missing_present_report.json"
+    write_sample_summary(
+        inconclusive_dx12,
+        "dx12",
+        fps=80.0,
+        frame_p95=14_000_000.0,
+        cef_cpu_bytes=0.0,
+    )
+    inconclusive_payload = json.loads(inconclusive_dx12.read_text(encoding="utf-8"))
+    inconclusive_payload["metrics"].pop("present_wait_ns", None)
+    inconclusive_payload["metrics"].pop("cef_cpu_upload_bytes", None)
+    inconclusive_dx12.write_text(json.dumps(inconclusive_payload), encoding="utf-8")
+    code = run_report(
+        argparse.Namespace(
+            vulkan_json=str(vulkan),
+            dx12_json=str(inconclusive_dx12),
+            markdown_report=str(root / "missing_present_report.md"),
+            csv_summary=str(summary_csv),
+            json_report=str(inconclusive_json),
+            pix_csv="",
+            presentmon_csv="",
         )
-        recommendation = json.loads(inconclusive_json.read_text(encoding="utf-8"))
-        if code != 0:
-            raise AssertionError("missing-present inconclusive scenario should not fail the lane")
-        if recommendation["dx12_classification"] != "inconclusive_needs_presentmon":
-            raise AssertionError("missing present data did not ask for PresentMon evidence")
-        if not recommendation["missing_evidence"]:
-            raise AssertionError("inconclusive recommendation did not list missing evidence")
+    )
+    recommendation = json.loads(inconclusive_json.read_text(encoding="utf-8"))
+    if code != 0:
+        raise AssertionError("missing-present inconclusive scenario should not fail the lane")
+    if recommendation["dx12_classification"] != "inconclusive_needs_presentmon":
+        raise AssertionError("missing present data did not ask for PresentMon evidence")
+    if not recommendation["missing_evidence"]:
+        raise AssertionError("inconclusive recommendation did not list missing evidence")
     return 0
 
 

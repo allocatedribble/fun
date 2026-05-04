@@ -3,7 +3,7 @@ param(
     [switch]$StaticBevy,
     [switch]$TraceDiagnostics,
     [switch]$FrameTimeDiagnostics,
-    [ValidateSet("quick", "full", "present", "cef_transport")]
+    [ValidateSet("quick", "full", "present", "cef_transport", "stream_pressure")]
     [string]$MatrixSize = "quick",
     [string[]]$Lane = @(),
     [switch]$PlanOnly,
@@ -180,6 +180,8 @@ function New-Dx12ParityLane {
         [string]$CloudTemporal = "",
         [string]$CloudShadows = "",
         [string]$CloudProfile = "",
+        [int]$StreamRenderPrepBudgetMs = 0,
+        [int]$StreamRenderPrepMaxChunksPerFrame = 0,
         [string]$Notes = ""
     )
 
@@ -207,6 +209,8 @@ function New-Dx12ParityLane {
         cloud_temporal = $CloudTemporal
         cloud_shadows = $CloudShadows
         cloud_profile = $CloudProfile
+        stream_render_prep_budget_ms = $StreamRenderPrepBudgetMs
+        stream_render_prep_max_chunks_per_frame = $StreamRenderPrepMaxChunksPerFrame
         notes = $Notes
     }
 }
@@ -392,6 +396,46 @@ function Get-Dx12CefTransportLaneDefinitions {
     return @($lanes.ToArray())
 }
 
+function Get-Dx12StreamPressureLaneDefinitions {
+    $lanes = New-Object "System.Collections.Generic.List[object]"
+    $backends = @("dx12", "vulkan")
+    foreach ($backend in $backends) {
+        $lanes.Add((New-Dx12ParityLane `
+                    -Name "stream_pressure_${backend}_control_budget2" `
+                    -Category "stream_pressure" `
+                    -RenderBackend $backend `
+                    -PresentMode "immediate" `
+                    -BenchmarkLane "streaming_spike" `
+                    -StreamRenderPrepBudgetMs 2 `
+                    -Notes "startup streaming spike lane; use as the fixed chunk-boundary route until scripted camera-path playback is available")) | Out-Null
+    }
+
+    foreach ($budgetMs in @(1, 2, 4, 8)) {
+        $lanes.Add((New-Dx12ParityLane `
+                    -Name "stream_pressure_dx12_budget${budgetMs}" `
+                    -Category "stream_pressure_budget_tuning" `
+                    -RenderBackend "dx12" `
+                    -PresentMode "immediate" `
+                    -BenchmarkLane "streaming_spike" `
+                    -StreamRenderPrepBudgetMs $budgetMs `
+                    -Notes "render-prep budget tuning lane; compare time-to-ready against p95 stability")) | Out-Null
+    }
+
+    foreach ($maxChunks in @(1, 2, 4, 8)) {
+        $lanes.Add((New-Dx12ParityLane `
+                    -Name "stream_pressure_dx12_budget2_max_chunks${maxChunks}" `
+                    -Category "stream_pressure_chunk_cap_tuning" `
+                    -RenderBackend "dx12" `
+                    -PresentMode "immediate" `
+                    -BenchmarkLane "streaming_spike" `
+                    -StreamRenderPrepBudgetMs 2 `
+                    -StreamRenderPrepMaxChunksPerFrame $maxChunks `
+                    -Notes "render-prep chunk cap lane; compare time-to-ready against p95 stability")) | Out-Null
+    }
+
+    return @($lanes.ToArray())
+}
+
 function Get-QuickLaneNames {
     return @(
         "vulkan_immediate",
@@ -431,6 +475,8 @@ function Get-RequiredMetricNames {
         "solari_gpu_ns",
         "render_scheduler_pressure",
         "world_stream_render_prep_budget_ns",
+        "world_stream_render_prep_max_chunks_per_frame",
+        "world_stream_render_prep_limit_reason_code",
         "world_stream_render_prep_queue_depth",
         "world_stream_render_prep_deferred_chunks",
         "world_stream_render_prep_applied_chunks",
@@ -587,7 +633,7 @@ function New-MetricPresence {
 function New-KeyMetricSnapshot {
     param([object]$Summary)
 
-    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_cpu_upload_bytes", "cef_gpu_copy_bytes", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "cef_transport_fallback_count", "cef_stale_frame_count", "cef_health_gpu_copy_ms", "cef_health_cpu_upload_bytes_per_frame", "cef_health_reused_frames", "cef_health_not_ready_frames", "cef_health_blocking_waits", "cef_health_fallback_count", "cef_health_ring_depth", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions", "render_readback_readback_requested_count", "render_readback_readback_completed_count", "render_readback_readback_dropped_count", "render_readback_readback_blocking_wait_count", "render_readback_map_async_count", "render_readback_poll_count", "render_shader_shader_module_creations", "render_shader_shader_module_create_ns", "render_shader_shader_variant_requests", "render_shader_material_specializations", "render_shader_pipeline_create_count", "render_shader_pipeline_create_ns")
+    $names = @("fps", "frame_ns", "present_wait_ns", "meshlet_buffer_reallocations", "meshlet_instance_buffer_upload_bytes", "meshlet_material_buffer_upload_bytes", "meshlet_view_visibility_buffer_upload_bytes", "meshlet_asset_buffer_upload_bytes", "meshlet_asset_buffer_grow_copies", "meshlet_buffer_capacity_high_water_bytes", "world_stream_apply_cpu_ns", "world_stream_render_prep_budget_ns", "world_stream_render_prep_max_chunks_per_frame", "world_stream_render_prep_limit_reason_code", "world_stream_render_prep_queue_depth", "world_stream_render_prep_deferred_chunks", "world_stream_render_prep_applied_chunks", "world_stream_render_prep_dynamic_mesh_assets", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_cpu_upload_bytes", "cef_gpu_copy_bytes", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "cef_transport_fallback_count", "cef_stale_frame_count", "cef_health_gpu_copy_ms", "cef_health_cpu_upload_bytes_per_frame", "cef_health_reused_frames", "cef_health_not_ready_frames", "cef_health_blocking_waits", "cef_health_fallback_count", "cef_health_ring_depth", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions", "render_readback_readback_requested_count", "render_readback_readback_completed_count", "render_readback_readback_dropped_count", "render_readback_readback_blocking_wait_count", "render_readback_map_async_count", "render_readback_poll_count", "render_shader_shader_module_creations", "render_shader_shader_module_create_ns", "render_shader_shader_variant_requests", "render_shader_material_specializations", "render_shader_pipeline_create_count", "render_shader_pipeline_create_ns")
     $snapshot = [ordered]@{}
     foreach ($name in $names) {
         $property = if ($null -ne $Summary -and $null -ne $Summary.metrics) { $Summary.metrics.PSObject.Properties[$name] } else { $null }
@@ -737,6 +783,12 @@ function Convert-LaneToBenchmarkArgs {
     if ($LaneDefinition.disable_solari) { $args += "-DisableSolari" }
     if ($LaneDefinition.disable_meshlets) { $args += "-DisableMeshlets" }
     if ($LaneDefinition.disable_fps_overlay) { $args += "-DisableFpsOverlay" }
+    if ([int]$LaneDefinition.stream_render_prep_budget_ms -gt 0) {
+        $args += @("-StreamRenderPrepBudgetMs", "$($LaneDefinition.stream_render_prep_budget_ms)")
+    }
+    if ([int]$LaneDefinition.stream_render_prep_max_chunks_per_frame -gt 0) {
+        $args += @("-StreamRenderPrepMaxChunksPerFrame", "$($LaneDefinition.stream_render_prep_max_chunks_per_frame)")
+    }
 
     return $args
 }
@@ -813,11 +865,18 @@ $benchmarkClientPath = Join-Path $scriptRoot "benchmark_client.ps1"
 $baseLanes = @(Get-Dx12ParityLaneDefinitions)
 $presentLanes = @(Get-Dx12PresentLaneDefinitions)
 $cefTransportLanes = @(Get-Dx12CefTransportLaneDefinitions)
+$streamPressureLanes = @(Get-Dx12StreamPressureLaneDefinitions)
 $allLanes = if ($MatrixSize -eq "present" -or ($Lane | Where-Object { $_ -like "present_*" }).Count -gt 0) {
-    @($baseLanes + $presentLanes + $cefTransportLanes)
+    @($baseLanes + $presentLanes + $cefTransportLanes + $streamPressureLanes)
 }
 elseif ($MatrixSize -eq "cef_transport" -or ($Lane | Where-Object { $_ -like "cef_*" }).Count -gt 0) {
-    @($baseLanes + $cefTransportLanes)
+    @($baseLanes + $cefTransportLanes + $streamPressureLanes)
+}
+elseif ($MatrixSize -eq "stream_pressure" -or ($Lane | Where-Object { $_ -like "stream_pressure_*" }).Count -gt 0) {
+    @($baseLanes + $streamPressureLanes)
+}
+elseif ($MatrixSize -eq "full") {
+    @($baseLanes + $presentLanes + $cefTransportLanes + $streamPressureLanes)
 }
 else {
     $baseLanes
@@ -830,6 +889,9 @@ elseif ($MatrixSize -eq "present") {
 }
 elseif ($MatrixSize -eq "cef_transport") {
     @($cefTransportLanes | ForEach-Object { $_.name })
+}
+elseif ($MatrixSize -eq "stream_pressure") {
+    @($streamPressureLanes | ForEach-Object { $_.name })
 }
 elseif ($MatrixSize -eq "quick") {
     @(Get-QuickLaneNames)
@@ -929,6 +991,11 @@ foreach ($laneDefinition in $selectedLanes) {
             cloud_temporal = $laneDefinition.cloud_temporal
             cloud_shadows = $laneDefinition.cloud_shadows
             cloud_profile = $laneDefinition.cloud_profile
+        }
+        stream_render_prep = [ordered]@{
+            budget_ms = $laneDefinition.stream_render_prep_budget_ms
+            max_chunks_per_frame = $laneDefinition.stream_render_prep_max_chunks_per_frame
+            route = if ($laneDefinition.benchmark_lane -eq "streaming_spike") { "streaming_spike_startup_chunk_boundary" } else { "default" }
         }
         command = @($powerShellPath) + $args
         summary_json = $summaryJson

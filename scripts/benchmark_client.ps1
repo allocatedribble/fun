@@ -59,6 +59,10 @@ param(
     [string]$CloudDebugOverlay = "",
     [string]$RenderGeometryPolicy = "hybrid",
     [int]$MeshletMinTriangles = 512,
+    [ValidateSet(0, 1, 2, 4, 8)]
+    [int]$StreamRenderPrepBudgetMs = 0,
+    [ValidateRange(0, 1000000)]
+    [int]$StreamRenderPrepMaxChunksPerFrame = 0,
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
     [string]$RenderBackend = "dx12",
@@ -1703,6 +1707,8 @@ function Write-MarkdownReport {
         "world_stream_apply_cpu_ns",
         "catalog_lookup_cpu_ns",
         "world_stream_render_prep_budget_ns",
+        "world_stream_render_prep_max_chunks_per_frame",
+        "world_stream_render_prep_limit_reason_code",
         "world_stream_render_prep_queue_depth",
         "world_stream_render_prep_deferred_chunks",
         "world_stream_render_prep_applied_chunks",
@@ -2039,6 +2045,7 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 $ranStack = $false
 $lineOffset = 0
 $errorLineOffset = 0
+$captureFromStart = $BenchmarkLane -eq "streaming_spike"
 
 switch ($BenchmarkLane) {
     "full_runtime" {}
@@ -2210,6 +2217,20 @@ try {
         if ($MeshletMinTriangles -gt 0) {
             $runStackArgs += @("-MeshletMinTriangles", "$MeshletMinTriangles")
         }
+        if ($StreamRenderPrepBudgetMs -gt 0) {
+            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_BUDGET_MS" -Value ([string]$StreamRenderPrepBudgetMs)
+            $runStackArgs += @("-StreamRenderPrepBudgetMs", "$StreamRenderPrepBudgetMs")
+        }
+        else {
+            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_BUDGET_MS" -Value ""
+        }
+        if ($StreamRenderPrepMaxChunksPerFrame -gt 0) {
+            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME" -Value ([string]$StreamRenderPrepMaxChunksPerFrame)
+            $runStackArgs += @("-StreamRenderPrepMaxChunksPerFrame", "$StreamRenderPrepMaxChunksPerFrame")
+        }
+        else {
+            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME" -Value ""
+        }
         if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) {
             $runStackArgs += @("-WindowWidth", "$WindowWidth", "-WindowHeight", "$WindowHeight")
         }
@@ -2231,9 +2252,15 @@ try {
 
         Write-Host "Warmup: $WarmupSeconds seconds"
         Start-Sleep -Seconds $WarmupSeconds
-        $lineOffset = @(Get-Content -Path $clientLog -ErrorAction SilentlyContinue).Count
-        if (-not [string]::IsNullOrWhiteSpace($clientErrorLog) -and (Test-Path $clientErrorLog)) {
-            $errorLineOffset = @(Get-Content -Path $clientErrorLog -ErrorAction SilentlyContinue).Count
+        if ($captureFromStart) {
+            $lineOffset = 0
+            $errorLineOffset = 0
+        }
+        else {
+            $lineOffset = @(Get-Content -Path $clientLog -ErrorAction SilentlyContinue).Count
+            if (-not [string]::IsNullOrWhiteSpace($clientErrorLog) -and (Test-Path $clientErrorLog)) {
+                $errorLineOffset = @(Get-Content -Path $clientErrorLog -ErrorAction SilentlyContinue).Count
+            }
         }
         Write-Host "Sampling: $SampleSeconds seconds"
         Start-Sleep -Seconds $SampleSeconds
@@ -2349,6 +2376,8 @@ try {
             render_vendor_emulation = if ([string]::IsNullOrWhiteSpace($RenderVendorEmulation)) { "auto" } else { $RenderVendorEmulation }
             render_geometry_policy = $RenderGeometryPolicy
             meshlet_min_triangles = $MeshletMinTriangles
+            stream_render_prep_budget_ms = $StreamRenderPrepBudgetMs
+            stream_render_prep_max_chunks_per_frame = $StreamRenderPrepMaxChunksPerFrame
             window_width = $WindowWidth
             window_height = $WindowHeight
             solari_arch = if ([string]::IsNullOrWhiteSpace($SolariArch)) { "legacy" } else { $SolariArch }

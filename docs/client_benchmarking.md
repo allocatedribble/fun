@@ -97,6 +97,8 @@ Each lane writes its own `summary.json`:
 - `meshlet_floor`: meshlets disabled only to expose meshlet cost.
 - `cpu_floor`: tiny-window workload to expose CPU, scheduling, physics, and networking.
 - `streaming_spike`: startup/chunk-apply lane with no warmup so stream p95 is visible.
+  This lane samples the client log from process start so startup chunk application
+  is not skipped by the normal warmup boundary.
 - `presentation_floor`: optional overlay/presentation cost isolated from the normal path.
 
 Performance claims must include `frame_ns.mean/p95`,
@@ -189,6 +191,32 @@ live lane.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize present -ContinueOnFailure
 ```
 
+Use the stream-pressure matrix before claiming meshlet/world-stream p95
+improvements. It runs the `streaming_spike` lane through DX12 and Vulkan
+controls, then expands DX12 render-prep budget and chunk-cap tuning lanes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize stream_pressure -ContinueOnFailure
+```
+
+The live controls are:
+
+- `-StreamRenderPrepBudgetMs 1|2|4|8`, forwarded as
+  `FUN_STREAM_RENDER_PREP_BUDGET_MS`.
+- `-StreamRenderPrepMaxChunksPerFrame <n>`, forwarded as
+  `FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME`; `0` means uncapped.
+
+Use the focused report to decide whether power-of-two meshlet capacity changes
+actually bounded reallocations and whether the render-prep budget is limiting
+time-to-ready:
+
+```powershell
+python tools\dx12_meshlet_stream_pressure_report.py `
+  --matrix-json target\dx12-parity\stream-pressure\matrix.json `
+  --markdown-report target\dx12-parity\stream-pressure\dx12_meshlet_stream_pressure_report.md `
+  --json-report target\dx12-parity\stream-pressure\dx12_meshlet_stream_pressure_report.json
+```
+
 The declared lane vocabulary is:
 
 - Backend/present: `vulkan_immediate`, `vulkan_fifo`,
@@ -199,6 +227,11 @@ The declared lane vocabulary is:
 - Feature isolation: `clouds_off`, `clouds_on`, `solari_off`, `solari_on`,
   `meshlets_off`, `meshlets_on`, `editor_preview_off`, `editor_preview_on`,
   `cef_cpu_paint`, and `cef_gpu_accelerated`.
+- Stream pressure: `stream_pressure_dx12_control_budget2`,
+  `stream_pressure_vulkan_control_budget2`, `stream_pressure_dx12_budget1`,
+  `stream_pressure_dx12_budget2`, `stream_pressure_dx12_budget4`,
+  `stream_pressure_dx12_budget8`, and
+  `stream_pressure_dx12_budget2_max_chunks1|2|4|8`.
 
 CEF transport controls used by the matrix and direct client benchmark runs:
 
@@ -275,7 +308,26 @@ Command submission metrics are recorded as
 `render_command_copy_commands`,
 `render_command_native_interop_command_insertions`, and
 `render_command_event_count`; `summary.json` also includes
-`render_command_events` with the top ten operation/category/label rows.
+  `render_command_events` with the top ten operation/category/label rows.
+Stream-pressure diagnostics are recorded as
+`meshlet_buffer_reallocations`,
+`meshlet_instance_buffer_upload_bytes`,
+`meshlet_material_buffer_upload_bytes`,
+`meshlet_view_visibility_buffer_upload_bytes`,
+`meshlet_asset_buffer_upload_bytes`,
+`meshlet_asset_buffer_grow_copies`,
+`meshlet_buffer_capacity_high_water_bytes`,
+`world_stream_apply_cpu_ns`,
+`world_stream_render_prep_budget_ns`,
+`world_stream_render_prep_max_chunks_per_frame`,
+`world_stream_render_prep_limit_reason_code`,
+`world_stream_render_prep_queue_depth`,
+`world_stream_render_prep_deferred_chunks`,
+`world_stream_render_prep_applied_chunks`, and
+`world_stream_render_prep_dynamic_mesh_assets`.
+`world_stream_render_prep_limit_reason_code` is stable:
+`0` means no limiter, `1` means the time budget stopped draining, and `2`
+means the max-chunks cap stopped draining.
 Readback diagnostics are recorded as
 `render_readback_readback_requested_count`,
 `render_readback_readback_completed_count`,

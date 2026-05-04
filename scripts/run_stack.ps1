@@ -57,6 +57,10 @@ param(
     [string]$CloudDebugOverlay = "",
     [string]$RenderGeometryPolicy = "hybrid",
     [int]$MeshletMinTriangles = 512,
+    [ValidateSet(0, 1, 2, 4, 8)]
+    [int]$StreamRenderPrepBudgetMs = 0,
+    [ValidateRange(0, 1000000)]
+    [int]$StreamRenderPrepMaxChunksPerFrame = 0,
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
     [string]$RenderBackend = "dx12",
@@ -359,6 +363,18 @@ if ($MeshletMinTriangles -gt 0) {
 }
 else {
     Remove-Item Env:\FUN_MESHLET_MIN_TRIANGLES -ErrorAction SilentlyContinue
+}
+if ($StreamRenderPrepBudgetMs -gt 0) {
+    $env:FUN_STREAM_RENDER_PREP_BUDGET_MS = [string]$StreamRenderPrepBudgetMs
+}
+else {
+    Remove-Item Env:\FUN_STREAM_RENDER_PREP_BUDGET_MS -ErrorAction SilentlyContinue
+}
+if ($StreamRenderPrepMaxChunksPerFrame -gt 0) {
+    $env:FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME = [string]$StreamRenderPrepMaxChunksPerFrame
+}
+else {
+    Remove-Item Env:\FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME -ErrorAction SilentlyContinue
 }
 if ($SolariDebugDirectVisibility) {
     $env:FUN_SOLARI_DEBUG_DIRECT_VISIBILITY = "1"

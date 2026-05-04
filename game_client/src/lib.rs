@@ -401,6 +401,8 @@ struct ClientPerfCounters {
     world_stream_apply_cpu_ns: u64,
     catalog_lookup_cpu_ns: u64,
     world_stream_render_prep_budget_ns: u64,
+    world_stream_render_prep_max_chunks_per_frame: u64,
+    world_stream_render_prep_limit_reason_code: u64,
     world_stream_render_prep_queue_depth: u64,
     world_stream_render_prep_deferred_chunks: u64,
     world_stream_render_prep_applied_chunks: u64,
@@ -428,12 +430,16 @@ impl ClientPerfCounters {
     fn set_world_stream_render_prep(
         &mut self,
         budget_ns: u64,
+        max_chunks_per_frame: u64,
+        limit_reason: StreamRenderPrepLimitReason,
         queue_depth: u64,
         deferred_chunks: u64,
         applied_chunks: u64,
         dynamic_mesh_assets: u64,
     ) {
         self.world_stream_render_prep_budget_ns = budget_ns;
+        self.world_stream_render_prep_max_chunks_per_frame = max_chunks_per_frame;
+        self.world_stream_render_prep_limit_reason_code = limit_reason.code();
         self.world_stream_render_prep_queue_depth = queue_depth;
         self.world_stream_render_prep_deferred_chunks = deferred_chunks;
         self.world_stream_render_prep_applied_chunks = applied_chunks;
@@ -503,19 +509,45 @@ struct ClientWorldStreamAckState {
 #[derive(Debug, Clone, Copy, Resource)]
 struct ClientStreamRenderPrepConfig {
     budget: Duration,
+    max_chunks_per_frame: u64,
 }
 
 impl Default for ClientStreamRenderPrepConfig {
     fn default() -> Self {
         Self {
             budget: stream_render_prep_budget_from_env(),
+            max_chunks_per_frame: stream_render_prep_max_chunks_per_frame_from_env(),
         }
     }
 }
 
 impl ClientStreamRenderPrepConfig {
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     fn budget_ns(self) -> u64 {
         self.budget.as_nanos().min(u128::from(u64::MAX)) as u64
+    }
+
+    const fn max_chunks_per_frame(self) -> u64 {
+        self.max_chunks_per_frame
+    }
+}
+
+#[cfg(any(all(feature = "render_diagnostics", debug_assertions), test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamRenderPrepLimitReason {
+    None,
+    TimeBudget,
+    MaxChunksPerFrame,
+}
+
+#[cfg(any(all(feature = "render_diagnostics", debug_assertions), test))]
+impl StreamRenderPrepLimitReason {
+    const fn code(self) -> u64 {
+        match self {
+            Self::None => 0,
+            Self::TimeBudget => 1,
+            Self::MaxChunksPerFrame => 2,
+        }
     }
 }
 
@@ -563,6 +595,17 @@ fn stream_render_prep_budget_millis_from_value(value: &str) -> Option<u64> {
         .parse::<u64>()
         .ok()
         .filter(|value| matches!(*value, 1 | 2 | 4 | 8))
+}
+
+fn stream_render_prep_max_chunks_per_frame_from_env() -> u64 {
+    std::env::var("FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME")
+        .ok()
+        .and_then(|value| stream_render_prep_max_chunks_per_frame_from_value(&value))
+        .unwrap_or(0)
+}
+
+fn stream_render_prep_max_chunks_per_frame_from_value(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok().filter(|value| *value > 0)
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
@@ -2037,6 +2080,8 @@ fn receive_world_stream(
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime.perf_counters.set_world_stream_render_prep(
             0,
+            0,
+            StreamRenderPrepLimitReason::None,
             pending_stream.len() as u64,
             pending_stream.len() as u64,
             0,
@@ -2082,9 +2127,15 @@ fn apply_pending_world_stream_chunks(
     if pending_stream.is_empty() {
         render_world.status.render_prep_pending_chunks = 0;
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        runtime
-            .perf_counters
-            .set_world_stream_render_prep(prep_config.budget_ns(), 0, 0, 0, 0);
+        runtime.perf_counters.set_world_stream_render_prep(
+            prep_config.budget_ns(),
+            prep_config.max_chunks_per_frame(),
+            StreamRenderPrepLimitReason::None,
+            0,
+            0,
+            0,
+            0,
+        );
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime
             .schedule_profiler
@@ -2099,13 +2150,27 @@ fn apply_pending_world_stream_chunks(
     }
 
     let budget = prep_config.budget;
+    let max_chunks_per_frame = prep_config.max_chunks_per_frame();
     let prep_started = std::time::Instant::now();
     let mut applied_chunks = 0u64;
     let mut dynamic_mesh_assets = 0u64;
     let mut last_world_revision_changed = false;
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    let mut limit_reason = StreamRenderPrepLimitReason::None;
 
     while !pending_stream.is_empty() {
+        if max_chunks_per_frame > 0 && applied_chunks >= max_chunks_per_frame {
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+            {
+                limit_reason = StreamRenderPrepLimitReason::MaxChunksPerFrame;
+            }
+            break;
+        }
         if applied_chunks > 0 && prep_started.elapsed() >= budget {
+            #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+            {
+                limit_reason = StreamRenderPrepLimitReason::TimeBudget;
+            }
             break;
         }
         let Some(PendingWorldStreamChunk {
@@ -2210,6 +2275,8 @@ fn apply_pending_world_stream_chunks(
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     runtime.perf_counters.set_world_stream_render_prep(
         prep_config.budget_ns(),
+        max_chunks_per_frame,
+        limit_reason,
         pending_stream.len() as u64,
         pending_stream.len() as u64,
         applied_chunks,
@@ -3090,6 +3157,10 @@ fn log_render_performance(
     let world_stream_apply_cpu_ns = take_counter(&mut perf_counters.world_stream_apply_cpu_ns);
     let catalog_lookup_cpu_ns = take_counter(&mut perf_counters.catalog_lookup_cpu_ns);
     let world_stream_render_prep_budget_ns = perf_counters.world_stream_render_prep_budget_ns;
+    let world_stream_render_prep_max_chunks_per_frame =
+        perf_counters.world_stream_render_prep_max_chunks_per_frame;
+    let world_stream_render_prep_limit_reason_code =
+        perf_counters.world_stream_render_prep_limit_reason_code;
     let world_stream_render_prep_queue_depth = perf_counters.world_stream_render_prep_queue_depth;
     let world_stream_render_prep_deferred_chunks =
         perf_counters.world_stream_render_prep_deferred_chunks;
@@ -3284,6 +3355,8 @@ fn log_render_performance(
         world_stream_apply_cpu_ns,
         catalog_lookup_cpu_ns,
         world_stream_render_prep_budget_ns,
+        world_stream_render_prep_max_chunks_per_frame,
+        world_stream_render_prep_limit_reason_code,
         world_stream_render_prep_queue_depth,
         world_stream_render_prep_deferred_chunks,
         world_stream_render_prep_applied_chunks,
@@ -3381,7 +3454,7 @@ fn log_render_performance(
         ray_proxy_only_count,
     );
     game_shared::fun_diag_info!(
-        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} meshlet_material_queue_cpu_ns={} meshlet_material_queue_dirty_instance_count={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} world_stream_render_prep_budget_ns={} world_stream_render_prep_queue_depth={} world_stream_render_prep_deferred_chunks={} world_stream_render_prep_applied_chunks={} world_stream_render_prep_dynamic_mesh_assets={} ui_overlay_cpu_ns={} present_wait_ns={}",
+        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} meshlet_material_queue_cpu_ns={} meshlet_material_queue_dirty_instance_count={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} world_stream_render_prep_budget_ns={} world_stream_render_prep_max_chunks_per_frame={} world_stream_render_prep_limit_reason_code={} world_stream_render_prep_queue_depth={} world_stream_render_prep_deferred_chunks={} world_stream_render_prep_applied_chunks={} world_stream_render_prep_dynamic_mesh_assets={} ui_overlay_cpu_ns={} present_wait_ns={}",
         format_optional_u64(meshlet_extract_cpu_ns),
         format_optional_u64(meshlet_prepare_cpu_ns),
         format_optional_u64(meshlet_bind_group_prepare_cpu_ns),
@@ -3392,6 +3465,8 @@ fn log_render_performance(
         world_stream_apply_cpu_ns,
         catalog_lookup_cpu_ns,
         world_stream_render_prep_budget_ns,
+        world_stream_render_prep_max_chunks_per_frame,
+        world_stream_render_prep_limit_reason_code,
         world_stream_render_prep_queue_depth,
         world_stream_render_prep_deferred_chunks,
         world_stream_render_prep_applied_chunks,
@@ -4505,6 +4580,33 @@ mod tests {
         assert_eq!(stream_render_prep_budget_millis_from_value("8"), Some(8));
         assert_eq!(stream_render_prep_budget_millis_from_value("3"), None);
         assert_eq!(stream_render_prep_budget_millis_from_value("bad"), None);
+    }
+
+    #[test]
+    fn stream_render_prep_max_chunks_accepts_positive_frame_caps() {
+        assert_eq!(
+            stream_render_prep_max_chunks_per_frame_from_value("1"),
+            Some(1)
+        );
+        assert_eq!(
+            stream_render_prep_max_chunks_per_frame_from_value("16"),
+            Some(16)
+        );
+        assert_eq!(
+            stream_render_prep_max_chunks_per_frame_from_value("0"),
+            None
+        );
+        assert_eq!(
+            stream_render_prep_max_chunks_per_frame_from_value("bad"),
+            None
+        );
+    }
+
+    #[test]
+    fn stream_render_prep_limit_reason_codes_are_stable() {
+        assert_eq!(StreamRenderPrepLimitReason::None.code(), 0);
+        assert_eq!(StreamRenderPrepLimitReason::TimeBudget.code(), 1);
+        assert_eq!(StreamRenderPrepLimitReason::MaxChunksPerFrame.code(), 2);
     }
 
     #[test]
