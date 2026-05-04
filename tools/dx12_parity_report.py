@@ -143,6 +143,77 @@ CPU_WORK_METRICS = {
     "network_receive_cpu_ns",
 }
 
+RECOMMENDATION_CLASSIFICATIONS: tuple[str, ...] = (
+    "present_bound",
+    "cpu_upload_bound",
+    "cef_transport_bound",
+    "barrier_or_state_bound",
+    "descriptor_or_pso_churn_bound",
+    "runtime_pipeline_creation_bound",
+    "readback_or_fence_bound",
+    "meshlet_or_stream_upload_bound",
+    "shader_or_pass_gpu_bound",
+    "inconclusive_needs_pix",
+    "inconclusive_needs_presentmon",
+    "inconclusive_needs_upload_callsite_table",
+)
+
+UPLOAD_CALLSITE_METRICS: tuple[str, ...] = (
+    "render_upload_write_texture_calls",
+    "render_upload_write_texture_bytes",
+    "render_upload_write_buffer_calls",
+    "render_upload_write_buffer_bytes",
+    "render_upload_write_buffer_with_calls",
+    "render_upload_write_buffer_with_bytes",
+    "render_upload_callsite_count",
+)
+
+RUNTIME_PIPELINE_CREATION_METRICS: tuple[str, ...] = (
+    "render_churn_render_pipeline_creations",
+    "render_churn_compute_pipeline_creations",
+    "render_shader_render_pipeline_create_count",
+    "render_shader_compute_pipeline_create_count",
+    "render_shader_pipeline_create_count",
+)
+
+DESCRIPTOR_OR_PSO_CHURN_METRICS: tuple[str, ...] = (
+    "render_churn_bind_group_creations",
+    "render_churn_bind_group_layout_creations",
+    "render_churn_bind_group_layout_cache_misses",
+    "render_churn_pipeline_layout_creations",
+    "render_churn_pipeline_cache_misses",
+)
+
+READBACK_OR_FENCE_METRICS: tuple[str, ...] = (
+    "render_readback_readback_requested_count",
+    "render_readback_readback_completed_count",
+    "render_readback_readback_dropped_count",
+    "render_readback_readback_blocking_wait_count",
+    "render_readback_readback_latency_frame_sum",
+    "render_readback_readback_latency_frame_max",
+    "render_readback_map_async_count",
+    "render_readback_poll_count",
+)
+
+MESHLET_OR_STREAM_UPLOAD_METRICS: tuple[str, ...] = (
+    "meshlet_instance_buffer_upload_bytes",
+    "meshlet_material_buffer_upload_bytes",
+    "meshlet_view_visibility_buffer_upload_bytes",
+    "meshlet_buffer_reallocations",
+    "meshlet_culling_output_buffer_bytes",
+    "meshlet_indirect_draw_buffer_writes",
+    "meshlet_asset_buffer_upload_bytes",
+    "meshlet_asset_buffer_grow_copies",
+    "world_stream_render_prep_queue_depth",
+    "world_stream_render_prep_deferred_chunks",
+    "world_stream_render_prep_dynamic_mesh_assets",
+)
+
+CPU_UPLOAD_BYTE_THRESHOLD = 1_048_576.0
+MATERIAL_TIME_REGRESSION_NS = 200_000.0
+PRESENT_WAIT_REGRESSION_NS = 500_000.0
+PRESENT_WAIT_DOMINANCE_RATIO = 0.25
+
 NVIDIA_VENDOR_ACTIONS: dict[str, tuple[str, ...]] = {
     "descriptor churn": (
         "evaluate a bindless-like material table where Bevy/wgpu permits it",
@@ -817,6 +888,298 @@ def likely_bottleneck(
     return "no clear bottleneck", "PresentMon smoke trace", reasons
 
 
+def metric_has_any_stat(summary: dict[str, Any], metric: str) -> bool:
+    metric_data = get_path(summary, "metrics", metric)
+    if not isinstance(metric_data, dict):
+        return False
+    return any(number(metric_data.get(field)) is not None for field in ("p95", "mean"))
+
+
+def metric_best_stat(summary: dict[str, Any], metric: str) -> float | None:
+    for field in ("p95", "mean"):
+        value = metric_value(summary, metric, field)
+        if value is not None:
+            return value
+    return None
+
+
+def first_metric_evidence(summary: dict[str, Any], metrics: tuple[str, ...]) -> tuple[str, float] | None:
+    for metric in metrics:
+        value = metric_best_stat(summary, metric)
+        if value is not None and value > 0.0:
+            return metric, value
+    return None
+
+
+def first_regressed_row(
+    rows: list[dict[str, Any]],
+    metrics: tuple[str, ...],
+    minimum_delta: float = 0.0,
+) -> tuple[str, float] | None:
+    for metric in metrics:
+        row = row_by_metric(rows, metric)
+        if not row:
+            continue
+        p95_delta = number(row.get("p95_delta"))
+        mean_delta = number(row.get("delta"))
+        if p95_delta is not None and p95_delta > minimum_delta:
+            return metric, p95_delta
+        if mean_delta is not None and mean_delta > minimum_delta:
+            return metric, mean_delta
+    return None
+
+
+def make_recommendation(
+    classification: str,
+    next_action: str,
+    required_trace: str,
+    confidence: str,
+    evidence: list[str],
+    missing_evidence: list[str] | None = None,
+) -> dict[str, Any]:
+    if classification not in RECOMMENDATION_CLASSIFICATIONS:
+        raise ValueError(f"unknown DX12 recommendation classification: {classification}")
+    return {
+        "dx12_classification": classification,
+        "next_action": next_action,
+        "required_trace": required_trace,
+        "confidence": confidence,
+        "evidence": evidence,
+        "missing_evidence": missing_evidence or [],
+    }
+
+
+def build_next_action_recommendation(
+    rows: list[dict[str, Any]],
+    vulkan: dict[str, Any],
+    dx12: dict[str, Any],
+    pix: dict[str, float],
+    presentmon: dict[str, float],
+    failures: list[str],
+) -> dict[str, Any]:
+    missing_evidence: list[str] = []
+    dx_fps = metric_value(dx12, "fps", "mean")
+    vk_fps = metric_value(vulkan, "fps", "mean")
+    dx_frame_p95 = metric_value(dx12, "frame_ns", "p95")
+    vk_frame_p95 = metric_value(vulkan, "frame_ns", "p95")
+    dx_loses_avg = dx_fps is not None and vk_fps is not None and dx_fps < vk_fps
+    p95_regression = (
+        dx_frame_p95 is not None
+        and vk_frame_p95 is not None
+        and dx_frame_p95 > vk_frame_p95 * 1.01
+    )
+
+    cef_cpu_upload = metric_value(dx12, "cef_cpu_upload_bytes", "mean") or 0.0
+    cef_cpu_upload_p95 = metric_value(dx12, "cef_cpu_upload_bytes", "p95") or cef_cpu_upload
+    cef_fallback = metric_best_stat(dx12, "cef_transport_fallback_count") or 0.0
+    if failures or (is_accelerated_cef_lane(dx12) and (cef_cpu_upload > 0.0 or cef_fallback > 0.0)):
+        evidence = failures.copy()
+        if cef_cpu_upload > 0.0:
+            evidence.append(f"cef_cpu_upload_bytes.mean={cef_cpu_upload:g} in accelerated CEF lane")
+        if cef_fallback > 0.0:
+            evidence.append(f"cef_transport_fallback_count={cef_fallback:g}")
+        return make_recommendation(
+            "cef_transport_bound",
+            "fix CEF accelerated D3D11On12 transport or convert the CEF texture upload path before treating this lane as GPU accelerated",
+            "cef_transport_health",
+            "high",
+            evidence,
+        )
+    if max(cef_cpu_upload, cef_cpu_upload_p95) >= CPU_UPLOAD_BYTE_THRESHOLD:
+        return make_recommendation(
+            "cef_transport_bound",
+            "fix CEF transport or convert the CEF texture upload path to remove full-frame CPU uploads",
+            "cef_transport_health",
+            "medium",
+            [f"cef_cpu_upload_bytes={max(cef_cpu_upload, cef_cpu_upload_p95):g}"],
+        )
+
+    present_wait_p95 = metric_value(dx12, "present_wait_ns", "p95")
+    present_row = row_by_metric(rows, "present_wait_ns")
+    present_delta = number(present_row.get("p95_delta")) if present_row else None
+    if present_wait_p95 is not None:
+        frame_bound = (
+            dx_frame_p95 is not None
+            and present_wait_p95 >= max(PRESENT_WAIT_REGRESSION_NS, dx_frame_p95 * PRESENT_WAIT_DOMINANCE_RATIO)
+        )
+        delta_bound = present_delta is not None and present_delta > PRESENT_WAIT_REGRESSION_NS
+        if frame_bound or delta_bound:
+            evidence = [f"present_wait_ns.p95={present_wait_p95:g}"]
+            if dx_frame_p95 is not None:
+                evidence.append(f"frame_ns.p95={dx_frame_p95:g}")
+            if present_delta is not None:
+                evidence.append(f"present_wait_ns.p95_delta={present_delta:g}")
+            return make_recommendation(
+                "present_bound",
+                "run the present matrix and tune present mode plus maximum frame latency before changing renderer internals",
+                "present_matrix_presentmon",
+                "high" if frame_bound else "medium",
+                evidence,
+            )
+    elif not presentmon:
+        missing_evidence.append("present_wait_ns or PresentMon CSV")
+
+    runtime_pipeline = first_metric_evidence(dx12, RUNTIME_PIPELINE_CREATION_METRICS)
+    if runtime_pipeline:
+        metric, value = runtime_pipeline
+        return make_recommendation(
+            "runtime_pipeline_creation_bound",
+            "add pipeline warmup and reduce pipeline-key fragmentation for runtime-created pipeline families",
+            "pipeline_churn_top_events",
+            "high",
+            [f"{metric}={value:g}"],
+        )
+
+    readback_blocking = metric_best_stat(dx12, "render_readback_readback_blocking_wait_count") or 0.0
+    if readback_blocking > 0.0:
+        return make_recommendation(
+            "readback_or_fence_bound",
+            "defer readbacks or remove blocking waits from the sampled lane",
+            "readback_fence_trace",
+            "high",
+            [f"render_readback_readback_blocking_wait_count={readback_blocking:g}"],
+        )
+    readback_regression = first_regressed_row(rows, READBACK_OR_FENCE_METRICS, 0.0)
+    if readback_regression:
+        metric, delta = readback_regression
+        return make_recommendation(
+            "readback_or_fence_bound",
+            "defer readbacks, widen readback rings, or remove fence waits from the hot frame",
+            "readback_fence_trace",
+            "medium",
+            [f"{metric}.delta={delta:g}"],
+        )
+
+    texture_upload = max(
+        metric_best_stat(dx12, "render_upload_write_texture_bytes") or 0.0,
+        metric_value(dx12, "render_upload_write_texture_bytes", "mean") or 0.0,
+    )
+    upload_regression = first_regressed_row(rows, UPLOAD_CALLSITE_METRICS, CPU_UPLOAD_BYTE_THRESHOLD)
+    if texture_upload >= CPU_UPLOAD_BYTE_THRESHOLD or upload_regression:
+        evidence = []
+        if texture_upload >= CPU_UPLOAD_BYTE_THRESHOLD:
+            evidence.append(f"render_upload_write_texture_bytes={texture_upload:g}")
+        if upload_regression:
+            evidence.append(f"{upload_regression[0]}.delta={upload_regression[1]:g}")
+        return make_recommendation(
+            "cpu_upload_bound",
+            "convert top write_texture callsite or force CEF accelerated lane",
+            "upload_callsite_table",
+            "medium",
+            evidence,
+        )
+
+    meshlet_or_stream_metric = first_regressed_row(rows, MESHLET_OR_STREAM_UPLOAD_METRICS, 0.0)
+    if not meshlet_or_stream_metric:
+        meshlet_or_stream_metric = first_metric_evidence(dx12, MESHLET_OR_STREAM_UPLOAD_METRICS)
+    if meshlet_or_stream_metric:
+        metric, value = meshlet_or_stream_metric
+        return make_recommendation(
+            "meshlet_or_stream_upload_bound",
+            "move meshlet and world-stream uploads to pooled staging or off the hot frame",
+            "upload_callsite_table",
+            "medium",
+            [f"{metric}={value:g}"],
+        )
+
+    descriptor_or_pso_metric = first_regressed_row(rows, DESCRIPTOR_OR_PSO_CHURN_METRICS, 0.0)
+    if not descriptor_or_pso_metric:
+        descriptor_or_pso_metric = first_metric_evidence(dx12, DESCRIPTOR_OR_PSO_CHURN_METRICS)
+    if descriptor_or_pso_metric:
+        metric, value = descriptor_or_pso_metric
+        return make_recommendation(
+            "descriptor_or_pso_churn_bound",
+            "inspect bind group layout and PSO churn, then canonicalize layouts or prewarm pipelines",
+            "pipeline_churn_top_events",
+            "medium",
+            [f"{metric}={value:g}"],
+        )
+
+    if pix.get("barrier_count", 0.0) > 0 or pix.get("resource_barrier_count", 0.0) > 0:
+        return make_recommendation(
+            "barrier_or_state_bound",
+            "inspect PIX barrier and resource-state rows, then collapse redundant transitions in the named pass",
+            "pix_barrier_summary",
+            "medium",
+            [
+                f"barrier_count={pix.get('barrier_count', 0.0):g}",
+                f"resource_barrier_count={pix.get('resource_barrier_count', 0.0):g}",
+            ],
+        )
+
+    gpu_pass_regression = first_regressed_row(rows, tuple(GPU_PASS_METRICS), MATERIAL_TIME_REGRESSION_NS)
+    if gpu_pass_regression:
+        metric, delta = gpu_pass_regression
+        return make_recommendation(
+            "shader_or_pass_gpu_bound",
+            "profile the regressed shader or pass with PIX or RenderDoc and compare DX12 shader variants",
+            "pix_or_renderdoc_pass_trace",
+            "medium",
+            [f"{metric}.p95_delta={delta:g}"],
+        )
+
+    if not any(metric_has_any_stat(dx12, metric) for metric in UPLOAD_CALLSITE_METRICS):
+        missing_evidence.append("upload_callsite_table")
+
+    if dx_loses_avg or p95_regression:
+        if present_wait_p95 is None and not presentmon:
+            return make_recommendation(
+                "inconclusive_needs_presentmon",
+                "capture PresentMon or present_wait_ns before attributing the DX12 loss to renderer work",
+                "presentmon_csv",
+                "low",
+                ["DX12 frame metrics regress without present wait evidence"],
+                missing_evidence,
+            )
+        if not any(metric_has_any_stat(dx12, metric) for metric in UPLOAD_CALLSITE_METRICS):
+            return make_recommendation(
+                "inconclusive_needs_upload_callsite_table",
+                "capture upload callsite counters so the report can separate CEF, meshlet, streaming, and generic uploads",
+                "upload_callsite_table",
+                "low",
+                ["DX12 regresses without upload callsite evidence"],
+                missing_evidence,
+            )
+        return make_recommendation(
+            "inconclusive_needs_pix",
+            "capture PIX with pass markers because parsed metrics do not isolate the DX12 loss",
+            "pix_capture",
+            "low",
+            ["DX12 regresses without a dominant parsed bottleneck"],
+            missing_evidence,
+        )
+
+    if pix.get("pipeline_creation_count", 0.0) > 0 or pix.get("pso_creation_count", 0.0) > 0:
+        return make_recommendation(
+            "runtime_pipeline_creation_bound",
+            "add pipeline warmup and reduce pipeline-key fragmentation for runtime-created pipeline families",
+            "pipeline_churn_top_events",
+            "medium",
+            [
+                f"pipeline_creation_count={pix.get('pipeline_creation_count', 0.0):g}",
+                f"pso_creation_count={pix.get('pso_creation_count', 0.0):g}",
+            ],
+        )
+    if pix.get("descriptor_heap_switch_count", 0.0) > 0:
+        return make_recommendation(
+            "descriptor_or_pso_churn_bound",
+            "inspect descriptor heap switches and canonicalize hot bind group or pipeline layouts",
+            "pix_descriptor_summary",
+            "medium",
+            [f"descriptor_heap_switch_count={pix.get('descriptor_heap_switch_count', 0.0):g}"],
+        )
+
+    missing = missing_evidence or ["PIX capture with pass, barrier, descriptor, and queue markers"]
+    return make_recommendation(
+        "inconclusive_needs_pix",
+        "capture PIX with FUN render markers before choosing an optimization lane",
+        "pix_capture",
+        "low",
+        ["parsed metrics do not show a DX12-specific loss"],
+        missing,
+    )
+
+
 def lane_failure_messages(dx12: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     cef_cpu_upload = metric_value(dx12, "cef_cpu_upload_bytes", "mean") or 0.0
@@ -879,12 +1242,43 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({field: row.get(field) for field in fields})
 
 
+def write_json_report(
+    path: Path,
+    recommendation: dict[str, Any],
+    bottleneck: tuple[str, str, list[str]],
+    failures: list[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    category, trace, reasons = bottleneck
+    payload = {
+        "schema": "fun.dx12_parity_recommendation.v1",
+        "dx12_classification": recommendation["dx12_classification"],
+        "next_action": recommendation["next_action"],
+        "required_trace": recommendation["required_trace"],
+        "confidence": recommendation["confidence"],
+        "evidence": recommendation.get("evidence", []),
+        "missing_evidence": recommendation.get("missing_evidence", []),
+        "legacy_bottleneck_category": category,
+        "legacy_required_trace": trace,
+        "legacy_evidence": reasons,
+        "lane_failures": failures,
+        "red_metrics": [
+            row["metric"]
+            for row in rows
+            if row.get("status") == "red" and (row.get("vulkan_mean") is not None or row.get("dx12_mean") is not None)
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def write_markdown(
     path: Path,
     vulkan: dict[str, Any],
     dx12: dict[str, Any],
     rows: list[dict[str, Any]],
     bottleneck: tuple[str, str, list[str]],
+    recommendation: dict[str, Any],
     failures: list[str],
     pix: dict[str, float],
     presentmon: dict[str, float],
@@ -948,6 +1342,24 @@ def write_markdown(
                 reason=row["reason"],
             )
         )
+
+    lines.extend(
+        [
+            "",
+            "## Next Action Recommendation",
+            "",
+            f"- dx12_classification: `{recommendation['dx12_classification']}`",
+            f"- next_action: {recommendation['next_action']}",
+            f"- required_trace: `{recommendation['required_trace']}`",
+            f"- confidence: `{recommendation['confidence']}`",
+        ]
+    )
+    for evidence in recommendation.get("evidence", []):
+        lines.append(f"- evidence: {evidence}")
+    missing_evidence = recommendation.get("missing_evidence", [])
+    if missing_evidence:
+        for missing in missing_evidence:
+            lines.append(f"- missing_evidence: {missing}")
 
     lines.extend(
         [
@@ -1055,8 +1467,12 @@ def run_report(args: argparse.Namespace) -> int:
     presentmon = parse_external_csv(Path(args.presentmon_csv)) if args.presentmon_csv else {}
     failures = lane_failure_messages(dx12)
     bottleneck = likely_bottleneck(rows, vulkan, dx12, pix, presentmon)
+    recommendation = build_next_action_recommendation(rows, vulkan, dx12, pix, presentmon, failures)
     write_csv(Path(args.csv_summary), rows)
-    write_markdown(Path(args.markdown_report), vulkan, dx12, rows, bottleneck, failures, pix, presentmon)
+    json_report = getattr(args, "json_report", "")
+    if json_report:
+        write_json_report(Path(json_report), recommendation, bottleneck, failures, rows)
+    write_markdown(Path(args.markdown_report), vulkan, dx12, rows, bottleneck, recommendation, failures, pix, presentmon)
     return 2 if failures else 0
 
 
@@ -1112,6 +1528,7 @@ def self_test() -> int:
         dx12 = root / "dx12.json"
         markdown = root / "report.md"
         summary_csv = root / "summary.csv"
+        recommendation_json = root / "recommendation.json"
         write_sample_summary(vulkan, "vulkan", fps=100.0, frame_p95=10_000_000.0, cef_cpu_bytes=0.0)
         write_sample_summary(
             dx12,
@@ -1128,17 +1545,23 @@ def self_test() -> int:
                 dx12_json=str(dx12),
                 markdown_report=str(markdown),
                 csv_summary=str(summary_csv),
+                json_report=str(recommendation_json),
                 pix_csv="",
                 presentmon_csv="",
             )
         )
         text = markdown.read_text(encoding="utf-8")
+        recommendation = json.loads(recommendation_json.read_text(encoding="utf-8"))
         if code != 2:
             raise AssertionError("accelerated CEF CPU upload failure did not produce exit code 2")
         if "P95 regression" not in text:
             raise AssertionError("p95 regression was not reported")
         if "CEF accelerated lane failed" not in text:
             raise AssertionError("CEF accelerated lane failure was not reported")
+        if recommendation["dx12_classification"] != "cef_transport_bound":
+            raise AssertionError("CEF CPU upload did not produce a CEF transport recommendation")
+        if "CEF" not in recommendation["next_action"]:
+            raise AssertionError("CEF CPU upload recommendation did not mention CEF transport work")
         if "Vendor-Specific Follow-Up" not in text:
             raise AssertionError("vendor follow-up section was not rendered")
         if "DX12 Memory Budget" not in text or "4.00 GiB" not in text:
@@ -1148,6 +1571,7 @@ def self_test() -> int:
 
         nvidia_dx12 = root / "dx12_nvidia_pipeline.json"
         nvidia_markdown = root / "nvidia_report.md"
+        nvidia_json = root / "nvidia_report.json"
         write_sample_summary(
             nvidia_dx12,
             "dx12",
@@ -1165,17 +1589,118 @@ def self_test() -> int:
                 dx12_json=str(nvidia_dx12),
                 markdown_report=str(nvidia_markdown),
                 csv_summary=str(summary_csv),
+                json_report=str(nvidia_json),
                 pix_csv="",
                 presentmon_csv="",
             )
         )
         text = nvidia_markdown.read_text(encoding="utf-8")
+        recommendation = json.loads(nvidia_json.read_text(encoding="utf-8"))
         if code != 0:
             raise AssertionError("NVIDIA pipeline follow-up scenario should not fail the lane")
+        if recommendation["dx12_classification"] != "runtime_pipeline_creation_bound":
+            raise AssertionError("runtime pipeline creation did not produce the pipeline recommendation")
+        if "pipeline warmup" not in recommendation["next_action"]:
+            raise AssertionError("pipeline recommendation did not mention warmup")
         if "Status: eligible_optional_nvidia_experiment" not in text:
             raise AssertionError("NVIDIA follow-up gate was not marked eligible")
         if "persistent PSO cache" not in text:
             raise AssertionError("NVIDIA PSO follow-up action was not reported")
+
+        present_dx12 = root / "dx12_present.json"
+        present_json = root / "present_report.json"
+        write_sample_summary(
+            present_dx12,
+            "dx12",
+            fps=90.0,
+            frame_p95=16_000_000.0,
+            cef_cpu_bytes=0.0,
+            extra_metrics={
+                "present_wait_ns": {"mean": 6_000_000.0, "p95": 8_000_000.0},
+                "render_upload_write_texture_bytes": {"mean": 0.0, "p95": 0.0},
+            },
+        )
+        code = run_report(
+            argparse.Namespace(
+                vulkan_json=str(vulkan),
+                dx12_json=str(present_dx12),
+                markdown_report=str(root / "present_report.md"),
+                csv_summary=str(summary_csv),
+                json_report=str(present_json),
+                pix_csv="",
+                presentmon_csv="",
+            )
+        )
+        recommendation = json.loads(present_json.read_text(encoding="utf-8"))
+        if code != 0:
+            raise AssertionError("present-bound scenario should not fail the lane")
+        if recommendation["dx12_classification"] != "present_bound":
+            raise AssertionError("dominant present_wait_ns did not produce a present-bound recommendation")
+        if "present matrix" not in recommendation["next_action"]:
+            raise AssertionError("present-bound recommendation did not mention the present matrix")
+
+        upload_dx12 = root / "dx12_upload.json"
+        upload_json = root / "upload_report.json"
+        write_sample_summary(
+            upload_dx12,
+            "dx12",
+            fps=92.0,
+            frame_p95=13_000_000.0,
+            cef_cpu_bytes=0.0,
+            extra_metrics={
+                "render_upload_write_texture_bytes": {"mean": 4_194_304.0, "p95": 4_194_304.0},
+            },
+        )
+        code = run_report(
+            argparse.Namespace(
+                vulkan_json=str(vulkan),
+                dx12_json=str(upload_dx12),
+                markdown_report=str(root / "upload_report.md"),
+                csv_summary=str(summary_csv),
+                json_report=str(upload_json),
+                pix_csv="",
+                presentmon_csv="",
+            )
+        )
+        recommendation = json.loads(upload_json.read_text(encoding="utf-8"))
+        if code != 0:
+            raise AssertionError("generic CPU upload scenario should not fail the lane")
+        if recommendation["dx12_classification"] != "cpu_upload_bound":
+            raise AssertionError("high write_texture bytes did not produce the CPU upload recommendation")
+        if recommendation["required_trace"] != "upload_callsite_table":
+            raise AssertionError("CPU upload recommendation did not require the upload callsite table")
+
+        inconclusive_dx12 = root / "dx12_missing_present.json"
+        inconclusive_json = root / "missing_present_report.json"
+        write_sample_summary(
+            inconclusive_dx12,
+            "dx12",
+            fps=80.0,
+            frame_p95=14_000_000.0,
+            cef_cpu_bytes=0.0,
+        )
+        inconclusive_payload = json.loads(inconclusive_dx12.read_text(encoding="utf-8"))
+        inconclusive_payload["metrics"].pop("present_wait_ns", None)
+        inconclusive_payload["metrics"].pop("cef_cpu_upload_bytes", None)
+        inconclusive_dx12.write_text(json.dumps(inconclusive_payload), encoding="utf-8")
+        code = run_report(
+            argparse.Namespace(
+                vulkan_json=str(vulkan),
+                dx12_json=str(inconclusive_dx12),
+                markdown_report=str(root / "missing_present_report.md"),
+                csv_summary=str(summary_csv),
+                json_report=str(inconclusive_json),
+                pix_csv="",
+                presentmon_csv="",
+            )
+        )
+        recommendation = json.loads(inconclusive_json.read_text(encoding="utf-8"))
+        if code != 0:
+            raise AssertionError("missing-present inconclusive scenario should not fail the lane")
+        if recommendation["dx12_classification"] != "inconclusive_needs_presentmon":
+            raise AssertionError("missing present data did not ask for PresentMon evidence")
+        if not recommendation["missing_evidence"]:
+            raise AssertionError("inconclusive recommendation did not list missing evidence")
     return 0
 
 
@@ -1187,6 +1712,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--presentmon", "--presentmon-csv", dest="presentmon_csv", default="", help="Optional PresentMon CSV")
     parser.add_argument("--markdown", "--markdown-report", dest="markdown_report", default="dx12_parity_report.md")
     parser.add_argument("--csv", "--csv-summary", dest="csv_summary", default="dx12_parity_summary.csv")
+    parser.add_argument("--json", "--json-report", dest="json_report", default="", help="Optional machine-readable recommendation JSON")
     parser.add_argument("--self-test", action="store_true", help="Run the built-in parser/report smoke test")
     return parser
 
