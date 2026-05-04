@@ -10,6 +10,7 @@ use bevy::{
         render_resource::TextureFormat,
         view::Msaa,
     },
+    window::WindowEvent,
 };
 use tracing::{info, warn};
 
@@ -442,8 +443,7 @@ pub fn is_dlss_supported_color_format(format: TextureFormat) -> bool {
 
 fn request_dlss_history_resets_from_events(
     mut reset: ResMut<DlssHistoryReset>,
-    mut window_resized: MessageReader<bevy::window::WindowResized>,
-    mut scale_factor_changed: MessageReader<bevy::window::WindowScaleFactorChanged>,
+    mut window_events: MessageReader<WindowEvent>,
     mut solari_resets: MessageReader<bevy::solari::prelude::SolariResetEvent>,
     config: Res<ClientRenderConfig>,
     render_recovery: Option<Res<RenderRecoveryStatus>>,
@@ -453,7 +453,10 @@ fn request_dlss_history_resets_from_events(
         return;
     }
 
-    if window_resized.read().next().is_some() || scale_factor_changed.read().next().is_some() {
+    if window_events
+        .read()
+        .any(dlss_window_event_invalidates_history)
+    {
         reset.request(DlssResetReason::WindowResize);
     }
     if solari_resets.read().next().is_some() {
@@ -474,6 +477,15 @@ fn request_dlss_history_resets_from_events(
             }
         }
     }
+}
+
+fn dlss_window_event_invalidates_history(event: &WindowEvent) -> bool {
+    matches!(
+        event,
+        WindowEvent::WindowBackendScaleFactorChanged(_)
+            | WindowEvent::WindowResized(_)
+            | WindowEvent::WindowScaleFactorChanged(_)
+    )
 }
 
 #[allow(
@@ -747,6 +759,39 @@ mod tests {
             native_dlss_mip_bias(NativeDlssMode::UltraPerformance)
                 < native_dlss_mip_bias(NativeDlssMode::Quality)
         );
+    }
+
+    #[test]
+    fn window_event_stream_marks_dlss_history_unsafe_for_size_changes() {
+        let window = Entity::PLACEHOLDER;
+
+        assert!(dlss_window_event_invalidates_history(
+            &WindowEvent::WindowResized(bevy::window::WindowResized {
+                window,
+                width: 1920.0,
+                height: 1080.0,
+            })
+        ));
+        assert!(dlss_window_event_invalidates_history(
+            &WindowEvent::WindowScaleFactorChanged(bevy::window::WindowScaleFactorChanged {
+                window,
+                scale_factor: 2.0,
+            })
+        ));
+        assert!(dlss_window_event_invalidates_history(
+            &WindowEvent::WindowBackendScaleFactorChanged(
+                bevy::window::WindowBackendScaleFactorChanged {
+                    window,
+                    scale_factor: 2.0,
+                },
+            )
+        ));
+        assert!(!dlss_window_event_invalidates_history(
+            &WindowEvent::WindowFocused(bevy::window::WindowFocused {
+                window,
+                focused: true,
+            })
+        ));
     }
 
     #[test]

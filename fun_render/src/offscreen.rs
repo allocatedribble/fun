@@ -4,7 +4,7 @@ use bevy::{
         error_handler::{RenderError, RenderErrorHandler, RenderErrorPolicy},
         render_resource::TextureFormat,
     },
-    window::{WindowCreated, WindowResized, WindowScaleFactorChanged},
+    window::{WindowCreated, WindowEvent, WindowResized, WindowScaleFactorChanged},
 };
 use tracing::info;
 
@@ -67,6 +67,7 @@ impl Plugin for FunRenderOffscreenPresentationPlugin {
         app.insert_resource(self.target);
         app.add_plugins(render_plugin(render_backend))
             .add_message::<WindowResized>()
+            .add_message::<WindowEvent>()
             .add_message::<WindowCreated>()
             .add_message::<WindowScaleFactorChanged>()
             .insert_resource(RenderErrorHandler(recover_offscreen_render_device));
