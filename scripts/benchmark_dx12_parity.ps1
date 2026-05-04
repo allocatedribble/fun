@@ -174,6 +174,12 @@ function New-Dx12ParityLane {
         [int]$MaxFrameLatency = 0,
         [string]$WindowMode = "windowed",
         [string]$EditorPreview = "off",
+        [string]$SolariVisualTarget = "",
+        [string]$CloudQuality = "",
+        [string]$CloudInternalScale = "",
+        [string]$CloudTemporal = "",
+        [string]$CloudShadows = "",
+        [string]$CloudProfile = "",
         [string]$Notes = ""
     )
 
@@ -195,6 +201,12 @@ function New-Dx12ParityLane {
         max_frame_latency = $MaxFrameLatency
         window_mode = $WindowMode
         editor_preview = $EditorPreview
+        solari_visual_target = $SolariVisualTarget
+        cloud_quality = $CloudQuality
+        cloud_internal_scale = $CloudInternalScale
+        cloud_temporal = $CloudTemporal
+        cloud_shadows = $CloudShadows
+        cloud_profile = $CloudProfile
         notes = $Notes
     }
 }
@@ -235,28 +247,88 @@ function Get-Dx12PresentLaneDefinitions {
     $backends = @("vulkan", "dx12")
     $presentModes = @("immediate", "auto_no_vsync", "fifo", "auto_vsync")
     $frameLatencies = @(1, 2, 3, 4)
-    $uiModes = @(
-        @{ name = "ui_hidden"; mode = "hidden"; transport = "default"; disable_fps = $true },
-        @{ name = "ui_static"; mode = "static"; transport = "cpu"; disable_fps = $false },
-        @{ name = "ui_animated"; mode = "animated"; transport = "cpu"; disable_fps = $false }
+    $scenarios = @(
+        @{
+            name = "ui_hidden";
+            mode = "hidden";
+            transport = "default";
+            benchmark_lane = "presentation_floor";
+            disable_fps = $true;
+            solari_visual_target = "";
+            cloud_quality = "";
+            cloud_internal_scale = "";
+            cloud_temporal = "";
+            cloud_shadows = "";
+            cloud_profile = "";
+            notes = "UI hidden presentation-control lane"
+        },
+        @{
+            name = "ui_accelerated";
+            mode = "animated";
+            transport = "d3d11on12";
+            benchmark_lane = "presentation_floor";
+            disable_fps = $false;
+            solari_visual_target = "";
+            cloud_quality = "";
+            cloud_internal_scale = "";
+            cloud_temporal = "";
+            cloud_shadows = "";
+            cloud_profile = "";
+            notes = "CEF animated UI lane requesting D3D11On12 accelerated paint"
+        },
+        @{
+            name = "representative_gameplay";
+            mode = "disabled";
+            transport = "default";
+            benchmark_lane = "full_runtime";
+            disable_fps = $false;
+            solari_visual_target = "";
+            cloud_quality = "";
+            cloud_internal_scale = "";
+            cloud_temporal = "";
+            cloud_shadows = "";
+            cloud_profile = "";
+            notes = "representative full-runtime gameplay lane"
+        },
+        @{
+            name = "solari_cloud_heavy";
+            mode = "disabled";
+            transport = "default";
+            benchmark_lane = "full_runtime";
+            disable_fps = $false;
+            solari_visual_target = "cinematic";
+            cloud_quality = "cinematic";
+            cloud_internal_scale = "0.75";
+            cloud_temporal = "1";
+            cloud_shadows = "1";
+            cloud_profile = "storm_front";
+            notes = "Solari cinematic plus storm-front cinematic cloud lane"
+        }
     )
 
     foreach ($backend in $backends) {
         foreach ($presentMode in $presentModes) {
             foreach ($latency in $frameLatencies) {
-                foreach ($ui in $uiModes) {
-                    $laneName = "present_${backend}_${presentMode}_fl${latency}_$($ui.name)"
+                foreach ($scenario in $scenarios) {
+                    $laneName = "present_${backend}_${presentMode}_fl${latency}_$($scenario.name)"
                     $lanes.Add((New-Dx12ParityLane `
                                 -Name $laneName `
                                 -Category "present_matrix" `
                                 -RenderBackend $backend `
                                 -PresentMode $presentMode `
                                 -MaxFrameLatency $latency `
-                                -CefUiMode $ui.mode `
-                                -CefPaintTransport $ui.transport `
-                                -DisableFpsOverlay $ui.disable_fps `
+                                -CefUiMode $scenario.mode `
+                                -CefPaintTransport $scenario.transport `
+                                -BenchmarkLane $scenario.benchmark_lane `
+                                -DisableFpsOverlay $scenario.disable_fps `
+                                -SolariVisualTarget $scenario.solari_visual_target `
+                                -CloudQuality $scenario.cloud_quality `
+                                -CloudInternalScale $scenario.cloud_internal_scale `
+                                -CloudTemporal $scenario.cloud_temporal `
+                                -CloudShadows $scenario.cloud_shadows `
+                                -CloudProfile $scenario.cloud_profile `
                                 -WindowMode "windowed" `
-                                -Notes "windowed lane; borderless fullscreen is not yet exposed by the stack runner")) | Out-Null
+                                -Notes "$($scenario.notes); windowed lane; borderless fullscreen is not yet exposed by the stack runner")) | Out-Null
                 }
             }
         }
@@ -638,6 +710,24 @@ function Convert-LaneToBenchmarkArgs {
     if ([int]$LaneDefinition.max_frame_latency -gt 0) {
         $args += @("-RequestedMaximumFrameLatency", "$($LaneDefinition.max_frame_latency)")
     }
+    if (-not [string]::IsNullOrWhiteSpace($LaneDefinition.solari_visual_target)) {
+        $args += @("-SolariVisualTarget", $LaneDefinition.solari_visual_target)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LaneDefinition.cloud_quality)) {
+        $args += @("-CloudQuality", $LaneDefinition.cloud_quality)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LaneDefinition.cloud_internal_scale)) {
+        $args += @("-CloudInternalScale", $LaneDefinition.cloud_internal_scale)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LaneDefinition.cloud_temporal)) {
+        $args += @("-CloudTemporal", $LaneDefinition.cloud_temporal)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LaneDefinition.cloud_shadows)) {
+        $args += @("-CloudShadows", $LaneDefinition.cloud_shadows)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LaneDefinition.cloud_profile)) {
+        $args += @("-CloudProfile", $LaneDefinition.cloud_profile)
+    }
 
     if ($Release) { $args += "-Release" }
     if ($StaticBevy) { $args += "-StaticBevy" }
@@ -831,6 +921,14 @@ foreach ($laneDefinition in $selectedLanes) {
             solari_disabled = $laneDefinition.disable_solari
             meshlets_disabled = $laneDefinition.disable_meshlets
             editor_preview = $laneDefinition.editor_preview
+        }
+        render_scenario = [ordered]@{
+            solari_visual_target = $laneDefinition.solari_visual_target
+            cloud_quality = $laneDefinition.cloud_quality
+            cloud_internal_scale = $laneDefinition.cloud_internal_scale
+            cloud_temporal = $laneDefinition.cloud_temporal
+            cloud_shadows = $laneDefinition.cloud_shadows
+            cloud_profile = $laneDefinition.cloud_profile
         }
         command = @($powerShellPath) + $args
         summary_json = $summaryJson

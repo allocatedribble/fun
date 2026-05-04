@@ -172,9 +172,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parit
 
 Use the present matrix before changing any Windows present defaults. It expands
 Vulkan/DX12 across `immediate`, `auto_no_vsync`, `fifo`, and `auto_vsync`,
-frame latency `1..4`, and hidden/static/animated CEF lanes. Current stack
-support records these as windowed lanes; borderless fullscreen still needs a
-dedicated host/window-mode switch before it can be included as a live lane.
+frame latency `1..4`, and the required decision scenarios:
+
+- `ui_hidden`: presentation floor with CEF hidden.
+- `ui_accelerated`: presentation floor requesting CEF D3D11On12 accelerated
+  paint.
+- `representative_gameplay`: normal `full_runtime` gameplay lane.
+- `solari_cloud_heavy`: `full_runtime` with Solari cinematic target and
+  cinematic storm-front clouds.
+
+Current stack support records these as windowed lanes; borderless fullscreen
+still needs a dedicated host/window-mode switch before it can be included as a
+live lane.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize present -ContinueOnFailure
@@ -211,6 +220,18 @@ Every matrix writes:
 The matrix summary reports the best observed DX12 lane for maximum FPS, frame
 p95, and present-wait p95. It intentionally keeps the product default unchanged
 until those recommendations come from comparable live runs.
+
+For an explicit default/benchmark decision artifact, run:
+
+```powershell
+python tools\dx12_present_decision_report.py --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_present_decision_report.md --json-report target\dx12-parity\current\dx12_present_decision_report.json
+```
+
+The decision report keeps the product default unchanged unless the required
+scenario matrix is complete, p95 and latency agree, and the chosen setting stays
+within five percent of the best throughput lane. Hardware-class defaults remain
+`not_justified` unless adapter detection, measured class-specific evidence,
+explicit override, and startup logging all exist.
 
 The required metric contract includes `frame_ns.mean/p50/p95/p99`,
 `fps.mean/p95`, `present_wait_ns.mean/p95`,

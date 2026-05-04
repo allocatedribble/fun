@@ -52,6 +52,17 @@ Benchmark JSON stores top rows under:
 - `transient_descriptor_creates`
 - `transient_descriptor_label_variants`
 
+Generate a focused reuse decision artifact with:
+
+```powershell
+python tools\dx12_transient_reuse_report.py --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_transient_reuse_report.md --json-report target\dx12-parity\current\dx12_transient_reuse_report.json
+```
+
+The report aggregates top descriptor-create rows, label variants, transient
+create/reuse metrics, and the aliasing exclusion table. If descriptor rows are
+missing or do not isolate a usage/format/every-frame miss, the correct decision
+is to rerun a transient-focused lane rather than guessing at allocator changes.
+
 ## Descriptor Reports
 
 Top descriptor-create rows use:
@@ -139,9 +150,14 @@ a render-graph lifetime map:
 | meshlet dummy render target | 35 | 45 | `TinyRenderAttachment` | no |
 | CEF UI ring / Bevy UI image | n/a | n/a | excluded | yes |
 | DLSS SR/RR input/output | n/a | n/a | excluded | yes |
+| Solari RR guide resources | n/a | n/a | excluded | future native DLSS input |
+| readback/capture resources | n/a | n/a | excluded | synchronization/capture |
+| raw DX12 command-list resources | n/a | n/a | excluded | yes |
 
-CEF and DLSS resources remain excluded until PIX validation proves their state
-transitions, fences, and native handles cannot be invalidated by aliasing.
+CEF ring textures, DLSS input/output, Solari RR guide resources,
+readback/capture resources, and any resource touched by a raw DX12 command list
+remain excluded until PIX validation proves their state transitions, fences,
+and native handles cannot be invalidated by aliasing.
 
 ## Acceptance Rules
 
