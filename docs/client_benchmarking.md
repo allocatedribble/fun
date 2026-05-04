@@ -290,7 +290,12 @@ Optional `--pix` and `--presentmon` CSV inputs are parsed into the report as
 external trace evidence. The dashboard marks red/yellow/green regressions,
 prints a likely bottleneck category when DX12 loses, calls out the special case
 where DX12 wins average FPS but loses frame p95, and fails accelerated CEF lanes
-that still report nonzero `cef_cpu_upload_bytes`.
+that still report nonzero `cef_cpu_upload_bytes`. It also prints a
+vendor-specific follow-up section. NVIDIA experiments are marked eligible only
+when the adapter is NVIDIA and the bottleneck is specific enough to act on; they
+remain optional and must not regress AMD, Intel, or Vulkan lanes.
+
+See [`dx12_vendor_followup.md`](dx12_vendor_followup.md) for the Tier 16 gate.
 
 For parser-only checks against an existing client log:
 

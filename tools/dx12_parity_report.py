@@ -143,6 +143,66 @@ CPU_WORK_METRICS = {
     "network_receive_cpu_ns",
 }
 
+NVIDIA_VENDOR_ACTIONS: dict[str, tuple[str, ...]] = {
+    "descriptor churn": (
+        "evaluate a bindless-like material table where Bevy/wgpu permits it",
+        "reduce per-draw bind group changes before changing shader layout",
+        "inspect descriptor heap rollover and root signature switches in PIX",
+    ),
+    "pipeline churn": (
+        "increase pipeline warmup coverage before first visible gameplay",
+        "experiment with a persistent PSO cache keyed by adapter, driver, wgpu, shader, and pipeline descriptor hashes",
+        "reduce material pipeline-key fragmentation by moving non-structural toggles to uniforms",
+    ),
+    "shader compilation": (
+        "move remaining runtime shader and pipeline creation into controlled warmup",
+        "compare NVIDIA driver pipeline-cache behavior before adding native cache hooks",
+        "reduce variant pressure only when benchmark top events identify the hot family",
+    ),
+    "shader variant pressure": (
+        "inspect material and shader-definition cardinality before rewriting shaders",
+        "prefer uniform toggles for non-layout-changing quality/debug options",
+        "keep structural specialization for format, sample-count, topology, and binding layout changes",
+    ),
+    "upload-bound": (
+        "use GPU-native or persistent staging upload paths only for measured hot callsites",
+        "keep CEF accelerated transport and meshlet/world-stream uploads separately attributable",
+        "prototype native upload heaps only behind a DX12/NVIDIA experiment flag",
+    ),
+    "barrier/state-bound": (
+        "use PIX to collapse redundant transitions around the identified pass",
+        "avoid native interop state changes outside the shared dx12_native boundary",
+        "prefer pass ordering/resource-state fixes before async queue experiments",
+    ),
+    "submission fragmentation": (
+        "reduce command buffer and queue-submit count before adding async scheduling",
+        "use GPUView or PIX queue lanes to prove idle overlap exists",
+        "keep async copy/compute experiments opt-in and reject them if p95 worsens",
+    ),
+    "CEF/native interop sync": (
+        "consume completed CEF GPU frames without blocking waits",
+        "reuse the last ready frame instead of waiting on a hot fence",
+        "keep CPU paint as a measured fallback lane, not a hidden path",
+    ),
+    "shader/pass GPU bound": (
+        "inspect hot NVIDIA shader variants with Nsight or driver shader tools",
+        "compare register pressure, occupancy, memory loads, and branch divergence",
+        "land shader rewrites only with DX12/Vulkan before-after timings and visual evidence",
+    ),
+}
+
+VENDOR_REQUIRED_EVIDENCE: dict[str, str] = {
+    "descriptor churn": "render_churn bind-group/layout deltas or PIX descriptor heap switch counters",
+    "pipeline churn": "render_churn pipeline creation/cache counters or PIX PSO creation counters",
+    "shader compilation": "render_shader module/pipeline creation counters during the sample window",
+    "shader variant pressure": "render_shader variant/material specialization deltas and top event labels",
+    "upload-bound": "render_upload, meshlet/world-stream upload, CEF upload/copy counters, or PIX copy evidence",
+    "barrier/state-bound": "PIX barrier/resource-state summary for the losing pass",
+    "submission fragmentation": "render_command submit/command-buffer deltas plus PIX or GPUView queue evidence",
+    "CEF/native interop sync": "CEF GPU frame readiness/reuse/blocking-wait counters plus PIX fence/queue evidence",
+    "shader/pass GPU bound": "pass-level GPU timing regression plus vendor shader analysis for the hot variant",
+}
+
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8-sig") as handle:
@@ -253,6 +313,31 @@ def summarize_gpu(summary: dict[str, Any]) -> str:
     return "unknown"
 
 
+def infer_adapter_vendor(summary: dict[str, Any]) -> str:
+    gpu_text = summarize_gpu(summary).lower()
+    presentation = summary.get("render_presentation", {})
+    config = summary.get("config", {})
+    extra = " ".join(
+        str(value).lower()
+        for value in (
+            presentation.get("adapter"),
+            presentation.get("adapter_name"),
+            presentation.get("vendor"),
+            config.get("adapter"),
+            config.get("gpu_vendor"),
+        )
+        if value is not None
+    )
+    text = f"{gpu_text} {extra}"
+    if any(token in text for token in ("nvidia", "geforce", "rtx", "gtx")):
+        return "nvidia"
+    if any(token in text for token in ("amd", "radeon")):
+        return "amd"
+    if any(token in text for token in ("intel", "arc graphics", "iris xe")):
+        return "intel"
+    return "unknown"
+
+
 def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
     config = summary.get("config", {})
     presentation = summary.get("render_presentation", {})
@@ -275,6 +360,32 @@ def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
             cef_selection.get("selected") or config.get("cef_paint_transport") or "unknown"
         ),
         "cef_mode": str(config.get("cef_ui_mode") or "unknown"),
+    }
+
+
+def vendor_follow_up(category: str, dx12: dict[str, Any]) -> dict[str, Any]:
+    vendor = infer_adapter_vendor(dx12)
+    actions: tuple[str, ...] = ()
+    if vendor == "nvidia":
+        actions = NVIDIA_VENDOR_ACTIONS.get(category, ())
+    eligible = bool(actions)
+    if category in {"unknown, requires PIX", "no clear bottleneck", "p95 regression", "present-bound"}:
+        status = "blocked_until_specific_bottleneck"
+    elif vendor != "nvidia":
+        status = "not_nvidia_path"
+    elif eligible:
+        status = "eligible_optional_nvidia_experiment"
+    else:
+        status = "no_vendor_specific_action"
+    return {
+        "vendor": vendor,
+        "status": status,
+        "required_evidence": VENDOR_REQUIRED_EVIDENCE.get(
+            category,
+            "specific PIX/GPUView/Nsight evidence naming the losing subsystem",
+        ),
+        "actions": actions,
+        "guardrail": "optional DX12/NVIDIA experiment only; must not regress AMD, Intel, or Vulkan lanes",
     }
 
 
@@ -383,16 +494,24 @@ def likely_bottleneck(
 
     render_pipeline_creates = row_by_metric(rows, "render_churn_render_pipeline_creations")
     compute_pipeline_creates = row_by_metric(rows, "render_churn_compute_pipeline_creations")
+    bind_group_creates = row_by_metric(rows, "render_churn_bind_group_creations")
     bind_group_layout_creates = row_by_metric(rows, "render_churn_bind_group_layout_creations")
+    bind_group_layout_misses = row_by_metric(rows, "render_churn_bind_group_layout_cache_misses")
     pipeline_misses = row_by_metric(rows, "render_churn_pipeline_cache_misses")
+    if bind_group_creates and bind_group_creates["p95_delta"] is not None and bind_group_creates["p95_delta"] > 0:
+        reasons.append("DX12 bind group creation exceeded the Vulkan lane")
+        return "descriptor churn", "PIX", reasons
+    if bind_group_layout_creates and bind_group_layout_creates["p95_delta"] is not None and bind_group_layout_creates["p95_delta"] > 0:
+        reasons.append("DX12 bind group layout creation exceeded the Vulkan lane")
+        return "descriptor churn", "PIX", reasons
+    if bind_group_layout_misses and bind_group_layout_misses["p95_delta"] is not None and bind_group_layout_misses["p95_delta"] > 0:
+        reasons.append("DX12 bind group layout cache misses exceeded the Vulkan lane")
+        return "descriptor churn", "PIX", reasons
     if render_pipeline_creates and render_pipeline_creates["dx12_p95"] and render_pipeline_creates["dx12_p95"] > 0:
         reasons.append("DX12 runtime render pipeline creation was observed")
         return "pipeline churn", "PIX", reasons
     if compute_pipeline_creates and compute_pipeline_creates["dx12_p95"] and compute_pipeline_creates["dx12_p95"] > 0:
         reasons.append("DX12 runtime compute pipeline creation was observed")
-        return "pipeline churn", "PIX", reasons
-    if bind_group_layout_creates and bind_group_layout_creates["p95_delta"] is not None and bind_group_layout_creates["p95_delta"] > 0:
-        reasons.append("DX12 bind group layout creation exceeded the Vulkan lane")
         return "pipeline churn", "PIX", reasons
     if pipeline_misses and pipeline_misses["p95_delta"] is not None and pipeline_misses["p95_delta"] > 0:
         reasons.append("DX12 pipeline cache misses exceeded the Vulkan lane")
@@ -469,7 +588,7 @@ def likely_bottleneck(
         return "pipeline churn", "PIX", reasons
     if pix.get("descriptor_heap_switch_count", 0.0) > 0:
         reasons.append("PIX summary includes descriptor heap switch counters")
-        return "pipeline churn", "PIX", reasons
+        return "descriptor churn", "PIX", reasons
 
     cpu_regressions = [
         row
@@ -634,6 +753,26 @@ def write_markdown(
     for reason in reasons:
         lines.append(f"- Evidence: {reason}")
 
+    follow_up = vendor_follow_up(category, dx12)
+    lines.extend(
+        [
+            "",
+            "## Vendor-Specific Follow-Up",
+            "",
+            f"- Adapter vendor: {follow_up['vendor']}",
+            f"- Status: {follow_up['status']}",
+            f"- Required evidence: {follow_up['required_evidence']}",
+            f"- Guardrail: {follow_up['guardrail']}",
+        ]
+    )
+    actions = follow_up["actions"]
+    if actions:
+        lines.append("- NVIDIA experiments:")
+        for action in actions:
+            lines.append(f"  - {action}")
+    else:
+        lines.append("- NVIDIA experiments: none until the adapter and bottleneck evidence match the gate.")
+
     lines.extend(["", "## External Trace Summary", ""])
     if pix:
         lines.append(f"- PIX fields parsed: {', '.join(sorted(pix)[:12])}")
@@ -670,9 +809,17 @@ def run_report(args: argparse.Namespace) -> int:
     return 2 if failures else 0
 
 
-def write_sample_summary(path: Path, backend: str, fps: float, frame_p95: float, cef_cpu_bytes: float) -> None:
+def write_sample_summary(
+    path: Path,
+    backend: str,
+    fps: float,
+    frame_p95: float,
+    cef_cpu_bytes: float,
+    gpu_name: str = "Synthetic GPU",
+    extra_metrics: dict[str, dict[str, float]] | None = None,
+) -> None:
     payload = {
-        "hardware": {"gpu": [{"Name": "Synthetic GPU", "DriverVersion": "0.0"}]},
+        "hardware": {"gpu": [{"Name": gpu_name, "DriverVersion": "0.0"}]},
         "config": {
             "render_backend": backend,
             "present_mode": "immediate",
@@ -690,6 +837,8 @@ def write_sample_summary(path: Path, backend: str, fps: float, frame_p95: float,
             "cef_cpu_upload_bytes": {"mean": cef_cpu_bytes, "p95": cef_cpu_bytes},
         },
     }
+    if extra_metrics:
+        payload["metrics"].update(extra_metrics)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -719,6 +868,39 @@ def self_test() -> int:
             raise AssertionError("p95 regression was not reported")
         if "CEF accelerated lane failed" not in text:
             raise AssertionError("CEF accelerated lane failure was not reported")
+        if "Vendor-Specific Follow-Up" not in text:
+            raise AssertionError("vendor follow-up section was not rendered")
+
+        nvidia_dx12 = root / "dx12_nvidia_pipeline.json"
+        nvidia_markdown = root / "nvidia_report.md"
+        write_sample_summary(
+            nvidia_dx12,
+            "dx12",
+            fps=90.0,
+            frame_p95=16_000_000.0,
+            cef_cpu_bytes=0.0,
+            gpu_name="NVIDIA GeForce RTX Synthetic",
+            extra_metrics={
+                "render_churn_render_pipeline_creations": {"mean": 1.0, "p95": 1.0},
+            },
+        )
+        code = run_report(
+            argparse.Namespace(
+                vulkan_json=str(vulkan),
+                dx12_json=str(nvidia_dx12),
+                markdown_report=str(nvidia_markdown),
+                csv_summary=str(summary_csv),
+                pix_csv="",
+                presentmon_csv="",
+            )
+        )
+        text = nvidia_markdown.read_text(encoding="utf-8")
+        if code != 0:
+            raise AssertionError("NVIDIA pipeline follow-up scenario should not fail the lane")
+        if "Status: eligible_optional_nvidia_experiment" not in text:
+            raise AssertionError("NVIDIA follow-up gate was not marked eligible")
+        if "persistent PSO cache" not in text:
+            raise AssertionError("NVIDIA PSO follow-up action was not reported")
     return 0
 
 
