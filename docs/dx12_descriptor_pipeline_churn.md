@@ -35,6 +35,15 @@ Top event rows are emitted as:
 
 Benchmark JSON stores the top rows under `render_churn_events`.
 
+Creation-focused rows are emitted separately so cache hits do not bury the
+labels that matter for warmup and layout decisions:
+
+```text
+[client perf] render churn creation top: rank=1 operation=render_pipeline_created category=solari label=bevy_solari::realtime::diffuse calls=1
+```
+
+Benchmark JSON stores those rows under `render_churn_creation_events`.
+
 ## Counted Events
 
 Engine-level counters currently cover:
@@ -96,6 +105,19 @@ The report should show `render_churn_render_pipeline_creations`,
 `render_churn_compute_pipeline_creations`, bind group layout creation/miss
 counts, pipeline cache hit/miss counts, and top churn events.
 
+Generate the focused cardinality report from an existing matrix:
+
+```powershell
+python tools\dx12_pipeline_cardinality_report.py `
+  --matrix target\dx12-parity\current\matrix.json `
+  --output-dir target\dx12-pix
+```
+
+Outputs:
+
+- `target\dx12-pix\pipeline_cardinality_report.md`
+- `target\dx12-pix\pipeline_cardinality_report.json`
+
 ## Steady-State Rule
 
 During steady-state gameplay, these should be zero or explicitly justified:
@@ -156,7 +178,7 @@ Do not remove a key bit without a visual comparison and a pipeline-count delta.
 
 `fun_render` exposes an opt-in warmup hook:
 
-- `FUN_RENDER_PIPELINE_WARMUP=off|basic|scene|exhaustive`
+- `FUN_RENDER_PIPELINE_WARMUP=off|basic|observed|scene|exhaustive`
 - `FUN_RENDER_PIPELINE_WARMUP_BUDGET_MS=1|2|4|8`
 
 Current behavior:
@@ -164,6 +186,11 @@ Current behavior:
 - `off`: do nothing.
 - `basic`: process the queued Bevy `PipelineCache` once in the render
   `Prepare` set before the render graph consumes it.
+- `observed`: process the queued Bevy `PipelineCache` while runtime pipeline
+  work is still being observed, then stop after 30 consecutive idle render
+  frames or after 240 render frames. This is the default next experiment when
+  the cardinality report shows runtime-created pipelines but does not yet
+  justify an exhaustive or scene-wide warmup.
 - `scene`: process queued pipelines for the first 120 render frames.
 - `exhaustive`: process queued pipelines every render frame.
 
@@ -175,3 +202,7 @@ the budget. The hook logs `waiting_before`, `waiting_after`, `elapsed_ns`,
 This is a warmup control surface, not a full variant enumerator. Scene-aware
 material enumeration should come after the churn counters identify which
 runtime pipelines are created after loading.
+
+Layout canonicalization remains blocked until `render_churn_creation_events`
+or PIX descriptor rows identify a specific family and a binding-structure
+comparison proves the layouts are compatible.

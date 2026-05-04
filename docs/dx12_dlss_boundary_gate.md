@@ -14,8 +14,8 @@ DX12 baseline ready for DLSS SR bring-up: no
 | Present-mode matrix complete | partial | selected immediate/fifo/auto-no-vsync lanes ran; full `-MatrixSize present` output is not attached |
 | CEF accelerated path health is isolated | blocked | latest 1280x720 animated `d3d11on12` request selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, nonzero CPU upload bytes, and no accelerated paint callbacks; the health badge and CEF transport matrix are instrumented for the next live proof |
 | Hot upload callsites identified | partial | current matrix summaries include upload counters; top-callsite review is not attached |
-| Barrier audit complete | not_ready | `docs/dx12_pix_barrier_audit.md` defines the protocol; no PIX summary is attached |
-| Steady-state pipeline creation mostly eliminated | not_ready | current perf gate fails with render pipeline p95 `22`, compute pipeline p95 `82`, and shader pipeline p95 `104` |
+| Barrier audit complete | not_ready | `target\dx12-pix\barrier_summary.md` exists but is blocked because no PIX CSV/capture rows are attached |
+| Steady-state pipeline creation mostly eliminated | not_ready | `target\dx12-pix\pipeline_cardinality_report.md` reports render pipeline p95 `22`, compute pipeline p95 `82`, shader pipeline p95 `104`; `FUN_RENDER_PIPELINE_WARMUP=observed` is the next measured lane, not proof of elimination |
 | Native DX12 handle boundary exists | ready | `fun_render::dx12_native` owns FUN-layer wgpu HAL extraction |
 | Native DLSS shim boundary exists | scaffolded | `fun_dx12_dlss` exposes the C ABI and fail-closed support query; Streamline/NGX integration is not linked |
 

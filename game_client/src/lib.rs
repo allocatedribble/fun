@@ -3539,6 +3539,37 @@ fn log_render_performance(
                 event.calls,
             );
         }
+        for (rank, event) in churn_snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.operation,
+                    "bind_group_layout"
+                        | "bind_group_layout_cache_miss"
+                        | "pipeline_layout"
+                        | "render_pipeline_queued"
+                        | "compute_pipeline_queued"
+                        | "render_pipeline_created"
+                        | "compute_pipeline_created"
+                        | "render_pipeline_ready"
+                        | "compute_pipeline_ready"
+                        | "render_pipeline_error"
+                        | "compute_pipeline_error"
+                )
+            })
+            .take(10)
+            .enumerate()
+        {
+            game_shared::fun_diag_info!(
+                "[client perf] render churn creation top: rank={} operation={} category={} label={} calls={}",
+                rank + 1,
+                event.operation,
+                event.category,
+                event.label,
+                event.calls,
+            );
+        }
         bevy::render::renderer::reset_render_resource_churn_counters();
     }
     let command_snapshot = bevy::render::renderer::snapshot_render_command_counters();

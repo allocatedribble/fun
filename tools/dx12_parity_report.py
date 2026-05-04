@@ -1259,7 +1259,7 @@ def build_next_action_recommendation(
         metric, value = runtime_pipeline
         return make_recommendation(
             "runtime_pipeline_creation_bound",
-            "add pipeline warmup and reduce pipeline-key fragmentation for runtime-created pipeline families",
+            "run observed pipeline warmup (FUN_RENDER_PIPELINE_WARMUP=observed), then reduce pipeline-key fragmentation for runtime-created pipeline families",
             "pipeline_churn_top_events",
             "high",
             [f"{metric}={value:g}"],
@@ -1387,7 +1387,7 @@ def build_next_action_recommendation(
     if pix.get("pipeline_creation_count", 0.0) > 0 or pix.get("pso_creation_count", 0.0) > 0:
         return make_recommendation(
             "runtime_pipeline_creation_bound",
-            "add pipeline warmup and reduce pipeline-key fragmentation for runtime-created pipeline families",
+            "run observed pipeline warmup (FUN_RENDER_PIPELINE_WARMUP=observed), then reduce pipeline-key fragmentation for runtime-created pipeline families",
             "pipeline_churn_top_events",
             "medium",
             [

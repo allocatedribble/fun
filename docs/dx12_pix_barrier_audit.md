@@ -182,3 +182,30 @@ DX12 PIX barrier audit:
 Only mark a pass barrier-bound when PIX shows redundant or excessive
 transitions and the client benchmark also shows the matching p95 or pass-time
 loss.
+
+## Current Evidence Attachment
+
+`tools/dx12_pix_barrier_summary.py` writes the pass artifact required by the
+barrier gate:
+
+```powershell
+python tools\dx12_pix_barrier_summary.py `
+  --matrix target\dx12-parity\current\matrix.json `
+  --pix target\dx12-pix\pix_export.csv `
+  --output-dir target\dx12-pix
+```
+
+Outputs:
+
+- `target\dx12-pix\barrier_summary.md`
+- `target\dx12-pix\barrier_summary.json`
+
+If no PIX CSV is imported, the tool still writes both files with
+`status=blocked` and `verdict=blocked_missing_pix_evidence`. That blocked
+artifact is intentional: it prevents speculative barrier cleanup from being
+mistaken for a measured state pass.
+
+For this pass, no PIX executable or PIX/PresentMon export was available on the
+local PATH or under the common `C:\Program Files\Microsoft PIX` install path.
+Barrier cleanup remains blocked until a PIX export names the exact pass,
+resource, transition pair, and queue-idle rows for the required capture scenes.

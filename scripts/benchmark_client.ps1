@@ -509,6 +509,52 @@ function Parse-RenderChurnEventsLog {
     )
 }
 
+function Parse-RenderChurnCreationEventsLog {
+    param([string[]]$Lines)
+
+    $events = [ordered]@{}
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, "\[client perf\] render churn creation top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+)")
+        if (-not $match.Success) {
+            continue
+        }
+        $operation = $match.Groups["operation"].Value
+        $category = $match.Groups["category"].Value
+        $label = $match.Groups["label"].Value
+        $key = "$operation`n$category`n$label"
+        if (-not $events.Contains($key)) {
+            $events[$key] = [ordered]@{
+                operation = $operation
+                category = $category
+                label = $label
+                calls = 0
+                samples = 0
+            }
+        }
+        $entry = $events[$key]
+        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
+        $entry.samples = [uint64]$entry.samples + 1
+    }
+
+    $rank = 0
+    return @(
+        $events.Values |
+            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
+            Select-Object -First 10 |
+            ForEach-Object {
+                $rank += 1
+                [ordered]@{
+                    rank = $rank
+                    operation = $_.operation
+                    category = $_.category
+                    label = $_.label
+                    calls = $_.calls
+                    samples = $_.samples
+                }
+            }
+    )
+}
+
 function Parse-RenderCommandEventsLog {
     param([string[]]$Lines)
 
@@ -1801,6 +1847,16 @@ function Write-MarkdownReport {
             $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
         }
     }
+    if ($null -ne $Summary.render_churn_creation_events -and $Summary.render_churn_creation_events.Count -gt 0) {
+        $lines.Add("") | Out-Null
+        $lines.Add("## Render Resource Creation Churn Top Events") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| rank | operation | category | label | calls | samples |") | Out-Null
+        $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
+        foreach ($event in $Summary.render_churn_creation_events) {
+            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
+        }
+    }
     if ($null -ne $Summary.render_command_events -and $Summary.render_command_events.Count -gt 0) {
         $lines.Add("") | Out-Null
         $lines.Add("## Render Command Top Events") | Out-Null
@@ -2218,6 +2274,7 @@ try {
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
     $renderChurnEvents = Parse-RenderChurnEventsLog -Lines $sampleLines
+    $renderChurnCreationEvents = Parse-RenderChurnCreationEventsLog -Lines $sampleLines
     $renderCommandEvents = Parse-RenderCommandEventsLog -Lines $sampleLines
     $renderReadbackEvents = Parse-RenderReadbackEventsLog -Lines $sampleLines
     $renderShaderEvents = Parse-RenderShaderEventsLog -Lines $sampleLines
@@ -2323,6 +2380,7 @@ try {
         render_presentation = $renderPresentation
         render_upload_callsites = $renderUploadCallsites
         render_churn_events = $renderChurnEvents
+        render_churn_creation_events = $renderChurnCreationEvents
         render_command_events = $renderCommandEvents
         render_readback_events = $renderReadbackEvents
         render_shader_events = $renderShaderEvents

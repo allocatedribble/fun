@@ -9,6 +9,7 @@ use bevy::{
 pub enum FunPipelineWarmupMode {
     Off,
     Basic,
+    Observed,
     Scene,
     Exhaustive,
 }
@@ -18,6 +19,7 @@ impl FunPipelineWarmupMode {
         match self {
             Self::Off => "off",
             Self::Basic => "basic",
+            Self::Observed => "observed",
             Self::Scene => "scene",
             Self::Exhaustive => "exhaustive",
         }
@@ -46,6 +48,7 @@ impl FunPipelineWarmupConfig {
 #[derive(Debug, Default)]
 struct FunPipelineWarmupState {
     frames_run: u32,
+    idle_frames: u32,
 }
 
 pub fn install_fun_pipeline_warmup(app: &mut App) {
@@ -76,7 +79,7 @@ fn run_fun_pipeline_warmup(
     config: Res<FunPipelineWarmupConfig>,
     mut state: Local<FunPipelineWarmupState>,
 ) {
-    if !should_run_warmup(config.mode, state.frames_run) {
+    if !should_run_warmup(config.mode, &state) {
         return;
     }
     let waiting_before = pipeline_cache.waiting_pipelines().count();
@@ -85,6 +88,11 @@ fn run_fun_pipeline_warmup(
     let elapsed = started.elapsed();
     let waiting_after = pipeline_cache.waiting_pipelines().count();
     state.frames_run = state.frames_run.saturating_add(1);
+    if waiting_before == 0 && waiting_after == 0 {
+        state.idle_frames = state.idle_frames.saturating_add(1);
+    } else {
+        state.idle_frames = 0;
+    }
 
     if waiting_before > 0 || waiting_after > 0 || elapsed > config.budget {
         game_shared::fun_diag_info!(
@@ -110,11 +118,18 @@ fn run_fun_pipeline_warmup(
     }
 }
 
-const fn should_run_warmup(mode: FunPipelineWarmupMode, frames_run: u32) -> bool {
+const OBSERVED_IDLE_FRAME_LIMIT: u32 = 30;
+const OBSERVED_MAX_FRAME_LIMIT: u32 = 240;
+
+const fn should_run_warmup(mode: FunPipelineWarmupMode, state: &FunPipelineWarmupState) -> bool {
     match mode {
         FunPipelineWarmupMode::Off => false,
-        FunPipelineWarmupMode::Basic => frames_run == 0,
-        FunPipelineWarmupMode::Scene => frames_run < 120,
+        FunPipelineWarmupMode::Basic => state.frames_run == 0,
+        FunPipelineWarmupMode::Observed => {
+            state.frames_run < OBSERVED_MAX_FRAME_LIMIT
+                && state.idle_frames < OBSERVED_IDLE_FRAME_LIMIT
+        }
+        FunPipelineWarmupMode::Scene => state.frames_run < 120,
         FunPipelineWarmupMode::Exhaustive => true,
     }
 }
@@ -126,6 +141,7 @@ fn pipeline_warmup_mode_from_env() -> FunPipelineWarmupMode {
     match value.trim().to_ascii_lowercase().as_str() {
         "off" | "0" | "false" | "disabled" => FunPipelineWarmupMode::Off,
         "basic" | "1" | "true" | "on" => FunPipelineWarmupMode::Basic,
+        "observed" => FunPipelineWarmupMode::Observed,
         "scene" => FunPipelineWarmupMode::Scene,
         "exhaustive" => FunPipelineWarmupMode::Exhaustive,
         _ => FunPipelineWarmupMode::Off,
@@ -148,14 +164,42 @@ mod tests {
 
     #[test]
     fn warmup_run_policy_is_mode_bounded() {
-        assert!(!should_run_warmup(FunPipelineWarmupMode::Off, 0));
-        assert!(should_run_warmup(FunPipelineWarmupMode::Basic, 0));
-        assert!(!should_run_warmup(FunPipelineWarmupMode::Basic, 1));
-        assert!(should_run_warmup(FunPipelineWarmupMode::Scene, 119));
-        assert!(!should_run_warmup(FunPipelineWarmupMode::Scene, 120));
+        let state = |frames_run, idle_frames| FunPipelineWarmupState {
+            frames_run,
+            idle_frames,
+        };
+        assert!(!should_run_warmup(FunPipelineWarmupMode::Off, &state(0, 0)));
+        assert!(should_run_warmup(
+            FunPipelineWarmupMode::Basic,
+            &state(0, 0)
+        ));
+        assert!(!should_run_warmup(
+            FunPipelineWarmupMode::Basic,
+            &state(1, 0)
+        ));
+        assert!(should_run_warmup(
+            FunPipelineWarmupMode::Observed,
+            &state(239, 29)
+        ));
+        assert!(!should_run_warmup(
+            FunPipelineWarmupMode::Observed,
+            &state(240, 0)
+        ));
+        assert!(!should_run_warmup(
+            FunPipelineWarmupMode::Observed,
+            &state(1, 30)
+        ));
+        assert!(should_run_warmup(
+            FunPipelineWarmupMode::Scene,
+            &state(119, 0)
+        ));
+        assert!(!should_run_warmup(
+            FunPipelineWarmupMode::Scene,
+            &state(120, 0)
+        ));
         assert!(should_run_warmup(
             FunPipelineWarmupMode::Exhaustive,
-            u32::MAX
+            &state(u32::MAX, u32::MAX)
         ));
     }
 }
