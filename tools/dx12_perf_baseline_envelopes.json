@@ -1,0 +1,109 @@
+{
+  "schema": "fun.dx12_perf_regression.envelopes.v1",
+  "default_lane": "dx12_required_steady_state",
+  "lanes": {
+    "dx12_required_steady_state": {
+      "description": "Required Windows DX12 steady-state lane after warmup. Baseline and current inputs are benchmark_client.ps1 summary.json files from comparable hardware, resolution, present mode, UI state, and build profile.",
+      "hard": [
+        {
+          "id": "frame_p95_regression",
+          "metric": "frame_ns",
+          "field": "p95",
+          "comparison": "max_regression_percent",
+          "direction": "lower",
+          "limit": 10.0,
+          "message": "DX12 frame p95 worsened by more than 10 percent in the required lane."
+        },
+        {
+          "id": "accelerated_cef_cpu_upload",
+          "metric": "cef_cpu_upload_bytes",
+          "field": "mean",
+          "comparison": "max_absolute",
+          "limit": 0.0,
+          "when": "accelerated_cef",
+          "message": "CPU upload bytes appeared in an accelerated CEF lane."
+        },
+        {
+          "id": "runtime_render_pipeline_creation",
+          "metric": "render_churn_render_pipeline_creations",
+          "field": "p95",
+          "comparison": "max_absolute",
+          "limit": 0.0,
+          "message": "Runtime render pipeline creation occurred after warmup."
+        },
+        {
+          "id": "runtime_compute_pipeline_creation",
+          "metric": "render_churn_compute_pipeline_creations",
+          "field": "p95",
+          "comparison": "max_absolute",
+          "limit": 0.0,
+          "message": "Runtime compute pipeline creation occurred after warmup."
+        },
+        {
+          "id": "runtime_shader_pipeline_creation",
+          "metric": "render_shader_pipeline_create_count",
+          "field": "p95",
+          "comparison": "max_absolute",
+          "limit": 0.0,
+          "message": "Shader/pipeline creation was observed in the steady-state sample."
+        }
+      ],
+      "warn": [
+        {
+          "id": "fps_mean_regression",
+          "metric": "fps",
+          "field": "mean",
+          "comparison": "max_regression_percent",
+          "direction": "higher",
+          "limit": 3.0,
+          "message": "DX12 mean FPS worsened by more than 3 percent."
+        },
+        {
+          "id": "present_wait_p95_regression",
+          "metric": "present_wait_ns",
+          "field": "p95",
+          "comparison": "max_regression_percent",
+          "direction": "lower",
+          "limit": 5.0,
+          "message": "DX12 present wait p95 increased."
+        },
+        {
+          "id": "texture_upload_p95_delta",
+          "metric": "render_upload_write_texture_bytes",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 1048576.0,
+          "message": "DX12 texture upload bytes increased by more than 1 MiB at p95."
+        },
+        {
+          "id": "buffer_upload_p95_delta",
+          "metric": "render_upload_write_buffer_bytes",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 1048576.0,
+          "message": "DX12 buffer upload bytes increased by more than 1 MiB at p95."
+        },
+        {
+          "id": "transient_texture_creates",
+          "metric": "transient_texture_creates",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 0.0,
+          "message": "Transient texture creates increased."
+        },
+        {
+          "id": "transient_buffer_creates",
+          "metric": "transient_buffer_creates",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 0.0,
+          "message": "Transient buffer creates increased."
+        }
+      ]
+    }
+  }
+}

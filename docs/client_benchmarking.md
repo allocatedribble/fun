@@ -297,6 +297,42 @@ remain optional and must not regress AMD, Intel, or Vulkan lanes.
 
 See [`dx12_vendor_followup.md`](dx12_vendor_followup.md) for the Tier 16 gate.
 
+## DX12 Perf Regression Gate
+
+Use the local gate when a baseline and candidate `summary.json` are available
+from the same hardware, resolution, present mode, CEF mode, and build profile:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 `
+  -Baseline target\benchmarks\client\<baseline>\summary.json `
+  -Current target\benchmarks\client\<candidate>\summary.json `
+  -ReportPath target\benchmarks\dx12_perf_gate\report.md `
+  -JsonOut target\benchmarks\dx12_perf_gate\report.json
+```
+
+The checked-in envelope is
+[`../tools/dx12_perf_baseline_envelopes.json`](../tools/dx12_perf_baseline_envelopes.json).
+Hard failures are:
+
+- `frame_ns.p95` regresses by more than 10 percent in the required DX12 lane;
+- `cef_cpu_upload_bytes.mean` is nonzero in an accelerated CEF lane;
+- runtime render, compute, or shader pipeline creation appears after warmup.
+
+Warnings do not fail by default. They cover mean FPS regression over 3 percent,
+present-wait p95 increases, upload-byte growth over 1 MiB at p95, and transient
+create-count increases. Use `-FailOnWarning` only for local ratcheting runs.
+
+CI runs correctness-only self-tests on normal Windows runners:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -SelfTest
+```
+
+The `.github/workflows/dx12-perf-gates.yml` hardware job is manual and
+non-blocking. It targets self-hosted runners labeled `windows` and `dx12-perf`;
+those runners can execute the full benchmark matrix when the sibling path
+dependencies are present.
+
 For parser-only checks against an existing client log:
 
 ```powershell

@@ -189,6 +189,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parit
 python tools\dx12_parity_report.py --vulkan target\benchmarks\client\<vulkan>\summary.json --dx12 target\benchmarks\client\<dx12>\summary.json --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
 ```
 
+Local DX12 regression gate once matched baseline/candidate summaries exist:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -Baseline target\benchmarks\client\<baseline>\summary.json -Current target\benchmarks\client\<candidate>\summary.json -ReportPath target\benchmarks\dx12_perf_gate\report.md
+```
+
 `-RenderDiagnostics` also enables render upload counters for
 `RenderQueue::write_texture`, `write_buffer`, and `write_buffer_with`. The
 current upload inventory and cleanup target order are in

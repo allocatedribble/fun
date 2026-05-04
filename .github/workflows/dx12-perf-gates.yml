@@ -1,0 +1,112 @@
+name: DX12 Perf Gates
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/dx12-perf-gates.yml"
+      - "docs/client_benchmarking.md"
+      - "scripts/benchmark_client.ps1"
+      - "scripts/benchmark_dx12_parity.ps1"
+      - "tools/check_dx12_perf_regression.ps1"
+      - "tools/dx12_perf_baseline_envelopes.json"
+      - "tools/dx12_parity_report.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/dx12-perf-gates.yml"
+      - "docs/client_benchmarking.md"
+      - "scripts/benchmark_client.ps1"
+      - "scripts/benchmark_dx12_parity.ps1"
+      - "tools/check_dx12_perf_regression.ps1"
+      - "tools/dx12_perf_baseline_envelopes.json"
+      - "tools/dx12_parity_report.py"
+  workflow_dispatch:
+    inputs:
+      run_hardware_matrix:
+        description: "Run the non-blocking self-hosted Windows DX12 matrix."
+        required: false
+        default: false
+        type: boolean
+      matrix_size:
+        description: "DX12 parity matrix size for hardware runners."
+        required: false
+        default: "quick"
+        type: choice
+        options:
+          - quick
+          - full
+          - present
+      baseline_json:
+        description: "Optional baseline summary.json path on the hardware runner."
+        required: false
+        default: ""
+        type: string
+      current_json:
+        description: "Optional current summary.json path on the hardware runner."
+        required: false
+        default: ""
+        type: string
+      lane:
+        description: "Perf envelope lane name."
+        required: false
+        default: "dx12_required_steady_state"
+        type: string
+
+jobs:
+  correctness:
+    name: correctness-only perf gate checks
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check local DX12 perf gate script
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -SelfTest
+      - name: Check DX12 parity report script
+        shell: pwsh
+        run: python -B tools\dx12_parity_report.py --self-test
+
+  hardware-perf:
+    name: non-blocking hardware DX12 perf matrix
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_hardware_matrix }}
+    runs-on: [self-hosted, windows, dx12-perf]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project-FUN/fun
+      - name: Run DX12 parity matrix when sibling path dependencies are present
+        shell: pwsh
+        working-directory: project-FUN/fun
+        run: |
+          $missing = @()
+          foreach ($path in @("..\bevy", "..\avian", "..\thunder", "..\bevy_quinnet")) {
+            if (-not (Test-Path $path)) {
+              $missing += $path
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Warning "Skipping hardware matrix because sibling path dependencies are missing: $($missing -join ', ')"
+            exit 0
+          }
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize "${{ inputs.matrix_size }}" -ContinueOnFailure -OutputRoot "target\benchmarks\dx12_parity\ci"
+      - name: Compare supplied baseline/current summaries
+        if: ${{ inputs.baseline_json != '' && inputs.current_json != '' }}
+        shell: pwsh
+        working-directory: project-FUN/fun
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 `
+            -Baseline "${{ inputs.baseline_json }}" `
+            -Current "${{ inputs.current_json }}" `
+            -Lane "${{ inputs.lane }}" `
+            -ReportPath "target\benchmarks\dx12_perf_gate\report.md" `
+            -JsonOut "target\benchmarks\dx12_perf_gate\report.json"
+      - name: Upload DX12 perf artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dx12-perf-artifacts
+          path: |
+            project-FUN/fun/target/benchmarks/dx12_parity/**
+            project-FUN/fun/target/benchmarks/dx12_perf_gate/**
+          if-no-files-found: ignore
