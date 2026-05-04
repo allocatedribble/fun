@@ -2,16 +2,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tracing::info;
 
-/// D3D12 resource-state categories expected at the native DLSS injection point.
+/// D3D12 resource-state categories expected at native interop boundaries.
 ///
 /// The first native shim pass should conservatively transition into these
-/// states immediately before evaluation and restore the render graph's expected
-/// output state afterward. Tighter wgpu graph-owned transitions can replace the
-/// shim-owned transitions only after correctness is proven with validation-layer
-/// captures.
+/// states immediately before native work and restore the render graph's
+/// expected output state afterward. Tighter wgpu graph-owned transitions can
+/// replace shim-owned transitions only after correctness is proven with
+/// validation-layer captures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dx12NativeResourceState {
+    Common,
+    CopySource,
+    CopyDest,
     ShaderResource,
+    PixelShaderResource,
     DepthRead,
     UnorderedAccess,
     RenderTarget,
@@ -20,7 +24,11 @@ pub enum Dx12NativeResourceState {
 impl Dx12NativeResourceState {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Common => "common",
+            Self::CopySource => "copy_source",
+            Self::CopyDest => "copy_dest",
             Self::ShaderResource => "shader_resource",
+            Self::PixelShaderResource => "pixel_shader_resource",
             Self::DepthRead => "depth_read",
             Self::UnorderedAccess => "unordered_access",
             Self::RenderTarget => "render_target",

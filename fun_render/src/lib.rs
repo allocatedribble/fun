@@ -1,5 +1,7 @@
 #[cfg(all(feature = "dx12_dlss_native", not(target_os = "windows")))]
 compile_error!("fun_render/dx12_dlss_native is a Windows-only experimental feature");
+#[cfg(all(feature = "dx12_native_interop", not(target_os = "windows")))]
+compile_error!("fun_render/dx12_native_interop is a Windows-only experimental feature");
 
 mod catalog;
 mod compiled_world;
@@ -9,7 +11,7 @@ pub mod core;
 mod dlss_correctness;
 mod dx12_dlss_rr;
 mod dx12_dlss_sr;
-#[cfg(all(target_os = "windows", feature = "dx12_dlss_native"))]
+#[cfg(all(target_os = "windows", feature = "dx12_native_interop"))]
 pub mod dx12_native;
 pub mod lighting;
 #[cfg(feature = "offscreen")]
@@ -62,13 +64,17 @@ pub use dx12_dlss_sr::{
     Dx12NativeDlssSrSupport, Dx12NativeDlssSrTransition, Dx12NativeDlssSrView,
     install_dx12_native_dlss_sr, log_dx12_native_dlss_sr_support_once,
 };
-#[cfg(all(target_os = "windows", feature = "dx12_dlss_native"))]
+#[cfg(all(target_os = "windows", feature = "dx12_native_interop"))]
 pub use dx12_native::{
-    Dx12DlssResourceStatePlan, Dx12DlssResourceStateRules, Dx12NativeHandles,
-    Dx12NativeInteropError, Dx12NativeInteropFailure, Dx12NativeResourceState, Dx12TextureHandle,
-    DxgiFormatLike, extract_dx12_native_handles, extract_dx12_texture_handle,
-    log_dx12_dlss_resource_state_plan_once, validate_dx12_backend, validate_dx12_device_queue,
-    with_dx12_command_list, with_dx12_command_list_checked,
+    Dx12CommandListHandle, Dx12DeviceQueueHandles, Dx12DlssResourceStatePlan,
+    Dx12DlssResourceStateRules, Dx12NativeHandles, Dx12NativeInteropError,
+    Dx12NativeInteropFailure, Dx12NativeObjectKind, Dx12NativeResourceState, Dx12ObjectLabel,
+    Dx12ObjectNameOutcome, Dx12TextureHandle, DxgiFormatLike, active_backend_is_dx12,
+    dx12_object_naming_enabled, extract_dx12_native_handles, extract_dx12_texture_handle,
+    log_dx12_dlss_resource_state_plan_once, set_dx12_object_name, validate_dx12_backend,
+    validate_dx12_device_queue, validate_render_device_dx12_backend, with_dx12_command_list,
+    with_dx12_command_list_checked, with_dx12_device_queue, with_dx12_device_queue_checked,
+    with_dx12_texture, with_dx12_texture_checked,
 };
 #[cfg(feature = "offscreen")]
 pub use offscreen::{EditorOffscreenRenderTarget, FunRenderOffscreenPresentationPlugin};

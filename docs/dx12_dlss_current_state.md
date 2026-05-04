@@ -145,8 +145,9 @@ The acceptance command fails if the estimated stress-frame count is below `-RrSt
 
 ## DX12 Native Interop Boundary
 
-- `fun_render/src/dx12_native/handles.rs` is the only place in `fun_render` allowed to call `Device::as_hal::<Dx12>()`, `Queue::as_hal::<Dx12>()`, `Texture::as_hal::<Dx12>()`, or `CommandEncoder::as_hal_mut::<Dx12>()`.
-- `extract_dx12_native_handles` validates the active wgpu backend is DX12, extracts borrowed `ID3D12Device` and `ID3D12CommandQueue` pointers, checks for null pointers, and logs each failure category once.
+- `fun_render/src/dx12_native/handles.rs` and `fun_render/src/dx12_native/command_encoder.rs` are the only FUN-layer files allowed to call `Device::as_hal::<Dx12>()`, `Queue::as_hal::<Dx12>()`, `Texture::as_hal::<Dx12>()`, or `CommandEncoder::as_hal_mut::<Dx12>()`.
+- `with_dx12_device_queue_checked` validates the active wgpu backend is DX12, extracts borrowed `ID3D12Device` and `ID3D12CommandQueue` pointers, checks for null pointers, and logs each failure category once.
+- `docs/dx12_native_interop_governance.md` is the shared governance note for CEF, DLSS, PIX naming, and future debug tooling.
 - `extract_dx12_texture_handle` validates single-layer, non-MSAA, non-zero 2D textures and maps only the texture formats currently expected for DLSS inputs and outputs.
 - The returned native pointers are borrowed. Rust-side `wgpu::Texture` resources must stay alive through native evaluation, and DLSS input and output resources must not alias during first bring-up.
 - `with_dx12_command_list_checked` validates DX12 command encoder HAL availability but returns `command_list_unavailable` until a sanctioned raw `ID3D12GraphicsCommandList` accessor exists.

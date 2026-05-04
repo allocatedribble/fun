@@ -1,16 +1,22 @@
-use std::ffi::c_void;
+use core::ffi::c_void;
 
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use windows_core::Interface as _;
 
-use super::validation::{Dx12NativeInteropError, Dx12NativeInteropFailure, failure};
+use super::diagnostics::{
+    Dx12NativeInteropError, Dx12NativeInteropFailure, failure, validate_render_device_dx12_backend,
+    validate_wgpu_dx12_backend,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Dx12NativeHandles {
+pub struct Dx12DeviceQueueHandles {
     /// Borrowed `ID3D12Device` COM pointer owned by wgpu.
     pub device: *mut c_void,
     /// Borrowed `ID3D12CommandQueue` COM pointer owned by wgpu.
     pub queue: *mut c_void,
 }
+
+pub type Dx12NativeHandles = Dx12DeviceQueueHandles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dx12TextureHandle {
@@ -71,14 +77,88 @@ impl DxgiFormatLike {
     }
 }
 
-pub fn extract_dx12_native_handles(
+#[must_use]
+pub fn active_backend_is_dx12(render_device: &RenderDevice) -> bool {
+    render_device.wgpu_device().adapter_info().backend == wgpu::Backend::Dx12
+}
+
+/// Runs `f` with borrowed native DX12 device/queue pointers from Bevy's active renderer.
+///
+/// # Safety
+///
+/// The returned pointers are borrowed from wgpu. The closure must not release
+/// them, must not store them without taking its own COM reference, and must only
+/// use them while the source `RenderDevice` and `RenderQueue` remain alive.
+pub unsafe fn with_dx12_device_queue<R>(
+    render_device: &RenderDevice,
+    render_queue: &RenderQueue,
+    f: impl FnOnce(Dx12DeviceQueueHandles) -> R,
+) -> Option<R> {
+    unsafe { with_dx12_device_queue_checked(render_device, render_queue, f).ok() }
+}
+
+/// Checked variant of [`with_dx12_device_queue`].
+///
+/// # Safety
+///
+/// See [`with_dx12_device_queue`]. The closure receives borrowed COM pointers
+/// owned by wgpu and must not release them.
+pub unsafe fn with_dx12_device_queue_checked<R>(
+    render_device: &RenderDevice,
+    render_queue: &RenderQueue,
+    f: impl FnOnce(Dx12DeviceQueueHandles) -> R,
+) -> Result<R, Dx12NativeInteropError> {
+    validate_render_device_dx12_backend(render_device)?;
+
+    let device = unsafe {
+        let Some(hal_device) = render_device.wgpu_device().as_hal::<wgpu::hal::api::Dx12>() else {
+            return Err(failure(
+                Dx12NativeInteropFailure::DeviceHalUnavailable,
+                "wgpu device did not expose a DX12 HAL device",
+            ));
+        };
+        hal_device.raw_device().as_raw()
+    };
+
+    let queue = unsafe {
+        let Some(hal_queue) = render_queue.as_hal::<wgpu::hal::api::Dx12>() else {
+            return Err(failure(
+                Dx12NativeInteropFailure::QueueHalUnavailable,
+                "wgpu queue did not expose a DX12 HAL queue",
+            ));
+        };
+        hal_queue.as_raw().as_raw()
+    };
+
+    if device.is_null() {
+        return Err(failure(
+            Dx12NativeInteropFailure::DeviceHalUnavailable,
+            "DX12 HAL device returned a null ID3D12Device pointer",
+        ));
+    }
+    if queue.is_null() {
+        return Err(failure(
+            Dx12NativeInteropFailure::QueueHalUnavailable,
+            "DX12 HAL queue returned a null ID3D12CommandQueue pointer",
+        ));
+    }
+
+    Ok(f(Dx12DeviceQueueHandles { device, queue }))
+}
+
+/// Extracts borrowed native DX12 device/queue pointers from raw wgpu objects.
+///
+/// # Safety
+///
+/// The returned pointers are borrowed from wgpu. Callers must not release them
+/// and must keep the source `wgpu::Device` and `wgpu::Queue` alive for the
+/// entire native call that consumes the handles.
+pub unsafe fn extract_dx12_native_handles(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> Result<Dx12NativeHandles, Dx12NativeInteropError> {
-    super::validation::validate_dx12_backend(device)?;
+    validate_wgpu_dx12_backend(device)?;
 
-    // SAFETY: `as_hal` only borrows wgpu-owned backend objects. The returned COM
-    // pointers are borrowed and must not be released by callers.
     let device = unsafe {
         let Some(hal_device) = device.as_hal::<wgpu::hal::api::Dx12>() else {
             return Err(failure(
@@ -89,8 +169,6 @@ pub fn extract_dx12_native_handles(
         hal_device.raw_device().as_raw()
     };
 
-    // SAFETY: `as_hal` only borrows the wgpu-owned queue. The returned COM
-    // pointer is borrowed and must not be released by callers.
     let queue = unsafe {
         let Some(hal_queue) = queue.as_hal::<wgpu::hal::api::Dx12>() else {
             return Err(failure(
@@ -114,15 +192,47 @@ pub fn extract_dx12_native_handles(
         ));
     }
 
-    Ok(Dx12NativeHandles { device, queue })
+    Ok(Dx12DeviceQueueHandles { device, queue })
 }
 
-/// Extracts a borrowed native texture handle for the native DLSS shim.
+/// Runs `f` with a borrowed native D3D12 texture resource pointer.
+///
+/// # Safety
+///
+/// The returned pointer is borrowed from wgpu. The closure must not release it,
+/// must not use it after `texture` is dropped, and must respect wgpu's resource
+/// state ownership unless a higher-level native interop path explicitly owns
+/// the transition plan.
+pub unsafe fn with_dx12_texture<R>(
+    texture: &wgpu::Texture,
+    f: impl FnOnce(Dx12TextureHandle) -> R,
+) -> Option<R> {
+    unsafe { with_dx12_texture_checked(texture, f).ok() }
+}
+
+/// Checked variant of [`with_dx12_texture`].
+///
+/// # Safety
+///
+/// See [`with_dx12_texture`]. The closure receives a borrowed
+/// `ID3D12Resource` pointer owned by wgpu.
+pub unsafe fn with_dx12_texture_checked<R>(
+    texture: &wgpu::Texture,
+    f: impl FnOnce(Dx12TextureHandle) -> R,
+) -> Result<R, Dx12NativeInteropError> {
+    let handle = unsafe { extract_dx12_texture_handle(texture)? };
+    Ok(f(handle))
+}
+
+/// Extracts a borrowed native texture handle.
+///
+/// # Safety
 ///
 /// The returned pointer does not AddRef the underlying COM object. The source
-/// `wgpu::Texture` must stay alive and must not alias the DLSS output resource
-/// through the entire native evaluation call.
-pub fn extract_dx12_texture_handle(
+/// `wgpu::Texture` must stay alive through the entire native use, and callers
+/// must not assume wgpu's resource-state tracker knows about external D3D12
+/// transitions.
+pub unsafe fn extract_dx12_texture_handle(
     texture: &wgpu::Texture,
 ) -> Result<Dx12TextureHandle, Dx12NativeInteropError> {
     let width = texture.width();
@@ -130,32 +240,29 @@ pub fn extract_dx12_texture_handle(
     if width == 0 || height == 0 {
         return Err(failure(
             Dx12NativeInteropFailure::InvalidTextureDimensions,
-            "DLSS native textures must have non-zero dimensions",
+            "DX12 native textures must have non-zero dimensions",
         ));
     }
     if texture.dimension() != wgpu::TextureDimension::D2 || texture.depth_or_array_layers() != 1 {
         return Err(failure(
             Dx12NativeInteropFailure::UnsupportedTextureShape,
-            "DLSS native textures must be single-layer 2D textures",
+            "DX12 native textures must be single-layer 2D textures",
         ));
     }
     if texture.sample_count() != 1 {
         return Err(failure(
             Dx12NativeInteropFailure::UnsupportedTextureShape,
-            "DLSS native textures must not be multisampled",
+            "DX12 native textures must not be multisampled",
         ));
     }
 
     let Some(format) = DxgiFormatLike::from_wgpu(texture.format()) else {
         return Err(failure(
             Dx12NativeInteropFailure::UnsupportedTextureFormat,
-            "texture format is not mapped for DX12 DLSS native interop",
+            "texture format is not mapped for DX12 native interop",
         ));
     };
 
-    // SAFETY: `as_hal` only borrows the wgpu-owned texture. The native resource
-    // pointer is borrowed; callers must keep the source texture alive through the
-    // native DLSS evaluation.
     let resource = unsafe {
         let Some(hal_texture) = texture.as_hal::<wgpu::hal::api::Dx12>() else {
             return Err(failure(
@@ -179,42 +286,4 @@ pub fn extract_dx12_texture_handle(
         width,
         height,
     })
-}
-
-/// Runs `f` with a borrowed `ID3D12GraphicsCommandList` pointer when available.
-///
-/// This currently returns `None` after validating DX12 HAL encoder availability
-/// because wgpu-hal 29 does not expose the underlying command list. It is kept as
-/// the sole future call site so DLSS bring-up does not scatter HAL extraction.
-pub fn with_dx12_command_list<R>(
-    encoder: &mut wgpu::CommandEncoder,
-    f: impl FnOnce(*mut c_void) -> R,
-) -> Option<R> {
-    with_dx12_command_list_checked(encoder, f).ok()
-}
-
-/// Checked variant of [`with_dx12_command_list`].
-pub fn with_dx12_command_list_checked<R>(
-    encoder: &mut wgpu::CommandEncoder,
-    _f: impl FnOnce(*mut c_void) -> R,
-) -> Result<R, Dx12NativeInteropError> {
-    // SAFETY: This validates that wgpu can open the DX12 HAL command encoder.
-    // wgpu-hal 29 does not publicly expose the inner ID3D12GraphicsCommandList,
-    // so this function intentionally fails closed until the renderer owns a
-    // sanctioned raw-command-list accessor.
-    unsafe {
-        encoder.as_hal_mut::<wgpu::hal::api::Dx12, _, _>(|encoder| {
-            let Some(_encoder) = encoder else {
-                return Err(failure(
-                    Dx12NativeInteropFailure::CommandEncoderHalUnavailable,
-                    "wgpu command encoder did not expose a DX12 HAL command encoder",
-                ));
-            };
-
-            Err(failure(
-                Dx12NativeInteropFailure::CommandListUnavailable,
-                "wgpu-hal DX12 command encoder does not expose ID3D12GraphicsCommandList",
-            ))
-        })
-    }
 }

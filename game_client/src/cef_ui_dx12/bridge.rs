@@ -53,7 +53,9 @@ use windows::{
 
 use super::{
     diagnostics::{Dx12CefInteropDiagnosticSnapshot, Dx12CefInteropDiagnostics},
-    handles::{Dx12CefNativeHandles, extract_wgpu_dx12_handles},
+    handles::{
+        Dx12CefNativeHandles, clone_dx12_resource_from_wgpu_texture, extract_wgpu_dx12_handles,
+    },
     ring::{
         Dx12CefRingSlotRequest, Dx12CefSlotState, Dx12CefTextureRing, Dx12CefTextureSlot,
         DxgiFormat,
@@ -376,6 +378,7 @@ impl Dx12CefInterop {
             )
         })?;
         let copy_commands = Dx12CefCopyCommandState::create(&handles.d3d12_device)?;
+        label_cef_bridge_objects(&handles.d3d12_queue, &fence, &copy_commands);
         let interop = Self {
             d3d12_device: handles.d3d12_device,
             d3d12_queue: handles.d3d12_queue,
@@ -643,8 +646,12 @@ impl Dx12CefInterop {
             match slots.next_copy_slot_request(width, height, CEF_GPU_FORMAT_POLICY.target) {
                 Dx12CefRingSlotRequest::Reuse { index } => index,
                 Dx12CefRingSlotRequest::Allocate { index } => {
-                    let slot =
-                        self.create_destination_slot(width, height, CEF_GPU_FORMAT_POLICY.target)?;
+                    let slot = self.create_destination_slot(
+                        index,
+                        width,
+                        height,
+                        CEF_GPU_FORMAT_POLICY.target,
+                    )?;
                     slots.install_slot(index, slot);
                     index
                 }
@@ -756,6 +763,7 @@ impl Dx12CefInterop {
 
     fn create_destination_slot(
         &self,
+        slot_index: usize,
         width: u32,
         height: u32,
         format: DxgiFormat,
@@ -807,6 +815,7 @@ impl Dx12CefInterop {
                 None,
             )
         })?;
+        label_cef_ring_texture(&d3d12_resource, slot_index, width, height, format);
         let wrapped_d3d11_resource = self.wrap_destination_texture(&d3d12_resource)?;
 
         Ok(Dx12CefTextureSlot {
@@ -1187,15 +1196,94 @@ fn validate_bevy_target(
 fn bevy_gpu_image_dx12_resource(
     gpu_image: &GpuImage,
 ) -> Result<ID3D12Resource, Dx12CefInteropError> {
-    unsafe {
-        let Some(hal_texture) = gpu_image.texture.as_hal::<wgpu::hal::api::Dx12>() else {
-            return Err(Dx12CefInteropError::new(
-                Dx12CefInteropFailure::BevyTargetTextureHalUnavailable,
-                "Bevy UI image texture did not expose a DX12 HAL texture",
-                None,
-            ));
-        };
-        Ok(hal_texture.raw_resource().clone())
+    clone_dx12_resource_from_wgpu_texture(&gpu_image.texture)
+}
+
+#[cfg(all(target_os = "windows", feature = "dx12_native_object_names"))]
+fn label_cef_bridge_objects(
+    queue: &ID3D12CommandQueue,
+    fence: &ID3D12Fence,
+    copy_commands: &Dx12CefCopyCommandState,
+) {
+    label_dx12_object(
+        queue.as_raw(),
+        fun_render::dx12_native::Dx12ObjectLabel::logical(
+            fun_render::dx12_native::Dx12NativeObjectKind::CommandQueue,
+            "CEF",
+            "D3D12",
+            "Queue",
+        ),
+    );
+    label_dx12_object(
+        fence.as_raw(),
+        fun_render::dx12_native::Dx12ObjectLabel::logical(
+            fun_render::dx12_native::Dx12NativeObjectKind::Fence,
+            "CEF",
+            "Copy",
+            "Fence",
+        ),
+    );
+    label_dx12_object(
+        copy_commands.command_list.as_raw(),
+        fun_render::dx12_native::Dx12ObjectLabel::logical(
+            fun_render::dx12_native::Dx12NativeObjectKind::CommandList,
+            "CEF",
+            "Copy",
+            "CommandList",
+        ),
+    );
+}
+
+#[cfg(not(all(target_os = "windows", feature = "dx12_native_object_names")))]
+fn label_cef_bridge_objects(
+    _queue: &ID3D12CommandQueue,
+    _fence: &ID3D12Fence,
+    _copy_commands: &Dx12CefCopyCommandState,
+) {
+}
+
+#[cfg(all(target_os = "windows", feature = "dx12_native_object_names"))]
+fn label_cef_ring_texture(
+    resource: &ID3D12Resource,
+    slot_index: usize,
+    width: u32,
+    height: u32,
+    format: DxgiFormat,
+) {
+    label_dx12_object(
+        resource.as_raw(),
+        fun_render::dx12_native::Dx12ObjectLabel::cef_ring_texture(
+            slot_index,
+            width,
+            height,
+            dxgi_format_label(format),
+        ),
+    );
+}
+
+#[cfg(not(all(target_os = "windows", feature = "dx12_native_object_names")))]
+fn label_cef_ring_texture(
+    _resource: &ID3D12Resource,
+    _slot_index: usize,
+    _width: u32,
+    _height: u32,
+    _format: DxgiFormat,
+) {
+}
+
+#[cfg(all(target_os = "windows", feature = "dx12_native_object_names"))]
+fn label_dx12_object(
+    raw_object: *mut std::ffi::c_void,
+    label: fun_render::dx12_native::Dx12ObjectLabel<'_>,
+) {
+    if let Err(error) = unsafe { fun_render::dx12_native::set_dx12_object_name(raw_object, label) }
+    {
+        tracing::debug!(
+            target: "fun::ui",
+            failure = error.failure.as_str(),
+            detail = error.detail,
+            "CEF DX12 object naming skipped"
+        );
     }
 }
 

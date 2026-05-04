@@ -12,7 +12,9 @@ benchmarks = []
 cloud_diagnostics = ["render_diagnostics"]
 diagnostics = ["game_shared/diagnostics"]
 dlss = ["bevy/dlss"]
-dx12_dlss_native = ["dep:wgpu", "dep:windows-core"]
+dx12_dlss_native = ["dx12_native_interop"]
+dx12_native_interop = ["dep:wgpu", "dep:windows-core"]
+dx12_native_object_names = ["dx12_native_interop", "dep:windows"]
 force_disable_dlss = ["bevy/force_disable_dlss"]
 offscreen = []
 render_diagnostics = [
@@ -34,3 +36,4 @@ wgpu = { version = "29.0.1", default-features = false, features = ["dx12"], opti
 
 [target.'cfg(windows)'.dependencies]
 windows-core = { version = "0.62", optional = true }
+windows = { version = "0.62", optional = true, features = ["Win32_Graphics_Direct3D12"] }

@@ -15,6 +15,11 @@ cef_ui_dx12_accelerated_paint = [
     "cef_ui",
     "dep:wgpu",
     "dep:windows",
+    "fun_render/dx12_native_interop",
+]
+dx12_native_object_names = [
+    "cef_ui_dx12_accelerated_paint",
+    "fun_render/dx12_native_object_names",
 ]
 diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
 dlss = ["bevy/dlss", "fun_render/dlss"]

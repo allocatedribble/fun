@@ -3110,6 +3110,7 @@ dependencies = [
 name = "fun-warden-protocol"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "fun-warden-core",
  "serde",
  "thiserror 2.0.18",
@@ -3171,6 +3172,7 @@ dependencies = [
  "thunder",
  "tracing",
  "wgpu",
+ "windows",
  "windows-core",
 ]
 

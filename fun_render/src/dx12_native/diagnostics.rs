@@ -1,9 +1,9 @@
 use std::{
     error::Error,
-    fmt,
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -17,6 +17,8 @@ pub enum Dx12NativeInteropFailure {
     InvalidTextureDimensions,
     UnsupportedTextureFormat,
     UnsupportedTextureShape,
+    ObjectNameUnavailable,
+    ObjectNameFailed,
 }
 
 impl Dx12NativeInteropFailure {
@@ -31,6 +33,8 @@ impl Dx12NativeInteropFailure {
             Self::InvalidTextureDimensions => "invalid_texture_dimensions",
             Self::UnsupportedTextureFormat => "unsupported_texture_format",
             Self::UnsupportedTextureShape => "unsupported_texture_shape",
+            Self::ObjectNameUnavailable => "object_name_unavailable",
+            Self::ObjectNameFailed => "object_name_failed",
         }
     }
 
@@ -45,6 +49,8 @@ impl Dx12NativeInteropFailure {
             Self::InvalidTextureDimensions => 6,
             Self::UnsupportedTextureFormat => 7,
             Self::UnsupportedTextureShape => 8,
+            Self::ObjectNameUnavailable => 9,
+            Self::ObjectNameFailed => 10,
         }
     }
 }
@@ -61,15 +67,17 @@ impl Dx12NativeInteropError {
     }
 }
 
-impl fmt::Display for Dx12NativeInteropError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for Dx12NativeInteropError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}: {}", self.failure.as_str(), self.detail)
     }
 }
 
 impl Error for Dx12NativeInteropError {}
 
-static LOGGED_FAILURES: [AtomicBool; 9] = [
+static LOGGED_FAILURES: [AtomicBool; 11] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
     AtomicBool::new(false),
     AtomicBool::new(false),
     AtomicBool::new(false),
@@ -95,12 +103,18 @@ pub(crate) fn log_failure_once(failure: Dx12NativeInteropFailure, detail: &'stat
             target: "fun::render::dx12_native",
             failure = failure.as_str(),
             detail,
-            "FUN DX12 native interop disabled"
+            "FUN DX12 native interop unavailable"
         );
     }
 }
 
 pub fn validate_dx12_backend(device: &wgpu::Device) -> Result<(), Dx12NativeInteropError> {
+    validate_wgpu_dx12_backend(device)
+}
+
+pub(crate) fn validate_wgpu_dx12_backend(
+    device: &wgpu::Device,
+) -> Result<(), Dx12NativeInteropError> {
     let backend = device.adapter_info().backend;
     if backend == wgpu::Backend::Dx12 {
         Ok(())
@@ -112,9 +126,15 @@ pub fn validate_dx12_backend(device: &wgpu::Device) -> Result<(), Dx12NativeInte
     }
 }
 
-pub fn validate_dx12_device_queue(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
+pub fn validate_render_device_dx12_backend(
+    render_device: &RenderDevice,
 ) -> Result<(), Dx12NativeInteropError> {
-    super::handles::extract_dx12_native_handles(device, queue).map(|_| ())
+    validate_wgpu_dx12_backend(render_device.wgpu_device())
+}
+
+pub fn validate_dx12_device_queue(
+    render_device: &RenderDevice,
+    render_queue: &RenderQueue,
+) -> Result<(), Dx12NativeInteropError> {
+    unsafe { super::handles::with_dx12_device_queue_checked(render_device, render_queue, |_| ()) }
 }

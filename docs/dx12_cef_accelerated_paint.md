@@ -152,7 +152,8 @@ Rules:
 - Do not cache CEF's shared handle outside `OnAcceleratedPaint`.
 - Copy into a FUN-owned D3D12/wgpu texture before CEF returns the frame to its
   pool.
-- Keep all raw COM pointer and wgpu HAL extraction inside one narrow module.
+- Keep all wgpu HAL extraction inside `fun_render::dx12_native`; CEF-specific
+  D3D11On12 COM work stays inside `game_client/src/cef_ui_dx12`.
 - Log the requested and selected paint transport on startup, including
   `disabled`, `cpu`, `d3d11on12`, and `auto` decisions.
 - Expose paint callback FPS separately from Svelte `requestAnimationFrame` FPS
@@ -273,8 +274,10 @@ main world
 
 When `cef_ui_dx12_accelerated_paint` is not compiled, the render-world slot
 records `d3d11on12_bridge_unavailable` after it observes the render device and
-queue. When the feature is compiled, `game_client/src/cef_ui_dx12` is the only
-module that extracts wgpu DX12 HAL handles. It:
+queue. When the feature is compiled, `game_client/src/cef_ui_dx12` builds the
+CEF-specific D3D11On12 bridge, but all wgpu DX12 HAL extraction goes through
+`fun_render::dx12_native` as documented in
+`docs/dx12_native_interop_governance.md`. The bridge:
 
 - confirms the active wgpu backend is DX12;
 - clones the active `ID3D12Device` and `ID3D12CommandQueue`;

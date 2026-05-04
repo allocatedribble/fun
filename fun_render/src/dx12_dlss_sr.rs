@@ -810,7 +810,7 @@ fn evaluate_dx12_native_dlss_sr(
             &depth.texture.texture,
             &motion_vectors.texture.texture,
         ] {
-            if let Err(error) = extract_dx12_texture_handle(texture) {
+            if let Err(error) = unsafe { extract_dx12_texture_handle(texture) } {
                 return Some(match error.failure {
                     Dx12NativeInteropFailure::WrongBackend => Dx12NativeDlssSrFailure::WrongBackend,
                     Dx12NativeInteropFailure::InvalidTextureDimensions => {
@@ -831,11 +831,16 @@ fn evaluate_dx12_native_dlss_sr(
                     Dx12NativeInteropFailure::CommandListUnavailable => {
                         Dx12NativeDlssSrFailure::CommandListUnavailable
                     }
+                    Dx12NativeInteropFailure::ObjectNameUnavailable
+                    | Dx12NativeInteropFailure::ObjectNameFailed => {
+                        Dx12NativeDlssSrFailure::NativeShimUnavailable
+                    }
                 });
             }
         }
 
-        let command_list = with_dx12_command_list_checked(encoder, |command_list| command_list);
+        let command_list =
+            unsafe { with_dx12_command_list_checked(encoder, |handle| handle.command_list) };
         if let Err(error) = command_list {
             return Some(match error.failure {
                 Dx12NativeInteropFailure::WrongBackend => Dx12NativeDlssSrFailure::WrongBackend,
@@ -856,6 +861,10 @@ fn evaluate_dx12_native_dlss_sr(
                 | Dx12NativeInteropFailure::UnsupportedTextureFormat
                 | Dx12NativeInteropFailure::UnsupportedTextureShape => {
                     Dx12NativeDlssSrFailure::InvalidResource
+                }
+                Dx12NativeInteropFailure::ObjectNameUnavailable
+                | Dx12NativeInteropFailure::ObjectNameFailed => {
+                    Dx12NativeDlssSrFailure::NativeShimUnavailable
                 }
             });
         }
