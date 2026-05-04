@@ -13,6 +13,9 @@ Status: measurement slice, upload cleanup tier 3.1.
   `[client perf] render upload top:` callsites.
 - `scripts/benchmark_client.ps1` records upload totals in `metrics` and
   aggregates top callsites under `render_upload_callsites`.
+- `tools/dx12_parity_report.py` turns the DX12 summary's
+  `render_upload_callsites` into a top-callsite kill list with calls/frame,
+  bytes/frame, calls/sec, bytes/sec, p95 impact guess, and a recommended fix.
 
 ## Inventory Summary
 
@@ -41,6 +44,11 @@ Categories:
 First optimization targets should come from measured top-ten callsites, not from
 the static inventory alone.
 
+Current local DX12 auto-no-vsync evidence points at Bevy generic
+`DynamicUniformBuffer` and `RawBufferVec` helper rows before any `fun_render`
+semantic owner is known. Those rows need semantic label splitting or a Bevy
+prepare/upload scheduling change before a hot owner can be moved safely.
+
 Priority order:
 
 1. CEF CPU texture uploads when the accelerated DX12 lane is unavailable or
@@ -58,3 +66,12 @@ Priority order:
 - Add a persistent texture-upload ring for unavoidable CPU texture uploads after
   the CEF accelerated path and dirty-rect behavior are measured in the same
   benchmark lane.
+
+## Upload Arena Boundary
+
+`fun_render::FunUploadArena` is available as the narrow staging-belt boundary
+for measured hot small-buffer writes that already have a render command encoder.
+Do not force Bevy prepare-stage `RenderQueue::write_buffer` helpers through it
+by creating ad hoc per-callsite encoders or submits; that would trade upload
+allocation pressure for submit and synchronization pressure. Move a hot owner
+only after the report's kill list and a render-schedule insertion point agree.

@@ -20,6 +20,7 @@ mod pipeline_warmup;
 mod signature;
 pub mod sky;
 pub mod solari;
+pub mod upload_arena;
 #[cfg(feature = "winit_presentation")]
 pub mod winit;
 pub mod world_stream;
@@ -90,6 +91,10 @@ pub use sky::{
 pub use solari::benchmark_parse_solari_denoise_mode;
 pub use solari::{
     parse_solari_denoise_mode, solari_runtime_params_from_env, solari_settings_from_env,
+};
+pub use upload_arena::{
+    FunUploadArena, FunUploadArenaLabelStats, FunUploadArenaStats, UploadArenaError,
+    UploadWriteLabel,
 };
 #[cfg(feature = "winit_presentation")]
 pub use winit::FunRenderWinitPresentationPlugin;

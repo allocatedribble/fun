@@ -561,6 +561,141 @@ def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def summary_sample_seconds(summary: dict[str, Any]) -> float:
+    seconds = number(get_path(summary, "samples", "sample_seconds"))
+    if seconds is not None and seconds > 0.0:
+        return seconds
+    count = number(get_path(summary, "samples", "count"))
+    if count is not None and count > 0.0:
+        return count
+    fps_count = metric_value(summary, "fps", "count")
+    if fps_count is not None and fps_count > 0.0:
+        return fps_count
+    return 1.0
+
+
+def upload_callsite_fix(operation: str, label: str) -> str:
+    normalized = normalize_key(f"{operation} {label}")
+    if "cef_ui_cpu_paint" in normalized:
+        return "accelerated CEF or persistent texture upload ring"
+    if operation == "write_texture":
+        if "texture_gpu_image" in normalized:
+            return "prove startup-only or move dynamic image uploads to persistent texture ring"
+        return "persistent texture upload ring with dirty-rect batching"
+    if "meshlet" in normalized or "visibility" in normalized:
+        return "move measured meshlet/visibility writes to staging belt or range batching"
+    if "uniform_buffer" in normalized:
+        return "move owning dynamic uniform writer to FunUploadArena after semantic label split"
+    if "buffer_vec" in normalized:
+        return "batch owning BufferVec writes or move proven hot owner to FunUploadArena"
+    if "solari" in normalized:
+        return "batch Solari constants or stage them through FunUploadArena"
+    if "debug" in normalized or "overlay" in normalized:
+        return "batch debug overlay writes through staging belt"
+    return "add semantic label, then choose staging belt, batching, or texture ring"
+
+
+def upload_callsite_impact(
+    operation: str,
+    calls_per_frame: float | None,
+    bytes_per_frame: float | None,
+    bytes_per_second: float,
+) -> str:
+    if operation == "write_texture" and (
+        bytes_per_second >= 16.0 * 1024.0 * 1024.0
+        or (bytes_per_frame is not None and bytes_per_frame >= 256.0 * 1024.0)
+    ):
+        return "high"
+    if calls_per_frame is not None and calls_per_frame >= 4.0:
+        return "high"
+    if bytes_per_frame is not None and bytes_per_frame >= 64.0 * 1024.0:
+        return "high"
+    if bytes_per_second >= 1.0 * 1024.0 * 1024.0:
+        return "medium"
+    if calls_per_frame is not None and calls_per_frame >= 1.0:
+        return "medium"
+    if bytes_per_frame is not None and bytes_per_frame >= 4.0 * 1024.0:
+        return "medium"
+    return "low"
+
+
+def build_upload_callsite_kill_list(summary: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+    raw_callsites = summary.get("render_upload_callsites")
+    if not isinstance(raw_callsites, list):
+        return []
+    backend = backend_summary(summary)["backend"]
+    sample_seconds = summary_sample_seconds(summary)
+    fps = metric_value(summary, "fps", "mean")
+    frame_count = fps * sample_seconds if fps is not None and fps > 0.0 else None
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for callsite in raw_callsites:
+        if not isinstance(callsite, dict):
+            continue
+        operation = str(callsite.get("operation") or "unknown")
+        label = str(callsite.get("label") or "unknown")
+        calls = number(callsite.get("calls")) or 0.0
+        bytes_uploaded = number(callsite.get("bytes")) or 0.0
+        samples = number(callsite.get("samples")) or 0.0
+        key = (operation, label)
+        entry = merged.setdefault(
+            key,
+            {
+                "operation": operation,
+                "label": label,
+                "calls": 0.0,
+                "bytes": 0.0,
+                "samples": 0.0,
+            },
+        )
+        entry["calls"] += calls
+        entry["bytes"] += bytes_uploaded
+        entry["samples"] += samples
+
+    rows: list[dict[str, Any]] = []
+    for entry in merged.values():
+        calls = float(entry["calls"])
+        bytes_uploaded = float(entry["bytes"])
+        calls_per_second = calls / sample_seconds
+        bytes_per_second = bytes_uploaded / sample_seconds
+        calls_per_frame = calls / frame_count if frame_count and frame_count > 0.0 else None
+        bytes_per_frame = bytes_uploaded / frame_count if frame_count and frame_count > 0.0 else None
+        operation = str(entry["operation"])
+        label = str(entry["label"])
+        rows.append(
+            {
+                "rank": 0,
+                "callsite": f"{operation}:{label}",
+                "backend": backend,
+                "operation": operation,
+                "label": label,
+                "calls": int(calls),
+                "bytes": int(bytes_uploaded),
+                "samples": int(entry["samples"]),
+                "calls_per_frame": calls_per_frame,
+                "bytes_per_frame": bytes_per_frame,
+                "calls_per_second": calls_per_second,
+                "bytes_per_second": bytes_per_second,
+                "p95_impact_guess": upload_callsite_impact(
+                    operation,
+                    calls_per_frame,
+                    bytes_per_frame,
+                    bytes_per_second,
+                ),
+                "fix": upload_callsite_fix(operation, label),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            -float(row["bytes_per_second"]),
+            -float(row["calls_per_second"]),
+            str(row["callsite"]),
+        )
+    )
+    for index, row in enumerate(rows[:limit], start=1):
+        row["rank"] = index
+    return rows[:limit]
+
+
 def vendor_follow_up(category: str, dx12: dict[str, Any]) -> dict[str, Any]:
     vendor = infer_adapter_vendor(dx12)
     actions: tuple[str, ...] = ()
@@ -1248,6 +1383,7 @@ def write_json_report(
     bottleneck: tuple[str, str, list[str]],
     failures: list[str],
     rows: list[dict[str, Any]],
+    top_upload_callsites: list[dict[str, Any]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     category, trace, reasons = bottleneck
@@ -1263,6 +1399,7 @@ def write_json_report(
         "legacy_required_trace": trace,
         "legacy_evidence": reasons,
         "lane_failures": failures,
+        "top_upload_callsites": top_upload_callsites,
         "red_metrics": [
             row["metric"]
             for row in rows
@@ -1279,6 +1416,7 @@ def write_markdown(
     rows: list[dict[str, Any]],
     bottleneck: tuple[str, str, list[str]],
     recommendation: dict[str, Any],
+    top_upload_callsites: list[dict[str, Any]],
     failures: list[str],
     pix: dict[str, float],
     presentmon: dict[str, float],
@@ -1360,6 +1498,31 @@ def write_markdown(
     if missing_evidence:
         for missing in missing_evidence:
             lines.append(f"- missing_evidence: {missing}")
+
+    lines.extend(["", "## Top Upload Callsites", ""])
+    if top_upload_callsites:
+        lines.extend(
+            [
+                "| rank | callsite | backend | calls/frame | bytes/frame | calls/sec | bytes/sec | p95 impact guess | fix |",
+                "|---:|---|---|---:|---:|---:|---:|---|---|",
+            ]
+        )
+        for row in top_upload_callsites:
+            lines.append(
+                "| {rank} | {callsite} | {backend} | {calls_per_frame} | {bytes_per_frame} | {calls_per_second} | {bytes_per_second} | {impact} | {fix} |".format(
+                    rank=row["rank"],
+                    callsite=row["callsite"],
+                    backend=row["backend"],
+                    calls_per_frame=format_number(row["calls_per_frame"]),
+                    bytes_per_frame=format_bytes(row["bytes_per_frame"]),
+                    calls_per_second=format_number(row["calls_per_second"]),
+                    bytes_per_second=format_bytes(row["bytes_per_second"]),
+                    impact=row["p95_impact_guess"],
+                    fix=row["fix"],
+                )
+            )
+    else:
+        lines.append("- No `render_upload_callsites` table was present; rerun with render upload counters enabled.")
 
     lines.extend(
         [
@@ -1468,11 +1631,23 @@ def run_report(args: argparse.Namespace) -> int:
     failures = lane_failure_messages(dx12)
     bottleneck = likely_bottleneck(rows, vulkan, dx12, pix, presentmon)
     recommendation = build_next_action_recommendation(rows, vulkan, dx12, pix, presentmon, failures)
+    top_upload_callsites = build_upload_callsite_kill_list(dx12)
     write_csv(Path(args.csv_summary), rows)
     json_report = getattr(args, "json_report", "")
     if json_report:
-        write_json_report(Path(json_report), recommendation, bottleneck, failures, rows)
-    write_markdown(Path(args.markdown_report), vulkan, dx12, rows, bottleneck, recommendation, failures, pix, presentmon)
+        write_json_report(Path(json_report), recommendation, bottleneck, failures, rows, top_upload_callsites)
+    write_markdown(
+        Path(args.markdown_report),
+        vulkan,
+        dx12,
+        rows,
+        bottleneck,
+        recommendation,
+        top_upload_callsites,
+        failures,
+        pix,
+        presentmon,
+    )
     return 2 if failures else 0
 
 
@@ -1484,6 +1659,7 @@ def write_sample_summary(
     cef_cpu_bytes: float,
     gpu_name: str = "Synthetic GPU",
     extra_metrics: dict[str, dict[str, float]] | None = None,
+    render_upload_callsites: list[dict[str, Any]] | None = None,
     memory_budget: float | None = None,
     memory_usage: float | None = None,
 ) -> None:
@@ -1505,6 +1681,12 @@ def write_sample_summary(
             "present_wait_ns": {"mean": 100_000.0, "p95": 100_000.0},
             "cef_cpu_upload_bytes": {"mean": cef_cpu_bytes, "p95": cef_cpu_bytes},
         },
+        "samples": {
+            "count": 4,
+            "warmup_seconds": 0,
+            "sample_seconds": 8,
+            "input_log_mode": False,
+        },
     }
     if memory_budget is not None or memory_usage is not None:
         payload["dx12_memory"] = {
@@ -1518,6 +1700,8 @@ def write_sample_summary(
         }
     if extra_metrics:
         payload["metrics"].update(extra_metrics)
+    if render_upload_callsites is not None:
+        payload["render_upload_callsites"] = render_upload_callsites
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -1650,6 +1834,32 @@ def self_test() -> int:
             extra_metrics={
                 "render_upload_write_texture_bytes": {"mean": 4_194_304.0, "p95": 4_194_304.0},
             },
+            render_upload_callsites=[
+                {
+                    "rank": 1,
+                    "operation": "write_texture",
+                    "label": "cef_ui.cpu_paint.full_frame@game_client\\src\\cef_ui.rs:3539",
+                    "calls": 16,
+                    "bytes": 67_108_864,
+                    "samples": 4,
+                },
+                {
+                    "rank": 2,
+                    "operation": "write_buffer",
+                    "label": "bevy\\crates\\bevy_render\\src\\render_resource\\buffer_vec.rs:183",
+                    "calls": 400,
+                    "bytes": 262_144,
+                    "samples": 4,
+                },
+                {
+                    "rank": 3,
+                    "operation": "write_buffer",
+                    "label": "bevy\\crates\\bevy_render\\src\\render_resource\\buffer_vec.rs:183",
+                    "calls": 100,
+                    "bytes": 131_072,
+                    "samples": 1,
+                },
+            ],
         )
         code = run_report(
             argparse.Namespace(
@@ -1662,6 +1872,7 @@ def self_test() -> int:
                 presentmon_csv="",
             )
         )
+        upload_markdown = (root / "upload_report.md").read_text(encoding="utf-8")
         recommendation = json.loads(upload_json.read_text(encoding="utf-8"))
         if code != 0:
             raise AssertionError("generic CPU upload scenario should not fail the lane")
@@ -1669,6 +1880,14 @@ def self_test() -> int:
             raise AssertionError("high write_texture bytes did not produce the CPU upload recommendation")
         if recommendation["required_trace"] != "upload_callsite_table":
             raise AssertionError("CPU upload recommendation did not require the upload callsite table")
+        if "## Top Upload Callsites" not in upload_markdown:
+            raise AssertionError("top upload callsite table was not rendered")
+        if not recommendation["top_upload_callsites"]:
+            raise AssertionError("top upload callsites were not written to JSON")
+        if recommendation["top_upload_callsites"][0]["fix"] != "accelerated CEF or persistent texture upload ring":
+            raise AssertionError("CEF upload callsite did not get the CEF transport fix")
+        if recommendation["top_upload_callsites"][1]["calls"] != 500:
+            raise AssertionError("duplicate upload callsite labels were not merged")
 
         inconclusive_dx12 = root / "dx12_missing_present.json"
         inconclusive_json = root / "missing_present_report.json"
