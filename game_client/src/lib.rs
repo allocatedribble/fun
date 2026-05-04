@@ -624,6 +624,20 @@ struct ClientRenderWorldParam<'w> {
     ack_state: ResMut<'w, ClientWorldStreamAckState>,
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+struct ClientTemporalRenderControls<'w, 's> {
+    solari_cameras: Query<'w, 's, Entity, (With<Camera3d>, Without<SolariLighting>)>,
+    solari_lighting: Query<'w, 's, &'static mut SolariLighting>,
+    solari_reset_events: MessageWriter<'w, SolariResetEvent>,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    dlss_rr_supported: Option<Res<'w, DlssRayReconstructionSupported>>,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    dlss_rr_cameras:
+        Query<'w, 's, Entity, (With<Camera3d>, Without<Dlss<DlssRayReconstructionFeature>>)>,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    dlss_rr: Query<'w, 's, &'static mut Dlss<DlssRayReconstructionFeature>>,
+}
+
 #[cfg_attr(not(all(feature = "diagnostics", debug_assertions)), allow(dead_code))]
 #[derive(Debug, Clone, Copy, Resource)]
 pub(crate) struct ClientLogConfig {
@@ -1077,19 +1091,7 @@ fn apply_static_preview_world_stream(
     mut runtime: ClientRuntimeProfiler,
     #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
     runtime: ClientRuntimeProfiler,
-    solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
-    mut solari_lighting: Query<&mut SolariLighting>,
-    mut solari_reset_events: MessageWriter<SolariResetEvent>,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_supported: Option<
-        Res<DlssRayReconstructionSupported>,
-    >,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_cameras: Query<
-        Entity,
-        (With<Camera3d>, Without<Dlss<DlssRayReconstructionFeature>>),
-    >,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] mut dlss_rr: Query<
-        &mut Dlss<DlssRayReconstructionFeature>,
-    >,
+    mut temporal: ClientTemporalRenderControls,
 ) {
     if preview_stream.applied {
         return;
@@ -1139,11 +1141,11 @@ fn apply_static_preview_world_stream(
     if world_revision_changed {
         request_solari_lighting_history_reset(
             "static editor preview stream applied",
-            &mut solari_reset_events,
-            &mut solari_lighting,
+            &mut temporal.solari_reset_events,
+            &mut temporal.solari_lighting,
         );
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        reset_dlss_ray_reconstruction_history(&mut dlss_rr);
+        reset_dlss_ray_reconstruction_history(&mut temporal.dlss_rr);
     }
 
     preview_stream.applied = true;
@@ -1151,17 +1153,17 @@ fn apply_static_preview_world_stream(
     enable_solari_lighting_for_ready_world(
         &mut commands,
         &render_config,
-        &solari_cameras,
-        &mut solari_lighting,
-        &mut solari_reset_events,
+        &temporal.solari_cameras,
+        &mut temporal.solari_lighting,
+        &mut temporal.solari_reset_events,
     );
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     enable_dlss_ray_reconstruction_for_ready_world(
         &mut commands,
         &render_config,
-        dlss_rr_supported.as_deref(),
-        &dlss_rr_cameras,
-        &mut dlss_rr,
+        temporal.dlss_rr_supported.as_deref(),
+        &temporal.dlss_rr_cameras,
+        &mut temporal.dlss_rr,
     );
     info!(
         target: "fun::preview",
@@ -2072,19 +2074,7 @@ fn apply_pending_world_stream_chunks(
     mut runtime: ClientRuntimeProfiler,
     #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
     runtime: ClientRuntimeProfiler,
-    solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
-    mut solari_lighting: Query<&mut SolariLighting>,
-    mut solari_reset_events: MessageWriter<SolariResetEvent>,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_supported: Option<
-        Res<DlssRayReconstructionSupported>,
-    >,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_cameras: Query<
-        Entity,
-        (With<Camera3d>, Without<Dlss<DlssRayReconstructionFeature>>),
-    >,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] mut dlss_rr: Query<
-        &mut Dlss<DlssRayReconstructionFeature>,
-    >,
+    mut temporal: ClientTemporalRenderControls,
 ) {
     crate::frame_profile_start!(system_started);
     let _stream_verbose = runtime.log_config.stream_verbose();
@@ -2230,11 +2220,11 @@ fn apply_pending_world_stream_chunks(
         crate::frame_profile_start!(reset_started);
         request_solari_lighting_history_reset(
             "streamed world revision changed",
-            &mut solari_reset_events,
-            &mut solari_lighting,
+            &mut temporal.solari_reset_events,
+            &mut temporal.solari_lighting,
         );
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        reset_dlss_ray_reconstruction_history(&mut dlss_rr);
+        reset_dlss_ray_reconstruction_history(&mut temporal.dlss_rr);
         crate::frame_profile_elapsed!(
             runtime.frame_profiler,
             reset_started,
@@ -2263,17 +2253,17 @@ fn apply_pending_world_stream_chunks(
             enable_solari_lighting_for_ready_world(
                 &mut commands,
                 &render_config,
-                &solari_cameras,
-                &mut solari_lighting,
-                &mut solari_reset_events,
+                &temporal.solari_cameras,
+                &mut temporal.solari_lighting,
+                &mut temporal.solari_reset_events,
             );
             #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
             enable_dlss_ray_reconstruction_for_ready_world(
                 &mut commands,
                 &render_config,
-                dlss_rr_supported.as_deref(),
-                &dlss_rr_cameras,
-                &mut dlss_rr,
+                temporal.dlss_rr_supported.as_deref(),
+                &temporal.dlss_rr_cameras,
+                &mut temporal.dlss_rr,
             );
             #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
             info!("[client render] DLSS feature disabled at compile time");

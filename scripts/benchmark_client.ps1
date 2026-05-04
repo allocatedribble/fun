@@ -1877,6 +1877,12 @@ $clientLog = if ([string]::IsNullOrWhiteSpace($InputLog)) {
 else {
     Resolve-RepoPath -RepoRoot $repoRoot -Path $InputLog
 }
+$clientErrorLog = if ([string]::IsNullOrWhiteSpace($InputLog)) {
+    Join-Path $logRoot "game_client.err.log"
+}
+else {
+    ""
+}
 $baselinePath = if ([string]::IsNullOrWhiteSpace($Baseline)) {
     ""
 }
@@ -1896,6 +1902,7 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
 $ranStack = $false
 $lineOffset = 0
+$errorLineOffset = 0
 
 switch ($BenchmarkLane) {
     "full_runtime" {}
@@ -1954,6 +1961,9 @@ try {
         Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_SCENARIO" -Value $BenchmarkScenario
         Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_MATRIX_LANE" -Value $BenchmarkMatrixLane
         Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_BENCHMARK_MODE" -Value $CefUiMode
+        $benchmarkLogFilter = "info,game_client=info,fun::perf=info,fun::render=debug,bevy_render::transient=debug"
+        Set-BenchmarkProcessEnv -Name "RUST_LOG" -Value $benchmarkLogFilter
+        Set-BenchmarkProcessEnv -Name "BEVY_LOG" -Value $benchmarkLogFilter
         if ($CefPaintTransport -eq "default") {
             Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_PAINT_TRANSPORT" -Value ""
             Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_PAINT" -Value ""
@@ -2086,6 +2096,9 @@ try {
         Write-Host "Warmup: $WarmupSeconds seconds"
         Start-Sleep -Seconds $WarmupSeconds
         $lineOffset = @(Get-Content -Path $clientLog -ErrorAction SilentlyContinue).Count
+        if (-not [string]::IsNullOrWhiteSpace($clientErrorLog) -and (Test-Path $clientErrorLog)) {
+            $errorLineOffset = @(Get-Content -Path $clientErrorLog -ErrorAction SilentlyContinue).Count
+        }
         Write-Host "Sampling: $SampleSeconds seconds"
         Start-Sleep -Seconds $SampleSeconds
     }
@@ -2097,10 +2110,27 @@ try {
     else {
         $allLines
     }
+    if (-not [string]::IsNullOrWhiteSpace($clientErrorLog) -and (Test-Path $clientErrorLog)) {
+        $allErrorLines = @(Get-Content -Path $clientErrorLog -ErrorAction Stop)
+        $sampleErrorLines = if ($errorLineOffset -gt 0) {
+            @($allErrorLines | Select-Object -Skip $errorLineOffset)
+        }
+        else {
+            $allErrorLines
+        }
+        $allLines = @($allLines + $allErrorLines)
+        $sampleLines = @($sampleLines + $sampleErrorLines)
+    }
 
     $samples = @(Parse-ClientPerfLog -Lines $sampleLines)
     if ($samples.Count -eq 0) {
-        throw "No [client perf] samples were found in $clientLog"
+        $sampleSources = if (-not [string]::IsNullOrWhiteSpace($clientErrorLog)) {
+            "$clientLog or $clientErrorLog"
+        }
+        else {
+            $clientLog
+        }
+        throw "No [client perf] samples were found in $sampleSources"
     }
 
     $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
@@ -2133,6 +2163,7 @@ try {
         created_at = (Get-Date).ToString("o")
         repo_root = $repoRoot
         source_log = $clientLog
+        source_error_log = $clientErrorLog
         git = [ordered]@{
             commit = $gitCommit
             dirty_count = $gitDirty.Count

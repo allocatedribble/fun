@@ -74,7 +74,8 @@ impl WardenClientConfig {
             .ok()
             .and_then(|value| parse_policy_mode(&value))
             .unwrap_or(WardenPolicyMode::Observe);
-        let protected_runtime = SharedProtectedRuntimeConfig::from_env();
+        let protected_runtime = SharedProtectedRuntimeConfig::from_env()
+            .unwrap_or_else(|_| disabled_protected_runtime_config(mode));
         Self {
             enabled,
             session_id,
@@ -107,7 +108,8 @@ impl WardenClientConfig {
                 _ => {}
             }
         }
-        let protected_runtime = SharedProtectedRuntimeConfig::from_pairs(pairs);
+        let protected_runtime = SharedProtectedRuntimeConfig::from_pairs(pairs)
+            .unwrap_or_else(|_| disabled_protected_runtime_config(mode));
 
         Self {
             enabled,
@@ -212,7 +214,8 @@ impl Default for WardenClientStatus {
 
 impl Default for WardenProtectedRuntimeStatus {
     fn default() -> Self {
-        let config = SharedProtectedRuntimeConfig::from_env();
+        let config = SharedProtectedRuntimeConfig::from_env()
+            .unwrap_or_else(|_| disabled_protected_runtime_config(WardenPolicyMode::Observe));
         SharedProtectedRuntimeStatus::from_config(config).into()
     }
 }
@@ -387,7 +390,7 @@ fn report_protected_status_to_service(
         shared_status.integrity_mesh_status == IntegrityStatus::Failed
             || shared_status.loader_verdict == WardenProtectedLoaderVerdict::Failed,
     );
-    let Some(report) = protected_region_status_report(
+    let Ok(report) = protected_region_status_report(
         ticket_id,
         status.config.protected_runtime,
         shared_status,
@@ -553,6 +556,18 @@ fn env_flag_value(value: &str) -> bool {
         || value.eq_ignore_ascii_case("on")
 }
 
+const fn disabled_protected_runtime_config(
+    enforcement_mode: WardenPolicyMode,
+) -> SharedProtectedRuntimeConfig {
+    SharedProtectedRuntimeConfig {
+        profile: None,
+        protected_bundle_digest: None,
+        loader_integrity_status: IntegrityStatus::Unsupported,
+        server_keyed_unlock_required: false,
+        enforcement_mode,
+    }
+}
+
 fn bounded_env_reference(value: &str, max_len: usize) -> Option<String> {
     if value.is_empty() || value.len() > max_len {
         return None;
@@ -710,6 +725,30 @@ mod tests {
         assert_eq!(
             bounded_env_reference("opaque", 16),
             Some(String::from("opaque"))
+        );
+    }
+
+    #[test]
+    fn invalid_protected_runtime_env_fails_closed_for_client_config() {
+        let config = WardenClientConfig::from_pairs([
+            (FUN_WARDEN_ENABLED_ENV, "1"),
+            (FUN_WARDEN_MODE_ENV, "protect"),
+            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "ranked"),
+            (FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV, "not-a-digest"),
+        ]);
+
+        assert!(config.enabled);
+        assert_eq!(config.mode, fun_warden_protocol::WardenPolicyMode::Protect);
+        assert_eq!(config.protected_runtime.profile, None);
+        assert_eq!(config.protected_runtime.protected_bundle_digest, None);
+        assert_eq!(
+            config.protected_runtime.loader_integrity_status,
+            fun_warden_core::IntegrityStatus::Unsupported
+        );
+        assert!(!config.protected_runtime.server_keyed_unlock_required);
+        assert_eq!(
+            config.protected_runtime.enforcement_mode,
+            fun_warden_protocol::WardenPolicyMode::Protect
         );
     }
 

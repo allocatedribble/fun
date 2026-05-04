@@ -10,12 +10,12 @@ DX12 baseline ready for DLSS SR bring-up: no
 
 | gate | status | evidence source |
 | --- | --- | --- |
-| DX12 vs Vulkan parity report exists | not_ready | `tools/dx12_parity_report.py` exists, but no committed current hardware report is attached to this gate |
-| Present-mode matrix complete | not_ready | present controls and benchmark lanes exist; a complete matrix result is not attached |
-| CEF accelerated path health is isolated | partial | CEF accelerated transport exists and can be disabled/measured, but `game_client` validation is still blocked by the unrelated `warden.rs` API mismatch |
-| Hot upload callsites identified | partial | upload counters and docs exist; current top-callsite evidence is not attached |
+| DX12 vs Vulkan parity report exists | partial | selected local report exists at `target\dx12-parity\current\dx12_parity_report.md`; full scene/present coverage is not complete |
+| Present-mode matrix complete | partial | selected immediate/fifo/auto-no-vsync lanes ran; full `-MatrixSize present` output is not attached |
+| CEF accelerated path health is isolated | blocked | `game_client` validation is unblocked, but requested `d3d11on12` selected CPU fallback with `fallback_reason=render_backend_not_dx12` and nonzero CPU upload bytes |
+| Hot upload callsites identified | partial | current matrix summaries include upload counters; top-callsite review is not attached |
 | Barrier audit complete | not_ready | `docs/dx12_pix_barrier_audit.md` defines the protocol; no PIX summary is attached |
-| Steady-state pipeline creation mostly eliminated | partial | churn counters exist; no current steady-state zero/near-zero report is attached |
+| Steady-state pipeline creation mostly eliminated | not_ready | current perf gate fails with render pipeline p95 `22`, compute pipeline p95 `82`, and shader pipeline p95 `104` |
 | Native DX12 handle boundary exists | ready | `fun_render::dx12_native` owns FUN-layer wgpu HAL extraction |
 | Native DLSS shim boundary exists | scaffolded | `fun_dx12_dlss` exposes the C ABI and fail-closed support query; Streamline/NGX integration is not linked |
 

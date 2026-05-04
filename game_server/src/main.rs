@@ -709,7 +709,8 @@ fn verify_warden_admission_ticket(
     let verified =
         VerifiedAdmissionTicket::verify(ticket, match_session_id, current_unix_ms(), &verifier)
             .map_err(map_warden_admission_verification_error)?;
-    let decision = admission_decision_for_game_server(&verified);
+    let decision = admission_decision_for_game_server(&verified)
+        .map_err(|_| ClientHelloRejection::WardenAdmissionMalformed)?;
     admission_outcome_for_decision(decision)
 }
 
@@ -2323,7 +2324,8 @@ fn unix_ns() -> u64 {
 mod tests {
     use super::*;
     use fun_warden_protocol::{
-        Digest32, IntegrityStatus, ProtectedProtectionProfile, WARDEN_PROTOCOL_SCHEMA_VERSION,
+        Digest32, IntegrityStatus, MatchSessionId, ProtectedProtectionProfile,
+        PseudonymousWardenSubjectId, WARDEN_PROTOCOL_SCHEMA_VERSION, WardenAdmissionKeyId,
         WardenAdmissionProtectedSummary, WardenDecisionReasonClass, WardenPolicyMode,
     };
 
@@ -2373,22 +2375,40 @@ mod tests {
         key_id: &str,
         allowed_until_ms: u64,
     ) -> Vec<u8> {
+        signed_warden_ticket_with_protected(
+            decision,
+            match_session_id,
+            key_id,
+            allowed_until_ms,
+            true,
+        )
+    }
+
+    fn signed_warden_ticket_with_protected(
+        decision: WardenSessionDecisionKind,
+        match_session_id: &str,
+        key_id: &str,
+        allowed_until_ms: u64,
+        include_protected_summary: bool,
+    ) -> Vec<u8> {
         let mut ticket = WardenAdmissionTicket {
             schema_version: WARDEN_PROTOCOL_SCHEMA_VERSION,
-            pseudonymous_subject_id: BoundedAscii::new(String::from("subject-opaque"))
-                .expect("subject"),
-            match_session_id: BoundedAscii::new(String::from(match_session_id)).expect("match"),
+            pseudonymous_subject_id: PseudonymousWardenSubjectId::new(String::from(
+                "subject-opaque",
+            ))
+            .expect("subject"),
+            match_session_id: MatchSessionId::new(String::from(match_session_id)).expect("match"),
             warden_policy_mode: WardenPolicyMode::Protect,
             allowed_until_ms,
             decision,
             reason_class: WardenDecisionReasonClass::Clean,
-            protected: Some(WardenAdmissionProtectedSummary {
+            protected: include_protected_summary.then_some(WardenAdmissionProtectedSummary {
                 protected_profile: ProtectedProtectionProfile::Ranked,
                 protected_bundle_digest: Digest32([9; 32]),
                 protected_integrity_status: IntegrityStatus::Passed,
             }),
             signature: fun_warden_protocol::WardenAdmissionSignature {
-                key_id: BoundedAscii::new(String::from(key_id)).expect("key id"),
+                key_id: WardenAdmissionKeyId::new(String::from(key_id)).expect("key id"),
                 signature_bytes: fun_warden_protocol::BoundedVec::empty(),
             },
         };
@@ -2552,6 +2572,33 @@ mod tests {
                 warden_decision: WardenSessionDecisionKind::QuarantineToUntrustedPool,
                 untrusted_pool: true,
             })
+        );
+    }
+
+    #[test]
+    fn warden_admission_gate_rejects_missing_required_protected_summary() {
+        let verifier = ClientTicketVerifier::DevelopmentToken {
+            token: b"dev-ticket".to_vec(),
+        };
+        let ticket = signed_warden_ticket_with_protected(
+            WardenSessionDecisionKind::Allow,
+            TEST_MATCH_SESSION_ID,
+            TEST_WARDEN_KEY_ID,
+            current_unix_ms().saturating_add(60_000),
+            false,
+        );
+        let hello = test_hello(b"dev-ticket".to_vec(), ticket);
+        let gate = WardenAdmissionGate::RequireAdmissionTicket {
+            verifier: WardenAdmissionTicketVerifier::SignedHmacSha256 {
+                key: TEST_WARDEN_KEY,
+                key_id: String::from(TEST_WARDEN_KEY_ID),
+                match_session_id: String::from(TEST_MATCH_SESSION_ID),
+            },
+        };
+
+        assert_eq!(
+            validate_client_hello(&hello, &verifier, &gate),
+            Err(ClientHelloRejection::WardenAdmissionMalformed)
         );
     }
 

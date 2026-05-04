@@ -685,10 +685,18 @@ foreach ($laneDefinition in $selectedLanes) {
         [System.Environment]::SetEnvironmentVariable("FUN_BENCH_EDITOR_PREVIEW", $laneDefinition.editor_preview, "Process")
         try {
             Write-Host "Running dx12_parity lane $($laneDefinition.name)..."
-            $output = @(& $powerShellPath @args 2>&1)
-            $exitCode = $LASTEXITCODE
-            $stdoutTail = @($output | Select-Object -Last 80)
-            $jsonLine = @($output | Select-String -Pattern "^Benchmark JSON:\s*(?<path>.+)$" | Select-Object -Last 1)
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $output = @(& $powerShellPath @args 2>&1)
+                $exitCode = $LASTEXITCODE
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+            $outputText = @($output | ForEach-Object { [string]$_ })
+            $stdoutTail = @($outputText | Select-Object -Last 80)
+            $jsonLine = @($outputText | Select-String -Pattern "^Benchmark JSON:\s*(?<path>.+)$" | Select-Object -Last 1)
             if ($jsonLine.Count -gt 0) {
                 $summaryJson = $jsonLine[0].Matches[0].Groups["path"].Value.Trim()
             }
