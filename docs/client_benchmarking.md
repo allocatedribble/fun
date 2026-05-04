@@ -296,6 +296,10 @@ when the adapter is NVIDIA and the bottleneck is specific enough to act on; they
 remain optional and must not regress AMD, Intel, or Vulkan lanes.
 
 See [`dx12_vendor_followup.md`](dx12_vendor_followup.md) for the Tier 16 gate.
+See [`dx12_moonshot_experiments.md`](dx12_moonshot_experiments.md) for the
+post-parity Tier 19 experiments. The parity dashboard prints moonshot
+eligibility and a `DX12 Memory Budget` table when native/DXGI budget samples or
+adapter RAM are available.
 
 ## DX12 Perf Regression Gate
 

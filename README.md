@@ -202,6 +202,9 @@ current upload inventory and cleanup target order are in
 It also enables transient render-resource descriptor diagnostics; the reuse,
 near-miss, and aliasing contract is in
 [`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).
+Post-parity moonshot gates are tracked in
+[`docs/dx12_moonshot_experiments.md`](docs/dx12_moonshot_experiments.md); the
+parity dashboard now reports DX12 memory budget/usage fields when available.
 
 Denoiser and DLSS Ray Reconstruction comparison:
 

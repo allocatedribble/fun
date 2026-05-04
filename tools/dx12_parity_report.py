@@ -203,6 +203,33 @@ VENDOR_REQUIRED_EVIDENCE: dict[str, str] = {
     "shader/pass GPU bound": "pass-level GPU timing regression plus vendor shader analysis for the hot variant",
 }
 
+MOONSHOT_EXPERIMENTS: tuple[dict[str, str], ...] = (
+    {
+        "id": "gpu_driven_visibility_pipeline_refinement",
+        "title": "GPU-driven visibility pipeline refinement",
+        "gate": "meshlet CPU prep or meshlet upload pressure is the confirmed bottleneck",
+        "payoff": "stronger dense-scene and meshlet-heavy DX12 scaling",
+    },
+    {
+        "id": "bindless_style_material_resource_table",
+        "title": "Bindless-style material resource table",
+        "gate": "descriptor churn is confirmed by render_churn counters or PIX descriptor heap switches",
+        "payoff": "fewer per-draw bind group/layout changes in material-heavy scenes",
+    },
+    {
+        "id": "dx12_specific_render_graph_compiler",
+        "title": "DX12-specific render graph compiler",
+        "gate": "barrier/state churn, submission fragmentation, or tiny pass overhead is confirmed",
+        "payoff": "fewer barriers, fewer passes, and better queue utilization",
+    },
+    {
+        "id": "native_dx12_residency_memory_budget_diagnostics",
+        "title": "Native DX12 residency and memory budget diagnostics",
+        "gate": "p95 spikes, transient allocation churn, or VRAM pressure remain unexplained",
+        "payoff": "budget/usage telemetry for large worlds, CEF, clouds, Solari, and future DLSS",
+    },
+)
+
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8-sig") as handle:
@@ -235,6 +262,14 @@ def number(value: Any) -> float | None:
 
 def metric_value(summary: dict[str, Any], metric: str, field: str) -> float | None:
     return number(get_path(summary, "metrics", metric, field))
+
+
+def first_metric_value(summary: dict[str, Any], names: tuple[str, ...], field: str = "mean") -> float | None:
+    for name in names:
+        value = metric_value(summary, name, field)
+        if value is not None:
+            return value
+    return None
 
 
 def percent_delta(current: float | None, baseline: float | None) -> float | None:
@@ -313,6 +348,98 @@ def summarize_gpu(summary: dict[str, Any]) -> str:
     return "unknown"
 
 
+def first_gpu_adapter_ram(summary: dict[str, Any]) -> float | None:
+    gpu = get_path(summary, "hardware", "gpu", default=[])
+    if isinstance(gpu, list) and gpu:
+        first = gpu[0]
+        if isinstance(first, dict):
+            return number(first.get("AdapterRAM") or first.get("adapter_ram") or first.get("adapter_ram_bytes"))
+    return None
+
+
+def external_number(external: dict[str, float], *names: str) -> float | None:
+    for name in names:
+        value = external.get(normalize_key(name))
+        if value is not None:
+            return value
+    return None
+
+
+def memory_snapshot(summary: dict[str, Any], external: dict[str, float] | None = None) -> dict[str, Any]:
+    external = external or {}
+    dx12_memory = summary.get("dx12_memory")
+    if not isinstance(dx12_memory, dict):
+        dx12_memory = get_path(summary, "environment", "dx12_memory", default={})
+    if not isinstance(dx12_memory, dict):
+        dx12_memory = {}
+
+    local_budget = number(dx12_memory.get("local_budget_bytes"))
+    if local_budget is None:
+        local_budget = first_metric_value(
+            summary,
+            (
+                "dx12_memory_local_budget_bytes",
+                "d3d12_local_budget_bytes",
+                "gpu_local_budget_bytes",
+            ),
+        )
+    if local_budget is None:
+        local_budget = external_number(
+            external,
+            "dx12_memory_local_budget_bytes",
+            "d3d12_local_budget_bytes",
+            "local_budget_bytes",
+            "budget_bytes",
+        )
+
+    local_usage = number(dx12_memory.get("local_usage_bytes"))
+    if local_usage is None:
+        local_usage = first_metric_value(
+            summary,
+            (
+                "dx12_memory_local_usage_bytes",
+                "d3d12_local_usage_bytes",
+                "gpu_local_usage_bytes",
+            ),
+        )
+    if local_usage is None:
+        local_usage = external_number(
+            external,
+            "dx12_memory_local_usage_bytes",
+            "d3d12_local_usage_bytes",
+            "local_usage_bytes",
+            "usage_bytes",
+        )
+
+    available = number(dx12_memory.get("local_available_for_reservation_bytes"))
+    if available is None:
+        available = external_number(external, "local_available_for_reservation_bytes", "available_for_reservation_bytes")
+    reservation = number(dx12_memory.get("local_current_reservation_bytes"))
+    if reservation is None:
+        reservation = external_number(external, "local_current_reservation_bytes", "current_reservation_bytes")
+    adapter_ram = number(dx12_memory.get("adapter_ram_bytes"))
+    if adapter_ram is None:
+        adapter_ram = first_gpu_adapter_ram(summary)
+
+    usage_pct = None
+    if local_budget is not None and local_usage is not None and local_budget > 0:
+        usage_pct = (local_usage / local_budget) * 100.0
+
+    has_budget = any(value is not None for value in (local_budget, local_usage, available, reservation))
+    status = str(dx12_memory.get("status") or ("provided" if has_budget else "adapter_ram_only" if adapter_ram is not None else "not_collected"))
+    source = str(dx12_memory.get("source") or ("summary_or_external_trace" if has_budget else "win32_video_controller_adapter_ram" if adapter_ram is not None else "none"))
+    return {
+        "status": status,
+        "source": source,
+        "local_budget_bytes": local_budget,
+        "local_usage_bytes": local_usage,
+        "local_available_for_reservation_bytes": available,
+        "local_current_reservation_bytes": reservation,
+        "adapter_ram_bytes": adapter_ram,
+        "local_usage_pct": usage_pct,
+    }
+
+
 def infer_adapter_vendor(summary: dict[str, Any]) -> str:
     gpu_text = summarize_gpu(summary).lower()
     presentation = summary.get("render_presentation", {})
@@ -387,6 +514,77 @@ def vendor_follow_up(category: str, dx12: dict[str, Any]) -> dict[str, Any]:
         "actions": actions,
         "guardrail": "optional DX12/NVIDIA experiment only; must not regress AMD, Intel, or Vulkan lanes",
     }
+
+
+def row_has_dx12_pressure(row: dict[str, Any] | None) -> bool:
+    if row is None:
+        return False
+    for key in ("p95_delta", "delta"):
+        value = row.get(key)
+        if value is not None and value > 0:
+            return True
+    dx_value = row.get("dx12_p95") if row.get("dx12_p95") is not None else row.get("dx12_mean")
+    vk_value = row.get("vulkan_p95") if row.get("vulkan_p95") is not None else row.get("vulkan_mean")
+    return dx_value is not None and dx_value > 0 and (vk_value is None or vk_value <= 0)
+    return False
+
+
+def moonshot_follow_up(
+    category: str,
+    rows: list[dict[str, Any]],
+    dx12: dict[str, Any],
+    pix: dict[str, float],
+    memory: dict[str, Any],
+) -> list[dict[str, str]]:
+    meshlet_pressure = any(
+        row_has_dx12_pressure(row_by_metric(rows, metric))
+        for metric in (
+            "meshlet_prepare_cpu_ns",
+            "meshlet_instance_buffer_upload_bytes",
+            "meshlet_material_buffer_upload_bytes",
+            "meshlet_view_visibility_buffer_upload_bytes",
+            "meshlet_asset_buffer_upload_bytes",
+        )
+    )
+    descriptor_pressure = category == "descriptor churn" or pix.get("descriptor_heap_switch_count", 0.0) > 0
+    render_graph_pressure = category in {"barrier/state-bound", "submission fragmentation"} or any(
+        pix.get(key, 0.0) > 0
+        for key in ("barrier_count", "resource_barrier_count", "command_list_count", "queue_idle_ns")
+    )
+    memory_observed = memory["status"] != "not_collected"
+    memory_pressure = memory.get("local_usage_pct") is not None and memory["local_usage_pct"] >= 85.0
+    transient_pressure = category == "transient allocation churn"
+
+    rows_out: list[dict[str, str]] = []
+    for experiment in MOONSHOT_EXPERIMENTS:
+        experiment_id = experiment["id"]
+        if experiment_id == "gpu_driven_visibility_pipeline_refinement":
+            status = "eligible_after_confirmed_meshlet_pressure" if category == "upload-bound" and meshlet_pressure else "blocked_until_meshlet_prep_or_upload_bottleneck"
+            evidence = "meshlet CPU/upload metrics" if meshlet_pressure else "none"
+        elif experiment_id == "bindless_style_material_resource_table":
+            status = "eligible_after_descriptor_bottleneck" if descriptor_pressure else "blocked_until_descriptor_churn_bottleneck"
+            evidence = "descriptor churn category or PIX descriptor heap switches" if descriptor_pressure else "none"
+        elif experiment_id == "dx12_specific_render_graph_compiler":
+            status = "eligible_after_barrier_or_submission_bottleneck" if render_graph_pressure else "blocked_until_barrier_or_submission_bottleneck"
+            evidence = "PIX barriers/queue counters or submission fragmentation category" if render_graph_pressure else "none"
+        else:
+            status = "diagnostics_present" if memory_observed else "instrumentation_needed"
+            if memory_pressure:
+                status = "eligible_after_memory_pressure"
+            elif transient_pressure:
+                status = "eligible_after_transient_allocation_churn"
+            evidence = "DX12 memory budget snapshot" if memory_observed else "none"
+        rows_out.append(
+            {
+                "id": experiment_id,
+                "title": experiment["title"],
+                "status": status,
+                "gate": experiment["gate"],
+                "evidence": evidence,
+                "payoff": experiment["payoff"],
+            }
+        )
+    return rows_out
 
 
 def parse_external_csv(path: Path | None) -> dict[str, float]:
@@ -639,6 +837,18 @@ def format_number(value: Any) -> str:
     return f"{parsed:.3f}".rstrip("0").rstrip(".")
 
 
+def format_bytes(value: Any) -> str:
+    parsed = number(value)
+    if parsed is None:
+        return "n/a"
+    units = ("B", "KiB", "MiB", "GiB")
+    unit_index = 0
+    while abs(parsed) >= 1024.0 and unit_index < len(units) - 1:
+        parsed /= 1024.0
+        unit_index += 1
+    return f"{parsed:.2f} {units[unit_index]}"
+
+
 def format_pct(value: Any) -> str:
     parsed = number(value)
     if parsed is None:
@@ -682,6 +892,8 @@ def write_markdown(
     path.parent.mkdir(parents=True, exist_ok=True)
     vk_summary = backend_summary(vulkan)
     dx_summary = backend_summary(dx12)
+    vk_memory = memory_snapshot(vulkan)
+    dx_memory = memory_snapshot(dx12, pix)
     category, trace, reasons = bottleneck
     p95_row = row_by_metric(rows, "frame_ns")
     fps_row = row_by_metric(rows, "fps")
@@ -773,6 +985,45 @@ def write_markdown(
     else:
         lines.append("- NVIDIA experiments: none until the adapter and bottleneck evidence match the gate.")
 
+    lines.extend(
+        [
+            "",
+            "## DX12 Memory Budget",
+            "",
+            "| field | Vulkan | DX12 |",
+            "|---|---:|---:|",
+            f"| status | {vk_memory['status']} | {dx_memory['status']} |",
+            f"| source | {vk_memory['source']} | {dx_memory['source']} |",
+            f"| local_budget_bytes | {format_bytes(vk_memory['local_budget_bytes'])} | {format_bytes(dx_memory['local_budget_bytes'])} |",
+            f"| local_usage_bytes | {format_bytes(vk_memory['local_usage_bytes'])} | {format_bytes(dx_memory['local_usage_bytes'])} |",
+            f"| local_usage_pct | {format_pct(vk_memory['local_usage_pct'])} | {format_pct(dx_memory['local_usage_pct'])} |",
+            f"| local_available_for_reservation_bytes | {format_bytes(vk_memory['local_available_for_reservation_bytes'])} | {format_bytes(dx_memory['local_available_for_reservation_bytes'])} |",
+            f"| local_current_reservation_bytes | {format_bytes(vk_memory['local_current_reservation_bytes'])} | {format_bytes(dx_memory['local_current_reservation_bytes'])} |",
+            f"| adapter_ram_bytes | {format_bytes(vk_memory['adapter_ram_bytes'])} | {format_bytes(dx_memory['adapter_ram_bytes'])} |",
+        ]
+    )
+
+    moonshots = moonshot_follow_up(category, rows, dx12, pix, dx_memory)
+    lines.extend(
+        [
+            "",
+            "## Moonshot Experiments",
+            "",
+            "| experiment | status | gate | evidence | payoff |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for experiment in moonshots:
+        lines.append(
+            "| {title} | {status} | {gate} | {evidence} | {payoff} |".format(
+                title=experiment["title"],
+                status=experiment["status"],
+                gate=experiment["gate"],
+                evidence=experiment["evidence"],
+                payoff=experiment["payoff"],
+            )
+        )
+
     lines.extend(["", "## External Trace Summary", ""])
     if pix:
         lines.append(f"- PIX fields parsed: {', '.join(sorted(pix)[:12])}")
@@ -817,9 +1068,11 @@ def write_sample_summary(
     cef_cpu_bytes: float,
     gpu_name: str = "Synthetic GPU",
     extra_metrics: dict[str, dict[str, float]] | None = None,
+    memory_budget: float | None = None,
+    memory_usage: float | None = None,
 ) -> None:
     payload = {
-        "hardware": {"gpu": [{"Name": gpu_name, "DriverVersion": "0.0"}]},
+        "hardware": {"gpu": [{"Name": gpu_name, "DriverVersion": "0.0", "AdapterRAM": 8_589_934_592}]},
         "config": {
             "render_backend": backend,
             "present_mode": "immediate",
@@ -837,6 +1090,16 @@ def write_sample_summary(
             "cef_cpu_upload_bytes": {"mean": cef_cpu_bytes, "p95": cef_cpu_bytes},
         },
     }
+    if memory_budget is not None or memory_usage is not None:
+        payload["dx12_memory"] = {
+            "status": "provided",
+            "source": "self_test",
+            "local_budget_bytes": memory_budget,
+            "local_usage_bytes": memory_usage,
+            "local_available_for_reservation_bytes": None,
+            "local_current_reservation_bytes": None,
+            "adapter_ram_bytes": 8_589_934_592,
+        }
     if extra_metrics:
         payload["metrics"].update(extra_metrics)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -850,7 +1113,15 @@ def self_test() -> int:
         markdown = root / "report.md"
         summary_csv = root / "summary.csv"
         write_sample_summary(vulkan, "vulkan", fps=100.0, frame_p95=10_000_000.0, cef_cpu_bytes=0.0)
-        write_sample_summary(dx12, "dx12", fps=105.0, frame_p95=15_000_000.0, cef_cpu_bytes=4096.0)
+        write_sample_summary(
+            dx12,
+            "dx12",
+            fps=105.0,
+            frame_p95=15_000_000.0,
+            cef_cpu_bytes=4096.0,
+            memory_budget=8_589_934_592.0,
+            memory_usage=4_294_967_296.0,
+        )
         code = run_report(
             argparse.Namespace(
                 vulkan_json=str(vulkan),
@@ -870,6 +1141,10 @@ def self_test() -> int:
             raise AssertionError("CEF accelerated lane failure was not reported")
         if "Vendor-Specific Follow-Up" not in text:
             raise AssertionError("vendor follow-up section was not rendered")
+        if "DX12 Memory Budget" not in text or "4.00 GiB" not in text:
+            raise AssertionError("DX12 memory budget section was not rendered")
+        if "Moonshot Experiments" not in text:
+            raise AssertionError("moonshot section was not rendered")
 
         nvidia_dx12 = root / "dx12_nvidia_pipeline.json"
         nvidia_markdown = root / "nvidia_report.md"

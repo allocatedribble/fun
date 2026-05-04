@@ -1098,6 +1098,70 @@ function Get-BenchmarkEnvValue {
     return $value
 }
 
+function Get-BenchmarkEnvUInt64 {
+    param([string]$Name)
+
+    $value = [System.Environment]::GetEnvironmentVariable($Name, "Process")
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $null
+    }
+    $parsed = 0UL
+    if ([UInt64]::TryParse($value, [ref]$parsed)) {
+        return $parsed
+    }
+    return $null
+}
+
+function Get-AdapterRamBytes {
+    try {
+        $adapter = @(Get-CimInstance Win32_VideoController | Select-Object -First 1)
+        if ($adapter.Count -eq 0 -or $null -eq $adapter[0].AdapterRAM) {
+            return $null
+        }
+        return [UInt64]$adapter[0].AdapterRAM
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-Dx12MemoryBudgetInfo {
+    $localBudget = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_BUDGET_BYTES"
+    $localUsage = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_USAGE_BYTES"
+    $availableForReservation = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_AVAILABLE_FOR_RESERVATION_BYTES"
+    $currentReservation = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_CURRENT_RESERVATION_BYTES"
+    $adapterRam = Get-AdapterRamBytes
+    $hasBudgetSample = $null -ne $localBudget -or $null -ne $localUsage -or $null -ne $availableForReservation -or $null -ne $currentReservation
+    $status = if ($hasBudgetSample) {
+        "provided"
+    }
+    elseif ($null -ne $adapterRam) {
+        "adapter_ram_only"
+    }
+    else {
+        "not_collected"
+    }
+    $source = if ($hasBudgetSample) {
+        "env_or_native_collector"
+    }
+    elseif ($null -ne $adapterRam) {
+        "win32_video_controller_adapter_ram"
+    }
+    else {
+        "none"
+    }
+
+    return [ordered]@{
+        status = $status
+        source = $source
+        local_budget_bytes = $localBudget
+        local_usage_bytes = $localUsage
+        local_available_for_reservation_bytes = $availableForReservation
+        local_current_reservation_bytes = $currentReservation
+        adapter_ram_bytes = $adapterRam
+    }
+}
+
 function Get-ActivePowerScheme {
     try {
         $line = (& powercfg /getactivescheme 2>$null | Select-Object -First 1)
@@ -1415,6 +1479,9 @@ function Write-MarkdownReport {
     $lines.Add("- RT feature hash: $($Summary.rt_feature_gates.rt_feature_hash)") | Out-Null
     $lines.Add("- Backend capability hash: $($Summary.render_capabilities.backend_capability_hash)") | Out-Null
     $lines.Add("- RT gates: direct=$($Summary.config.rt_sample_direct) indirect=$($Summary.config.rt_sample_indirect) reflections=$($Summary.config.rt_sample_reflections) surface_cache=$($Summary.config.rt_surface_cache) megageom=$($Summary.config.rt_megageom) opacity_mask=$($Summary.config.rt_opacity_mask) hair=$($Summary.config.rt_hair) async_readback=$($Summary.config.rt_async_readback) validation=$($Summary.config.rt_validation)") | Out-Null
+    if ($null -ne $Summary.dx12_memory) {
+        $lines.Add("- DX12 memory: status=$($Summary.dx12_memory.status) source=$($Summary.dx12_memory.source) local_budget_bytes=$($Summary.dx12_memory.local_budget_bytes) local_usage_bytes=$($Summary.dx12_memory.local_usage_bytes) adapter_ram_bytes=$($Summary.dx12_memory.adapter_ram_bytes)") | Out-Null
+    }
     $lines.Add("- Sample count: $($Summary.samples.count)") | Out-Null
     $lines.Add("") | Out-Null
 
@@ -2073,6 +2140,7 @@ try {
         }
         hardware = Get-HardwareInfo
         environment = Get-BenchmarkEnvironmentInfo
+        dx12_memory = Get-Dx12MemoryBudgetInfo
         config = [ordered]@{
             benchmark_profile = $BenchmarkProfile
             benchmark_scenario = $BenchmarkScenario

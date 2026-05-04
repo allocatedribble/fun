@@ -64,6 +64,49 @@ function Get-EnvAnnotation {
     return $value
 }
 
+function Get-EnvAnnotationUInt64 {
+    param([string]$Name)
+
+    $value = [System.Environment]::GetEnvironmentVariable($Name, "Process")
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $null
+    }
+    $parsed = 0UL
+    if ([UInt64]::TryParse($value, [ref]$parsed)) {
+        return $parsed
+    }
+    return $null
+}
+
+function Get-Dx12MemoryBudgetInfo {
+    $adapterRam = $null
+    try {
+        $adapter = @(Get-CimInstance Win32_VideoController | Select-Object -First 1)
+        if ($adapter.Count -gt 0 -and $null -ne $adapter[0].AdapterRAM) {
+            $adapterRam = [UInt64]$adapter[0].AdapterRAM
+        }
+    }
+    catch {
+        $adapterRam = $null
+    }
+
+    $localBudget = Get-EnvAnnotationUInt64 -Name "FUN_BENCH_DX12_LOCAL_BUDGET_BYTES"
+    $localUsage = Get-EnvAnnotationUInt64 -Name "FUN_BENCH_DX12_LOCAL_USAGE_BYTES"
+    $availableForReservation = Get-EnvAnnotationUInt64 -Name "FUN_BENCH_DX12_LOCAL_AVAILABLE_FOR_RESERVATION_BYTES"
+    $currentReservation = Get-EnvAnnotationUInt64 -Name "FUN_BENCH_DX12_LOCAL_CURRENT_RESERVATION_BYTES"
+    $hasBudgetSample = $null -ne $localBudget -or $null -ne $localUsage -or $null -ne $availableForReservation -or $null -ne $currentReservation
+
+    return [ordered]@{
+        status = if ($hasBudgetSample) { "provided" } elseif ($null -ne $adapterRam) { "adapter_ram_only" } else { "not_collected" }
+        source = if ($hasBudgetSample) { "env_or_native_collector" } elseif ($null -ne $adapterRam) { "win32_video_controller_adapter_ram" } else { "none" }
+        local_budget_bytes = $localBudget
+        local_usage_bytes = $localUsage
+        local_available_for_reservation_bytes = $availableForReservation
+        local_current_reservation_bytes = $currentReservation
+        adapter_ram_bytes = $adapterRam
+    }
+}
+
 function Test-CommandAvailable {
     param([string]$Name)
 
@@ -108,6 +151,7 @@ function Get-Dx12ParityEnvironment {
             pix_attached = Get-EnvAnnotation -Name "FUN_BENCH_ENV_PIX_ATTACHED" -Default "false"
             renderdoc_attached = Get-EnvAnnotation -Name "FUN_BENCH_ENV_RENDERDOC_ATTACHED" -Default "false"
         }
+        dx12_memory = Get-Dx12MemoryBudgetInfo
     }
 }
 
