@@ -35,6 +35,23 @@ The local Bevy fork records:
 DX12 and classifies higher DX12 submit or command-buffer counts as
 `submission fragmentation`.
 
+For the focused Tier 10 command/readback pass, generate the smaller decision
+artifact with:
+
+```powershell
+python tools\dx12_command_readback_report.py `
+  --matrix-json target\dx12-parity\current\matrix.json `
+  --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
+  --json-report target\dx12-parity\current\dx12_command_readback_report.json
+```
+
+That report is the gate for command-submission behavior changes. High submit or
+command-buffer counts alone are not enough to merge passes, move copy work, or
+batch a path. A change needs either a named actionable command event plus a
+PIX/GPUView queue-idle span, or a before/after lane proving p95 and latency do
+not regress. If the report says `candidate_needs_pix_before_behavior_change`,
+leave runtime scheduling unchanged and attach the requested trace first.
+
 Categories are intentionally coarse:
 
 - `main_scene`

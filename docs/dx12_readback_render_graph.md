@@ -48,6 +48,23 @@ Top events are emitted as:
 [client perf] render readback top: rank=1 operation=requested category=gpu_readback label=gpu_readback_texture_to_buffer calls=1 latency_frame_sum=0 latency_frame_max=0
 ```
 
+Use the focused Tier 10 report to prove readback behavior before changing
+render scheduling:
+
+```powershell
+python tools\dx12_command_readback_report.py `
+  --matrix-json target\dx12-parity\current\matrix.json `
+  --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
+  --json-report target\dx12-parity\current\dx12_command_readback_report.json
+```
+
+The readback acceptance line is `render_readback_readback_blocking_wait_count`.
+Normal benchmark lanes must stay at zero. Diagnostic and capture lanes may have
+large `requested`, `completed`, and `map_async` counts, but those rows must be
+visible in the report so their overhead is not mistaken for product-lane render
+cost. Required readback work should remain N-frame delayed unless a capture-only
+path explicitly marks its overhead.
+
 ## Render Graph Flame Map
 
 `scripts/benchmark_client.ps1` now writes a coarse frame artifact to:

@@ -276,6 +276,31 @@ Command submission metrics are recorded as
 `render_command_native_interop_command_insertions`, and
 `render_command_event_count`; `summary.json` also includes
 `render_command_events` with the top ten operation/category/label rows.
+Readback diagnostics are recorded as
+`render_readback_readback_requested_count`,
+`render_readback_readback_completed_count`,
+`render_readback_readback_dropped_count`,
+`render_readback_readback_blocking_wait_count`,
+`render_readback_readback_latency_frame_sum`,
+`render_readback_readback_latency_frame_max`,
+`render_readback_map_async_count`, `render_readback_poll_count`, and
+`render_readback_event_count`; `summary.json` also includes
+`render_readback_events`.
+
+For the focused command/readback decision artifact, run:
+
+```powershell
+python tools\dx12_command_readback_report.py `
+  --matrix-json target\dx12-parity\current\matrix.json `
+  --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
+  --json-report target\dx12-parity\current\dx12_command_readback_report.json
+```
+
+The report selects no submit-reduction patch unless high command counts are
+paired with an actionable event and a required PIX/GPUView queue-idle trace.
+Normal lanes must show `render_readback_readback_blocking_wait_count=0`; debug
+or capture lanes may show high requested/map counts, but the report keeps that
+overhead explicit.
 Shader diagnostics are recorded as
 `render_shader_shader_module_creations`,
 `render_shader_shader_module_create_ns`,

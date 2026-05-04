@@ -8,10 +8,10 @@ scope: live pass-control checklist for the next DX12 parity implementation campa
 
 | repo | commit | status |
 | --- | --- | --- |
-| project-FUN root | `32d8b6b` | umbrella baseline before present/transient decision pass |
-| fun | `73a6bb5` | DX12 PIX and pipeline decision report baseline before edits |
+| project-FUN root | `cbb1492` | umbrella baseline before command/readback decision pass |
+| fun | `9e7f0dd` | present and transient decision reports baseline before edits |
 | bevy | `020d7d6` | root gitlink baseline before this pass |
-| fun-warden | `4faff82` | dependency baseline before this pass; checkout has unrelated local edits |
+| fun-warden | `4faff82` | dependency baseline before this pass |
 
 The unrelated `game_client/src/warden.rs` validation blocker has been cleared
 against the current `fun-warden` API. The same pass also cleared default
@@ -32,6 +32,8 @@ renderer behavior was intentionally changed.
 | present smoke decision report | measured | `target\dx12-parity\present-smoke-auto-no-vsync-fl2\dx12_present_decision_report.md` |
 | present decision report | measured | `target\dx12-parity\current\dx12_present_decision_report.md` |
 | transient reuse report | measured | `target\dx12-parity\current\dx12_transient_reuse_report.md` |
+| command/readback report | measured | `target\dx12-parity\current\dx12_command_readback_report.md` |
+| command/readback smoke report | measured | `target\dx12-parity\present-smoke-auto-no-vsync-fl2\dx12_command_readback_report.md` |
 | CEF transport matrix mode | measured | `scripts\benchmark_dx12_parity.ps1 -MatrixSize cef_transport -PlanOnly` |
 | CEF accelerated live lane | measured_blocked | `target\benchmarks\client\20260504-005500-247\summary.json` |
 | PIX barrier summary | blocked | `target\dx12-pix\barrier_summary.md` |
@@ -70,6 +72,7 @@ fallback with `cef_cpu_upload_bytes.mean=44236800`.
 | current DX12 vs Vulkan parity JSON | measured | `target\dx12-parity\current\matrix.json` plus matched dashboard artifacts |
 | present matrix | measured | selected immediate/fifo/auto-no-vsync lanes ran; required scenario plan exists; DX12 smoke slice ran all four scenarios at `auto_no_vsync`/latency `2` |
 | upload top-callsite table | measured | current `summary.json` files include render upload counters; top-callsite review is still pending |
+| command/readback decision report | measured | current report says `candidate_needs_pix_before_behavior_change` for command submission and `nonblocking_proven` for readback; no submit reduction is selected |
 | CEF accelerated health report | blocked | latest present smoke `d3d11on12` request selected CPU fallback with `cef_cpu_upload_bytes.mean=44236800`, `cef_gpu_copy_bytes.mean=0`, `cef_on_accelerated_paint_fps.mean=0`, and health `fallback`; new `cef_ui_transport_health` badge and `-MatrixSize cef_transport` lanes are ready for the next live capture |
 | PIX barrier summary | blocked | blocked artifact written to `target\dx12-pix\barrier_summary.md`; no PIX CSV was available locally |
 | steady-state pipeline creation report | measured | `target\dx12-pix\pipeline_cardinality_report.md` reports render pipeline p95 `22`, compute pipeline p95 `82`, shader pipeline p95 `104`; shader creation families are led by PBR, Solari, meshlet, and UI pipelines |
@@ -78,7 +81,7 @@ fallback with `cef_cpu_upload_bytes.mean=44236800`.
 
 | order | doctrine gate | current_status | evidence | blocker |
 | ---: | --- | --- | --- | --- |
-| 1 | Make DX12 observable. | measured | selected local matrix, dashboard, perf gate, upload/churn/command/shader/readback diagnostics exist | full scene/present expansion still missing |
+| 1 | Make DX12 observable. | measured | selected local matrix, dashboard, perf gate, upload/churn/command/shader/readback diagnostics, and focused command/readback decision report exist | full scene/present expansion still missing |
 | 2 | Remove obvious hot-path uploads. | measured | upload counters and selected matrix summaries exist | current top-callsite review still pending |
 | 3 | Harden CEF GPU transport. | blocked | requested accelerated lane ran; health badge and ring-depth matrix are instrumented | runtime selected CPU fallback with `render_backend_not_dx12` and no accelerated paint callbacks |
 | 4 | Reduce barriers, descriptors, and PSO churn. | blocked | pipeline cardinality report exists and `FUN_RENDER_PIPELINE_WARMUP=observed` is available | barrier cleanup still blocked on PIX CSV; layout canonicalization blocked on creation-event/PIX descriptor rows |
@@ -100,6 +103,7 @@ Allowed statuses: `missing`, `measured`, `optimized`, `blocked`,
 | barrier cleanup decision | blocked | no cleanup selected; local barrier artifact is blocked because no PIX CSV was available | PIX barrier/resource-state summary with named resources and transitions |
 | PSO/churn decision | measured | runtime PSO churn is a current bottleneck candidate; use `FUN_RENDER_PIPELINE_WARMUP=observed` for the next measured lane before layout canonicalization | rerun benchmark after creation-focused churn rows are present, then compare before/after observed warmup |
 | transient reuse decision | measured | no transient descriptor canonicalization selected; current matrix has no descriptor-create rows, and native interop resources remain excluded from aliasing | rerun a transient-focused lane with `bevy_render::transient=debug` before normalizing another texture family |
+| command/readback decision | measured | command counters are high but no submit reduction is selected without PIX/GPUView queue-idle evidence; readback is nonblocking with p95 blocking waits at `0` in current and present-smoke lanes | attach PIX/GPUView queue-idle span before moving copy-only work or merging tiny passes; keep diagnostic readback overhead visible |
 | DLSS gate decision | blocked | DLSS SR remains fail-closed | boundary gate changes from baseline ready `no` to `yes` with attached evidence |
 
 ## Live Gate Controls
