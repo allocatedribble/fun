@@ -199,6 +199,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regres
 `RenderQueue::write_texture`, `write_buffer`, and `write_buffer_with`. The
 current upload inventory and cleanup target order are in
 [`docs/dx12_upload_audit.md`](docs/dx12_upload_audit.md).
+The DX12 implementation order is governed by
+[`docs/dx12_implementation_doctrine.md`](docs/dx12_implementation_doctrine.md):
+observe first, remove hot uploads, harden CEF GPU transport, reduce
+barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
+native interop, then bring up DLSS SR before RR.
 It also enables transient render-resource descriptor diagnostics; the reuse,
 near-miss, and aliasing contract is in
 [`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).

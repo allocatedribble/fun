@@ -9,6 +9,12 @@ scope: `fun_render::dx12_native`, CEF accelerated paint, native DLSS, PIX/Nsight
 `as_hal::<wgpu::hal::api::Dx12>()` or
 `as_hal_mut::<wgpu::hal::api::Dx12>()`.
 
+This boundary is step 6 of
+[`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md). Do not add
+native DX12 calls to make the renderer "more Windowsy"; add them only after the
+observable/upload/CEF/churn/present gates prove a native interop boundary is the
+right tool or a feature such as CEF shared textures or DLSS requires it.
+
 Approved files:
 
 - `fun_render/src/dx12_native/handles.rs`

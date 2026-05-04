@@ -146,6 +146,13 @@ control lane. It is measurement-first: every lane is routed through
 visibility/transport, feature toggles, hardware, Windows build, manual display
 annotations, and metric presence.
 
+The controlling order of operations is in
+[`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md). In short:
+make DX12 observable, remove hot uploads, harden CEF GPU transport, reduce
+barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
+native interop, then bring up DLSS Super Resolution and only later consider Ray
+Reconstruction.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1
 ```
@@ -296,6 +303,8 @@ when the adapter is NVIDIA and the bottleneck is specific enough to act on; they
 remain optional and must not regress AMD, Intel, or Vulkan lanes.
 
 See [`dx12_vendor_followup.md`](dx12_vendor_followup.md) for the Tier 16 gate.
+See [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md) for the
+required implementation sequence before DX12-only feature work.
 See [`dx12_moonshot_experiments.md`](dx12_moonshot_experiments.md) for the
 post-parity Tier 19 experiments. The parity dashboard prints moonshot
 eligibility and a `DX12 Memory Budget` table when native/DXGI budget samples or

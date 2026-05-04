@@ -33,6 +33,12 @@ Native DLSS SR must not be used to hide base DX12 losses. Until this gate says
 No pass may claim a DX12 FPS improvement from DLSS until the baseline evidence
 above is attached and the gate is updated.
 
+This gate follows [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md):
+DX12 must first be observable, upload-cleaned, CEF-transport-hardened,
+barrier/descriptor/PSO-audited, present-paced with evidence, and routed through
+the centralized native interop boundary. DLSS Super Resolution comes after that
+baseline; Ray Reconstruction comes after SR is stable.
+
 ## Runtime Opt-In
 
 The future SR path is requested with either env spelling:
