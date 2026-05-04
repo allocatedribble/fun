@@ -193,30 +193,38 @@ impl NativeDlssConfig {
 
     #[must_use]
     pub fn from_env_reader(mut read: impl FnMut(&'static str) -> Option<String>) -> Self {
+        let dlss_enabled = read("FUN_RENDER_DX12_DLSS").or_else(|| read("FUN_DX12_DLSS"));
+        let dlss_mode = read("FUN_RENDER_DX12_DLSS_MODE").or_else(|| read("FUN_DX12_DLSS_MODE"));
+        let dlss_sharpness =
+            read("FUN_RENDER_DX12_DLSS_SHARPNESS").or_else(|| read("FUN_DX12_DLSS_SHARPNESS"));
+        let dlss_rr = read("FUN_RENDER_DX12_DLSS_RR").or_else(|| read("FUN_DX12_DLSS_RR"));
+        let dlss_reset = read("FUN_RENDER_DX12_DLSS_RESET").or_else(|| read("FUN_DX12_DLSS_RESET"));
+        let dlss_debug = read("FUN_RENDER_DX12_DLSS_DEBUG").or_else(|| read("FUN_DX12_DLSS_DEBUG"));
+
         Self {
             enabled: native_dlss_compiled_for_this_target()
-                && native_dlss_enable_value(read("FUN_RENDER_DX12_DLSS").as_deref()),
-            mode: NativeDlssMode::from_env_value(read("FUN_RENDER_DX12_DLSS_MODE").as_deref()),
+                && native_dlss_enable_value(dlss_enabled.as_deref()),
+            mode: NativeDlssMode::from_env_value(dlss_mode.as_deref()),
             sharpness: env_f32_value(
                 "FUN_RENDER_DX12_DLSS_SHARPNESS",
-                read("FUN_RENDER_DX12_DLSS_SHARPNESS").as_deref(),
+                dlss_sharpness.as_deref(),
                 Self::DEFAULT_SHARPNESS,
                 -1.0,
                 1.0,
             ),
             allow_ray_reconstruction: env_bool_value(
                 "FUN_RENDER_DX12_DLSS_RR",
-                read("FUN_RENDER_DX12_DLSS_RR").as_deref(),
+                dlss_rr.as_deref(),
                 false,
             ),
             force_reset_next_frame: env_bool_value(
                 "FUN_RENDER_DX12_DLSS_RESET",
-                read("FUN_RENDER_DX12_DLSS_RESET").as_deref(),
+                dlss_reset.as_deref(),
                 false,
             ),
             debug_overlay: env_bool_value(
                 "FUN_RENDER_DX12_DLSS_DEBUG",
-                read("FUN_RENDER_DX12_DLSS_DEBUG").as_deref(),
+                dlss_debug.as_deref(),
                 false,
             ),
         }
@@ -849,14 +857,31 @@ pub fn log_native_dlss_startup_diagnostics(render_backend: Backends, config: Nat
         );
         return;
     }
-    info!(
-        target: "fun::render",
-        sdk_runtime_found = false,
-        native_handle_extraction_available = false,
-        sr_supported = false,
-        rr_supported = false,
-        "FUN DX12 DLSS native bridge pending SDK integration"
-    );
+    #[cfg(all(target_os = "windows", feature = "dx12_dlss_native"))]
+    {
+        let support = fun_dx12_dlss::query_support_from_env();
+        info!(
+            target: "fun::render",
+            sdk_runtime_found = support.runtime_found,
+            native_handle_extraction_available = true,
+            sr_supported = support.sr_supported,
+            rr_supported = support.rr_supported,
+            driver_needs_update = support.needs_updated_driver,
+            fallback_reason = support.reason,
+            "FUN DX12 DLSS native bridge support query"
+        );
+    }
+    #[cfg(not(all(target_os = "windows", feature = "dx12_dlss_native")))]
+    {
+        info!(
+            target: "fun::render",
+            sdk_runtime_found = false,
+            native_handle_extraction_available = false,
+            sr_supported = false,
+            rr_supported = false,
+            "FUN DX12 DLSS native bridge pending SDK integration"
+        );
+    }
 }
 
 const fn native_dlss_compiled_for_this_target() -> bool {
@@ -1309,6 +1334,32 @@ mod tests {
         assert_eq!(config.mode, NativeDlssMode::Balanced);
         assert_eq!(config.sharpness, 0.25);
         assert!(config.allow_ray_reconstruction);
+        assert!(config.force_reset_next_frame);
+        assert!(config.debug_overlay);
+    }
+
+    #[test]
+    fn native_dlss_config_accepts_short_fun_dx12_aliases() {
+        let config = NativeDlssConfig::from_env_reader(|name| {
+            match name {
+                "FUN_DX12_DLSS" => Some("1"),
+                "FUN_DX12_DLSS_MODE" => Some("performance"),
+                "FUN_DX12_DLSS_SHARPNESS" => Some("0.125"),
+                "FUN_DX12_DLSS_RR" => Some("0"),
+                "FUN_DX12_DLSS_RESET" => Some("1"),
+                "FUN_DX12_DLSS_DEBUG" => Some("true"),
+                _ => None,
+            }
+            .map(str::to_owned)
+        });
+
+        assert_eq!(
+            config.enabled,
+            cfg!(all(target_os = "windows", feature = "dx12_dlss_native"))
+        );
+        assert_eq!(config.mode, NativeDlssMode::Performance);
+        assert_eq!(config.sharpness, 0.125);
+        assert!(!config.allow_ray_reconstruction);
         assert!(config.force_reset_next_frame);
         assert!(config.debug_overlay);
     }

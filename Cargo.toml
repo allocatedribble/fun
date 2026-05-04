@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "fun_editor_core",
+    "fun_dx12_dlss",
     "fun_host",
     "fun_render",
     "fun_ui_cef",

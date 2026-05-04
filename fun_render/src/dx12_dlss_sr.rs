@@ -121,6 +121,25 @@ impl Dx12NativeDlssSrSupport {
     }
 }
 
+pub fn query_dx12_native_dlss_sr_support() -> Dx12NativeDlssSrSupport {
+    #[cfg(all(target_os = "windows", feature = "dx12_dlss_native"))]
+    {
+        let support = fun_dx12_dlss::query_support_from_env();
+        Dx12NativeDlssSrSupport {
+            runtime_found: support.runtime_found,
+            native_handle_extraction_available: true,
+            super_resolution_supported: support.sr_supported,
+            ray_reconstruction_supported: support.rr_supported,
+            driver_needs_update: support.needs_updated_driver,
+        }
+    }
+
+    #[cfg(not(all(target_os = "windows", feature = "dx12_dlss_native")))]
+    {
+        Dx12NativeDlssSrSupport::unsupported()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 pub enum Dx12NativeDlssSrState {
     PendingSupport,
@@ -931,6 +950,15 @@ mod tests {
             ..default()
         };
         assert!(!Dx12NativeDlssSrSupport::default().super_resolution_ready(config));
+    }
+
+    #[test]
+    fn native_support_query_fails_closed_until_bridge_reports_sr() {
+        let support = query_dx12_native_dlss_sr_support();
+
+        assert!(!support.super_resolution_supported);
+        assert!(!support.ray_reconstruction_supported);
+        assert!(!support.driver_needs_update);
     }
 
     #[test]

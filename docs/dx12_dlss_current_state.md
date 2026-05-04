@@ -8,6 +8,7 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 
 - `game_client` defaults to the existing Bevy-facing `dlss` feature and forwards it to `fun_render`.
 - `fun_render/winit_presentation` inserts the NVIDIA `DlssProjectId` before Bevy `DefaultPlugins` when the existing Bevy DLSS feature is compiled.
+- `fun_dx12_dlss` now exists as the native Windows C ABI bridge crate, but it is a fail-closed scaffold until Streamline or NGX is linked.
 - The local Bevy fork exposes DLSS through `bevy_anti_alias::dlss`, and that crate depends on `dlss_wgpu`.
 - `game_client` has camera-side plumbing for `Dlss<DlssRayReconstructionFeature>`, including support checks, history reset, and activation when Solari denoise mode is the RR preset.
 - `fun_render` owns Solari denoiser selection, render path signatures, RT feature policy, backend selection, and diagnostics.
@@ -21,11 +22,11 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 
 ## Missing DX12 Backend
 
-- There is no native Windows bridge that initializes Streamline or NGX against a D3D12 device and command queue.
+- There is a native Windows bridge crate scaffold, but it does not initialize Streamline or NGX against a D3D12 device and command queue yet.
 - `fun_render::dx12_native` is now the controlled wgpu HAL trapdoor for D3D12 device, queue, and texture resource handles.
 - Command encoder HAL extraction is centralized there, but `ID3D12GraphicsCommandList` access intentionally fails closed because wgpu-hal 29 does not expose the raw command list publicly.
 - Native SR now has Bevy-side resource, size, texture format, depth, and motion-vector gates before evaluation. There is still no SDK resource tagging or successful command-list evaluation path.
-- There is no SDK runtime discovery for `NVIDIA_STREAMLINE_SDK`, `NVIDIA_NGX_SDK`, or repo-local third-party SDK paths.
+- SDK/runtime discovery exists in `fun_dx12_dlss` for `NVIDIA_STREAMLINE_SDK`, `NVIDIA_NGX_SDK`, `FUN_NVIDIA_DLSS_SDK`, and `FUN_NVIDIA_DLSS_DLL`, but support still reports false until the SDK integration is linked.
 - The native SR schedule node is inserted into the 3D pipeline, and the Rust-side resize, mode-switch, and device-recovery lifecycle is represented. It still cannot call NVIDIA SDK resize/evaluate/destroy code until the native bridge and raw command-list accessor exist.
 
 ## New Experimental Surface
@@ -35,6 +36,7 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 - The feature currently adds configuration, diagnostics, a narrow DX12 native interop boundary, camera data-correctness gates, and the first SR schedule node. It does not compile or call NVIDIA SDK code yet.
 - `FUN_RENDER_DX12_DLSS=1|auto` requests native DLSS, but the request only becomes active when the feature is compiled for Windows.
 - `FUN_RENDER_DX12_DLSS_MODE=quality|balanced|performance|ultra_performance` selects the future SR mode.
+- `FUN_DX12_DLSS=1` and `FUN_DX12_DLSS_MODE=quality|balanced|performance|ultra_performance` are supported aliases for the same SR request.
 - `FUN_RENDER_DX12_DLSS_RR=1` is intentionally separate and defaults off; Super Resolution must work before RR is connected. `FUN_SOLARI_DENOISE_MODE=rr|dlss|dlss-rr|ray-reconstruction` now falls back to `balanced-fast` unless this explicit RR gate is enabled and the legacy `FUN_DISABLE_DLSS_RR` kill switch is absent.
 - `scripts/run_stack.ps1`, `scripts/benchmark_client.ps1`, and the RR benchmark matrix lanes use `-EnableDx12DlssRr` for the explicit gate; `-DisableDlssRr` remains the kill switch.
 - `FUN_RENDER_DX12_DLSS_DEBUG=1`, `FUN_RENDER_DX12_DLSS_RESET=1`, and `FUN_RENDER_DX12_DLSS_SHARPNESS=<f32>` are parsed for future bridge use.
@@ -48,7 +50,7 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 - `Dx12NativeDlssSrOutput` allocates an intermediate output-resolution HDR-compatible texture with render-attachment, sampled, storage, copy-source, and copy-destination usage. The swapchain image is not used as the DLSS output.
 - The node validates depth and motion-vector availability, checks the expected input/output resolution relationship, validates native texture handles through `fun_render::dx12_native` when compiled for Windows, logs the resource-state plan, and records structured failure codes.
 - The current node falls back to a debug copy if evaluation fails, then disables the native SR path in render-world status after the failure budget is exhausted. Until support is reported ready, main-world camera setup removes native DLSS render-scale overrides and resets mip bias to native.
-- Native SDK evaluation still returns `native_shim_unavailable`; this is intentional until a `fun_dx12_dlss` crate, SDK discovery, and command-list accessor are added.
+- Native SDK evaluation still returns `native_shim_unavailable`; this is intentional until Streamline/NGX calls and a command-list accessor are linked into `fun_dx12_dlss`.
 
 ## CEF HUD Composition Boundary
 
@@ -80,7 +82,7 @@ temporal input would contaminate SR/RR history.
 - Render-world output management recreates the intermediate output target when input size, output size, texture format, DLSS mode, runtime mode, or device generation changes.
 - Resource recreation records a runtime transition, clears the native SR failure counter, marks native resize pending, and skips DLSS evaluation for one frame before falling back to a copy for that frame.
 - Device recovery observation uses Bevy `RenderRecoveryStatus` plus render-device change tracking. On device loss or recreation, render-world native SR output components are removed and the status returns to pending support so stale D3D12 device, queue, resource, descriptor, or command-list pointers cannot be reused by future native code.
-- Actual Streamline/NGX context destruction, `fun_dlss_resize`, SDK support re-query, and feature-context recreation are still pending the `fun_dx12_dlss` bridge. The current implementation provides the Rust-owned lifecycle hooks that bridge will consume.
+- Streamline/NGX context destruction, SDK-backed `fun_dlss_resize`, SDK support re-query, and feature-context recreation are still pending. The `fun_dx12_dlss` crate currently provides the ABI and fail-closed lifecycle entry points those hooks will consume.
 
 ## Ray Reconstruction Gate
 
@@ -187,8 +189,8 @@ The acceptance command fails if the estimated stress-frame count is below `-RrSt
 
 ## Next Implementation Boundary
 
-- Add a separate `fun_dx12_dlss` crate when native integration begins.
-- Consume `fun_render::dx12_native` from the future native bridge instead of adding new HAL extraction call sites.
+- Replace the current `fun_dx12_dlss` unsupported shim with Streamline or NGX calls after the DX12 baseline gate is ready.
+- Consume `fun_render::dx12_native` from native integration code instead of adding new HAL extraction call sites.
 - Add or expose a sanctioned raw `ID3D12GraphicsCommandList` accessor before attempting DLSS evaluation.
 - Replace the current `native_shim_unavailable` stub in `Dx12NativeDlssSrNode` with a Streamline or NGX-backed `fun_dlss_evaluate` call.
 - Wire the runtime robustness hooks to native `fun_dlss_destroy`, support re-query, `fun_dlss_resize`, and feature-context recreation once the bridge crate exists.

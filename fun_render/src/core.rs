@@ -100,12 +100,14 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         app.add_plugins(FunSkyPlugin::new(render_config.cloud_settings()));
     }
     dlss_correctness::install_dlss_correctness(app);
+    let dx12_native_dlss_sr_support = dx12_dlss_sr::query_dx12_native_dlss_sr_support();
     dx12_dlss_sr::install_dx12_native_dlss_sr(app);
+    app.insert_resource(dx12_native_dlss_sr_support);
     dx12_dlss_rr::install_dx12_native_dlss_rr(app);
     pipeline_warmup::install_fun_pipeline_warmup(app);
     dx12_dlss_sr::log_dx12_native_dlss_sr_support_once(
         render_config.native_dlss,
-        crate::Dx12NativeDlssSrSupport::default(),
+        dx12_native_dlss_sr_support,
     );
 
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]

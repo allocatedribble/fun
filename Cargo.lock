@@ -3143,6 +3143,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fun_dx12_dlss"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "fun_editor_core"
 version = "0.1.0"
 dependencies = [
@@ -3168,6 +3175,7 @@ name = "fun_render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "fun_dx12_dlss",
  "game_shared",
  "thunder",
  "tracing",

@@ -1,0 +1,15 @@
+[package]
+name = "fun_dx12_dlss"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+
+[target.'cfg(windows)'.build-dependencies]
+cc = "1.2.0"
