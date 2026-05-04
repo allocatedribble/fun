@@ -301,6 +301,10 @@ function New-SyntheticSummary {
         [double]$BufferUploadBytes,
         [double]$TransientTextureCreates,
         [double]$TransientBufferCreates,
+        [double]$CefBlockingWaits = 0.0,
+        [double]$CefNotReadyFrames = 0.0,
+        [double]$CefReusedFrames = 0.0,
+        [double]$CefStaleFrames = 0.0,
         [bool]$AcceleratedCef
     )
 
@@ -322,6 +326,10 @@ function New-SyntheticSummary {
             render_upload_write_buffer_bytes = [ordered]@{ mean = $BufferUploadBytes; p95 = $BufferUploadBytes }
             transient_texture_creates = [ordered]@{ mean = $TransientTextureCreates; p95 = $TransientTextureCreates }
             transient_buffer_creates = [ordered]@{ mean = $TransientBufferCreates; p95 = $TransientBufferCreates }
+            cef_gpu_frame_blocking_wait_count = [ordered]@{ mean = $CefBlockingWaits; p95 = $CefBlockingWaits }
+            cef_gpu_frame_not_ready_count = [ordered]@{ mean = $CefNotReadyFrames; p95 = $CefNotReadyFrames }
+            cef_gpu_frame_reused_count = [ordered]@{ mean = $CefReusedFrames; p95 = $CefReusedFrames }
+            cef_stale_frame_count = [ordered]@{ mean = $CefStaleFrames; p95 = $CefStaleFrames }
         }
     }
     $json = $payload | ConvertTo-Json -Depth 8
@@ -339,8 +347,8 @@ if ([string]::IsNullOrWhiteSpace($Lane)) {
 
 if ($SelfTest) {
     $baselineSummaryForSelfTest = New-SyntheticSummary -FpsMean 100.0 -FrameP95 10000000.0 -PresentP95 100000.0 -CefCpuUploadBytes 0.0 -RenderPipelineCreations 0.0 -ComputePipelineCreations 0.0 -ShaderPipelineCreations 0.0 -TextureUploadBytes 0.0 -BufferUploadBytes 0.0 -TransientTextureCreates 1.0 -TransientBufferCreates 1.0 -AcceleratedCef $true
-    $warning = New-SyntheticSummary -FpsMean 96.0 -FrameP95 10000000.0 -PresentP95 110000.0 -CefCpuUploadBytes 0.0 -RenderPipelineCreations 0.0 -ComputePipelineCreations 0.0 -ShaderPipelineCreations 0.0 -TextureUploadBytes 0.0 -BufferUploadBytes 0.0 -TransientTextureCreates 2.0 -TransientBufferCreates 1.0 -AcceleratedCef $true
-    $failure = New-SyntheticSummary -FpsMean 96.0 -FrameP95 11500000.0 -PresentP95 110000.0 -CefCpuUploadBytes 4096.0 -RenderPipelineCreations 1.0 -ComputePipelineCreations 0.0 -ShaderPipelineCreations 1.0 -TextureUploadBytes 0.0 -BufferUploadBytes 0.0 -TransientTextureCreates 1.0 -TransientBufferCreates 1.0 -AcceleratedCef $true
+    $warning = New-SyntheticSummary -FpsMean 96.0 -FrameP95 10000000.0 -PresentP95 110000.0 -CefCpuUploadBytes 0.0 -RenderPipelineCreations 0.0 -ComputePipelineCreations 0.0 -ShaderPipelineCreations 0.0 -TextureUploadBytes 0.0 -BufferUploadBytes 0.0 -TransientTextureCreates 2.0 -TransientBufferCreates 1.0 -CefNotReadyFrames 1.0 -CefReusedFrames 1.0 -AcceleratedCef $true
+    $failure = New-SyntheticSummary -FpsMean 96.0 -FrameP95 11500000.0 -PresentP95 110000.0 -CefCpuUploadBytes 4096.0 -RenderPipelineCreations 1.0 -ComputePipelineCreations 0.0 -ShaderPipelineCreations 1.0 -TextureUploadBytes 0.0 -BufferUploadBytes 0.0 -TransientTextureCreates 1.0 -TransientBufferCreates 1.0 -CefBlockingWaits 1.0 -AcceleratedCef $true
 
     $warningReport = Invoke-PerfGate -BaselineSummary $baselineSummaryForSelfTest -CurrentSummary $warning -Envelope $envelope -LaneName $Lane
     if ($warningReport.status -ne "warn" -or $warningReport.hard_failures -ne 0 -or $warningReport.warnings -lt 1) {

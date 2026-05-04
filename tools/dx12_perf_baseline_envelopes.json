@@ -24,6 +24,15 @@
           "message": "CPU upload bytes appeared in an accelerated CEF lane."
         },
         {
+          "id": "accelerated_cef_blocking_waits",
+          "metric": "cef_gpu_frame_blocking_wait_count",
+          "field": "p95",
+          "comparison": "max_absolute",
+          "limit": 0.0,
+          "when": "accelerated_cef",
+          "message": "Blocking waits appeared in an accelerated CEF lane."
+        },
+        {
           "id": "runtime_render_pipeline_creation",
           "metric": "render_churn_render_pipeline_creations",
           "field": "p95",
@@ -102,6 +111,36 @@
           "direction": "lower",
           "limit": 0.0,
           "message": "Transient buffer creates increased."
+        },
+        {
+          "id": "accelerated_cef_stale_frames",
+          "metric": "cef_stale_frame_count",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 0.0,
+          "when": "accelerated_cef",
+          "message": "Stale CEF GPU frame count regressed."
+        },
+        {
+          "id": "accelerated_cef_not_ready_frames",
+          "metric": "cef_gpu_frame_not_ready_count",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 0.0,
+          "when": "accelerated_cef",
+          "message": "Not-ready CEF GPU frames regressed."
+        },
+        {
+          "id": "accelerated_cef_reused_frames",
+          "metric": "cef_gpu_frame_reused_count",
+          "field": "p95",
+          "comparison": "max_regression_absolute",
+          "direction": "lower",
+          "limit": 0.0,
+          "when": "accelerated_cef",
+          "message": "Reused CEF GPU frames regressed."
         }
       ]
     }

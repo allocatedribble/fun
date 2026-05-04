@@ -3,7 +3,7 @@ param(
     [switch]$StaticBevy,
     [switch]$TraceDiagnostics,
     [switch]$FrameTimeDiagnostics,
-    [ValidateSet("quick", "full", "present")]
+    [ValidateSet("quick", "full", "present", "cef_transport")]
     [string]$MatrixSize = "quick",
     [string[]]$Lane = @(),
     [switch]$PlanOnly,
@@ -170,6 +170,7 @@ function New-Dx12ParityLane {
         [bool]$DisableFpsOverlay = $false,
         [int]$LaneWindowWidth = 0,
         [int]$LaneWindowHeight = 0,
+        [int]$CefGpuRingDepth = 3,
         [int]$MaxFrameLatency = 0,
         [string]$WindowMode = "windowed",
         [string]$EditorPreview = "off",
@@ -190,6 +191,7 @@ function New-Dx12ParityLane {
         disable_fps_overlay = $DisableFpsOverlay
         window_width = $LaneWindowWidth
         window_height = $LaneWindowHeight
+        cef_gpu_ring_depth = $CefGpuRingDepth
         max_frame_latency = $MaxFrameLatency
         window_mode = $WindowMode
         editor_preview = $EditorPreview
@@ -258,6 +260,61 @@ function Get-Dx12PresentLaneDefinitions {
                 }
             }
         }
+    }
+
+    return @($lanes.ToArray())
+}
+
+function Get-Dx12CefTransportLaneDefinitions {
+    $lanes = New-Object "System.Collections.Generic.List[object]"
+    $surfaces = @(
+        @{ name = "current"; width = 0; height = 0 },
+        @{ name = "1080p"; width = 1920; height = 1080 },
+        @{ name = "1440p"; width = 2560; height = 1440 }
+    )
+    $uiModes = @(
+        @{ name = "static"; mode = "static" },
+        @{ name = "animated"; mode = "animated" }
+    )
+
+    $lanes.Add((New-Dx12ParityLane `
+                -Name "cef_hidden_current" `
+                -Category "cef_transport_decision" `
+                -CefUiMode "hidden" `
+                -CefPaintTransport "default" `
+                -DisableFpsOverlay $true `
+                -Notes "hidden control lane; CEF browser is not visible")) | Out-Null
+
+    foreach ($surface in $surfaces) {
+        foreach ($ui in $uiModes) {
+            $lanes.Add((New-Dx12ParityLane `
+                        -Name "cef_cpu_$($ui.name)_$($surface.name)" `
+                        -Category "cef_transport_decision" `
+                        -CefUiMode $ui.mode `
+                        -CefPaintTransport "cpu" `
+                        -LaneWindowWidth $surface.width `
+                        -LaneWindowHeight $surface.height `
+                        -Notes "CPU paint reference lane for CEF transport health and screenshot comparison")) | Out-Null
+            $lanes.Add((New-Dx12ParityLane `
+                        -Name "cef_gpu_$($ui.name)_$($surface.name)_ring3" `
+                        -Category "cef_transport_decision" `
+                        -CefUiMode $ui.mode `
+                        -CefPaintTransport "d3d11on12" `
+                        -LaneWindowWidth $surface.width `
+                        -LaneWindowHeight $surface.height `
+                        -CefGpuRingDepth 3 `
+                        -Notes "accelerated D3D11On12 candidate lane")) | Out-Null
+        }
+    }
+
+    foreach ($ringDepth in @(2, 3, 4, 5)) {
+        $lanes.Add((New-Dx12ParityLane `
+                    -Name "cef_gpu_animated_current_ring$ringDepth" `
+                    -Category "cef_transport_ring_tuning" `
+                    -CefUiMode "animated" `
+                    -CefPaintTransport "d3d11on12" `
+                    -CefGpuRingDepth $ringDepth `
+                    -Notes "ring-depth tuning lane; choose the smallest depth with zero normal blocking waits and no stale-frame bursts")) | Out-Null
     }
 
     return @($lanes.ToArray())
@@ -337,6 +394,13 @@ function Get-RequiredMetricNames {
         "cef_gpu_frame_not_ready_count",
         "cef_gpu_frame_reused_count",
         "cef_gpu_frame_blocking_wait_count",
+        "cef_health_gpu_copy_ms",
+        "cef_health_cpu_upload_bytes_per_frame",
+        "cef_health_reused_frames",
+        "cef_health_not_ready_frames",
+        "cef_health_blocking_waits",
+        "cef_health_fallback_count",
+        "cef_health_ring_depth",
         "cef_transport_fallback_count",
         "cef_published_generation",
         "cef_sampled_generation",
@@ -451,7 +515,7 @@ function New-MetricPresence {
 function New-KeyMetricSnapshot {
     param([object]$Summary)
 
-    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions", "render_readback_readback_requested_count", "render_readback_readback_completed_count", "render_readback_readback_dropped_count", "render_readback_readback_blocking_wait_count", "render_readback_map_async_count", "render_readback_poll_count", "render_shader_shader_module_creations", "render_shader_shader_module_create_ns", "render_shader_shader_variant_requests", "render_shader_material_specializations", "render_shader_pipeline_create_count", "render_shader_pipeline_create_ns")
+    $names = @("fps", "frame_ns", "present_wait_ns", "cef_on_paint_fps", "cef_on_accelerated_paint_fps", "cef_cpu_upload_bytes", "cef_gpu_copy_bytes", "cef_gpu_copy_ns", "cef_gpu_frame_not_ready_count", "cef_gpu_frame_reused_count", "cef_gpu_frame_blocking_wait_count", "cef_transport_fallback_count", "cef_stale_frame_count", "cef_health_gpu_copy_ms", "cef_health_cpu_upload_bytes_per_frame", "cef_health_reused_frames", "cef_health_not_ready_frames", "cef_health_blocking_waits", "cef_health_fallback_count", "cef_health_ring_depth", "render_upload_write_texture_bytes", "render_upload_write_buffer_bytes", "render_churn_render_pipeline_creations", "render_churn_compute_pipeline_creations", "render_churn_bind_group_layout_creations", "render_command_command_encoder_creations", "render_command_command_buffers_submitted", "render_command_queue_submits", "render_command_copy_commands", "render_command_native_interop_command_insertions", "render_readback_readback_requested_count", "render_readback_readback_completed_count", "render_readback_readback_dropped_count", "render_readback_readback_blocking_wait_count", "render_readback_map_async_count", "render_readback_poll_count", "render_shader_shader_module_creations", "render_shader_shader_module_create_ns", "render_shader_shader_variant_requests", "render_shader_material_specializations", "render_shader_pipeline_create_count", "render_shader_pipeline_create_ns")
     $snapshot = [ordered]@{}
     foreach ($name in $names) {
         $property = if ($null -ne $Summary -and $null -ne $Summary.metrics) { $Summary.metrics.PSObject.Properties[$name] } else { $null }
@@ -567,7 +631,9 @@ function Convert-LaneToBenchmarkArgs {
         "-WindowWidth",
         "$laneWidth",
         "-WindowHeight",
-        "$laneHeight"
+        "$laneHeight",
+        "-CefGpuRingDepth",
+        "$($LaneDefinition.cef_gpu_ring_depth)"
     )
     if ([int]$LaneDefinition.max_frame_latency -gt 0) {
         $args += @("-RequestedMaximumFrameLatency", "$($LaneDefinition.max_frame_latency)")
@@ -600,15 +666,30 @@ function Write-Dx12ParityMarkdown {
     $lines.Add("- Plan only: $($Summary.plan_only)") | Out-Null
     $lines.Add("- Required metrics: $($Summary.required_metrics -join ', ')") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| lane | status | backend | present | max latency | cef mode | cef transport | fps mean | frame p95 ns | present p95 ns | summary |") | Out-Null
-    $lines.Add("|---|---|---|---|---:|---|---|---:|---:|---:|---|") | Out-Null
+    $lines.Add("| lane | status | backend | present | max latency | cef mode | requested transport | selected transport | ring | health | fps mean | frame p95 ns | present p95 ns | accel fps | CPU upload mean | GPU copy ns mean | blocking waits p95 | fallback p95 | summary |") | Out-Null
+    $lines.Add("|---|---|---|---|---:|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|") | Out-Null
     foreach ($lane in $Summary.lanes) {
         $metrics = $lane.key_metrics
         $fpsMean = if ($null -ne $metrics.fps) { $metrics.fps.mean } else { "n/a" }
         $frameP95 = if ($null -ne $metrics.frame_ns) { $metrics.frame_ns.p95 } else { "n/a" }
         $presentP95 = if ($null -ne $metrics.present_wait_ns) { $metrics.present_wait_ns.p95 } else { "n/a" }
+        $cpuUploadMean = if ($null -ne $metrics.cef_cpu_upload_bytes) { $metrics.cef_cpu_upload_bytes.mean } else { "n/a" }
+        $gpuCopyNsMean = if ($null -ne $metrics.cef_gpu_copy_ns) { $metrics.cef_gpu_copy_ns.mean } else { "n/a" }
+        $blockingP95 = if ($null -ne $metrics.cef_gpu_frame_blocking_wait_count) { $metrics.cef_gpu_frame_blocking_wait_count.p95 } else { "n/a" }
+        $fallbackP95 = if ($null -ne $metrics.cef_transport_fallback_count) { $metrics.cef_transport_fallback_count.p95 } else { "n/a" }
+        $accelFps = if ($null -ne $metrics.cef_on_accelerated_paint_fps) { $metrics.cef_on_accelerated_paint_fps.mean } else { "n/a" }
+        $selectedTransport = if ($null -ne $lane.cef_ui_transport_selection -and $lane.cef_ui_transport_selection.status -eq "found") { $lane.cef_ui_transport_selection.selected } else { "n/a" }
+        $health = if ($null -ne $lane.cef_ui_transport_health -and $lane.cef_ui_transport_health.record_status -eq "found") { $lane.cef_ui_transport_health.status } else { "n/a" }
         $summaryPath = if ([string]::IsNullOrWhiteSpace($lane.summary_json)) { "n/a" } else { $lane.summary_json }
-        $lines.Add("| $($lane.name) | $($lane.status) | $($lane.render_backend) | $($lane.present_mode) | $($lane.max_frame_latency) | $($lane.cef_ui_mode) | $($lane.cef_paint_transport) | $fpsMean | $frameP95 | $presentP95 | $summaryPath |") | Out-Null
+        $lines.Add("| $($lane.name) | $($lane.status) | $($lane.render_backend) | $($lane.present_mode) | $($lane.max_frame_latency) | $($lane.cef_ui_mode) | $($lane.cef_paint_transport) | $selectedTransport | $($lane.cef_gpu_ring_depth) | $health | $fpsMean | $frameP95 | $presentP95 | $accelFps | $cpuUploadMean | $gpuCopyNsMean | $blockingP95 | $fallbackP95 | $summaryPath |") | Out-Null
+    }
+    if ($Summary.matrix_size -eq "cef_transport") {
+        $lines.Add("") | Out-Null
+        $lines.Add("## CEF Transport Manual Evidence") | Out-Null
+        $lines.Add("") | Out-Null
+        foreach ($item in $Summary.cef_transport_manual_evidence) {
+            $lines.Add("- $($item.name): $($item.status) - $($item.required_action)") | Out-Null
+        }
     }
     if ($null -ne $Summary.dx12_present_recommendations) {
         $lines.Add("") | Out-Null
@@ -641,8 +722,12 @@ New-Item -ItemType Directory -Force -Path $matrixRoot | Out-Null
 $benchmarkClientPath = Join-Path $scriptRoot "benchmark_client.ps1"
 $baseLanes = @(Get-Dx12ParityLaneDefinitions)
 $presentLanes = @(Get-Dx12PresentLaneDefinitions)
+$cefTransportLanes = @(Get-Dx12CefTransportLaneDefinitions)
 $allLanes = if ($MatrixSize -eq "present" -or ($Lane | Where-Object { $_ -like "present_*" }).Count -gt 0) {
-    @($baseLanes + $presentLanes)
+    @($baseLanes + $presentLanes + $cefTransportLanes)
+}
+elseif ($MatrixSize -eq "cef_transport" -or ($Lane | Where-Object { $_ -like "cef_*" }).Count -gt 0) {
+    @($baseLanes + $cefTransportLanes)
 }
 else {
     $baseLanes
@@ -652,6 +737,9 @@ $selectedNames = if ($Lane.Count -gt 0) {
 }
 elseif ($MatrixSize -eq "present") {
     @($presentLanes | ForEach-Object { $_.name })
+}
+elseif ($MatrixSize -eq "cef_transport") {
+    @($cefTransportLanes | ForEach-Object { $_.name })
 }
 elseif ($MatrixSize -eq "quick") {
     @(Get-QuickLaneNames)
@@ -736,6 +824,7 @@ foreach ($laneDefinition in $selectedLanes) {
         window_mode = $laneDefinition.window_mode
         cef_ui_mode = $laneDefinition.cef_ui_mode
         cef_paint_transport = $laneDefinition.cef_paint_transport
+        cef_gpu_ring_depth = $laneDefinition.cef_gpu_ring_depth
         benchmark_lane = $laneDefinition.benchmark_lane
         feature_toggles = [ordered]@{
             clouds_disabled = $laneDefinition.disable_clouds
@@ -747,6 +836,8 @@ foreach ($laneDefinition in $selectedLanes) {
         summary_json = $summaryJson
         key_metrics = New-KeyMetricSnapshot -Summary $summary
         metric_presence = New-MetricPresence -Summary $summary -MetricNames $requiredMetrics
+        cef_ui_transport_selection = if ($null -ne $summary) { $summary.cef_ui_transport_selection } else { $null }
+        cef_ui_transport_health = if ($null -ne $summary) { $summary.cef_ui_transport_health } else { $null }
         dx12_external_metrics = if ($laneDefinition.render_backend -eq "dx12") { Get-Dx12ExternalMetricPlan } else { $null }
         notes = $laneDefinition.notes
         stdout_tail = $stdoutTail
@@ -779,6 +870,28 @@ $matrixSummary = [ordered]@{
     environment = Get-Dx12ParityEnvironment
     lanes_defined = $allLanes
     lanes = @($laneResults.ToArray())
+    cef_transport_manual_evidence = @(
+        [ordered]@{
+            name = "resize_test"
+            status = "manual_required"
+            required_action = "capture CPU and accelerated lanes while rapidly resizing; attach summary JSON plus screenshot diff"
+        },
+        [ordered]@{
+            name = "alt_tab_test"
+            status = "manual_required"
+            required_action = "capture CPU and accelerated lanes after alt-tab/minimize/restore; verify no stale output or fallback"
+        },
+        [ordered]@{
+            name = "world_reload_editor_transition_test"
+            status = "manual_required"
+            required_action = "capture launcher-to-editor and editor-to-game transitions; verify selected transport, zero blocking waits, and visual continuity"
+        },
+        [ordered]@{
+            name = "static_screenshot_diff"
+            status = "manual_required"
+            required_action = "compare static CPU and accelerated screenshots with tools\\compare_cef_ui_screenshots.ps1"
+        }
+    )
     dx12_present_recommendations = New-Dx12PresentRecommendations -LaneResults @($laneResults.ToArray())
 }
 

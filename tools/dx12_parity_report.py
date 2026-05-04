@@ -540,6 +540,7 @@ def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
     config = summary.get("config", {})
     presentation = summary.get("render_presentation", {})
     cef_selection = summary.get("cef_ui_transport_selection", {})
+    cef_health = summary.get("cef_ui_transport_health", {})
     width = config.get("window_width") or presentation.get("resolution_width") or "unknown"
     height = config.get("window_height") or presentation.get("resolution_height") or "unknown"
     return {
@@ -558,6 +559,113 @@ def backend_summary(summary: dict[str, Any]) -> dict[str, str]:
             cef_selection.get("selected") or config.get("cef_paint_transport") or "unknown"
         ),
         "cef_mode": str(config.get("cef_ui_mode") or "unknown"),
+        "cef_ring_depth": str(
+            cef_health.get("ring_depth")
+            or cef_selection.get("ring_depth")
+            or config.get("cef_gpu_ring_depth")
+            or "unknown"
+        ),
+    }
+
+
+def metric_best_stat(summary: dict[str, Any], metric: str) -> float | None:
+    for field in ("p95", "mean", "max", "p50"):
+        value = metric_value(summary, metric, field)
+        if value is not None:
+            return value
+    return None
+
+
+def cef_health_number(summary: dict[str, Any], key: str) -> float | None:
+    health = summary.get("cef_ui_transport_health", {})
+    if isinstance(health, dict):
+        value = number(health.get(key))
+        if value is not None:
+            return value
+    return metric_best_stat(summary, f"cef_health_{key}")
+
+
+def cef_transport_health(summary: dict[str, Any]) -> dict[str, Any]:
+    config = summary.get("config", {})
+    selection = summary.get("cef_ui_transport_selection", {})
+    health = summary.get("cef_ui_transport_health", {})
+    selected = str(selection.get("selected") or config.get("cef_paint_transport") or "unknown").lower()
+    requested = str(config.get("cef_paint_transport") or selection.get("requested") or "unknown").lower()
+    health_status = str(health.get("status") or "not_reported")
+    ring_depth = (
+        cef_health_number(summary, "ring_depth")
+        or number(selection.get("ring_depth"))
+        or number(config.get("cef_gpu_ring_depth"))
+    )
+    accel_fps = (
+        cef_health_number(summary, "accel_paint_fps")
+        or metric_value(summary, "cef_on_accelerated_paint_fps", "mean")
+        or 0.0
+    )
+    gpu_copy_ns = (
+        cef_health_number(summary, "gpu_copy_ns_per_copy")
+        or metric_value(summary, "cef_gpu_copy_ns", "mean")
+        or 0.0
+    )
+    gpu_copy_ms = cef_health_number(summary, "gpu_copy_ms")
+    if gpu_copy_ms is None:
+        gpu_copy_ms = gpu_copy_ns / 1_000_000.0
+    cpu_upload_per_frame = cef_health_number(summary, "cpu_upload_bytes_per_frame")
+    if cpu_upload_per_frame is None:
+        cpu_upload_per_frame = metric_value(summary, "cef_cpu_upload_bytes", "mean") or 0.0
+    reused_frames = cef_health_number(summary, "reused_frames") or metric_best_stat(summary, "cef_gpu_frame_reused_count") or 0.0
+    not_ready_frames = cef_health_number(summary, "not_ready_frames") or metric_best_stat(summary, "cef_gpu_frame_not_ready_count") or 0.0
+    blocking_waits = cef_health_number(summary, "blocking_waits") or metric_best_stat(summary, "cef_gpu_frame_blocking_wait_count") or 0.0
+    fallback_count = cef_health_number(summary, "fallback_count") or metric_best_stat(summary, "cef_transport_fallback_count") or 0.0
+    cpu_upload_bytes = metric_value(summary, "cef_cpu_upload_bytes", "mean") or 0.0
+    gpu_copy_bytes = metric_value(summary, "cef_gpu_copy_bytes", "mean") or 0.0
+    fallback_reason = str(selection.get("fallback_reason") or "unknown")
+
+    accelerated_requested = bool(config.get("cef_accelerated_feature_requested")) or requested in {
+        "auto",
+        "d3d11on12",
+        "d3d11_shared_texture_dx12_copy",
+    }
+    if selected in {"disabled", "hidden"}:
+        decision = "disabled"
+    elif selected in {"cpu", "cpu_paint"} and accelerated_requested:
+        decision = "fallback"
+    elif selected in {"cpu", "cpu_paint"}:
+        decision = "cpu_reference"
+    elif blocking_waits > 0.0:
+        decision = "unhealthy_blocking_wait"
+    elif fallback_count > 0.0:
+        decision = "fallback"
+    elif selected in {"d3d11on12", "d3d11_shared_texture_dx12_copy"}:
+        if cpu_upload_bytes == 0.0 and gpu_copy_bytes > 0.0 and accel_fps > 0.0:
+            decision = "healthy"
+        else:
+            decision = "incomplete"
+    else:
+        decision = "unknown"
+
+    badge = (
+        f"CEF transport: {selected} | accel paint {format_number(accel_fps)} fps | "
+        f"gpu copy {format_number(gpu_copy_ms)} ms | CPU upload {format_bytes(cpu_upload_per_frame)}/frame | "
+        f"reused {format_number(reused_frames)} frames | fallback {format_number(fallback_count)}"
+    )
+    return {
+        "decision": decision,
+        "requested_transport": requested,
+        "selected_transport": selected,
+        "runtime_health_status": health_status,
+        "fallback_reason": fallback_reason,
+        "ring_depth": ring_depth,
+        "accel_paint_fps": accel_fps,
+        "gpu_copy_ms": gpu_copy_ms,
+        "cpu_upload_bytes_per_frame": cpu_upload_per_frame,
+        "cpu_upload_bytes_mean": cpu_upload_bytes,
+        "gpu_copy_bytes_mean": gpu_copy_bytes,
+        "reused_frames": reused_frames,
+        "not_ready_frames": not_ready_frames,
+        "blocking_waits": blocking_waits,
+        "fallback_count": fallback_count,
+        "badge": badge,
     }
 
 
@@ -1030,14 +1138,6 @@ def metric_has_any_stat(summary: dict[str, Any], metric: str) -> bool:
     return any(number(metric_data.get(field)) is not None for field in ("p95", "mean"))
 
 
-def metric_best_stat(summary: dict[str, Any], metric: str) -> float | None:
-    for field in ("p95", "mean"):
-        value = metric_value(summary, metric, field)
-        if value is not None:
-            return value
-    return None
-
-
 def first_metric_evidence(summary: dict[str, Any], metrics: tuple[str, ...]) -> tuple[str, float] | None:
     for metric in metrics:
         value = metric_best_stat(summary, metric)
@@ -1384,6 +1484,7 @@ def write_json_report(
     failures: list[str],
     rows: list[dict[str, Any]],
     top_upload_callsites: list[dict[str, Any]],
+    dx12: dict[str, Any],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     category, trace, reasons = bottleneck
@@ -1399,6 +1500,7 @@ def write_json_report(
         "legacy_required_trace": trace,
         "legacy_evidence": reasons,
         "lane_failures": failures,
+        "cef_transport_health": cef_transport_health(dx12),
         "top_upload_callsites": top_upload_callsites,
         "red_metrics": [
             row["metric"]
@@ -1454,8 +1556,33 @@ def write_markdown(
         "resolution",
         "cef_transport",
         "cef_mode",
+        "cef_ring_depth",
     ):
         lines.append(f"| {key} | {vk_summary[key]} | {dx_summary[key]} |")
+
+    cef_health = cef_transport_health(dx12)
+    lines.extend(
+        [
+            "",
+            "## CEF Transport Health",
+            "",
+            f"- {cef_health['badge']}",
+            f"- decision: `{cef_health['decision']}`",
+            f"- runtime_health_status: `{cef_health['runtime_health_status']}`",
+            f"- fallback_reason: `{cef_health['fallback_reason']}`",
+            "",
+            "| field | value |",
+            "|---|---:|",
+            f"| ring_depth | {format_number(cef_health['ring_depth'])} |",
+            f"| accel_paint_fps | {format_number(cef_health['accel_paint_fps'])} |",
+            f"| gpu_copy_ms | {format_number(cef_health['gpu_copy_ms'])} |",
+            f"| cpu_upload_bytes_per_frame | {format_bytes(cef_health['cpu_upload_bytes_per_frame'])} |",
+            f"| reused_frames | {format_number(cef_health['reused_frames'])} |",
+            f"| not_ready_frames | {format_number(cef_health['not_ready_frames'])} |",
+            f"| blocking_waits | {format_number(cef_health['blocking_waits'])} |",
+            f"| fallback_count | {format_number(cef_health['fallback_count'])} |",
+        ]
+    )
 
     lines.extend(
         [
@@ -1635,7 +1762,7 @@ def run_report(args: argparse.Namespace) -> int:
     write_csv(Path(args.csv_summary), rows)
     json_report = getattr(args, "json_report", "")
     if json_report:
-        write_json_report(Path(json_report), recommendation, bottleneck, failures, rows, top_upload_callsites)
+        write_json_report(Path(json_report), recommendation, bottleneck, failures, rows, top_upload_callsites, dx12)
     write_markdown(
         Path(args.markdown_report),
         vulkan,
@@ -1671,6 +1798,7 @@ def write_sample_summary(
             "requested_maximum_frame_latency": 2,
             "window_width": 1280,
             "window_height": 720,
+            "cef_gpu_ring_depth": 3,
             "cef_ui_mode": "animated",
             "cef_paint_transport": "d3d11on12" if backend == "dx12" else "cpu",
             "cef_accelerated_feature_requested": backend == "dx12",
@@ -1680,6 +1808,35 @@ def write_sample_summary(
             "frame_ns": {"mean": 1_000_000_000.0 / fps, "p95": frame_p95},
             "present_wait_ns": {"mean": 100_000.0, "p95": 100_000.0},
             "cef_cpu_upload_bytes": {"mean": cef_cpu_bytes, "p95": cef_cpu_bytes},
+            "cef_gpu_copy_bytes": {"mean": 0.0 if cef_cpu_bytes else 12_000_000.0, "p95": 0.0 if cef_cpu_bytes else 12_000_000.0},
+            "cef_gpu_copy_ns": {"mean": 0.0 if cef_cpu_bytes else 180_000.0, "p95": 0.0 if cef_cpu_bytes else 180_000.0},
+            "cef_on_accelerated_paint_fps": {"mean": 0.0 if cef_cpu_bytes else 60.0, "p95": 0.0 if cef_cpu_bytes else 60.0},
+            "cef_gpu_frame_reused_count": {"mean": 0.0, "p95": 0.0},
+            "cef_gpu_frame_not_ready_count": {"mean": 0.0, "p95": 0.0},
+            "cef_gpu_frame_blocking_wait_count": {"mean": 0.0, "p95": 0.0},
+            "cef_transport_fallback_count": {"mean": 1.0 if cef_cpu_bytes and backend == "dx12" else 0.0, "p95": 1.0 if cef_cpu_bytes and backend == "dx12" else 0.0},
+        },
+        "cef_ui_transport_selection": {
+            "status": "found",
+            "requested": "d3d11on12" if backend == "dx12" else "cpu",
+            "selected": "cpu" if cef_cpu_bytes else ("d3d11on12" if backend == "dx12" else "cpu"),
+            "ring_depth": "3",
+            "fallback_reason": "render_backend_not_dx12" if cef_cpu_bytes and backend == "dx12" else "none",
+        },
+        "cef_ui_transport_health": {
+            "record_status": "found",
+            "transport": "cpu" if cef_cpu_bytes else ("d3d11on12" if backend == "dx12" else "cpu"),
+            "status": "fallback" if cef_cpu_bytes and backend == "dx12" else "healthy",
+            "accel_paint_fps": "0" if cef_cpu_bytes else "60",
+            "paint_fps": "60" if cef_cpu_bytes else "0",
+            "gpu_copy_ms": "0" if cef_cpu_bytes else "0.18",
+            "gpu_copy_ns_per_copy": "0" if cef_cpu_bytes else "180000",
+            "cpu_upload_bytes_per_frame": str(cef_cpu_bytes),
+            "reused_frames": "0",
+            "not_ready_frames": "0",
+            "blocking_waits": "0",
+            "fallback_count": "1" if cef_cpu_bytes and backend == "dx12" else "0",
+            "ring_depth": "3",
         },
         "samples": {
             "count": 4,
@@ -1742,6 +1899,10 @@ def self_test() -> int:
             raise AssertionError("p95 regression was not reported")
         if "CEF accelerated lane failed" not in text:
             raise AssertionError("CEF accelerated lane failure was not reported")
+        if "CEF Transport Health" not in text:
+            raise AssertionError("CEF transport health section was not rendered")
+        if recommendation.get("cef_transport_health", {}).get("decision") != "fallback":
+            raise AssertionError("CEF transport health did not identify fallback")
         if recommendation["dx12_classification"] != "cef_transport_bound":
             raise AssertionError("CEF CPU upload did not produce a CEF transport recommendation")
         if "CEF" not in recommendation["next_action"]:

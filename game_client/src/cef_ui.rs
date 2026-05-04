@@ -3385,8 +3385,64 @@ fn cef_ui_accelerated_strict_enabled() -> bool {
         })
 }
 
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn cef_ui_transport_health_label(state: Option<&CefUiStartupState>) -> &'static str {
+    let Some(state) = state else {
+        return "not_started";
+    };
+    if let Some(transport) = state.running_transport {
+        return transport.as_wire_str();
+    }
+    match state.kind {
+        CefUiStartupStateKind::NotStarted => "not_started",
+        CefUiStartupStateKind::WaitingForGpuBridge => "waiting_gpu_bridge",
+        CefUiStartupStateKind::StartingCpuFallback { .. } => "starting_cpu_fallback",
+        CefUiStartupStateKind::StartingAccelerated => "starting_d3d11on12",
+        CefUiStartupStateKind::Running => "running_unknown",
+        CefUiStartupStateKind::Failed => "failed",
+    }
+}
+
+#[cfg(all(feature = "diagnostics", debug_assertions))]
+fn cef_ui_transport_health_status(
+    transport: &str,
+    accelerated_paint_delta: u64,
+    cpu_upload_bytes_delta: u64,
+    gpu_copy_count_delta: u64,
+    blocking_wait_delta: u64,
+    fallback_count: u64,
+) -> &'static str {
+    if blocking_wait_delta > 0 {
+        return "blocking_wait";
+    }
+    if fallback_count > 0 {
+        return "fallback";
+    }
+    match transport {
+        "d3d11on12" => {
+            if accelerated_paint_delta > 0
+                && gpu_copy_count_delta > 0
+                && cpu_upload_bytes_delta == 0
+            {
+                "healthy"
+            } else {
+                "warming"
+            }
+        }
+        "cpu" | "starting_cpu_fallback" => "cpu_paint",
+        "disabled" => "disabled",
+        "waiting_gpu_bridge" | "starting_d3d11on12" | "not_started" | "running_unknown" => {
+            "starting"
+        }
+        "failed" => "failed",
+        _ => "unknown",
+    }
+}
+
 fn sample_cef_ui_transport_counters(
     time: Res<Time>,
+    _startup_config: Option<Res<CefUiStartupConfig>>,
+    _startup_state: Option<Res<CefUiStartupState>>,
     counters: Res<CefUiTransportCountersResource>,
     dx12_slot: Option<Res<SharedDx12CefInteropSlot>>,
     mut sampler: ResMut<CefUiTransportCounterSampler>,
@@ -3396,7 +3452,8 @@ fn sample_cef_ui_transport_counters(
         return;
     }
     let snapshot = counters.snapshot();
-    if let Some(previous) = sampler.last_snapshot {
+    let previous = sampler.last_snapshot;
+    if let Some(previous) = previous {
         stats.cef_on_paint_fps = snapshot
             .cef_on_paint_count
             .saturating_sub(previous.cef_on_paint_count);
@@ -3493,6 +3550,114 @@ fn sample_cef_ui_transport_counters(
         stats.cef_sampled_generation,
         stats.stale_gpu_frame_count,
     );
+    game_shared::fun_diag_block!({
+        let paint_delta = previous.map_or(snapshot.cef_on_paint_count, |previous| {
+            snapshot
+                .cef_on_paint_count
+                .saturating_sub(previous.cef_on_paint_count)
+        });
+        let accelerated_paint_delta =
+            previous.map_or(snapshot.cef_on_accelerated_paint_count, |previous| {
+                snapshot
+                    .cef_on_accelerated_paint_count
+                    .saturating_sub(previous.cef_on_accelerated_paint_count)
+            });
+        let cpu_upload_bytes_delta = previous.map_or(snapshot.cef_cpu_upload_bytes, |previous| {
+            snapshot
+                .cef_cpu_upload_bytes
+                .saturating_sub(previous.cef_cpu_upload_bytes)
+        });
+        let gpu_copy_count_delta = previous.map_or(snapshot.cef_gpu_copy_count, |previous| {
+            snapshot
+                .cef_gpu_copy_count
+                .saturating_sub(previous.cef_gpu_copy_count)
+        });
+        let gpu_copy_ns_delta = previous.map_or(snapshot.cef_gpu_copy_ns, |previous| {
+            snapshot
+                .cef_gpu_copy_ns
+                .saturating_sub(previous.cef_gpu_copy_ns)
+        });
+        let gpu_frame_not_ready_delta =
+            previous.map_or(snapshot.cef_gpu_frame_not_ready_count, |previous| {
+                snapshot
+                    .cef_gpu_frame_not_ready_count
+                    .saturating_sub(previous.cef_gpu_frame_not_ready_count)
+            });
+        let gpu_frame_reused_delta =
+            previous.map_or(snapshot.cef_gpu_frame_reused_count, |previous| {
+                snapshot
+                    .cef_gpu_frame_reused_count
+                    .saturating_sub(previous.cef_gpu_frame_reused_count)
+            });
+        let gpu_frame_blocking_wait_delta =
+            previous.map_or(snapshot.cef_gpu_frame_blocking_wait_count, |previous| {
+                snapshot
+                    .cef_gpu_frame_blocking_wait_count
+                    .saturating_sub(previous.cef_gpu_frame_blocking_wait_count)
+            });
+        let transport = _startup_state.as_ref().map_or("not_started", |state| {
+            cef_ui_transport_health_label(Some(state.as_ref()))
+        });
+        let health_status = cef_ui_transport_health_status(
+            transport,
+            accelerated_paint_delta,
+            cpu_upload_bytes_delta,
+            gpu_copy_count_delta,
+            gpu_frame_blocking_wait_delta,
+            stats.cef_transport_fallback_count,
+        );
+        let transport_frame_delta = if accelerated_paint_delta > 0 {
+            accelerated_paint_delta
+        } else {
+            paint_delta
+        };
+        let cpu_upload_bytes_per_frame = if transport_frame_delta > 0 {
+            cpu_upload_bytes_delta / transport_frame_delta
+        } else if snapshot.cef_on_paint_count > 0 {
+            snapshot.cef_cpu_upload_bytes / snapshot.cef_on_paint_count
+        } else {
+            0
+        };
+        let gpu_copy_ns_per_copy = if gpu_copy_count_delta == 0 {
+            0
+        } else {
+            gpu_copy_ns_delta / gpu_copy_count_delta
+        };
+        let gpu_copy_ms = gpu_copy_ns_per_copy as f64 / 1_000_000.0;
+        let ring_depth = _startup_config
+            .as_ref()
+            .map_or(0, |config| config.browser_config.gpu_ring_depth);
+        game_shared::fun_diag_info!(
+            target: "fun::perf::cef_ui_transport_health",
+            transport,
+            status = health_status,
+            accel_paint_fps = stats.cef_on_accelerated_paint_fps,
+            paint_fps = stats.cef_on_paint_fps,
+            gpu_copy_ns_per_copy,
+            cpu_upload_bytes_per_frame,
+            reused_frames = gpu_frame_reused_delta,
+            not_ready_frames = gpu_frame_not_ready_delta,
+            blocking_waits = gpu_frame_blocking_wait_delta,
+            fallback_count = stats.cef_transport_fallback_count,
+            ring_depth,
+            "CEF UI transport health"
+        );
+        game_shared::fun_diag_info!(
+            "[client perf] cef_ui transport health: transport={} status={} accel_paint_fps={} paint_fps={} gpu_copy_ms={:.3} gpu_copy_ns_per_copy={} cpu_upload_bytes_per_frame={} reused_frames={} not_ready_frames={} blocking_waits={} fallback_count={} ring_depth={}",
+            transport,
+            health_status,
+            stats.cef_on_accelerated_paint_fps,
+            stats.cef_on_paint_fps,
+            gpu_copy_ms,
+            gpu_copy_ns_per_copy,
+            cpu_upload_bytes_per_frame,
+            gpu_frame_reused_delta,
+            gpu_frame_not_ready_delta,
+            gpu_frame_blocking_wait_delta,
+            stats.cef_transport_fallback_count,
+            ring_depth,
+        );
+    });
     sampler.last_snapshot = Some(snapshot);
 }
 

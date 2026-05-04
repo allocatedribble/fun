@@ -151,6 +151,15 @@ function ConvertTo-MetricName {
     return ([regex]::Replace($Name.ToLowerInvariant(), "[^a-z0-9]+", "_")).Trim("_")
 }
 
+function Remove-AnsiEscape {
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return $Text
+    }
+    return [regex]::Replace($Text, "\x1B\[[0-9;]*m", "")
+}
+
 function Add-KeyValueMetrics {
     param(
         [System.Collections.IDictionary]$Sample,
@@ -159,6 +168,7 @@ function Add-KeyValueMetrics {
         [switch]$Milliseconds
     )
 
+    $Payload = Remove-AnsiEscape -Text $Payload
     foreach ($match in [regex]::Matches($Payload, "([A-Za-z0-9_\/]+)=([^\s,]+)")) {
         $key = ConvertTo-MetricName $match.Groups[1].Value
         $value = $match.Groups[2].Value
@@ -177,6 +187,7 @@ function ConvertTo-KeyValueObject {
     )
 
     $result = [ordered]@{}
+    $Payload = Remove-AnsiEscape -Text $Payload
     foreach ($match in [regex]::Matches($Payload, "([A-Za-z0-9_\/]+)=([^\s,]+)")) {
         $key = ConvertTo-MetricName $match.Groups[1].Value
         if ($key -eq "hash") {
@@ -803,12 +814,47 @@ function Parse-CefUiTransportSelectionLog {
     }
 }
 
+function Parse-CefUiTransportHealthLog {
+    param([string[]]$Lines)
+
+    $last = $null
+    foreach ($line in $Lines) {
+        $health = [regex]::Match($line, "\[client perf\] cef_ui transport health: (?<payload>.*)$")
+        if ($health.Success) {
+            $last = ConvertTo-KeyValueObject -Payload $health.Groups["payload"].Value -HashKey "transport_health_hash"
+            $last["status"] = if ($last.Contains("status")) { $last["status"] } else { "found" }
+            $last["record_status"] = "found"
+        }
+    }
+
+    if ($null -ne $last) {
+        return $last
+    }
+
+    return [ordered]@{
+        record_status = "not_found"
+        transport = $null
+        status = $null
+        accel_paint_fps = $null
+        paint_fps = $null
+        gpu_copy_ms = $null
+        gpu_copy_ns_per_copy = $null
+        cpu_upload_bytes_per_frame = $null
+        reused_frames = $null
+        not_ready_frames = $null
+        blocking_waits = $null
+        fallback_count = $null
+        ring_depth = $null
+    }
+}
+
 function Parse-ClientPerfLog {
     param([string[]]$Lines)
 
     $samples = New-Object "System.Collections.Generic.List[object]"
     $current = $null
     $pendingCefUiMetrics = $null
+    $pendingCefUiHealthMetrics = $null
 
     foreach ($line in $Lines) {
         $main = [regex]::Match($line, "\[client perf\] fps=(?<fps>\S+) frame_ms=(?<frame_ms>\S+) solari_gpu_ms=(?<solari>\S+) meshlet_visibility_gpu_ms=(?<meshlet>\S+) dlss_rr_gpu_ms=(?<dlss>\S+)")
@@ -824,6 +870,12 @@ function Parse-ClientPerfLog {
                     $current[$key] = $pendingCefUiMetrics[$key]
                 }
                 $pendingCefUiMetrics = $null
+            }
+            if ($null -ne $pendingCefUiHealthMetrics) {
+                foreach ($key in $pendingCefUiHealthMetrics.Keys) {
+                    $current[$key] = $pendingCefUiHealthMetrics[$key]
+                }
+                $pendingCefUiHealthMetrics = $null
             }
             $samples.Add($current) | Out-Null
             continue
@@ -964,6 +1016,18 @@ function Parse-ClientPerfLog {
             }
             else {
                 Add-KeyValueMetrics -Sample $current -Payload $cefUi.Groups["payload"].Value -Prefix ""
+            }
+            continue
+        }
+
+        $cefUiHealth = [regex]::Match($line, "\[client perf\] cef_ui transport health: (?<payload>.*)$")
+        if ($cefUiHealth.Success) {
+            if ($null -eq $current) {
+                $pendingCefUiHealthMetrics = [ordered]@{}
+                Add-KeyValueMetrics -Sample $pendingCefUiHealthMetrics -Payload $cefUiHealth.Groups["payload"].Value -Prefix "cef_health_"
+            }
+            else {
+                Add-KeyValueMetrics -Sample $current -Payload $cefUiHealth.Groups["payload"].Value -Prefix "cef_health_"
             }
             continue
         }
@@ -1472,7 +1536,13 @@ function Write-MarkdownReport {
     $lines.Add("- Max frame latency: requested=$($Summary.config.requested_maximum_frame_latency) startup=$startupLatency") | Out-Null
     $lines.Add("- Surface present: selected=$surfacePresent swapchain_format=$swapchainFormat") | Out-Null
     $selectedTransport = if ($Summary.cef_ui_transport_selection.status -eq "found") { $Summary.cef_ui_transport_selection.selected } else { "not_found" }
-    $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) requested_transport=$($Summary.config.cef_paint_transport) selected_transport=$selectedTransport enabled=$($Summary.config.cef_ui_enabled)") | Out-Null
+    $health = $Summary.cef_ui_transport_health
+    $healthStatus = if ($null -ne $health -and $health.record_status -eq "found") { $health.status } else { "not_found" }
+    $healthRingDepth = if ($null -ne $health -and -not [string]::IsNullOrWhiteSpace([string]$health.ring_depth)) { $health.ring_depth } else { $Summary.config.cef_gpu_ring_depth }
+    $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) requested_transport=$($Summary.config.cef_paint_transport) selected_transport=$selectedTransport enabled=$($Summary.config.cef_ui_enabled) ring_depth=$healthRingDepth health=$healthStatus") | Out-Null
+    if ($null -ne $health -and $health.record_status -eq "found") {
+        $lines.Add("- CEF transport health: $($health.transport) | accel paint $($health.accel_paint_fps) fps | gpu copy $($health.gpu_copy_ms) ms | CPU upload $($health.cpu_upload_bytes_per_frame) B/frame | reused $($health.reused_frames) frames | fallback $($health.fallback_count)") | Out-Null
+    }
     $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
     $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
     $lines.Add("- Clouds: disabled=$($Summary.config.disable_clouds) profile=$($Summary.config.cloud_profile) quality=$($Summary.config.cloud_quality) internal_scale=$($Summary.config.cloud_internal_scale) temporal=$($Summary.config.cloud_temporal) shadows=$($Summary.config.cloud_shadows)") | Out-Null
@@ -1604,6 +1674,16 @@ function Write-MarkdownReport {
         "cef_gpu_frame_not_ready_count",
         "cef_gpu_frame_reused_count",
         "cef_gpu_frame_blocking_wait_count",
+        "cef_health_accel_paint_fps",
+        "cef_health_paint_fps",
+        "cef_health_gpu_copy_ms",
+        "cef_health_gpu_copy_ns_per_copy",
+        "cef_health_cpu_upload_bytes_per_frame",
+        "cef_health_reused_frames",
+        "cef_health_not_ready_frames",
+        "cef_health_blocking_waits",
+        "cef_health_fallback_count",
+        "cef_health_ring_depth",
         "cef_transport_fallback_count",
         "cef_published_generation",
         "cef_sampled_generation",
@@ -2144,6 +2224,7 @@ try {
     $transientDescriptorCreates = @(Parse-TransientDescriptorCreateLog -Lines $sampleLines)
     $transientDescriptorLabelVariants = @(Parse-TransientDescriptorLabelVariantLog -Lines $sampleLines)
     $cefUiTransportSelection = Parse-CefUiTransportSelectionLog -Lines $allLines
+    $cefUiTransportHealth = Parse-CefUiTransportHealthLog -Lines $sampleLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath
     $rrAcceptance = New-Dx12DlssRrAcceptance `
@@ -2248,6 +2329,7 @@ try {
         transient_descriptor_creates = $transientDescriptorCreates
         transient_descriptor_label_variants = $transientDescriptorLabelVariants
         cef_ui_transport_selection = $cefUiTransportSelection
+        cef_ui_transport_health = $cefUiTransportHealth
     }
 
     $flameMapPath = Join-Path $repoRoot "target\dx12\render_graph_frame_0000.json"

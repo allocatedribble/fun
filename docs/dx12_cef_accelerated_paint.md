@@ -7,6 +7,13 @@ transport is still the CPU paint path, but an experimental Windows-only
 `cef_ui_dx12_accelerated_paint` feature now builds the D3D11On12 bridge and
 per-callback GPU copy boundary.
 
+The May 4, 2026 CEF transport decision pass does not promote accelerated CEF to
+default-on. A 1280x720 animated `d3d11on12` request selected CPU fallback with
+`fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, nonzero CPU
+upload bytes, zero GPU copy bytes, and zero accelerated paint FPS. The health
+badge and CEF transport matrix are now wired, but the runtime bridge readiness
+issue must be fixed before `auto` can prefer D3D11On12 by default.
+
 Evidence in the current code:
 
 - `fun_ui_cef::browser::windowless_window_info` creates a transparent
@@ -212,6 +219,24 @@ The parser-stable line is:
 
 Benchmark summaries record this as `cef_ui_transport_selection` so DX12 parity
 reports can distinguish a real accelerated lane from a CPU fallback lane.
+
+Every benchmark sample also emits a separate health badge line. This is the
+developer-facing transport badge; it is independent of the Svelte RAF FPS badge:
+
+```text
+[client perf] cef_ui transport health: transport=d3d11on12 status=healthy accel_paint_fps=60 paint_fps=0 gpu_copy_ms=0.180 gpu_copy_ns_per_copy=180000 cpu_upload_bytes_per_frame=0 reused_frames=2 not_ready_frames=0 blocking_waits=0 fallback_count=0 ring_depth=3
+```
+
+`benchmark_client.ps1` records the latest line as `cef_ui_transport_health` and
+also folds numeric fields into `cef_health_*` metrics. The DX12 parity dashboard
+renders a compact CEF Transport Health section in the form:
+
+```text
+CEF transport: d3d11on12 | accel paint 60 fps | gpu copy 0.18 ms | CPU upload 0 B/frame | reused 2 frames | fallback 0
+```
+
+Use that badge, not the Svelte UI FPS badge, when deciding whether the CEF path
+is truly accelerated.
 
 The render handler now has an `OnAcceleratedPaint` surface, but it only records
 the callback and dispatches a borrowed `CefAcceleratedPaintFrame` to an optional
@@ -426,6 +451,27 @@ Keep FPS readings separate:
 - Bevy FPS: the game/render frame cadence.
 
 The UI RAF badge is not evidence of CEF paint callback cadence or GPU transport.
+
+## CEF Transport Matrix
+
+`scripts\benchmark_dx12_parity.ps1 -MatrixSize cef_transport` expands the CEF
+decision lanes:
+
+- hidden control;
+- CPU paint and D3D11On12 lanes for static and animated Svelte pages;
+- current window, 1080p, and 1440p surface sizes;
+- D3D11On12 ring-depth tuning for depths 2, 3, 4, and 5.
+
+The matrix summary includes selected transport, ring depth, health status,
+accelerated paint FPS, CPU upload bytes, GPU copy time, blocking waits, and
+fallback count per lane. Resize, alt-tab, editor route, launcher route, and
+static screenshot-diff checks remain explicit manual evidence rows in the
+matrix artifact because they require window interaction or screenshot capture.
+
+The ring-depth decision rule is unchanged: prefer the smallest depth with zero
+normal-frame blocking waits, no callback/render contention, no stale-frame
+bursts, and acceptable latency. Until a complete healthy matrix says otherwise,
+the documented default remains `3`.
 
 ## Static Visual Match
 
