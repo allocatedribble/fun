@@ -32,6 +32,7 @@ use fun_render::{
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use std::{collections::BTreeMap, time::Instant};
+use std::{collections::VecDeque, time::Duration};
 
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -399,6 +400,11 @@ struct ClientPerfCounters {
     network_receive_cpu_ns: u64,
     world_stream_apply_cpu_ns: u64,
     catalog_lookup_cpu_ns: u64,
+    world_stream_render_prep_budget_ns: u64,
+    world_stream_render_prep_queue_depth: u64,
+    world_stream_render_prep_deferred_chunks: u64,
+    world_stream_render_prep_applied_chunks: u64,
+    world_stream_render_prep_dynamic_mesh_assets: u64,
     meshlet_path_instance_count: u64,
     raster_path_instance_count: u64,
     ray_proxy_only_count: u64,
@@ -417,6 +423,21 @@ impl ClientPerfCounters {
 
     fn add_catalog_lookup_ns(&mut self, ns: u64) {
         self.catalog_lookup_cpu_ns = self.catalog_lookup_cpu_ns.saturating_add(ns);
+    }
+
+    fn set_world_stream_render_prep(
+        &mut self,
+        budget_ns: u64,
+        queue_depth: u64,
+        deferred_chunks: u64,
+        applied_chunks: u64,
+        dynamic_mesh_assets: u64,
+    ) {
+        self.world_stream_render_prep_budget_ns = budget_ns;
+        self.world_stream_render_prep_queue_depth = queue_depth;
+        self.world_stream_render_prep_deferred_chunks = deferred_chunks;
+        self.world_stream_render_prep_applied_chunks = applied_chunks;
+        self.world_stream_render_prep_dynamic_mesh_assets = dynamic_mesh_assets;
     }
 
     fn set_render_path_counts(
@@ -477,6 +498,71 @@ impl ClientHostControlState {
 #[derive(Debug, Default, Resource)]
 struct ClientWorldStreamAckState {
     sent: bool,
+}
+
+#[derive(Debug, Clone, Copy, Resource)]
+struct ClientStreamRenderPrepConfig {
+    budget: Duration,
+}
+
+impl Default for ClientStreamRenderPrepConfig {
+    fn default() -> Self {
+        Self {
+            budget: stream_render_prep_budget_from_env(),
+        }
+    }
+}
+
+impl ClientStreamRenderPrepConfig {
+    fn budget_ns(self) -> u64 {
+        self.budget.as_nanos().min(u128::from(u64::MAX)) as u64
+    }
+}
+
+#[derive(Debug)]
+struct PendingWorldStreamChunk {
+    chunk: WorldStreamChunk,
+    payload_len: usize,
+}
+
+#[derive(Debug, Default, Resource)]
+struct ClientPendingWorldStreamChunks {
+    chunks: VecDeque<PendingWorldStreamChunk>,
+}
+
+impl ClientPendingWorldStreamChunks {
+    fn push(&mut self, chunk: WorldStreamChunk, payload_len: usize) {
+        self.chunks
+            .push_back(PendingWorldStreamChunk { chunk, payload_len });
+    }
+
+    fn pop(&mut self) -> Option<PendingWorldStreamChunk> {
+        self.chunks.pop_front()
+    }
+
+    fn len(&self) -> usize {
+        self.chunks.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
+}
+
+fn stream_render_prep_budget_from_env() -> Duration {
+    let millis = std::env::var("FUN_STREAM_RENDER_PREP_BUDGET_MS")
+        .ok()
+        .and_then(|value| stream_render_prep_budget_millis_from_value(&value))
+        .unwrap_or(2);
+    Duration::from_millis(millis)
+}
+
+fn stream_render_prep_budget_millis_from_value(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|value| matches!(*value, 1 | 2 | 4 | 8))
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
@@ -731,6 +817,8 @@ impl Plugin for GameClientPlugin {
             .init_resource::<RenderWorldContext>()
             .init_resource::<RenderWorldStatus>()
             .init_resource::<ClientWorldStreamAckState>()
+            .init_resource::<ClientStreamRenderPrepConfig>()
+            .init_resource::<ClientPendingWorldStreamChunks>()
             .init_resource::<ClientEditorInspectorState>();
 
         app.add_plugins(crate::ai_presentation::FunAiClientPresentationPlugin);
@@ -780,6 +868,7 @@ impl Plugin for GameClientPlugin {
                     receive_server_control,
                     receive_server_snapshots,
                     receive_world_stream,
+                    apply_pending_world_stream_chunks.after(receive_world_stream),
                     update_client_editor_inspector_snapshot,
                 ),
             );
@@ -1834,33 +1923,15 @@ fn receive_server_snapshots(
     reason = "Bevy system parameters expose each runtime resource and query directly to the scheduler"
 )]
 fn receive_world_stream(
-    mut commands: Commands,
     mut client: ResMut<QuinnetClient>,
-    render_config: Res<ClientRenderConfig>,
-    mut render_world: ClientRenderWorldParam,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    catalog: Res<WorldRenderCatalog>,
+    mut pending_stream: ResMut<ClientPendingWorldStreamChunks>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     mut runtime: ClientRuntimeProfiler,
     #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
     runtime: ClientRuntimeProfiler,
-    solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
-    mut solari_lighting: Query<&mut SolariLighting>,
-    mut solari_reset_events: MessageWriter<SolariResetEvent>,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_supported: Option<
-        Res<DlssRayReconstructionSupported>,
-    >,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_cameras: Query<
-        Entity,
-        (With<Camera3d>, Without<Dlss<DlssRayReconstructionFeature>>),
-    >,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] mut dlss_rr: Query<
-        &mut Dlss<DlssRayReconstructionFeature>,
-    >,
 ) {
     crate::frame_profile_start!(system_started);
+    let _stream_verbose = runtime.log_config.stream_verbose();
     let Some(connection) = client.get_connection_mut() else {
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         runtime
@@ -1879,7 +1950,7 @@ fn receive_world_stream(
         crate::frame_profile_start!(receive_started);
         let payload_len = payload.as_ref().len();
         game_shared::fun_diag_debug_if!(
-            runtime.log_config.stream_verbose(),
+            _stream_verbose,
             target: "fun::stream",
             bytes = payload_len,
             channel = "stream",
@@ -1892,7 +1963,7 @@ fn receive_world_stream(
             Ok(ServerPacket::WorldStream { chunk }) => chunk,
             Ok(_packet) => {
                 game_shared::fun_diag_debug_if!(
-                    runtime.log_config.stream_verbose(),
+                    _stream_verbose,
                     target: "fun::stream",
                     packet = ?_packet,
                     "ignoring non-world packet on world stream channel"
@@ -1934,7 +2005,7 @@ fn receive_world_stream(
         );
 
         game_shared::fun_diag_info_if!(
-            runtime.log_config.stream_verbose(),
+            _stream_verbose,
             target: "fun::stream",
             level = %packet.level_id.0,
             revision = packet.revision.0,
@@ -1943,7 +2014,7 @@ fn receive_world_stream(
             chunk_count = packet.chunk_count,
             entity_count = packet.entities.len(),
             bytes = payload_len,
-            "applying streamed world chunk"
+            "queued streamed world chunk for render prep"
         );
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         game_shared::fun_diag_info!(
@@ -1960,173 +2031,15 @@ fn receive_world_stream(
             "client profiler event"
         );
 
-        #[cfg(all(feature = "diagnostics", debug_assertions))]
-        let apply_diagnostic_started = std::time::Instant::now();
-        crate::frame_profile_start!(apply_started);
-        let outcome = apply_render_world_chunk(
-            &mut commands,
-            &mut render_world.render_world,
-            &mut render_world.status,
-            &mut meshes,
-            &mut meshlet_meshes,
-            &mut materials,
-            &catalog,
-            &render_config,
-            RenderWorldApplyOptions {
-                stream_verbose: runtime.log_config.stream_verbose(),
-                render_verbose: runtime.log_config.render_verbose(),
-            },
-            &packet,
-        );
-        if outcome.world_revision_changed {
-            render_world.ack_state.sent = false;
-        }
-        insert_gameplay_colliders_for_chunk(
-            &mut commands,
-            &render_world.render_world,
-            &catalog,
-            &packet,
-        );
+        pending_stream.push(packet, payload_len);
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        let apply_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        runtime.perf_counters.add_world_stream_apply_ns(apply_ns);
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        runtime
-            .perf_counters
-            .add_catalog_lookup_ns(outcome.catalog_lookup_ns);
-        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
-        runtime
-            .schedule_profiler
-            .record_ns(ClientScheduleSystem::WorldStreamApply, apply_ns);
-        #[cfg(all(feature = "diagnostics", debug_assertions))]
-        let apply_diagnostic_ns = apply_diagnostic_started
-            .elapsed()
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64;
-        game_shared::fun_diag_info!(
-            target: "fun::client::profiler",
-            server_tick = tracing::field::Empty,
-            client_id = tracing::field::Empty,
-            packet_type = "world_stream",
-            world_revision = packet.revision.0,
-            chunk_index = packet.chunk_index.saturating_add(1),
-            chunk_count = packet.chunk_count,
-            bytes = payload_len,
-            stage = "apply_world_stream",
-            duration_ns = apply_diagnostic_ns,
-            "client profiler event"
+        runtime.perf_counters.set_world_stream_render_prep(
+            0,
+            pending_stream.len() as u64,
+            pending_stream.len() as u64,
+            0,
+            0,
         );
-        crate::frame_profile_ns!(
-            runtime.frame_profiler,
-            apply_ns,
-            "Update",
-            "receive_world_stream",
-            "apply_world_stream_chunk",
-        );
-        if outcome.world_revision_changed {
-            crate::frame_profile_start!(reset_started);
-            request_solari_lighting_history_reset(
-                "streamed world revision changed",
-                &mut solari_reset_events,
-                &mut solari_lighting,
-            );
-            #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-            reset_dlss_ray_reconstruction_history(&mut dlss_rr);
-            crate::frame_profile_elapsed!(
-                runtime.frame_profiler,
-                reset_started,
-                "Update",
-                "receive_world_stream",
-                "reset_temporal_history",
-            );
-        }
-
-        if render_world.render_world.is_complete() {
-            let became_ready = !render_world.status.ready;
-            if became_ready {
-                info!(
-                    target: "fun::stream",
-                    level = ?render_world.render_world.level_id,
-                    revision = ?render_world.render_world.revision.map(|revision| revision.0),
-                    spawned_entities = render_world.render_world.spawned_entities.len(),
-                    chunks_received = render_world.render_world.received_chunks.len(),
-                    "streamed world is ready"
-                );
-            }
-            render_world.status.ready = true;
-            if became_ready {
-                crate::frame_profile_start!(ready_started);
-                enable_solari_lighting_for_ready_world(
-                    &mut commands,
-                    &render_config,
-                    &solari_cameras,
-                    &mut solari_lighting,
-                    &mut solari_reset_events,
-                );
-                #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-                enable_dlss_ray_reconstruction_for_ready_world(
-                    &mut commands,
-                    &render_config,
-                    dlss_rr_supported.as_deref(),
-                    &dlss_rr_cameras,
-                    &mut dlss_rr,
-                );
-                #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
-                info!("[client render] DLSS feature disabled at compile time");
-                crate::frame_profile_elapsed!(
-                    runtime.frame_profiler,
-                    ready_started,
-                    "Update",
-                    "receive_world_stream",
-                    "enable_ready_world_rendering",
-                );
-            }
-        }
-
-        if render_world.render_world.is_complete() && !render_world.ack_state.sent {
-            crate::frame_profile_start!(ack_started);
-            let ack = ClientPacket::WorldReady {
-                ack: WorldStreamAck {
-                    level_id: WorldLevelId(
-                        render_world
-                            .render_world
-                            .level_id
-                            .clone()
-                            .unwrap_or_default(),
-                    ),
-                    revision: render_world.render_world.revision.unwrap_or_default(),
-                    chunk_count: render_world.render_world.expected_chunks,
-                    manifest_signature: render_world.render_world.manifest_signature,
-                },
-            };
-
-            match encode_client_packet(&ack) {
-                Ok(bytes) => {
-                    let _byte_len = bytes.len();
-                    connection.try_send_payload_on(ClientChannel::Control, bytes);
-                    render_world.ack_state.sent = true;
-                    game_shared::fun_diag_info_if!(
-                        runtime.log_config.stream_verbose(),
-                        target: "fun::stream",
-                        level = %render_world.render_world.level_id.as_deref().unwrap_or_default(),
-                        revision = render_world.render_world.revision.unwrap_or_default().0,
-                        bytes = _byte_len,
-                        "sent world-ready ack"
-                    );
-                }
-                Err(error) => {
-                    error!(target: "fun::stream", %error, "failed to encode world ready acknowledgement");
-                }
-            }
-            crate::frame_profile_elapsed!(
-                runtime.frame_profiler,
-                ack_started,
-                "Update",
-                "receive_world_stream",
-                "send_world_ready_ack",
-            );
-        }
     }
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     runtime
@@ -2137,6 +2050,301 @@ fn receive_world_stream(
         system_started,
         "Update",
         "receive_world_stream",
+    );
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "render-prep draining owns the explicit render stores and lifecycle transitions formerly handled inline during network receive"
+)]
+fn apply_pending_world_stream_chunks(
+    mut commands: Commands,
+    mut client: ResMut<QuinnetClient>,
+    render_config: Res<ClientRenderConfig>,
+    mut render_world: ClientRenderWorldParam,
+    mut pending_stream: ResMut<ClientPendingWorldStreamChunks>,
+    prep_config: Res<ClientStreamRenderPrepConfig>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    catalog: Res<WorldRenderCatalog>,
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    mut runtime: ClientRuntimeProfiler,
+    #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
+    runtime: ClientRuntimeProfiler,
+    solari_cameras: Query<Entity, (With<Camera3d>, Without<SolariLighting>)>,
+    mut solari_lighting: Query<&mut SolariLighting>,
+    mut solari_reset_events: MessageWriter<SolariResetEvent>,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_supported: Option<
+        Res<DlssRayReconstructionSupported>,
+    >,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] dlss_rr_cameras: Query<
+        Entity,
+        (With<Camera3d>, Without<Dlss<DlssRayReconstructionFeature>>),
+    >,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))] mut dlss_rr: Query<
+        &mut Dlss<DlssRayReconstructionFeature>,
+    >,
+) {
+    crate::frame_profile_start!(system_started);
+    let _stream_verbose = runtime.log_config.stream_verbose();
+    let _render_verbose = runtime.log_config.render_verbose();
+    if pending_stream.is_empty() {
+        render_world.status.render_prep_pending_chunks = 0;
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime
+            .perf_counters
+            .set_world_stream_render_prep(prep_config.budget_ns(), 0, 0, 0, 0);
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime
+            .schedule_profiler
+            .record_elapsed(ClientScheduleSystem::WorldStreamApply, system_started);
+        crate::frame_profile_elapsed!(
+            runtime.frame_profiler,
+            system_started,
+            "Update",
+            "apply_pending_world_stream_chunks",
+        );
+        return;
+    }
+
+    let budget = prep_config.budget;
+    let prep_started = std::time::Instant::now();
+    let mut applied_chunks = 0u64;
+    let mut dynamic_mesh_assets = 0u64;
+    let mut last_world_revision_changed = false;
+
+    while !pending_stream.is_empty() {
+        if applied_chunks > 0 && prep_started.elapsed() >= budget {
+            break;
+        }
+        let Some(PendingWorldStreamChunk {
+            chunk,
+            payload_len: _payload_len,
+        }) = pending_stream.pop()
+        else {
+            break;
+        };
+
+        game_shared::fun_diag_info_if!(
+            _stream_verbose,
+            target: "fun::stream",
+            level = %chunk.level_id.0,
+            revision = chunk.revision.0,
+            chunk_index = chunk.chunk_index,
+            chunk_number = chunk.chunk_index + 1,
+            chunk_count = chunk.chunk_count,
+            entity_count = chunk.entities.len(),
+            bytes = _payload_len,
+            budget_ns = prep_config.budget_ns(),
+            "applying queued streamed world chunk"
+        );
+
+        let apply_diagnostic_started = std::time::Instant::now();
+        let apply_started = std::time::Instant::now();
+        let outcome = apply_render_world_chunk(
+            &mut commands,
+            &mut render_world.render_world,
+            &mut render_world.status,
+            &mut meshes,
+            &mut meshlet_meshes,
+            &mut materials,
+            &catalog,
+            &render_config,
+            RenderWorldApplyOptions {
+                stream_verbose: _stream_verbose,
+                render_verbose: _render_verbose,
+            },
+            &chunk,
+        );
+        if outcome.world_revision_changed {
+            render_world.ack_state.sent = false;
+            last_world_revision_changed = true;
+        }
+        insert_gameplay_colliders_for_chunk(
+            &mut commands,
+            &render_world.render_world,
+            &catalog,
+            &chunk,
+        );
+        dynamic_mesh_assets = dynamic_mesh_assets.saturating_add(
+            (outcome.meshlet_mesh_assets_built
+                + outcome.raster_mesh_assets_built
+                + outcome.material_assets_created) as u64,
+        );
+        let _apply_ns = apply_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime.perf_counters.add_world_stream_apply_ns(_apply_ns);
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime
+            .perf_counters
+            .add_catalog_lookup_ns(outcome.catalog_lookup_ns);
+        #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+        runtime
+            .schedule_profiler
+            .record_ns(ClientScheduleSystem::WorldStreamApply, _apply_ns);
+        let _apply_diagnostic_ns = apply_diagnostic_started
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
+        game_shared::fun_diag_info!(
+            target: "fun::client::profiler",
+            server_tick = tracing::field::Empty,
+            client_id = tracing::field::Empty,
+            packet_type = "world_stream",
+            world_revision = chunk.revision.0,
+            chunk_index = chunk.chunk_index.saturating_add(1),
+            chunk_count = chunk.chunk_count,
+            bytes = _payload_len,
+            stage = "apply_world_stream",
+            duration_ns = _apply_diagnostic_ns,
+            dynamic_mesh_assets,
+            remaining_render_prep_chunks = pending_stream.len(),
+            "client profiler event"
+        );
+        crate::frame_profile_ns!(
+            runtime.frame_profiler,
+            _apply_ns,
+            "Update",
+            "apply_pending_world_stream_chunks",
+            "apply_world_stream_chunk",
+        );
+        applied_chunks = applied_chunks.saturating_add(1);
+    }
+
+    render_world.status.render_prep_pending_chunks = pending_stream.len();
+    render_world.status.render_prep_applied_chunks = render_world
+        .status
+        .render_prep_applied_chunks
+        .saturating_add(applied_chunks);
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    runtime.perf_counters.set_world_stream_render_prep(
+        prep_config.budget_ns(),
+        pending_stream.len() as u64,
+        pending_stream.len() as u64,
+        applied_chunks,
+        dynamic_mesh_assets,
+    );
+
+    if last_world_revision_changed {
+        crate::frame_profile_start!(reset_started);
+        request_solari_lighting_history_reset(
+            "streamed world revision changed",
+            &mut solari_reset_events,
+            &mut solari_lighting,
+        );
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        reset_dlss_ray_reconstruction_history(&mut dlss_rr);
+        crate::frame_profile_elapsed!(
+            runtime.frame_profiler,
+            reset_started,
+            "Update",
+            "apply_pending_world_stream_chunks",
+            "reset_temporal_history",
+        );
+    }
+
+    if render_world.render_world.is_complete() && pending_stream.is_empty() {
+        let became_ready = !render_world.status.ready;
+        if became_ready {
+            info!(
+                target: "fun::stream",
+                level = ?render_world.render_world.level_id,
+                revision = ?render_world.render_world.revision.map(|revision| revision.0),
+                spawned_entities = render_world.render_world.spawned_entities.len(),
+                chunks_received = render_world.render_world.received_chunks.len(),
+                render_prep_applied_chunks = render_world.status.render_prep_applied_chunks,
+                "streamed world render prep is ready"
+            );
+        }
+        render_world.status.ready = true;
+        if became_ready {
+            crate::frame_profile_start!(ready_started);
+            enable_solari_lighting_for_ready_world(
+                &mut commands,
+                &render_config,
+                &solari_cameras,
+                &mut solari_lighting,
+                &mut solari_reset_events,
+            );
+            #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+            enable_dlss_ray_reconstruction_for_ready_world(
+                &mut commands,
+                &render_config,
+                dlss_rr_supported.as_deref(),
+                &dlss_rr_cameras,
+                &mut dlss_rr,
+            );
+            #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
+            info!("[client render] DLSS feature disabled at compile time");
+            crate::frame_profile_elapsed!(
+                runtime.frame_profiler,
+                ready_started,
+                "Update",
+                "apply_pending_world_stream_chunks",
+                "enable_ready_world_rendering",
+            );
+        }
+    }
+
+    if render_world.render_world.is_complete()
+        && pending_stream.is_empty()
+        && !render_world.ack_state.sent
+    {
+        crate::frame_profile_start!(ack_started);
+        let ack = ClientPacket::WorldReady {
+            ack: WorldStreamAck {
+                level_id: WorldLevelId(
+                    render_world
+                        .render_world
+                        .level_id
+                        .clone()
+                        .unwrap_or_default(),
+                ),
+                revision: render_world.render_world.revision.unwrap_or_default(),
+                chunk_count: render_world.render_world.expected_chunks,
+                manifest_signature: render_world.render_world.manifest_signature,
+            },
+        };
+
+        match encode_client_packet(&ack) {
+            Ok(bytes) => {
+                let _byte_len = bytes.len();
+                if let Some(connection) = client.get_connection_mut() {
+                    connection.try_send_payload_on(ClientChannel::Control, bytes);
+                    render_world.ack_state.sent = true;
+                    game_shared::fun_diag_info_if!(
+                        _stream_verbose,
+                        target: "fun::stream",
+                        level = %render_world.render_world.level_id.as_deref().unwrap_or_default(),
+                        revision = render_world.render_world.revision.unwrap_or_default().0,
+                        bytes = _byte_len,
+                        "sent world-ready ack"
+                    );
+                }
+            }
+            Err(error) => {
+                error!(target: "fun::stream", %error, "failed to encode world ready acknowledgement");
+            }
+        }
+        crate::frame_profile_elapsed!(
+            runtime.frame_profiler,
+            ack_started,
+            "Update",
+            "apply_pending_world_stream_chunks",
+            "send_world_ready_ack",
+        );
+    }
+
+    #[cfg(all(feature = "render_diagnostics", debug_assertions))]
+    runtime
+        .schedule_profiler
+        .record_elapsed(ClientScheduleSystem::WorldStreamApply, system_started);
+    crate::frame_profile_elapsed!(
+        runtime.frame_profiler,
+        system_started,
+        "Update",
+        "apply_pending_world_stream_chunks",
     );
 }
 
@@ -2802,6 +3010,41 @@ fn log_render_performance(
         diagnostic_average(diagnostics, "meshlet_view_reset_cpu_queue_writes_per_view");
     let meshlet_view_count =
         diagnostic_average(diagnostics, "meshlet_view_count").map(|value| value as u64);
+    let meshlet_instance_buffer_upload_bytes =
+        diagnostic_average(diagnostics, "meshlet_instance_buffer_upload_bytes")
+            .map(|value| value as u64);
+    let meshlet_material_buffer_upload_bytes =
+        diagnostic_average(diagnostics, "meshlet_material_buffer_upload_bytes")
+            .map(|value| value as u64);
+    let meshlet_view_visibility_buffer_upload_bytes =
+        diagnostic_average(diagnostics, "meshlet_view_visibility_buffer_upload_bytes")
+            .map(|value| value as u64);
+    let meshlet_buffer_reallocations =
+        diagnostic_average(diagnostics, "meshlet_buffer_reallocations").map(|value| value as u64);
+    let meshlet_buffer_capacity_high_water_bytes =
+        diagnostic_average(diagnostics, "meshlet_buffer_capacity_high_water_bytes")
+            .map(|value| value as u64);
+    let meshlet_view_resource_cache_rebuilds =
+        diagnostic_average(diagnostics, "meshlet_view_resource_cache_rebuilds")
+            .map(|value| value as u64);
+    let meshlet_culling_output_buffer_bytes =
+        diagnostic_average(diagnostics, "meshlet_culling_output_buffer_bytes")
+            .map(|value| value as u64);
+    let meshlet_indirect_draw_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_indirect_draw_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_compaction_buffer_writes =
+        diagnostic_average(diagnostics, "meshlet_compaction_buffer_writes")
+            .map(|value| value as u64);
+    let meshlet_asset_buffer_upload_bytes =
+        diagnostic_average(diagnostics, "meshlet_asset_buffer_upload_bytes")
+            .map(|value| value as u64);
+    let meshlet_asset_buffer_grow_copies =
+        diagnostic_average(diagnostics, "meshlet_asset_buffer_grow_copies")
+            .map(|value| value as u64);
+    let meshlet_asset_buffer_capacity_bytes =
+        diagnostic_average(diagnostics, "meshlet_asset_buffer_capacity_bytes")
+            .map(|value| value as u64);
     let material_bind_group_reused_count =
         diagnostic_average(diagnostics, "render/cpu/material_bind_group_reused_count")
             .map(|value| value as u64);
@@ -2856,6 +3099,14 @@ fn log_render_performance(
     let network_receive_cpu_ns = take_counter(&mut perf_counters.network_receive_cpu_ns);
     let world_stream_apply_cpu_ns = take_counter(&mut perf_counters.world_stream_apply_cpu_ns);
     let catalog_lookup_cpu_ns = take_counter(&mut perf_counters.catalog_lookup_cpu_ns);
+    let world_stream_render_prep_budget_ns = perf_counters.world_stream_render_prep_budget_ns;
+    let world_stream_render_prep_queue_depth = perf_counters.world_stream_render_prep_queue_depth;
+    let world_stream_render_prep_deferred_chunks =
+        perf_counters.world_stream_render_prep_deferred_chunks;
+    let world_stream_render_prep_applied_chunks =
+        perf_counters.world_stream_render_prep_applied_chunks;
+    let world_stream_render_prep_dynamic_mesh_assets =
+        perf_counters.world_stream_render_prep_dynamic_mesh_assets;
     let raster_path_instance_count = perf_counters.raster_path_instance_count;
     let ray_proxy_only_count = perf_counters.ray_proxy_only_count;
     let pixel_count = window.map(ClientWindowProfile::physical_pixels);
@@ -3016,6 +3267,18 @@ fn log_render_performance(
         meshlet_view_reset_cpu_queue_writes = ?meshlet_view_reset_cpu_queue_writes,
         meshlet_view_reset_cpu_queue_writes_per_view = ?meshlet_view_reset_cpu_queue_writes_per_view,
         meshlet_view_count = ?meshlet_view_count,
+        meshlet_instance_buffer_upload_bytes = ?meshlet_instance_buffer_upload_bytes,
+        meshlet_material_buffer_upload_bytes = ?meshlet_material_buffer_upload_bytes,
+        meshlet_view_visibility_buffer_upload_bytes = ?meshlet_view_visibility_buffer_upload_bytes,
+        meshlet_buffer_reallocations = ?meshlet_buffer_reallocations,
+        meshlet_buffer_capacity_high_water_bytes = ?meshlet_buffer_capacity_high_water_bytes,
+        meshlet_view_resource_cache_rebuilds = ?meshlet_view_resource_cache_rebuilds,
+        meshlet_culling_output_buffer_bytes = ?meshlet_culling_output_buffer_bytes,
+        meshlet_indirect_draw_buffer_writes = ?meshlet_indirect_draw_buffer_writes,
+        meshlet_compaction_buffer_writes = ?meshlet_compaction_buffer_writes,
+        meshlet_asset_buffer_upload_bytes = ?meshlet_asset_buffer_upload_bytes,
+        meshlet_asset_buffer_grow_copies = ?meshlet_asset_buffer_grow_copies,
+        meshlet_asset_buffer_capacity_bytes = ?meshlet_asset_buffer_capacity_bytes,
         render_cpu_material_bind_group_reused_count = ?material_bind_group_reused_count,
         render_cpu_material_bind_group_recreated_count = ?material_bind_group_recreated_count,
         render_cpu_material_buffer_only_update_count = ?material_buffer_only_update_count,
@@ -3030,6 +3293,11 @@ fn log_render_performance(
         network_receive_cpu_ns,
         world_stream_apply_cpu_ns,
         catalog_lookup_cpu_ns,
+        world_stream_render_prep_budget_ns,
+        world_stream_render_prep_queue_depth,
+        world_stream_render_prep_deferred_chunks,
+        world_stream_render_prep_applied_chunks,
+        world_stream_render_prep_dynamic_mesh_assets,
         ui_overlay_cpu_ns = ?ui_overlay_cpu_ns,
         present_wait_ns = ?present_wait_ns,
         "non-Solari performance budget sample"
@@ -3123,7 +3391,7 @@ fn log_render_performance(
         ray_proxy_only_count,
     );
     game_shared::fun_diag_info!(
-        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} meshlet_material_queue_cpu_ns={} meshlet_material_queue_dirty_instance_count={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} ui_overlay_cpu_ns={} present_wait_ns={}",
+        "[client perf] non_solari cpu_ns: meshlet_extract_cpu_ns={} meshlet_prepare_cpu_ns={} meshlet_bind_group_prepare_cpu_ns={} meshlet_material_queue_cpu_ns={} meshlet_material_queue_dirty_instance_count={} physics_fixed_update_cpu_ns={} network_receive_cpu_ns={} world_stream_apply_cpu_ns={} catalog_lookup_cpu_ns={} world_stream_render_prep_budget_ns={} world_stream_render_prep_queue_depth={} world_stream_render_prep_deferred_chunks={} world_stream_render_prep_applied_chunks={} world_stream_render_prep_dynamic_mesh_assets={} ui_overlay_cpu_ns={} present_wait_ns={}",
         format_optional_u64(meshlet_extract_cpu_ns),
         format_optional_u64(meshlet_prepare_cpu_ns),
         format_optional_u64(meshlet_bind_group_prepare_cpu_ns),
@@ -3133,11 +3401,16 @@ fn log_render_performance(
         network_receive_cpu_ns,
         world_stream_apply_cpu_ns,
         catalog_lookup_cpu_ns,
+        world_stream_render_prep_budget_ns,
+        world_stream_render_prep_queue_depth,
+        world_stream_render_prep_deferred_chunks,
+        world_stream_render_prep_applied_chunks,
+        world_stream_render_prep_dynamic_mesh_assets,
         format_optional_u64(ui_overlay_cpu_ns),
         format_optional_u64(present_wait_ns),
     );
     game_shared::fun_diag_info!(
-        "[client perf] meshlet buffers: instance_full_buffer_writes={} instance_range_buffer_writes={} material_full_buffer_writes={} material_range_buffer_writes={} view_visibility_buffer_writes={} view_reset_cpu_queue_writes={} view_reset_cpu_queue_writes_per_view={} view_count={}",
+        "[client perf] meshlet buffers: instance_full_buffer_writes={} instance_range_buffer_writes={} material_full_buffer_writes={} material_range_buffer_writes={} view_visibility_buffer_writes={} view_reset_cpu_queue_writes={} view_reset_cpu_queue_writes_per_view={} view_count={} instance_buffer_upload_bytes={} material_buffer_upload_bytes={} view_visibility_buffer_upload_bytes={} buffer_reallocations={} buffer_capacity_high_water_bytes={} view_resource_cache_rebuilds={} culling_output_buffer_bytes={} indirect_draw_buffer_writes={} compaction_buffer_writes={} asset_buffer_upload_bytes={} asset_buffer_grow_copies={} asset_buffer_capacity_bytes={}",
         format_optional_u64(meshlet_instance_full_buffer_writes),
         format_optional_u64(meshlet_instance_range_buffer_writes),
         format_optional_u64(meshlet_material_full_buffer_writes),
@@ -3146,6 +3419,18 @@ fn log_render_performance(
         format_optional_u64(meshlet_view_reset_cpu_queue_writes),
         format_optional_number(meshlet_view_reset_cpu_queue_writes_per_view),
         format_optional_u64(meshlet_view_count),
+        format_optional_u64(meshlet_instance_buffer_upload_bytes),
+        format_optional_u64(meshlet_material_buffer_upload_bytes),
+        format_optional_u64(meshlet_view_visibility_buffer_upload_bytes),
+        format_optional_u64(meshlet_buffer_reallocations),
+        format_optional_u64(meshlet_buffer_capacity_high_water_bytes),
+        format_optional_u64(meshlet_view_resource_cache_rebuilds),
+        format_optional_u64(meshlet_culling_output_buffer_bytes),
+        format_optional_u64(meshlet_indirect_draw_buffer_writes),
+        format_optional_u64(meshlet_compaction_buffer_writes),
+        format_optional_u64(meshlet_asset_buffer_upload_bytes),
+        format_optional_u64(meshlet_asset_buffer_grow_copies),
+        format_optional_u64(meshlet_asset_buffer_capacity_bytes),
     );
     game_shared::fun_diag_info!(
         target: "fun::perf::material",
@@ -4189,6 +4474,16 @@ mod tests {
             option_from_args_iter("project-path", args),
             Some(String::from("C:\\fun"))
         );
+    }
+
+    #[test]
+    fn stream_render_prep_budget_accepts_discrete_frame_budgets() {
+        assert_eq!(stream_render_prep_budget_millis_from_value("1"), Some(1));
+        assert_eq!(stream_render_prep_budget_millis_from_value("2"), Some(2));
+        assert_eq!(stream_render_prep_budget_millis_from_value("4"), Some(4));
+        assert_eq!(stream_render_prep_budget_millis_from_value("8"), Some(8));
+        assert_eq!(stream_render_prep_budget_millis_from_value("3"), None);
+        assert_eq!(stream_render_prep_budget_millis_from_value("bad"), None);
     }
 
     #[test]

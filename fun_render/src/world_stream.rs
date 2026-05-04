@@ -35,6 +35,8 @@ impl RenderWorldContext {
 #[derive(Debug, Default, Resource)]
 pub struct RenderWorldStatus {
     pub ready: bool,
+    pub render_prep_pending_chunks: usize,
+    pub render_prep_applied_chunks: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -49,6 +51,11 @@ pub struct RenderWorldChunkOutcome {
     pub spawned_entities: usize,
     pub duplicate_entities: usize,
     pub catalog_lookup_ns: u64,
+    pub catalog_backed_entities: usize,
+    pub primitive_entities: usize,
+    pub meshlet_mesh_assets_built: usize,
+    pub raster_mesh_assets_built: usize,
+    pub material_assets_created: usize,
 }
 
 pub fn despawn_render_context(
@@ -66,6 +73,8 @@ pub fn despawn_render_context(
     context.received_chunks.clear();
     context.spawned_entities.clear();
     status.ready = false;
+    status.render_prep_pending_chunks = 0;
+    status.render_prep_applied_chunks = 0;
 }
 
 #[allow(
@@ -222,6 +231,7 @@ pub fn spawn_render_entity_from_spec(
         );
 
         if let Some(compiled) = compiled {
+            outcome.catalog_backed_entities = outcome.catalog_backed_entities.saturating_add(1);
             entity_commands.insert(compiled.geometry_class);
             if compiled.geometry_class.uses_meshlet() {
                 if let (Some(meshlet_mesh), Some(material)) =
@@ -267,6 +277,7 @@ pub fn spawn_render_entity_from_spec(
             warn_missing_catalog_ref(catalog_ref, &spec.name);
         }
     } else if let Some(primitive) = spec.render {
+        outcome.primitive_entities = outcome.primitive_entities.saturating_add(1);
         let mesh = mesh_from_primitive(primitive);
         let (raytracing_mesh, meshlet_mesh) = add_scene_mesh_assets(
             meshes,
@@ -277,6 +288,13 @@ pub fn spawn_render_entity_from_spec(
             options,
         );
         let material = materials.add(color_from_packed(spec.color));
+        outcome.material_assets_created = outcome.material_assets_created.saturating_add(1);
+        outcome.meshlet_mesh_assets_built = outcome
+            .meshlet_mesh_assets_built
+            .saturating_add(meshlet_mesh.is_some() as usize);
+        outcome.raster_mesh_assets_built = outcome
+            .raster_mesh_assets_built
+            .saturating_add(raytracing_mesh.is_some() as usize);
 
         if render_config.meshlets_enabled {
             entity_commands.insert((
