@@ -1840,6 +1840,60 @@ mod tests {
     }
 
     #[test]
+    fn protected_mode_reports_ticket_missing_as_vm_readiness_failure() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        {
+            let mut status = app.world_mut().resource_mut::<WardenClientStatus>();
+            status.config = protected_config_with_unlock_flags(true, false, true, false);
+            status.device_attestation_status = ClientAttestationStatus::Passed;
+        }
+
+        app.update();
+
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::TicketMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(
+            unlock_state.last_unlock_failure,
+            Some(WardenVmUnlockFailureClass::TicketMissing)
+        );
+        assert_eq!(unlock_state.unlocked_function_count, 0);
+        assert_eq!(unlock_state.denied_function_count, 2);
+    }
+
+    #[test]
+    fn protected_mode_reports_hardware_proof_missing_as_vm_readiness_failure() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        {
+            let mut status = app.world_mut().resource_mut::<WardenClientStatus>();
+            status.config = protected_config_with_unlock_flags(true, true, false, false);
+            status.device_attestation_status = ClientAttestationStatus::Passed;
+        }
+
+        app.update();
+
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::HardwareProofMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(
+            unlock_state.last_unlock_failure,
+            Some(WardenVmUnlockFailureClass::HardwareProofMissing)
+        );
+        assert_eq!(unlock_state.unlocked_function_count, 0);
+        assert_eq!(unlock_state.denied_function_count, 2);
+    }
+
+    #[test]
     fn hidden_mode_reports_unlock_missing_without_local_block() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1877,6 +1931,70 @@ mod tests {
     }
 
     #[test]
+    fn hidden_mode_reports_unlock_failure_without_blocking_gameplay() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        app.world_mut().resource_mut::<WardenClientStatus>().config =
+            hidden_config_requiring_unlock_with_ticket_missing();
+
+        app.update();
+
+        let status = app.world().resource::<WardenClientStatus>();
+        assert_eq!(status.config.protection_mode, ProtectionLevel::Hidden);
+        assert!(!status.blocked_by_warden);
+        assert!(!status.exit_requested);
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::TicketMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(
+            unlock_state.last_unlock_failure,
+            Some(WardenVmUnlockFailureClass::TicketMissing)
+        );
+        assert_eq!(unlock_state.unlocked_function_count, 0);
+        assert_eq!(unlock_state.denied_function_count, 1);
+        let flush_state = app
+            .world()
+            .resource::<WardenRedactedUnlockDiagnosticFlushState>();
+        assert_eq!(flush_state.total_flushed, 1);
+    }
+
+    #[test]
+    fn protected_mode_blocks_only_protected_boundary_on_unlock_failure() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        {
+            let mut status = app.world_mut().resource_mut::<WardenClientStatus>();
+            status.config = protected_config_with_unlock_flags(true, false, true, false);
+            status.device_attestation_status = ClientAttestationStatus::Passed;
+        }
+
+        app.update();
+
+        let status = app.world().resource::<WardenClientStatus>();
+        assert_eq!(status.config.protection_mode, ProtectionLevel::Protected);
+        assert_eq!(
+            status.last_admission_decision,
+            WardenClientBackendDecision::Pending
+        );
+        assert_ne!(status.finding, WardenClientFinding::EnforcementDenied);
+        assert!(!status.blocked_by_warden);
+        assert!(!status.exit_requested);
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::TicketMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(unlock_state.unlocked_function_count, 0);
+        assert_eq!(unlock_state.denied_function_count, 2);
+    }
+
+    #[test]
     fn protected_unlock_authentication_failure_collects_redacted_diagnostic() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1906,6 +2024,44 @@ mod tests {
                 .records
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn redacted_unlock_evidence_flushes_within_frame_budget() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<WardenVmUnlockDiagnosticBuffer>()
+            .init_resource::<WardenRedactedUnlockDiagnosticFlushState>()
+            .add_systems(
+                Last,
+                super::flush_redacted_warden_unlock_diagnostics_within_budget,
+            );
+        let frame_budget = super::MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME;
+        {
+            let mut buffer = app
+                .world_mut()
+                .resource_mut::<WardenVmUnlockDiagnosticBuffer>();
+            for sequence in 0..u64::from(frame_budget.saturating_add(2)) {
+                buffer.records.push_back(WardenCompactUnlockDenialEvidence {
+                    sequence,
+                    protection_mode: ProtectionLevel::Protected,
+                    readiness: WardenVmPackageReadinessState::TicketMissing,
+                    failure: WardenVmUnlockFailureClass::TicketMissing,
+                    policy_epoch: 99,
+                });
+            }
+        }
+
+        app.update();
+
+        let flush_state = app
+            .world()
+            .resource::<WardenRedactedUnlockDiagnosticFlushState>();
+        assert_eq!(flush_state.last_flush_count, frame_budget);
+        assert_eq!(flush_state.total_flushed, u64::from(frame_budget));
+        assert_eq!(flush_state.deferred_due_to_budget, 2);
+        let buffer = app.world().resource::<WardenVmUnlockDiagnosticBuffer>();
+        assert_eq!(buffer.records.len(), 2);
     }
 
     #[test]
@@ -1965,6 +2121,20 @@ mod tests {
         status.config.enabled = true;
         status.service_state = WardenClientServiceState::PendingService;
         status
+    }
+
+    fn hidden_config_requiring_unlock_with_ticket_missing() -> WardenClientConfig {
+        WardenClientConfig::from_pairs([
+            (FUN_WARDEN_MODE_ENV, "Hidden"),
+            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Hidden"),
+            (
+                FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
+                "0808080808080808080808080808080808080808080808080808080808080808",
+            ),
+            (FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV, "passed"),
+            (FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV, "1"),
+            (FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV, "1"),
+        ])
     }
 
     fn protected_config_with_unlock_flags(
