@@ -8,7 +8,9 @@ use fun_warden_client::{
         protected_region_status_report, redacted_protected_runtime_diagnostics_json,
     },
 };
-use fun_warden_core::{ExecutableIntegrityManifest, IntegrityStatus, ProtectedProtectionProfile};
+use fun_warden_core::{
+    ExecutableIntegrityManifest, IntegrityStatus, ProtectedProtectionProfile, ProtectionLevel,
+};
 use fun_warden_protocol::{
     ClientAttestationStatus, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
     FUN_WARDEN_MODE_ENV, FUN_WARDEN_SESSION_ID_ENV, ProtectedRegionStatusReport, TicketId16,
@@ -582,21 +584,9 @@ fn bounded_env_reference(value: &str, max_len: usize) -> Option<String> {
 }
 
 fn parse_policy_mode(value: &str) -> Option<WardenPolicyMode> {
-    if value.eq_ignore_ascii_case("observe") {
-        return Some(WardenPolicyMode::Observe);
-    }
-    if value.eq_ignore_ascii_case("protect") {
-        return Some(WardenPolicyMode::Protect);
-    }
-    if value.eq_ignore_ascii_case("enforce_candidate")
-        || value.eq_ignore_ascii_case("enforce-candidate")
-    {
-        return Some(WardenPolicyMode::EnforceCandidate);
-    }
-    if value.eq_ignore_ascii_case("enforce") {
-        return Some(WardenPolicyMode::Enforce);
-    }
-    None
+    ProtectionLevel::parse_public_label(value)
+        .ok()
+        .map(ProtectionLevel::internal_policy_mode)
 }
 
 fn parse_service_admission_decision(value: &str) -> Option<WardenClientBackendDecision> {
@@ -692,8 +682,8 @@ mod tests {
             (FUN_WARDEN_ENABLED_ENV, "1"),
             (FUN_WARDEN_SESSION_ID_ENV, "session-ref"),
             (FUN_WARDEN_CHALLENGE_ID_ENV, "challenge-ref"),
-            (FUN_WARDEN_MODE_ENV, "protect"),
-            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "standard"),
+            (FUN_WARDEN_MODE_ENV, "Hidden"),
+            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Hidden"),
             (
                 FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
                 "0707070707070707070707070707070707070707070707070707070707070707",
@@ -732,8 +722,8 @@ mod tests {
     fn invalid_protected_runtime_env_fails_closed_for_client_config() {
         let config = WardenClientConfig::from_pairs([
             (FUN_WARDEN_ENABLED_ENV, "1"),
-            (FUN_WARDEN_MODE_ENV, "protect"),
-            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "ranked"),
+            (FUN_WARDEN_MODE_ENV, "Hidden"),
+            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Protected"),
             (FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV, "not-a-digest"),
         ]);
 
@@ -755,9 +745,10 @@ mod tests {
     #[test]
     fn warden_policy_mode_parser_defaults_unknown_to_none() {
         assert_eq!(
-            parse_policy_mode("enforce-candidate"),
-            Some(fun_warden_protocol::WardenPolicyMode::EnforceCandidate)
+            parse_policy_mode("Protected"),
+            Some(fun_warden_protocol::WardenPolicyMode::Enforce)
         );
+        assert_eq!(parse_policy_mode("protect"), None);
         assert_eq!(parse_policy_mode("unknown"), None);
     }
 
