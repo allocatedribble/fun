@@ -1008,23 +1008,26 @@ fn coarse_now_ms() -> u64 {
 mod tests {
     use super::{
         ClientWardenPlugin, FUN_WARDEN_LEGACY_MODE_COMPAT_ENV, MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME,
-        WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME, WARDEN_INTEGRITY_RECHECK_SECONDS,
-        WardenClientBackendDecision, WardenClientConfig, WardenClientFinding,
-        WardenClientServiceState, WardenClientStatus, WardenCompactProtectedCallEvidence,
-        WardenHandlerIslandPeerCheckState, WardenIntegrityRecheckTimer, WardenModeParseFallback,
-        WardenProtectedCallEvidenceBuffer, WardenRedactedEvidenceFlushState,
-        WardenVmPackageReadiness, WardenVmPackageReadinessState, apply_service_policy_update,
-        bounded_env_reference, legacy_mode_compat_allowed, ticket_id_from_session_reference,
-        warden_policy_poll_interval_seconds, warden_service_policy_update_from_pairs,
+        WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME, WARDEN_HEARTBEAT_SECONDS,
+        WARDEN_INTEGRITY_RECHECK_SECONDS, WardenClientBackendDecision, WardenClientConfig,
+        WardenClientFinding, WardenClientServiceState, WardenClientStatus,
+        WardenCompactProtectedCallEvidence, WardenHandlerIslandPeerCheckState,
+        WardenIntegrityRecheckTimer, WardenModeParseFallback, WardenProtectedCallEvidenceBuffer,
+        WardenRedactedEvidenceFlushState, WardenVmPackageReadiness, WardenVmPackageReadinessState,
+        apply_service_policy_update, bounded_env_reference, legacy_mode_compat_allowed,
+        ticket_id_from_session_reference, warden_policy_poll_interval_seconds,
+        warden_service_policy_update_from_pairs,
     };
     use bevy::prelude::*;
-    use fun_warden_core::ProtectionLevel;
+    use fun_warden_core::{ExecutionMode, ProtectionLevel, WardenJsonConfig};
     use fun_warden_protocol::{
         ClientAttestationStatus, Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
         FUN_WARDEN_MODE_ENV, FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
         FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV, FUN_WARDEN_PROTECTED_PROFILE_ENV,
         FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV, FUN_WARDEN_SESSION_ID_ENV, TicketId16,
     };
+
+    const GAME_CLIENT_WARDEN_JSON: &str = include_str!("../warden.json");
 
     #[test]
     fn warden_env_config_reads_only_non_secret_references() {
@@ -1121,6 +1124,59 @@ mod tests {
             protected.protected_runtime.enforcement_mode,
             fun_warden_protocol::WardenPolicyMode::Enforce
         );
+    }
+
+    #[test]
+    fn game_client_warden_json_matches_client_plugin_contract() {
+        let config: WardenJsonConfig =
+            serde_json::from_str(GAME_CLIENT_WARDEN_JSON).expect("game_client warden.json");
+
+        assert_eq!(config.validate(), Ok(()));
+        assert_eq!(config.protection_level(), ProtectionLevel::Protected);
+        assert_eq!(config.package.name, "game_client");
+        assert_eq!(config.package.profile, "game_client");
+        assert_eq!(
+            config.allowed_execution_tiers(),
+            vec![
+                ExecutionMode::Interpreter,
+                ExecutionMode::QuickenedInterpreter,
+                ExecutionMode::SuperInstructionInterpreter,
+                ExecutionMode::AotStub,
+            ]
+        );
+        assert!(!config.execution_modes().allows(ExecutionMode::DynamicJit));
+        assert_eq!(
+            config.bevy.integrity_recheck_seconds as f32,
+            WARDEN_INTEGRITY_RECHECK_SECONDS
+        );
+        assert_eq!(
+            config.bevy.service_heartbeat_seconds as f32,
+            WARDEN_HEARTBEAT_SECONDS
+        );
+        assert_eq!(config.bevy.frame_budget_us, 300);
+    }
+
+    #[test]
+    fn game_client_warden_json_uses_only_public_protection_vocabulary() {
+        let config: serde_json::Value =
+            serde_json::from_str(GAME_CLIENT_WARDEN_JSON).expect("game_client warden.json value");
+
+        assert_eq!(config["protection"], "Protected");
+        for legacy in [
+            "observe",
+            "protect",
+            "enforce",
+            "enforce_candidate",
+            "light",
+            "standard",
+            "ranked",
+            "research",
+        ] {
+            assert!(
+                !GAME_CLIENT_WARDEN_JSON.contains(&format!("\"{legacy}\"")),
+                "game_client warden.json must not contain legacy public label {legacy}"
+            );
+        }
     }
 
     #[test]

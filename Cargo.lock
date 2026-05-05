@@ -3319,6 +3319,7 @@ dependencies = [
  "game_scene",
  "game_shared",
  "log",
+ "serde_json",
  "thunder",
  "tracing",
  "wgpu",
