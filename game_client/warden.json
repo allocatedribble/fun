@@ -16,6 +16,16 @@
       "server_signed_dynamic_variant": true
     }
   },
+  "vm_program_gate": {
+    "enabled": true,
+    "default_unlock": "per_session",
+    "high_value_unlock": "per_match",
+    "critical_unlock": "per_call",
+    "require_hardware_proof": true,
+    "require_warden_ticket": true,
+    "seal_function_bytecode": true,
+    "seal_decoy_programs": true
+  },
   "integrity": {
     "startup_root_check": true,
     "low_frequency_recheck": true,

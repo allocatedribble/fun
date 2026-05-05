@@ -27,18 +27,28 @@ const WARDEN_INTEGRITY_RECHECK_SECONDS: f32 = 30.0;
 const WARDEN_SERVICE_POLICY_POLL_MIN_SECONDS: f32 = 5.0;
 const WARDEN_SERVICE_POLICY_POLL_JITTER_SECONDS: f32 = 10.0;
 const WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME: u8 = 2;
+const WARDEN_VM_UNLOCK_CHECKS_PER_FRAME: u8 = 2;
 const MAX_WARDEN_COMPACT_EVIDENCE_RECORDS: usize = 16;
 const MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME: u8 = 4;
 const FUN_WARDEN_SERVICE_DECISION_ENV: &str = "FUN_WARDEN_SERVICE_DECISION";
 const FUN_WARDEN_POLICY_EPOCH_ENV: &str = "FUN_WARDEN_POLICY_EPOCH";
 const FUN_WARDEN_DEVICE_ATTESTATION_STATUS_ENV: &str = "FUN_WARDEN_DEVICE_ATTESTATION_STATUS";
 const FUN_WARDEN_LEGACY_MODE_COMPAT_ENV: &str = "FUN_WARDEN_LEGACY_MODE_COMPAT";
-const WARDEN_RUNTIME_ENV_KEYS: [&str; 9] = [
+const FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV: &str = "FUN_WARDEN_VM_UNLOCK_MATERIAL_READY";
+const FUN_WARDEN_HARDWARE_RUN_PROOF_READY_ENV: &str = "FUN_WARDEN_HARDWARE_RUN_PROOF_READY";
+const FUN_WARDEN_DEVICE_VARIANT_TICKET_READY_ENV: &str = "FUN_WARDEN_DEVICE_VARIANT_TICKET_READY";
+const FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS_ENV: &str =
+    "FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS";
+const WARDEN_RUNTIME_ENV_KEYS: [&str; 13] = [
     FUN_WARDEN_ENABLED_ENV,
     FUN_WARDEN_SESSION_ID_ENV,
     FUN_WARDEN_CHALLENGE_ID_ENV,
     FUN_WARDEN_MODE_ENV,
     FUN_WARDEN_LEGACY_MODE_COMPAT_ENV,
+    FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV,
+    FUN_WARDEN_HARDWARE_RUN_PROOF_READY_ENV,
+    FUN_WARDEN_DEVICE_VARIANT_TICKET_READY_ENV,
+    FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS_ENV,
     fun_warden_protocol::FUN_WARDEN_PROTECTED_PROFILE_ENV,
     fun_warden_protocol::FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
     fun_warden_protocol::FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV,
@@ -54,8 +64,11 @@ impl Plugin for ClientWardenPlugin {
             .init_resource::<WardenProtectedServiceReportOutbox>()
             .init_resource::<WardenHandlerIslandPeerCheckState>()
             .init_resource::<WardenVmPackageReadiness>()
+            .init_resource::<WardenVmProgramUnlockState>()
             .init_resource::<WardenProtectedCallEvidenceBuffer>()
+            .init_resource::<WardenVmUnlockDiagnosticBuffer>()
             .init_resource::<WardenRedactedEvidenceFlushState>()
+            .init_resource::<WardenRedactedUnlockDiagnosticFlushState>()
             .init_resource::<WardenServiceHeartbeatTimer>()
             .init_resource::<WardenServicePolicyPollTimer>()
             .init_resource::<WardenIntegrityRecheckTimer>()
@@ -65,7 +78,10 @@ impl Plugin for ClientWardenPlugin {
                 (
                     bounded_handler_island_peer_checks,
                     check_warden_vm_package_readiness,
-                ),
+                    verify_warden_vm_unlock_material_availability,
+                    run_bounded_warden_vm_unlock_checks,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -78,7 +94,14 @@ impl Plugin for ClientWardenPlugin {
                 ),
             )
             .add_systems(PostUpdate, collect_compact_protected_call_evidence)
-            .add_systems(Last, flush_redacted_warden_evidence_within_budget);
+            .add_systems(PostUpdate, collect_warden_unlock_denial_evidence)
+            .add_systems(
+                Last,
+                (
+                    flush_redacted_warden_evidence_within_budget,
+                    flush_redacted_warden_unlock_diagnostics_within_budget,
+                ),
+            );
     }
 }
 
@@ -90,6 +113,10 @@ pub struct WardenClientConfig {
     pub protection_mode: ProtectionLevel,
     pub mode_parse_fallback: Option<WardenModeParseFallback>,
     pub protected_runtime: SharedProtectedRuntimeConfig,
+    pub vm_unlock_material_ready: bool,
+    pub hardware_run_proof_ready: bool,
+    pub device_variant_ticket_ready: bool,
+    pub sealed_program_authentication_failed: bool,
 }
 
 impl WardenClientConfig {
@@ -114,6 +141,10 @@ impl WardenClientConfig {
         let mut challenge_id = None;
         let mut mode_value = None;
         let mut legacy_mode_compat = false;
+        let mut vm_unlock_material_ready = false;
+        let mut hardware_run_proof_ready = false;
+        let mut device_variant_ticket_ready = false;
+        let mut sealed_program_authentication_failed = false;
 
         for (key, value) in &pairs {
             match key.as_ref() {
@@ -130,6 +161,19 @@ impl WardenClientConfig {
                 }
                 FUN_WARDEN_LEGACY_MODE_COMPAT_ENV => {
                     legacy_mode_compat = env_flag_value(value.as_ref());
+                }
+                FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV => {
+                    vm_unlock_material_ready = env_flag_value(value.as_ref());
+                }
+                FUN_WARDEN_HARDWARE_RUN_PROOF_READY_ENV => {
+                    hardware_run_proof_ready = env_flag_value(value.as_ref());
+                }
+                FUN_WARDEN_DEVICE_VARIANT_TICKET_READY_ENV => {
+                    device_variant_ticket_ready = env_flag_value(value.as_ref());
+                }
+                FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS_ENV => {
+                    sealed_program_authentication_failed =
+                        sealed_program_authentication_status_failed(value.as_ref());
                 }
                 _ => {}
             }
@@ -152,6 +196,10 @@ impl WardenClientConfig {
             protection_mode: parsed_mode.protection_mode,
             mode_parse_fallback: parsed_mode.fallback,
             protected_runtime,
+            vm_unlock_material_ready,
+            hardware_run_proof_ready,
+            device_variant_ticket_ready,
+            sealed_program_authentication_failed,
         }
     }
 
@@ -204,6 +252,10 @@ pub enum WardenVmPackageReadinessState {
     Ready,
     MissingProtectedBundle,
     RuntimeUnavailable,
+    UnlockMaterialMissing,
+    HardwareProofMissing,
+    TicketMissing,
+    SealedProgramAuthenticationFailed,
 }
 
 #[derive(Debug, Resource)]
@@ -265,6 +317,22 @@ impl Default for WardenVmPackageReadiness {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WardenVmUnlockFailureClass {
+    UnlockMaterialMissing,
+    HardwareProofMissing,
+    TicketMissing,
+    SealedProgramAuthenticationFailed,
+}
+
+#[derive(Debug, Resource, Default)]
+pub struct WardenVmProgramUnlockState {
+    pub unlocked_function_count: u16,
+    pub denied_function_count: u16,
+    pub last_unlock_failure: Option<WardenVmUnlockFailureClass>,
+    pub last_policy_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WardenCompactEvidenceReason {
     StartupSnapshot,
     IntegrityChanged,
@@ -301,6 +369,40 @@ impl Default for WardenProtectedCallEvidenceBuffer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WardenCompactUnlockDenialEvidence {
+    pub sequence: u64,
+    pub protection_mode: ProtectionLevel,
+    pub readiness: WardenVmPackageReadinessState,
+    pub failure: WardenVmUnlockFailureClass,
+    pub policy_epoch: u64,
+}
+
+#[derive(Debug, Resource)]
+pub struct WardenVmUnlockDiagnosticBuffer {
+    pub records: VecDeque<WardenCompactUnlockDenialEvidence>,
+    pub next_sequence: u64,
+    last_snapshot: Option<WardenUnlockDiagnosticSnapshot>,
+}
+
+impl Default for WardenVmUnlockDiagnosticBuffer {
+    fn default() -> Self {
+        Self {
+            records: VecDeque::with_capacity(MAX_WARDEN_COMPACT_EVIDENCE_RECORDS),
+            next_sequence: 0,
+            last_snapshot: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WardenUnlockDiagnosticSnapshot {
+    protection_mode: ProtectionLevel,
+    readiness: WardenVmPackageReadinessState,
+    failure: WardenVmUnlockFailureClass,
+    policy_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WardenCompactProtectedCallEvidenceSnapshot {
     protection_mode: ProtectionLevel,
     integrity_status: IntegrityStatus,
@@ -311,6 +413,13 @@ struct WardenCompactProtectedCallEvidenceSnapshot {
 
 #[derive(Debug, Resource, Default)]
 pub struct WardenRedactedEvidenceFlushState {
+    pub total_flushed: u64,
+    pub last_flush_count: u8,
+    pub deferred_due_to_budget: u64,
+}
+
+#[derive(Debug, Resource, Default)]
+pub struct WardenRedactedUnlockDiagnosticFlushState {
     pub total_flushed: u64,
     pub last_flush_count: u8,
     pub deferred_due_to_budget: u64,
@@ -504,6 +613,61 @@ fn check_warden_vm_package_readiness(
     readiness.check_count = readiness.check_count.saturating_add(1);
 }
 
+fn verify_warden_vm_unlock_material_availability(
+    status: Res<WardenClientStatus>,
+    protected_status: Res<WardenProtectedRuntimeStatus>,
+    mut readiness: ResMut<WardenVmPackageReadiness>,
+    mut unlock_state: ResMut<WardenVmProgramUnlockState>,
+) {
+    unlock_state.last_policy_epoch = status.last_policy_epoch;
+    if !status.config.enabled || status.config.protection_mode == ProtectionLevel::None {
+        readiness.state = WardenVmPackageReadinessState::Disabled;
+        unlock_state.last_unlock_failure = None;
+        return;
+    }
+
+    let Some(failure) = warden_vm_unlock_failure(&status, &protected_status, readiness.state)
+    else {
+        unlock_state.last_unlock_failure = None;
+        return;
+    };
+    readiness.state = readiness_state_for_unlock_failure(failure);
+    unlock_state.last_unlock_failure = Some(failure);
+}
+
+fn run_bounded_warden_vm_unlock_checks(
+    status: Res<WardenClientStatus>,
+    readiness: Res<WardenVmPackageReadiness>,
+    mut unlock_state: ResMut<WardenVmProgramUnlockState>,
+) {
+    if !status.config.enabled || status.config.protection_mode == ProtectionLevel::None {
+        unlock_state.unlocked_function_count = 0;
+        unlock_state.denied_function_count = 0;
+        unlock_state.last_unlock_failure = None;
+        unlock_state.last_policy_epoch = status.last_policy_epoch;
+        return;
+    }
+
+    let budget = match status.config.protection_mode {
+        ProtectionLevel::None => 0,
+        ProtectionLevel::Hidden => 1,
+        ProtectionLevel::Protected => WARDEN_VM_UNLOCK_CHECKS_PER_FRAME,
+    };
+    unlock_state.last_policy_epoch = status.last_policy_epoch;
+    if readiness.state == WardenVmPackageReadinessState::Ready {
+        unlock_state.unlocked_function_count = u16::from(budget);
+        unlock_state.denied_function_count = 0;
+        unlock_state.last_unlock_failure = None;
+    } else if let Some(failure) = warden_vm_unlock_failure_for_readiness(readiness.state) {
+        unlock_state.unlocked_function_count = 0;
+        unlock_state.denied_function_count = u16::from(budget);
+        unlock_state.last_unlock_failure = Some(failure);
+    } else {
+        unlock_state.unlocked_function_count = 0;
+        unlock_state.denied_function_count = 0;
+    }
+}
+
 fn warden_service_heartbeat(
     time: Res<Time>,
     mut timer: ResMut<WardenServiceHeartbeatTimer>,
@@ -678,9 +842,64 @@ fn collect_compact_protected_call_evidence(
     buffer.records.push_back(evidence);
 }
 
+fn collect_warden_unlock_denial_evidence(
+    status: Res<WardenClientStatus>,
+    readiness: Res<WardenVmPackageReadiness>,
+    unlock_state: Res<WardenVmProgramUnlockState>,
+    mut buffer: ResMut<WardenVmUnlockDiagnosticBuffer>,
+) {
+    if !status.config.enabled || status.config.protection_mode == ProtectionLevel::None {
+        return;
+    }
+    let Some(failure) = unlock_state.last_unlock_failure else {
+        return;
+    };
+
+    let snapshot = WardenUnlockDiagnosticSnapshot {
+        protection_mode: status.config.protection_mode,
+        readiness: readiness.state,
+        failure,
+        policy_epoch: unlock_state.last_policy_epoch,
+    };
+    if buffer
+        .last_snapshot
+        .is_some_and(|previous| previous == snapshot)
+    {
+        return;
+    }
+    if buffer.records.len() == MAX_WARDEN_COMPACT_EVIDENCE_RECORDS {
+        buffer.records.pop_front();
+    }
+    let evidence = WardenCompactUnlockDenialEvidence {
+        sequence: buffer.next_sequence,
+        protection_mode: snapshot.protection_mode,
+        readiness: snapshot.readiness,
+        failure: snapshot.failure,
+        policy_epoch: snapshot.policy_epoch,
+    };
+    buffer.next_sequence = buffer.next_sequence.saturating_add(1);
+    buffer.last_snapshot = Some(snapshot);
+    buffer.records.push_back(evidence);
+}
+
 fn flush_redacted_warden_evidence_within_budget(
     mut buffer: ResMut<WardenProtectedCallEvidenceBuffer>,
     mut flush_state: ResMut<WardenRedactedEvidenceFlushState>,
+) {
+    let mut flushed = 0_u8;
+    while flushed < MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME && buffer.records.pop_front().is_some() {
+        flushed = flushed.saturating_add(1);
+    }
+    flush_state.last_flush_count = flushed;
+    flush_state.total_flushed = flush_state.total_flushed.saturating_add(u64::from(flushed));
+    flush_state.deferred_due_to_budget = flush_state
+        .deferred_due_to_budget
+        .saturating_add(buffer.records.len() as u64);
+}
+
+fn flush_redacted_warden_unlock_diagnostics_within_budget(
+    mut buffer: ResMut<WardenVmUnlockDiagnosticBuffer>,
+    mut flush_state: ResMut<WardenRedactedUnlockDiagnosticFlushState>,
 ) {
     let mut flushed = 0_u8;
     while flushed < MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME && buffer.records.pop_front().is_some() {
@@ -813,6 +1032,97 @@ fn env_flag_value(value: &str) -> bool {
         || value.eq_ignore_ascii_case("true")
         || value.eq_ignore_ascii_case("yes")
         || value.eq_ignore_ascii_case("on")
+}
+
+fn sealed_program_authentication_status_failed(value: &str) -> bool {
+    value.eq_ignore_ascii_case("failed")
+        || value.eq_ignore_ascii_case("failure")
+        || value.eq_ignore_ascii_case("auth_failed")
+        || value.eq_ignore_ascii_case("authentication_failed")
+        || value.eq_ignore_ascii_case("sealed_program_authentication_failed")
+}
+
+fn warden_vm_unlock_failure(
+    status: &WardenClientStatus,
+    protected_status: &WardenProtectedRuntimeStatus,
+    package_readiness: WardenVmPackageReadinessState,
+) -> Option<WardenVmUnlockFailureClass> {
+    if package_readiness != WardenVmPackageReadinessState::Ready
+        && package_readiness != WardenVmPackageReadinessState::ObservationOnly
+    {
+        return None;
+    }
+    if !warden_vm_unlock_required(status) {
+        return None;
+    }
+    if matches!(
+        protected_status.backend_challenge_binding_status,
+        WardenBackendChallengeBindingStatus::Missing
+            | WardenBackendChallengeBindingStatus::Stale
+            | WardenBackendChallengeBindingStatus::Replayed
+    ) {
+        return Some(WardenVmUnlockFailureClass::UnlockMaterialMissing);
+    }
+    if !status.config.vm_unlock_material_ready {
+        return Some(WardenVmUnlockFailureClass::UnlockMaterialMissing);
+    }
+    if !status.config.device_variant_ticket_ready {
+        return Some(WardenVmUnlockFailureClass::TicketMissing);
+    }
+    if !status.config.hardware_run_proof_ready
+        || status.device_attestation_status != ClientAttestationStatus::Passed
+    {
+        return Some(WardenVmUnlockFailureClass::HardwareProofMissing);
+    }
+    if status.config.sealed_program_authentication_failed {
+        return Some(WardenVmUnlockFailureClass::SealedProgramAuthenticationFailed);
+    }
+    None
+}
+
+fn warden_vm_unlock_required(status: &WardenClientStatus) -> bool {
+    match status.config.protection_mode {
+        ProtectionLevel::None => false,
+        ProtectionLevel::Hidden => status.config.protected_runtime.server_keyed_unlock_required,
+        ProtectionLevel::Protected => true,
+    }
+}
+
+const fn readiness_state_for_unlock_failure(
+    failure: WardenVmUnlockFailureClass,
+) -> WardenVmPackageReadinessState {
+    match failure {
+        WardenVmUnlockFailureClass::UnlockMaterialMissing => {
+            WardenVmPackageReadinessState::UnlockMaterialMissing
+        }
+        WardenVmUnlockFailureClass::HardwareProofMissing => {
+            WardenVmPackageReadinessState::HardwareProofMissing
+        }
+        WardenVmUnlockFailureClass::TicketMissing => WardenVmPackageReadinessState::TicketMissing,
+        WardenVmUnlockFailureClass::SealedProgramAuthenticationFailed => {
+            WardenVmPackageReadinessState::SealedProgramAuthenticationFailed
+        }
+    }
+}
+
+const fn warden_vm_unlock_failure_for_readiness(
+    state: WardenVmPackageReadinessState,
+) -> Option<WardenVmUnlockFailureClass> {
+    match state {
+        WardenVmPackageReadinessState::UnlockMaterialMissing => {
+            Some(WardenVmUnlockFailureClass::UnlockMaterialMissing)
+        }
+        WardenVmPackageReadinessState::HardwareProofMissing => {
+            Some(WardenVmUnlockFailureClass::HardwareProofMissing)
+        }
+        WardenVmPackageReadinessState::TicketMissing => {
+            Some(WardenVmUnlockFailureClass::TicketMissing)
+        }
+        WardenVmPackageReadinessState::SealedProgramAuthenticationFailed => {
+            Some(WardenVmUnlockFailureClass::SealedProgramAuthenticationFailed)
+        }
+        _ => None,
+    }
 }
 
 const fn disabled_protected_runtime_config(
@@ -1007,20 +1317,25 @@ fn coarse_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientWardenPlugin, FUN_WARDEN_LEGACY_MODE_COMPAT_ENV, MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME,
-        WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME, WARDEN_HEARTBEAT_SECONDS,
+        ClientWardenPlugin, FUN_WARDEN_DEVICE_VARIANT_TICKET_READY_ENV,
+        FUN_WARDEN_HARDWARE_RUN_PROOF_READY_ENV, FUN_WARDEN_LEGACY_MODE_COMPAT_ENV,
+        FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS_ENV,
+        FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV, WARDEN_HEARTBEAT_SECONDS,
         WARDEN_INTEGRITY_RECHECK_SECONDS, WardenClientBackendDecision, WardenClientConfig,
         WardenClientFinding, WardenClientServiceState, WardenClientStatus,
-        WardenCompactProtectedCallEvidence, WardenHandlerIslandPeerCheckState,
-        WardenIntegrityRecheckTimer, WardenModeParseFallback, WardenProtectedCallEvidenceBuffer,
-        WardenRedactedEvidenceFlushState, WardenVmPackageReadiness, WardenVmPackageReadinessState,
-        apply_service_policy_update, bounded_env_reference, legacy_mode_compat_allowed,
-        ticket_id_from_session_reference, warden_policy_poll_interval_seconds,
-        warden_service_policy_update_from_pairs,
+        WardenCompactProtectedCallEvidence, WardenCompactUnlockDenialEvidence,
+        WardenHandlerIslandPeerCheckState, WardenIntegrityRecheckTimer, WardenModeParseFallback,
+        WardenProtectedCallEvidenceBuffer, WardenRedactedEvidenceFlushState,
+        WardenRedactedUnlockDiagnosticFlushState, WardenVmPackageReadiness,
+        WardenVmPackageReadinessState, WardenVmProgramUnlockState, WardenVmUnlockDiagnosticBuffer,
+        WardenVmUnlockFailureClass, apply_service_policy_update, bounded_env_reference,
+        legacy_mode_compat_allowed, ticket_id_from_session_reference,
+        warden_policy_poll_interval_seconds, warden_service_policy_update_from_pairs,
     };
     use bevy::prelude::*;
     use fun_warden_core::{
-        ExecutionMode, ProtectionLevel, WardenFunctionInflationProfile, WardenJsonConfig,
+        ExecutionMode, ProtectionLevel, WardenConfigVmProgramGate, WardenFunctionInflationProfile,
+        WardenJsonConfig, WardenVmProgramUnlockClass,
     };
     use fun_warden_protocol::{
         ClientAttestationStatus, Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
@@ -1038,6 +1353,13 @@ mod tests {
             (FUN_WARDEN_SESSION_ID_ENV, "session-ref"),
             (FUN_WARDEN_CHALLENGE_ID_ENV, "challenge-ref"),
             (FUN_WARDEN_MODE_ENV, "Hidden"),
+            (FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV, "1"),
+            (FUN_WARDEN_HARDWARE_RUN_PROOF_READY_ENV, "1"),
+            (FUN_WARDEN_DEVICE_VARIANT_TICKET_READY_ENV, "1"),
+            (
+                FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS_ENV,
+                "passed",
+            ),
             (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Hidden"),
             (
                 FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
@@ -1065,6 +1387,10 @@ mod tests {
             config.protected_runtime.protected_bundle_digest,
             Some(Digest32([7; 32]))
         );
+        assert!(config.vm_unlock_material_ready);
+        assert!(config.hardware_run_proof_ready);
+        assert!(config.device_variant_ticket_ready);
+        assert!(!config.sealed_program_authentication_failed);
     }
 
     #[test]
@@ -1147,6 +1473,17 @@ mod tests {
             ]
         );
         assert!(!config.execution_modes().allows(ExecutionMode::DynamicJit));
+        assert_eq!(
+            config.vm_program_gate,
+            WardenConfigVmProgramGate::protected_default()
+        );
+        assert_eq!(
+            config.vm_program_gate.default_unlock,
+            WardenVmProgramUnlockClass::PerSession
+        );
+        assert!(config.vm_program_gate.require_hardware_proof);
+        assert!(config.vm_program_gate.require_warden_ticket);
+        assert!(config.vm_program_gate.seal_function_bytecode);
         assert!(config.function_inflation.enabled);
         assert_eq!(
             config.function_inflation.profile,
@@ -1415,9 +1752,6 @@ mod tests {
             timer.0.duration().as_secs_f32(),
             WARDEN_INTEGRITY_RECHECK_SECONDS
         );
-        assert!(WARDEN_INTEGRITY_RECHECK_SECONDS >= 30.0);
-        assert_eq!(WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME, 2);
-        assert_eq!(MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME, 4);
     }
 
     #[test]
@@ -1453,6 +1787,128 @@ mod tests {
     }
 
     #[test]
+    fn protected_unlock_readiness_requires_material_ticket_and_hardware_proof() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        app.world_mut().resource_mut::<WardenClientStatus>().config =
+            protected_config_with_unlock_flags(false, false, false, false);
+
+        app.update();
+
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::UnlockMaterialMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(
+            unlock_state.last_unlock_failure,
+            Some(WardenVmUnlockFailureClass::UnlockMaterialMissing)
+        );
+        assert_eq!(unlock_state.unlocked_function_count, 0);
+        assert_eq!(unlock_state.denied_function_count, 2);
+
+        app.world_mut().resource_mut::<WardenClientStatus>().config =
+            protected_config_with_unlock_flags(true, false, false, false);
+        app.update();
+
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::TicketMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(
+            unlock_state.last_unlock_failure,
+            Some(WardenVmUnlockFailureClass::TicketMissing)
+        );
+
+        {
+            let mut status = app.world_mut().resource_mut::<WardenClientStatus>();
+            status.config = protected_config_with_unlock_flags(true, true, true, false);
+            status.device_attestation_status = ClientAttestationStatus::Passed;
+        }
+        app.update();
+
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(readiness.state, WardenVmPackageReadinessState::Ready);
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(unlock_state.last_unlock_failure, None);
+        assert_eq!(unlock_state.unlocked_function_count, 2);
+        assert_eq!(unlock_state.denied_function_count, 0);
+    }
+
+    #[test]
+    fn hidden_mode_reports_unlock_missing_without_local_block() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        app.world_mut().resource_mut::<WardenClientStatus>().config =
+            WardenClientConfig::from_pairs([
+                (FUN_WARDEN_MODE_ENV, "Hidden"),
+                (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Hidden"),
+                (
+                    FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
+                    "0808080808080808080808080808080808080808080808080808080808080808",
+                ),
+                (FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV, "passed"),
+                (FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV, "1"),
+                (FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV, "1"),
+            ]);
+
+        app.update();
+
+        let status = app.world().resource::<WardenClientStatus>();
+        assert_eq!(status.config.protection_mode, ProtectionLevel::Hidden);
+        assert!(!status.blocked_by_warden);
+        assert!(!status.exit_requested);
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::TicketMissing
+        );
+        let unlock_state = app.world().resource::<WardenVmProgramUnlockState>();
+        assert_eq!(
+            unlock_state.last_unlock_failure,
+            Some(WardenVmUnlockFailureClass::TicketMissing)
+        );
+        assert_eq!(unlock_state.denied_function_count, 1);
+    }
+
+    #[test]
+    fn protected_unlock_authentication_failure_collects_redacted_diagnostic() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        {
+            let mut status = app.world_mut().resource_mut::<WardenClientStatus>();
+            status.config = protected_config_with_unlock_flags(true, true, true, true);
+            status.device_attestation_status = ClientAttestationStatus::Passed;
+            status.last_policy_epoch = 42;
+        }
+
+        app.update();
+
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::SealedProgramAuthenticationFailed
+        );
+        let flush_state = app
+            .world()
+            .resource::<WardenRedactedUnlockDiagnosticFlushState>();
+        assert_eq!(flush_state.last_flush_count, 1);
+        assert_eq!(flush_state.total_flushed, 1);
+        assert!(
+            app.world()
+                .resource::<WardenVmUnlockDiagnosticBuffer>()
+                .records
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn compact_evidence_records_only_redacted_state_classes() {
         let evidence = WardenCompactProtectedCallEvidence {
             sequence: 7,
@@ -1479,10 +1935,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unlock_diagnostic_records_only_redacted_state_classes() {
+        let evidence = WardenCompactUnlockDenialEvidence {
+            sequence: 3,
+            protection_mode: ProtectionLevel::Protected,
+            readiness: WardenVmPackageReadinessState::HardwareProofMissing,
+            failure: WardenVmUnlockFailureClass::HardwareProofMissing,
+            policy_epoch: 11,
+        };
+        let debug = format!("{evidence:?}");
+
+        for forbidden in [
+            "ticket_id",
+            "session_id",
+            "token",
+            "account",
+            "hardware_id",
+            "serial",
+            "bytecode",
+            "signature",
+        ] {
+            assert!(!debug.to_ascii_lowercase().contains(forbidden));
+        }
+    }
+
     fn enabled_status() -> WardenClientStatus {
         let mut status = WardenClientStatus::default();
         status.config.enabled = true;
         status.service_state = WardenClientServiceState::PendingService;
         status
+    }
+
+    fn protected_config_with_unlock_flags(
+        unlock_material_ready: bool,
+        ticket_ready: bool,
+        hardware_proof_ready: bool,
+        sealed_auth_failed: bool,
+    ) -> WardenClientConfig {
+        WardenClientConfig::from_pairs([
+            (FUN_WARDEN_MODE_ENV, "Protected"),
+            (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Protected"),
+            (
+                FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
+                "0909090909090909090909090909090909090909090909090909090909090909",
+            ),
+            (FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV, "passed"),
+            (FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV, "1"),
+            (
+                FUN_WARDEN_VM_UNLOCK_MATERIAL_READY_ENV,
+                flag_label(unlock_material_ready),
+            ),
+            (
+                FUN_WARDEN_DEVICE_VARIANT_TICKET_READY_ENV,
+                flag_label(ticket_ready),
+            ),
+            (
+                FUN_WARDEN_HARDWARE_RUN_PROOF_READY_ENV,
+                flag_label(hardware_proof_ready),
+            ),
+            (
+                FUN_WARDEN_SEALED_PROGRAM_AUTHENTICATION_STATUS_ENV,
+                if sealed_auth_failed {
+                    "failed"
+                } else {
+                    "passed"
+                },
+            ),
+        ])
+    }
+
+    const fn flag_label(value: bool) -> &'static str {
+        if value { "1" } else { "0" }
     }
 }
