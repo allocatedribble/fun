@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use bevy::{app::AppExit, prelude::*};
 use fun_warden_client::{
     integrity::verify_current_process_integrity,
@@ -24,9 +26,24 @@ const WARDEN_HEARTBEAT_SECONDS: f32 = 5.0;
 const WARDEN_INTEGRITY_RECHECK_SECONDS: f32 = 30.0;
 const WARDEN_SERVICE_POLICY_POLL_MIN_SECONDS: f32 = 5.0;
 const WARDEN_SERVICE_POLICY_POLL_JITTER_SECONDS: f32 = 10.0;
+const WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME: u8 = 2;
+const MAX_WARDEN_COMPACT_EVIDENCE_RECORDS: usize = 16;
+const MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME: u8 = 4;
 const FUN_WARDEN_SERVICE_DECISION_ENV: &str = "FUN_WARDEN_SERVICE_DECISION";
 const FUN_WARDEN_POLICY_EPOCH_ENV: &str = "FUN_WARDEN_POLICY_EPOCH";
 const FUN_WARDEN_DEVICE_ATTESTATION_STATUS_ENV: &str = "FUN_WARDEN_DEVICE_ATTESTATION_STATUS";
+const FUN_WARDEN_LEGACY_MODE_COMPAT_ENV: &str = "FUN_WARDEN_LEGACY_MODE_COMPAT";
+const WARDEN_RUNTIME_ENV_KEYS: [&str; 9] = [
+    FUN_WARDEN_ENABLED_ENV,
+    FUN_WARDEN_SESSION_ID_ENV,
+    FUN_WARDEN_CHALLENGE_ID_ENV,
+    FUN_WARDEN_MODE_ENV,
+    FUN_WARDEN_LEGACY_MODE_COMPAT_ENV,
+    fun_warden_protocol::FUN_WARDEN_PROTECTED_PROFILE_ENV,
+    fun_warden_protocol::FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
+    fun_warden_protocol::FUN_WARDEN_PROTECTED_INTEGRITY_STATUS_ENV,
+    fun_warden_protocol::FUN_WARDEN_PROTECTED_UNLOCK_REQUIRED_ENV,
+];
 
 pub struct ClientWardenPlugin;
 
@@ -35,10 +52,21 @@ impl Plugin for ClientWardenPlugin {
         app.init_resource::<WardenClientStatus>()
             .init_resource::<WardenProtectedRuntimeStatus>()
             .init_resource::<WardenProtectedServiceReportOutbox>()
+            .init_resource::<WardenHandlerIslandPeerCheckState>()
+            .init_resource::<WardenVmPackageReadiness>()
+            .init_resource::<WardenProtectedCallEvidenceBuffer>()
+            .init_resource::<WardenRedactedEvidenceFlushState>()
             .init_resource::<WardenServiceHeartbeatTimer>()
             .init_resource::<WardenServicePolicyPollTimer>()
             .init_resource::<WardenIntegrityRecheckTimer>()
             .add_systems(Startup, initialize_warden_client)
+            .add_systems(
+                PreUpdate,
+                (
+                    bounded_handler_island_peer_checks,
+                    check_warden_vm_package_readiness,
+                ),
+            )
             .add_systems(
                 Update,
                 (
@@ -48,7 +76,9 @@ impl Plugin for ClientWardenPlugin {
                     report_protected_status_to_service,
                     apply_warden_policy_change,
                 ),
-            );
+            )
+            .add_systems(PostUpdate, collect_compact_protected_call_evidence)
+            .add_systems(Last, flush_redacted_warden_evidence_within_budget);
     }
 }
 
@@ -57,70 +87,85 @@ pub struct WardenClientConfig {
     pub enabled: bool,
     pub session_id: Option<String>,
     pub challenge_id: Option<String>,
-    pub mode: WardenPolicyMode,
+    pub protection_mode: ProtectionLevel,
+    pub mode_parse_fallback: Option<WardenModeParseFallback>,
     pub protected_runtime: SharedProtectedRuntimeConfig,
 }
 
 impl WardenClientConfig {
     #[must_use]
     pub fn from_env() -> Self {
-        let enabled =
-            std::env::var(FUN_WARDEN_ENABLED_ENV).is_ok_and(|value| env_flag_value(&value));
-        let session_id = std::env::var(FUN_WARDEN_SESSION_ID_ENV)
-            .ok()
-            .and_then(|value| bounded_env_reference(&value, MAX_WARDEN_SESSION_ID_BYTES));
-        let challenge_id = std::env::var(FUN_WARDEN_CHALLENGE_ID_ENV)
-            .ok()
-            .and_then(|value| bounded_env_reference(&value, MAX_WARDEN_CHALLENGE_ID_BYTES));
-        let mode = std::env::var(FUN_WARDEN_MODE_ENV)
-            .ok()
-            .and_then(|value| parse_policy_mode(&value))
-            .unwrap_or(WardenPolicyMode::Observe);
-        let protected_runtime = SharedProtectedRuntimeConfig::from_env()
-            .unwrap_or_else(|_| disabled_protected_runtime_config(mode));
+        let pairs = WARDEN_RUNTIME_ENV_KEYS
+            .iter()
+            .filter_map(|key| std::env::var(key).ok().map(|value| (*key, value)))
+            .collect::<Vec<_>>();
+        Self::from_pairs(pairs)
+    }
+
+    #[must_use]
+    pub fn from_pairs<K, V>(pairs: impl IntoIterator<Item = (K, V)>) -> Self
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let pairs = pairs.into_iter().collect::<Vec<_>>();
+        let mut enabled_flag = false;
+        let mut session_id = None;
+        let mut challenge_id = None;
+        let mut mode_value = None;
+        let mut legacy_mode_compat = false;
+
+        for (key, value) in &pairs {
+            match key.as_ref() {
+                FUN_WARDEN_ENABLED_ENV => enabled_flag = env_flag_value(value.as_ref()),
+                FUN_WARDEN_SESSION_ID_ENV => {
+                    session_id = bounded_env_reference(value.as_ref(), MAX_WARDEN_SESSION_ID_BYTES);
+                }
+                FUN_WARDEN_CHALLENGE_ID_ENV => {
+                    challenge_id =
+                        bounded_env_reference(value.as_ref(), MAX_WARDEN_CHALLENGE_ID_BYTES);
+                }
+                FUN_WARDEN_MODE_ENV => {
+                    mode_value = Some(value.as_ref());
+                }
+                FUN_WARDEN_LEGACY_MODE_COMPAT_ENV => {
+                    legacy_mode_compat = env_flag_value(value.as_ref());
+                }
+                _ => {}
+            }
+        }
+        let parsed_mode = parse_warden_protection_mode(
+            mode_value,
+            enabled_flag,
+            legacy_mode_compat && legacy_mode_compat_allowed(),
+        );
+        let enabled = parsed_mode.protection_mode != ProtectionLevel::None;
+        let internal_policy_mode = parsed_mode.protection_mode.internal_policy_mode();
+        let runtime_pairs = normalized_protected_runtime_pairs(&pairs, parsed_mode.protection_mode);
+        let protected_runtime = SharedProtectedRuntimeConfig::from_pairs(runtime_pairs)
+            .unwrap_or_else(|_| disabled_protected_runtime_config(internal_policy_mode));
+
         Self {
             enabled,
             session_id,
             challenge_id,
-            mode,
+            protection_mode: parsed_mode.protection_mode,
+            mode_parse_fallback: parsed_mode.fallback,
             protected_runtime,
         }
     }
 
     #[must_use]
-    pub fn from_pairs<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
-        let mut enabled = false;
-        let mut session_id = None;
-        let mut challenge_id = None;
-        let mut mode = WardenPolicyMode::Observe;
-        let pairs = pairs.into_iter().collect::<Vec<_>>();
-
-        for (key, value) in &pairs {
-            match *key {
-                FUN_WARDEN_ENABLED_ENV => enabled = env_flag_value(value),
-                FUN_WARDEN_SESSION_ID_ENV => {
-                    session_id = bounded_env_reference(value, MAX_WARDEN_SESSION_ID_BYTES);
-                }
-                FUN_WARDEN_CHALLENGE_ID_ENV => {
-                    challenge_id = bounded_env_reference(value, MAX_WARDEN_CHALLENGE_ID_BYTES);
-                }
-                FUN_WARDEN_MODE_ENV => {
-                    mode = parse_policy_mode(value).unwrap_or(WardenPolicyMode::Observe);
-                }
-                _ => {}
-            }
-        }
-        let protected_runtime = SharedProtectedRuntimeConfig::from_pairs(pairs)
-            .unwrap_or_else(|_| disabled_protected_runtime_config(mode));
-
-        Self {
-            enabled,
-            session_id,
-            challenge_id,
-            mode,
-            protected_runtime,
-        }
+    pub const fn internal_policy_mode(&self) -> WardenPolicyMode {
+        self.protection_mode.internal_policy_mode()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WardenModeParseFallback {
+    MissingModeEnabledAsHidden,
+    MalformedModeHidden,
+    LegacyModeCompat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +195,15 @@ pub enum WardenClientFinding {
     CurrentProcessIntegrityUnsupported,
     ServiceConnectionPending,
     EnforcementDenied,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WardenVmPackageReadinessState {
+    Disabled,
+    ObservationOnly,
+    Ready,
+    MissingProtectedBundle,
+    RuntimeUnavailable,
 }
 
 #[derive(Debug, Resource)]
@@ -186,6 +240,82 @@ pub struct WardenProtectedServiceReportOutbox {
     pub report_count: u64,
 }
 
+#[derive(Debug, Resource, Default)]
+pub struct WardenHandlerIslandPeerCheckState {
+    pub total_checks: u64,
+    pub last_frame_budget: u8,
+    pub last_protection_mode: Option<ProtectionLevel>,
+}
+
+#[derive(Debug, Resource)]
+pub struct WardenVmPackageReadiness {
+    pub state: WardenVmPackageReadinessState,
+    pub check_count: u64,
+    pub last_protection_mode: ProtectionLevel,
+}
+
+impl Default for WardenVmPackageReadiness {
+    fn default() -> Self {
+        Self {
+            state: WardenVmPackageReadinessState::Disabled,
+            check_count: 0,
+            last_protection_mode: ProtectionLevel::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WardenCompactEvidenceReason {
+    StartupSnapshot,
+    IntegrityChanged,
+    BackendDecisionChanged,
+    VmPackageReadinessChanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WardenCompactProtectedCallEvidence {
+    pub sequence: u64,
+    pub reason: WardenCompactEvidenceReason,
+    pub protection_mode: ProtectionLevel,
+    pub integrity_status: IntegrityStatus,
+    pub loader_verdict: WardenProtectedLoaderVerdict,
+    pub backend_decision: WardenClientBackendDecision,
+    pub vm_package_readiness: WardenVmPackageReadinessState,
+}
+
+#[derive(Debug, Resource)]
+pub struct WardenProtectedCallEvidenceBuffer {
+    pub records: VecDeque<WardenCompactProtectedCallEvidence>,
+    pub next_sequence: u64,
+    last_snapshot: Option<WardenCompactProtectedCallEvidenceSnapshot>,
+}
+
+impl Default for WardenProtectedCallEvidenceBuffer {
+    fn default() -> Self {
+        Self {
+            records: VecDeque::with_capacity(MAX_WARDEN_COMPACT_EVIDENCE_RECORDS),
+            next_sequence: 0,
+            last_snapshot: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WardenCompactProtectedCallEvidenceSnapshot {
+    protection_mode: ProtectionLevel,
+    integrity_status: IntegrityStatus,
+    loader_verdict: WardenProtectedLoaderVerdict,
+    backend_decision: WardenClientBackendDecision,
+    vm_package_readiness: WardenVmPackageReadinessState,
+}
+
+#[derive(Debug, Resource, Default)]
+pub struct WardenRedactedEvidenceFlushState {
+    pub total_flushed: u64,
+    pub last_flush_count: u8,
+    pub deferred_due_to_budget: u64,
+}
+
 impl Default for WardenClientStatus {
     fn default() -> Self {
         let config = WardenClientConfig::from_env();
@@ -216,8 +346,9 @@ impl Default for WardenClientStatus {
 
 impl Default for WardenProtectedRuntimeStatus {
     fn default() -> Self {
-        let config = SharedProtectedRuntimeConfig::from_env()
-            .unwrap_or_else(|_| disabled_protected_runtime_config(WardenPolicyMode::Observe));
+        let config = SharedProtectedRuntimeConfig::from_env().unwrap_or_else(|_| {
+            disabled_protected_runtime_config(ProtectionLevel::None.internal_policy_mode())
+        });
         SharedProtectedRuntimeStatus::from_config(config).into()
     }
 }
@@ -303,7 +434,8 @@ fn initialize_warden_client(
     status.service_state = WardenClientServiceState::PendingService;
     info!(
         target: WARDEN_CLIENT_DIAGNOSTIC_TARGET,
-        mode = ?status.config.mode,
+        protection_mode = ?status.config.protection_mode,
+        mode_parse_fallback = ?status.config.mode_parse_fallback,
         protected_profile = ?protected_status.profile,
         loader_verdict = ?protected_status.loader_verdict,
         has_session_id = status.config.session_id.is_some(),
@@ -311,6 +443,65 @@ fn initialize_warden_client(
         integrity_status = ?status.integrity_status,
         "initialized Warden client status"
     );
+}
+
+fn bounded_handler_island_peer_checks(
+    status: Res<WardenClientStatus>,
+    mut peer_checks: ResMut<WardenHandlerIslandPeerCheckState>,
+) {
+    if !status.config.enabled || status.config.protection_mode == ProtectionLevel::None {
+        peer_checks.last_frame_budget = 0;
+        peer_checks.last_protection_mode = Some(ProtectionLevel::None);
+        return;
+    }
+
+    let budget = match status.config.protection_mode {
+        ProtectionLevel::None => 0,
+        ProtectionLevel::Hidden => 1,
+        ProtectionLevel::Protected => WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME,
+    };
+    peer_checks.last_frame_budget = budget;
+    peer_checks.last_protection_mode = Some(status.config.protection_mode);
+    peer_checks.total_checks = peer_checks.total_checks.saturating_add(u64::from(budget));
+}
+
+fn check_warden_vm_package_readiness(
+    status: Res<WardenClientStatus>,
+    protected_status: Res<WardenProtectedRuntimeStatus>,
+    mut readiness: ResMut<WardenVmPackageReadiness>,
+) {
+    let next_state =
+        if !status.config.enabled || status.config.protection_mode == ProtectionLevel::None {
+            WardenVmPackageReadinessState::Disabled
+        } else {
+            match status.config.protection_mode {
+                ProtectionLevel::None => WardenVmPackageReadinessState::Disabled,
+                ProtectionLevel::Hidden => WardenVmPackageReadinessState::ObservationOnly,
+                ProtectionLevel::Protected => {
+                    if protected_status.profile.is_none()
+                        || status
+                            .config
+                            .protected_runtime
+                            .protected_bundle_digest
+                            .is_none()
+                    {
+                        WardenVmPackageReadinessState::MissingProtectedBundle
+                    } else if matches!(
+                        protected_status.loader_verdict,
+                        WardenProtectedLoaderVerdict::Failed
+                            | WardenProtectedLoaderVerdict::Unsupported
+                    ) {
+                        WardenVmPackageReadinessState::RuntimeUnavailable
+                    } else {
+                        WardenVmPackageReadinessState::Ready
+                    }
+                }
+            }
+        };
+
+    readiness.state = next_state;
+    readiness.last_protection_mode = status.config.protection_mode;
+    readiness.check_count = readiness.check_count.saturating_add(1);
 }
 
 fn warden_service_heartbeat(
@@ -430,10 +621,76 @@ fn apply_warden_policy_change(
     status.blocked_by_warden = true;
     warn!(
         target: WARDEN_CLIENT_DIAGNOSTIC_TARGET,
-        mode = ?status.config.mode,
+        protection_mode = ?status.config.protection_mode,
         "Warden policy ended this protected session"
     );
     exit.write(AppExit::Success);
+}
+
+fn collect_compact_protected_call_evidence(
+    status: Res<WardenClientStatus>,
+    protected_status: Res<WardenProtectedRuntimeStatus>,
+    readiness: Res<WardenVmPackageReadiness>,
+    mut buffer: ResMut<WardenProtectedCallEvidenceBuffer>,
+) {
+    if !status.config.enabled || status.config.protection_mode == ProtectionLevel::None {
+        return;
+    }
+
+    let snapshot = WardenCompactProtectedCallEvidenceSnapshot {
+        protection_mode: status.config.protection_mode,
+        integrity_status: status.integrity_status,
+        loader_verdict: protected_status.loader_verdict,
+        backend_decision: status.last_admission_decision,
+        vm_package_readiness: readiness.state,
+    };
+    let reason = match buffer.last_snapshot {
+        None => WardenCompactEvidenceReason::StartupSnapshot,
+        Some(previous) if previous.vm_package_readiness != snapshot.vm_package_readiness => {
+            WardenCompactEvidenceReason::VmPackageReadinessChanged
+        }
+        Some(previous) if previous.backend_decision != snapshot.backend_decision => {
+            WardenCompactEvidenceReason::BackendDecisionChanged
+        }
+        Some(previous)
+            if previous.integrity_status != snapshot.integrity_status
+                || previous.loader_verdict != snapshot.loader_verdict =>
+        {
+            WardenCompactEvidenceReason::IntegrityChanged
+        }
+        Some(_) => return,
+    };
+
+    if buffer.records.len() == MAX_WARDEN_COMPACT_EVIDENCE_RECORDS {
+        buffer.records.pop_front();
+    }
+    let evidence = WardenCompactProtectedCallEvidence {
+        sequence: buffer.next_sequence,
+        reason,
+        protection_mode: snapshot.protection_mode,
+        integrity_status: snapshot.integrity_status,
+        loader_verdict: snapshot.loader_verdict,
+        backend_decision: snapshot.backend_decision,
+        vm_package_readiness: snapshot.vm_package_readiness,
+    };
+    buffer.next_sequence = buffer.next_sequence.saturating_add(1);
+    buffer.last_snapshot = Some(snapshot);
+    buffer.records.push_back(evidence);
+}
+
+fn flush_redacted_warden_evidence_within_budget(
+    mut buffer: ResMut<WardenProtectedCallEvidenceBuffer>,
+    mut flush_state: ResMut<WardenRedactedEvidenceFlushState>,
+) {
+    let mut flushed = 0_u8;
+    while flushed < MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME && buffer.records.pop_front().is_some() {
+        flushed = flushed.saturating_add(1);
+    }
+    flush_state.last_flush_count = flushed;
+    flush_state.total_flushed = flush_state.total_flushed.saturating_add(u64::from(flushed));
+    flush_state.deferred_due_to_budget = flush_state
+        .deferred_due_to_budget
+        .saturating_add(buffer.records.len() as u64);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -583,10 +840,96 @@ fn bounded_env_reference(value: &str, max_len: usize) -> Option<String> {
     Some(String::from(value))
 }
 
-fn parse_policy_mode(value: &str) -> Option<WardenPolicyMode> {
-    ProtectionLevel::parse_public_label(value)
-        .ok()
-        .map(ProtectionLevel::internal_policy_mode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedWardenProtectionMode {
+    protection_mode: ProtectionLevel,
+    fallback: Option<WardenModeParseFallback>,
+}
+
+fn parse_warden_protection_mode(
+    value: Option<&str>,
+    enabled_flag: bool,
+    legacy_mode_compat: bool,
+) -> ParsedWardenProtectionMode {
+    let Some(value) = value else {
+        return ParsedWardenProtectionMode {
+            protection_mode: if enabled_flag {
+                ProtectionLevel::Hidden
+            } else {
+                ProtectionLevel::None
+            },
+            fallback: enabled_flag.then_some(WardenModeParseFallback::MissingModeEnabledAsHidden),
+        };
+    };
+    if let Ok(mode) = ProtectionLevel::parse_public_label(value) {
+        return ParsedWardenProtectionMode {
+            protection_mode: mode,
+            fallback: None,
+        };
+    }
+    if legacy_mode_compat && let Some(mode) = parse_legacy_warden_mode(value) {
+        return ParsedWardenProtectionMode {
+            protection_mode: mode,
+            fallback: Some(WardenModeParseFallback::LegacyModeCompat),
+        };
+    }
+    ParsedWardenProtectionMode {
+        protection_mode: ProtectionLevel::Hidden,
+        fallback: Some(WardenModeParseFallback::MalformedModeHidden),
+    }
+}
+
+fn parse_legacy_warden_mode(value: &str) -> Option<ProtectionLevel> {
+    if value.eq_ignore_ascii_case("observe") || value.eq_ignore_ascii_case("passive") {
+        return Some(ProtectionLevel::Hidden);
+    }
+    if value.eq_ignore_ascii_case("protect") || value.eq_ignore_ascii_case("monitor") {
+        return Some(ProtectionLevel::Hidden);
+    }
+    if value.eq_ignore_ascii_case("enforce_candidate")
+        || value.eq_ignore_ascii_case("enforce-candidate")
+        || value.eq_ignore_ascii_case("enforce")
+        || value.eq_ignore_ascii_case("full")
+    {
+        return Some(ProtectionLevel::Protected);
+    }
+    None
+}
+
+fn legacy_mode_compat_allowed() -> bool {
+    cfg!(debug_assertions)
+}
+
+fn normalized_protected_runtime_pairs<K, V>(
+    pairs: &[(K, V)],
+    protection_mode: ProtectionLevel,
+) -> Vec<(&str, String)>
+where
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut normalized = Vec::with_capacity(pairs.len().saturating_add(1));
+    let mut inserted_mode = false;
+    for (key, value) in pairs {
+        let key = key.as_ref();
+        if key == FUN_WARDEN_MODE_ENV {
+            normalized.push((key, String::from(protection_mode.public_label())));
+            inserted_mode = true;
+        } else if key != FUN_WARDEN_ENABLED_ENV
+            && key != FUN_WARDEN_SESSION_ID_ENV
+            && key != FUN_WARDEN_CHALLENGE_ID_ENV
+            && key != FUN_WARDEN_LEGACY_MODE_COMPAT_ENV
+        {
+            normalized.push((key, String::from(value.as_ref())));
+        }
+    }
+    if !inserted_mode {
+        normalized.push((
+            FUN_WARDEN_MODE_ENV,
+            String::from(protection_mode.public_label()),
+        ));
+    }
+    normalized
 }
 
 fn parse_service_admission_decision(value: &str) -> Option<WardenClientBackendDecision> {
@@ -664,11 +1007,17 @@ fn coarse_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        WardenClientBackendDecision, WardenClientConfig, WardenClientFinding,
-        WardenClientServiceState, WardenClientStatus, apply_service_policy_update,
-        bounded_env_reference, parse_policy_mode, ticket_id_from_session_reference,
-        warden_policy_poll_interval_seconds, warden_service_policy_update_from_pairs,
+        ClientWardenPlugin, FUN_WARDEN_LEGACY_MODE_COMPAT_ENV, WardenClientBackendDecision,
+        WardenClientConfig, WardenClientFinding, WardenClientServiceState, WardenClientStatus,
+        WardenCompactProtectedCallEvidence, WardenHandlerIslandPeerCheckState,
+        WardenModeParseFallback, WardenProtectedCallEvidenceBuffer,
+        WardenRedactedEvidenceFlushState, WardenVmPackageReadiness, WardenVmPackageReadinessState,
+        apply_service_policy_update, bounded_env_reference, legacy_mode_compat_allowed,
+        ticket_id_from_session_reference, warden_policy_poll_interval_seconds,
+        warden_service_policy_update_from_pairs,
     };
+    use bevy::prelude::*;
+    use fun_warden_core::ProtectionLevel;
     use fun_warden_protocol::{
         ClientAttestationStatus, Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
         FUN_WARDEN_MODE_ENV, FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
@@ -697,7 +1046,11 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.session_id.as_deref(), Some("session-ref"));
         assert_eq!(config.challenge_id.as_deref(), Some("challenge-ref"));
-        assert_eq!(config.mode, fun_warden_protocol::WardenPolicyMode::Protect);
+        assert_eq!(config.protection_mode, ProtectionLevel::Hidden);
+        assert_eq!(
+            config.internal_policy_mode(),
+            fun_warden_protocol::WardenPolicyMode::Protect
+        );
         assert_eq!(
             config.protected_runtime.profile,
             Some(fun_warden_core::ProtectedProtectionProfile::Standard)
@@ -728,7 +1081,7 @@ mod tests {
         ]);
 
         assert!(config.enabled);
-        assert_eq!(config.mode, fun_warden_protocol::WardenPolicyMode::Protect);
+        assert_eq!(config.protection_mode, ProtectionLevel::Hidden);
         assert_eq!(config.protected_runtime.profile, None);
         assert_eq!(config.protected_runtime.protected_bundle_digest, None);
         assert_eq!(
@@ -743,13 +1096,82 @@ mod tests {
     }
 
     #[test]
-    fn warden_policy_mode_parser_defaults_unknown_to_none() {
+    fn warden_public_mode_parser_accepts_only_none_hidden_protected() {
+        let none = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "None")]);
+        assert!(!none.enabled);
+        assert_eq!(none.protection_mode, ProtectionLevel::None);
         assert_eq!(
-            parse_policy_mode("Protected"),
-            Some(fun_warden_protocol::WardenPolicyMode::Enforce)
+            none.protected_runtime.enforcement_mode,
+            fun_warden_protocol::WardenPolicyMode::Observe
         );
-        assert_eq!(parse_policy_mode("protect"), None);
-        assert_eq!(parse_policy_mode("unknown"), None);
+
+        let hidden = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "Hidden")]);
+        assert!(hidden.enabled);
+        assert_eq!(hidden.protection_mode, ProtectionLevel::Hidden);
+        assert_eq!(
+            hidden.protected_runtime.enforcement_mode,
+            fun_warden_protocol::WardenPolicyMode::Protect
+        );
+
+        let protected = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "Protected")]);
+        assert!(protected.enabled);
+        assert_eq!(protected.protection_mode, ProtectionLevel::Protected);
+        assert_eq!(
+            protected.protected_runtime.enforcement_mode,
+            fun_warden_protocol::WardenPolicyMode::Enforce
+        );
+    }
+
+    #[test]
+    fn warden_legacy_mode_compat_requires_explicit_debug_flag() {
+        let legacy_without_compat =
+            WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "protect")]);
+
+        assert_eq!(
+            legacy_without_compat.protection_mode,
+            ProtectionLevel::Hidden
+        );
+        assert_eq!(
+            legacy_without_compat.mode_parse_fallback,
+            Some(WardenModeParseFallback::MalformedModeHidden)
+        );
+
+        let legacy_with_compat = WardenClientConfig::from_pairs([
+            (FUN_WARDEN_MODE_ENV, "enforce"),
+            (FUN_WARDEN_LEGACY_MODE_COMPAT_ENV, "1"),
+        ]);
+        if legacy_mode_compat_allowed() {
+            assert_eq!(
+                legacy_with_compat.protection_mode,
+                ProtectionLevel::Protected
+            );
+            assert_eq!(
+                legacy_with_compat.mode_parse_fallback,
+                Some(WardenModeParseFallback::LegacyModeCompat)
+            );
+        } else {
+            assert_eq!(legacy_with_compat.protection_mode, ProtectionLevel::Hidden);
+            assert_eq!(
+                legacy_with_compat.mode_parse_fallback,
+                Some(WardenModeParseFallback::MalformedModeHidden)
+            );
+        }
+    }
+
+    #[test]
+    fn missing_mode_uses_none_unless_legacy_enabled_flag_is_set() {
+        let disabled = WardenClientConfig::from_pairs(std::iter::empty::<(&str, &str)>());
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.protection_mode, ProtectionLevel::None);
+        assert_eq!(disabled.mode_parse_fallback, None);
+
+        let legacy_enabled = WardenClientConfig::from_pairs([(FUN_WARDEN_ENABLED_ENV, "1")]);
+        assert!(legacy_enabled.enabled);
+        assert_eq!(legacy_enabled.protection_mode, ProtectionLevel::Hidden);
+        assert_eq!(
+            legacy_enabled.mode_parse_fallback,
+            Some(WardenModeParseFallback::MissingModeEnabledAsHidden)
+        );
     }
 
     #[test]
@@ -830,6 +1252,65 @@ mod tests {
         assert_eq!(warden_policy_poll_interval_seconds(10_000), 15.0);
         let interval = warden_policy_poll_interval_seconds(4_321);
         assert!((5.0..=15.0).contains(&interval));
+    }
+
+    #[test]
+    fn warden_plugin_runs_split_schedule_work_with_bounded_frame_budget() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        app.world_mut().resource_mut::<WardenClientStatus>().config =
+            WardenClientConfig::from_pairs([
+                (FUN_WARDEN_MODE_ENV, "Hidden"),
+                (FUN_WARDEN_PROTECTED_PROFILE_ENV, "Hidden"),
+            ]);
+
+        app.update();
+
+        let peer_checks = app.world().resource::<WardenHandlerIslandPeerCheckState>();
+        assert_eq!(peer_checks.last_frame_budget, 1);
+        assert_eq!(peer_checks.total_checks, 1);
+        let readiness = app.world().resource::<WardenVmPackageReadiness>();
+        assert_eq!(
+            readiness.state,
+            WardenVmPackageReadinessState::ObservationOnly
+        );
+        let flush_state = app.world().resource::<WardenRedactedEvidenceFlushState>();
+        assert_eq!(flush_state.last_flush_count, 1);
+        assert_eq!(flush_state.total_flushed, 1);
+        assert!(
+            app.world()
+                .resource::<WardenProtectedCallEvidenceBuffer>()
+                .records
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn compact_evidence_records_only_redacted_state_classes() {
+        let evidence = WardenCompactProtectedCallEvidence {
+            sequence: 7,
+            reason: super::WardenCompactEvidenceReason::StartupSnapshot,
+            protection_mode: ProtectionLevel::Protected,
+            integrity_status: fun_warden_core::IntegrityStatus::Failed,
+            loader_verdict: super::WardenProtectedLoaderVerdict::Failed,
+            backend_decision: WardenClientBackendDecision::DenySession,
+            vm_package_readiness: WardenVmPackageReadinessState::RuntimeUnavailable,
+        };
+        let debug = format!("{evidence:?}");
+
+        for forbidden in [
+            "ticket_id",
+            "session_id",
+            "token",
+            "account",
+            "device",
+            "hardware",
+            "serial",
+            "bytecode",
+        ] {
+            assert!(!debug.to_ascii_lowercase().contains(forbidden));
+        }
     }
 
     fn enabled_status() -> WardenClientStatus {
