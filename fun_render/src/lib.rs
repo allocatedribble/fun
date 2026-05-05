@@ -134,6 +134,30 @@ pub use entity_render_strategy::{
     evaluate_entity_render_strategy_budget, fun_entity_render_strategies,
     strategy_for_entity_render_class,
 };
+pub use fun_renderer;
+pub use fun_renderer::fun_lux;
+pub use fun_renderer::fun_scene;
+pub use fun_renderer::{
+    FUN_RENDER_BRIDGE_PACKAGE_NAME, FUN_RENDERER_AI_INTERFACE_DESCRIPTORS,
+    FUN_RENDERER_AI_OWNER_PACKAGE_NAME, FUN_RENDERER_BACKEND_DESCRIPTORS,
+    FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME, FUN_RENDERER_DYNAMIC_SCENE_TARGET,
+    FUN_RENDERER_FRAME_GENERATION_CONTRACT, FUN_RENDERER_LIGHTING_SCALE_POLICY,
+    FUN_RENDERER_PACKAGE_NAME, FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS,
+    FUN_RENDERER_PRODUCT_TOPOLOGY, FUN_RENDERER_REQUIRES_BEVY_ECS,
+    FUN_RENDERER_RUNTIME_BACKEND_ENV, FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME,
+    FUN_RENDERER_SCHEMA_VERSION, FUN_RENDERER_SUBSYSTEM_DESCRIPTORS,
+    FUN_RENDERER_UI_RUNTIME_POLICY, FunRendererAiInterfaceDescriptor, FunRendererAiInterfaceKind,
+    FunRendererAiOwnedSurface, FunRendererBackend, FunRendererBackendDescriptor,
+    FunRendererBevyRole, FunRendererCefRuntimePolicy, FunRendererDynamicSceneTarget,
+    FunRendererFrameGenerationContract, FunRendererFrameGraphStage, FunRendererLightingScalePolicy,
+    FunRendererOwner, FunRendererPresentationFeature, FunRendererPresentationFeatureDescriptor,
+    FunRendererProductTopology, FunRendererRuntimeBackend, FunRendererSubsystem,
+    FunRendererSubsystemDescriptor, FunRendererUiRuntimePolicy, owner_for_subsystem,
+};
+pub use fun_renderer::{
+    FUN_RENDERER_ECS_SCHEMA_VERSION, FunRendererEcsSchedulePolicy, FunRendererFrameGraphNode,
+    FunRendererGpuObjectId, FunRendererGpuSceneObject,
+};
 pub use gpu_visibility::{
     FUN_GPU_VISIBILITY_SCHEMA_VERSION, GPU_VIS_OBJECT_CEF_UI, GPU_VIS_OBJECT_DEBUG,
     GPU_VIS_OBJECT_FOLIAGE, GPU_VIS_OBJECT_MESHLET, GPU_VIS_OBJECT_OCCLUDER,

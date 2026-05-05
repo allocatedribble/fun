@@ -1,0 +1,12 @@
+[package]
+name = "fun-scene-macros"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]

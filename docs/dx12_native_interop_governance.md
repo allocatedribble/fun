@@ -1,13 +1,15 @@
 # DX12 Native Interop Governance
 
 status: active
-scope: `fun_render::dx12_native`, CEF accelerated paint, native DLSS, PIX/Nsight naming
+scope: `fun_render::dx12_native`, future `fun-renderer` backend boundary, CEF accelerated paint, native DLSS, PIX/Nsight naming
 
 ## Boundary
 
-`fun_render::dx12_native` is the only approved FUN-layer module that may call
-`as_hal::<wgpu::hal::api::Dx12>()` or
-`as_hal_mut::<wgpu::hal::api::Dx12>()`.
+`fun_render::dx12_native` is the only approved current FUN-layer module that may
+call `as_hal::<wgpu::hal::api::Dx12>()` or
+`as_hal_mut::<wgpu::hal::api::Dx12>()`. As the renderer core migrates,
+equivalent native-handle and command-list access moves behind `fun-renderer`'s
+backend abstraction rather than spreading into callers.
 
 This boundary is step 6 of
 [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md). Do not add

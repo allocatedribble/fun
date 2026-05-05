@@ -1,0 +1,15 @@
+[package]
+name = "fun-scene"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "fun_scene"
+
+[lints]
+workspace = true
+
+[dependencies]
+bevy_ecs.workspace = true
+bevy_scene.workspace = true
+fun_scene_macros.workspace = true

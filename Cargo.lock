@@ -3084,6 +3084,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "fun-lux"
+version = "0.1.0"
+
+[[package]]
+name = "fun-renderer"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "fun-lux",
+ "fun-scene",
+]
+
+[[package]]
+name = "fun-scene"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_scene",
+ "fun-scene-macros",
+]
+
+[[package]]
+name = "fun-scene-macros"
+version = "0.1.0"
+
+[[package]]
 name = "fun-warden-client"
 version = "0.1.0"
 dependencies = [
@@ -3175,6 +3201,7 @@ name = "fun_render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "fun-renderer",
  "fun_dx12_dlss",
  "game_shared",
  "serde",

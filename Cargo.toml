@@ -3,7 +3,11 @@ members = [
     "fun_editor_core",
     "fun_dx12_dlss",
     "fun_host",
+    "fun-lux",
+    "fun-scene",
+    "fun-scene-macros",
     "fun_render",
+    "fun-renderer",
     "fun_ui_cef",
     "game_client",
     "game_launcher",
@@ -42,9 +46,15 @@ implicit_clone = "warn"
 [workspace.dependencies]
 avian3d = { path = "../avian/crates/avian3d" }
 bevy = { path = "../bevy", features = ["bevy_dev_tools", "bevy_solari", "meshlet", "meshlet_processor"] }
+bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
 bevy_quinnet = { path = "../bevy_quinnet" }
+bevy_scene = { path = "../bevy/crates/bevy_scene" }
 compactly = "0.1.6"
 criterion = { version = "0.8.2", features = ["html_reports"] }
+fun_lux = { package = "fun-lux", path = "fun-lux" }
+fun_renderer = { package = "fun-renderer", path = "fun-renderer" }
+fun_scene = { package = "fun-scene", path = "fun-scene" }
+fun_scene_macros = { package = "fun-scene-macros", path = "fun-scene-macros" }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 secrecy = { version = "0.10", features = ["serde"] }

@@ -1,0 +1,12 @@
+[package]
+name = "fun-lux"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "fun_lux"
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -31,6 +31,7 @@ winit_presentation = []
 [dependencies]
 bevy.workspace = true
 fun_dx12_dlss = { path = "../fun_dx12_dlss", optional = true }
+fun_renderer.workspace = true
 game_shared = { path = "../game_shared" }
 serde.workspace = true
 thunder.workspace = true

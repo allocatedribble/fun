@@ -34,7 +34,7 @@ explanation for why the base DX12 path is slow.
 | 3 | Harden CEF GPU transport. | Accelerated CEF reports real `OnAcceleratedPaint` cadence, GPU copy bytes/time, zero normal-frame blocking waits, and safe CPU fallback. |
 | 4 | Reduce barriers, descriptors, and PSO churn. | PIX/resource-state evidence, render churn counters, and steady-state pipeline creation counters prove the target issue and the fix. |
 | 5 | Tune present pacing with evidence. | Present matrix and frame-latency lanes identify the best DX12 present policy for mean FPS, p95, and latency without hiding render-pass losses. |
-| 6 | Centralize native DX12 interop. | All wgpu HAL extraction stays inside `fun_render::dx12_native`; CEF, DLSS, and debug tooling call that boundary instead of opening new trapdoors. |
+| 6 | Centralize native DX12 interop. | All wgpu HAL extraction stays inside `fun_render::dx12_native` until the backend abstraction moves to `fun-renderer`; CEF, DLSS, and debug tooling call that boundary instead of opening new trapdoors. |
 | 7 | Bring up DLSS Super Resolution. | `docs/dx12_dlss_boundary_gate.md` says the baseline is ready, SR is fail-closed, and CEF/UI composition stays after temporal reconstruction. |
 | 8 | Consider Ray Reconstruction. | SR is stable first; RR guide surfaces, history resets, Solari data, and stress-scene evidence are valid before user-facing claims. |
 
@@ -44,7 +44,8 @@ interop gate.
 
 ## Anti-Patterns
 
-- Adding random native D3D12 calls outside the shared interop module.
+- Adding random native D3D12 calls outside the shared interop module or the
+  future `fun-renderer` backend abstraction.
 - Using DLSS to mask CPU upload, present pacing, descriptor churn, or barrier
   regressions.
 - Treating the Svelte RAF badge as evidence of CEF paint or GPU transport.
