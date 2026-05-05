@@ -1007,14 +1007,15 @@ fn coarse_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientWardenPlugin, FUN_WARDEN_LEGACY_MODE_COMPAT_ENV, WardenClientBackendDecision,
-        WardenClientConfig, WardenClientFinding, WardenClientServiceState, WardenClientStatus,
-        WardenCompactProtectedCallEvidence, WardenHandlerIslandPeerCheckState,
-        WardenModeParseFallback, WardenProtectedCallEvidenceBuffer,
-        WardenRedactedEvidenceFlushState, WardenVmPackageReadiness, WardenVmPackageReadinessState,
-        apply_service_policy_update, bounded_env_reference, legacy_mode_compat_allowed,
-        ticket_id_from_session_reference, warden_policy_poll_interval_seconds,
-        warden_service_policy_update_from_pairs,
+        ClientWardenPlugin, FUN_WARDEN_LEGACY_MODE_COMPAT_ENV, MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME,
+        WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME, WARDEN_INTEGRITY_RECHECK_SECONDS,
+        WardenClientBackendDecision, WardenClientConfig, WardenClientFinding,
+        WardenClientServiceState, WardenClientStatus, WardenCompactProtectedCallEvidence,
+        WardenHandlerIslandPeerCheckState, WardenIntegrityRecheckTimer, WardenModeParseFallback,
+        WardenProtectedCallEvidenceBuffer, WardenRedactedEvidenceFlushState,
+        WardenVmPackageReadiness, WardenVmPackageReadinessState, apply_service_policy_update,
+        bounded_env_reference, legacy_mode_compat_allowed, ticket_id_from_session_reference,
+        warden_policy_poll_interval_seconds, warden_service_policy_update_from_pairs,
     };
     use bevy::prelude::*;
     use fun_warden_core::ProtectionLevel;
@@ -1123,6 +1124,38 @@ mod tests {
     }
 
     #[test]
+    fn client_warden_mode_parser_accepts_only_none_hidden_protected() {
+        for (label, expected, enabled) in [
+            ("None", ProtectionLevel::None, false),
+            ("Hidden", ProtectionLevel::Hidden, true),
+            ("Protected", ProtectionLevel::Protected, true),
+        ] {
+            let parsed = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, label)]);
+            assert_eq!(parsed.protection_mode, expected);
+            assert_eq!(parsed.enabled, enabled);
+            assert_eq!(parsed.mode_parse_fallback, None);
+        }
+
+        for legacy in [
+            "observe",
+            "Observe",
+            "protect",
+            "Protect",
+            "enforce",
+            "Enforce",
+            "enforce_candidate",
+            "EnforceCandidate",
+        ] {
+            let parsed = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, legacy)]);
+            assert_eq!(parsed.protection_mode, ProtectionLevel::Hidden);
+            assert_eq!(
+                parsed.mode_parse_fallback,
+                Some(WardenModeParseFallback::MalformedModeHidden)
+            );
+        }
+    }
+
+    #[test]
     fn warden_legacy_mode_compat_requires_explicit_debug_flag() {
         let legacy_without_compat =
             WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "protect")]);
@@ -1220,6 +1253,34 @@ mod tests {
     }
 
     #[test]
+    fn hidden_mode_does_not_set_blocked_by_warden_locally() {
+        let mut status = enabled_status();
+        status.config = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "Hidden")]);
+        let update = warden_service_policy_update_from_pairs(
+            [
+                (
+                    "FUN_WARDEN_SERVICE_DECISION",
+                    "quarantine_to_untrusted_pool",
+                ),
+                ("FUN_WARDEN_POLICY_EPOCH", "8"),
+                ("FUN_WARDEN_DEVICE_ATTESTATION_STATUS", "failed"),
+            ],
+            0,
+        )
+        .expect("policy update");
+
+        apply_service_policy_update(&mut status, update);
+
+        assert_eq!(status.config.protection_mode, ProtectionLevel::Hidden);
+        assert_eq!(
+            status.last_admission_decision,
+            WardenClientBackendDecision::QuarantineToUntrustedPool
+        );
+        assert!(!status.blocked_by_warden);
+        assert!(!status.exit_requested);
+    }
+
+    #[test]
     fn service_policy_update_marks_deny_session_as_warden_blocked() {
         let mut status = enabled_status();
         let update = warden_service_policy_update_from_pairs(
@@ -1247,11 +1308,52 @@ mod tests {
     }
 
     #[test]
+    fn protected_deny_session_requests_clean_app_exit() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ClientWardenPlugin);
+        {
+            let mut status = app.world_mut().resource_mut::<WardenClientStatus>();
+            status.config = WardenClientConfig::from_pairs([(FUN_WARDEN_MODE_ENV, "Protected")]);
+            status.last_admission_decision = WardenClientBackendDecision::DenySession;
+        }
+
+        app.update();
+
+        let status = app.world().resource::<WardenClientStatus>();
+        assert_eq!(status.config.protection_mode, ProtectionLevel::Protected);
+        assert_eq!(status.finding, WardenClientFinding::EnforcementDenied);
+        assert!(status.blocked_by_warden);
+        assert!(status.exit_requested);
+    }
+
+    #[test]
     fn service_policy_poll_interval_is_low_frequency_and_jittered() {
         assert_eq!(warden_policy_poll_interval_seconds(0), 5.0);
         assert_eq!(warden_policy_poll_interval_seconds(10_000), 15.0);
         let interval = warden_policy_poll_interval_seconds(4_321);
         assert!((5.0..=15.0).contains(&interval));
+    }
+
+    #[test]
+    fn service_policy_poll_remains_low_frequency() {
+        assert_eq!(warden_policy_poll_interval_seconds(0), 5.0);
+        assert_eq!(warden_policy_poll_interval_seconds(10_000), 15.0);
+        assert!(warden_policy_poll_interval_seconds(999) >= 5.0);
+        assert!(warden_policy_poll_interval_seconds(999) <= 15.0);
+    }
+
+    #[test]
+    fn integrity_recheck_respects_budget() {
+        let timer = WardenIntegrityRecheckTimer::default();
+
+        assert_eq!(
+            timer.0.duration().as_secs_f32(),
+            WARDEN_INTEGRITY_RECHECK_SECONDS
+        );
+        assert!(WARDEN_INTEGRITY_RECHECK_SECONDS >= 30.0);
+        assert_eq!(WARDEN_HANDLER_ISLAND_PEER_CHECKS_PER_FRAME, 2);
+        assert_eq!(MAX_WARDEN_EVIDENCE_FLUSH_PER_FRAME, 4);
     }
 
     #[test]
