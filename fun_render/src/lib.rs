@@ -135,6 +135,7 @@ pub use entity_render_strategy::{
     strategy_for_entity_render_class,
 };
 pub use fun_renderer;
+pub use fun_renderer::ecs::*;
 pub use fun_renderer::fun_lux;
 pub use fun_renderer::fun_scene;
 pub use fun_renderer::{
@@ -153,10 +154,6 @@ pub use fun_renderer::{
     FunRendererOwner, FunRendererPresentationFeature, FunRendererPresentationFeatureDescriptor,
     FunRendererProductTopology, FunRendererRuntimeBackend, FunRendererSubsystem,
     FunRendererSubsystemDescriptor, FunRendererUiRuntimePolicy, owner_for_subsystem,
-};
-pub use fun_renderer::{
-    FUN_RENDERER_ECS_SCHEMA_VERSION, FunRendererEcsSchedulePolicy, FunRendererFrameGraphNode,
-    FunRendererGpuObjectId, FunRendererGpuSceneObject,
 };
 pub use gpu_visibility::{
     FUN_GPU_VISIBILITY_SCHEMA_VERSION, GPU_VIS_OBJECT_CEF_UI, GPU_VIS_OBJECT_DEBUG,

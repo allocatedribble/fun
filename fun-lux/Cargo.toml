@@ -10,3 +10,4 @@ name = "fun_lux"
 workspace = true
 
 [dependencies]
+bevy_ecs.workspace = true

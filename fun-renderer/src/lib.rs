@@ -618,10 +618,7 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 };
 
 #[cfg(feature = "bevy_ecs")]
-pub use ecs::{
-    FUN_RENDERER_ECS_SCHEMA_VERSION, FunRendererEcsSchedulePolicy, FunRendererFrameGraphNode,
-    FunRendererGpuObjectId, FunRendererGpuSceneObject,
-};
+pub use ecs::*;
 
 #[must_use]
 pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRendererOwner {

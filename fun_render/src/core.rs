@@ -22,8 +22,11 @@ use tracing::warn;
 
 use crate::{
     ClientOpaqueRenderer, ClientRenderConfig, DynamicInstanceTable,
-    FunEntityRenderStrategyRegistry, FunGeometryClass, FunHiZOcclusionAdaptiveState,
-    FunMaterialClass, FunRenderAppOptions, FunRenderPath, FunRenderRtFeatures, FunSkyPlugin,
+    FunEntityRenderStrategyRegistry, FunFrameGraph, FunGeometryClass, FunGpuSceneDatabase,
+    FunHiZOcclusionAdaptiveState, FunMaterialClass, FunPipelineRegistry, FunRenderAppOptions,
+    FunRenderCapabilityMatrix, FunRenderPath, FunRenderRtFeatures, FunRendererConfig,
+    FunRendererEcsEvent, FunRendererEcsSchedulePolicy, FunRendererPageAllocator,
+    FunRendererUploadArena, FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry,
     GeometryResidencyManager, MaterialResidencyManager, RenderPathSignature, StaticInstanceTable,
     TextureResidencyManager, VirtualGeometryResidency, dlss_correctness, dx12_dlss_rr,
     dx12_dlss_sr, lighting, pipeline_warmup, prewarm_primitive_render_cache,
@@ -256,6 +259,17 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
 
     app.insert_resource(opaque_renderer.method())
         .init_resource::<FunDrawCallCounters>()
+        .init_resource::<FunRendererEcsSchedulePolicy>()
+        .init_resource::<FunRendererConfig>()
+        .init_resource::<FunGpuSceneDatabase>()
+        .init_resource::<FunFrameGraph>()
+        .init_resource::<FunRendererPageAllocator>()
+        .init_resource::<FunRendererUploadArena>()
+        .init_resource::<FunRenderCapabilityMatrix>()
+        .init_resource::<FunPipelineRegistry>()
+        .init_resource::<crate::fun_lux::FunLuxLightDatabase>()
+        .init_resource::<FunSceneManifestRegistry>()
+        .init_resource::<FunViewportRegistry>()
         .init_resource::<GeometryResidencyManager>()
         .init_resource::<TextureResidencyManager>()
         .init_resource::<MaterialResidencyManager>()
@@ -271,6 +285,8 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .insert_resource(solari_settings)
         .insert_resource(solari_runtime_params)
         .insert_resource(solari_feature_policy)
+        .add_message::<FunRendererEcsEvent>()
+        .add_message::<crate::fun_lux::FunLuxLightEvent>()
         .add_message::<bevy::solari::prelude::SolariResetEvent>()
         .add_plugins(ExtractResourcePlugin::<FunRenderRtFeatures>::default())
         .add_plugins(MeshletPlugin {
@@ -343,6 +359,19 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
 
     if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
         render_app.init_resource::<FunDrawCallCounters>();
+        render_app.init_resource::<FunRendererEcsSchedulePolicy>();
+        render_app.init_resource::<FunRendererConfig>();
+        render_app.init_resource::<FunGpuSceneDatabase>();
+        render_app.init_resource::<FunFrameGraph>();
+        render_app.init_resource::<FunRendererPageAllocator>();
+        render_app.init_resource::<FunRendererUploadArena>();
+        render_app.init_resource::<FunRenderCapabilityMatrix>();
+        render_app.init_resource::<FunPipelineRegistry>();
+        render_app.init_resource::<crate::fun_lux::FunLuxLightDatabase>();
+        render_app.init_resource::<FunSceneManifestRegistry>();
+        render_app.init_resource::<FunViewportRegistry>();
+        render_app.add_message::<FunRendererEcsEvent>();
+        render_app.add_message::<crate::fun_lux::FunLuxLightEvent>();
         render_app.init_resource::<FunEntityRenderStrategyRegistry>();
         render_app.insert_resource(rt_features);
         render_app.add_systems(

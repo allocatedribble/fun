@@ -3086,6 +3086,9 @@ dependencies = [
 [[package]]
 name = "fun-lux"
 version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+]
 
 [[package]]
 name = "fun-renderer"

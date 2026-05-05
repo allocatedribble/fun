@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
+use bevy_ecs::prelude::{Component, Message, Resource};
+
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
 pub const FUN_LUX_PACKAGE_NAME: &str = "fun-lux";
 pub const FUN_LUX_CRATE_NAME: &str = "fun_lux";
+pub const FUN_LUX_ECS_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunLuxSubsystem {
@@ -226,6 +229,163 @@ pub struct FunLuxFeatureSet {
     pub probe_cache: bool,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunLuxLightId(pub u64);
+
+impl FunLuxLightId {
+    pub const INVALID: Self = Self(0);
+
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.0 != Self::INVALID.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunLuxLightKind {
+    Directional,
+    Punctual,
+    Area,
+    EmissiveCandidate,
+    Probe,
+}
+
+impl FunLuxLightKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Directional => "directional",
+            Self::Punctual => "punctual",
+            Self::Area => "area",
+            Self::EmissiveCandidate => "emissive_candidate",
+            Self::Probe => "probe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct FunLuxLight {
+    pub light_id: FunLuxLightId,
+    pub kind: FunLuxLightKind,
+    pub intensity_lux: f32,
+    pub casts_virtual_shadow: bool,
+}
+
+impl FunLuxLight {
+    #[must_use]
+    pub const fn new(
+        light_id: FunLuxLightId,
+        kind: FunLuxLightKind,
+        intensity_lux: f32,
+        casts_virtual_shadow: bool,
+    ) -> Self {
+        Self {
+            light_id,
+            kind,
+            intensity_lux,
+            casts_virtual_shadow,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct FunLuxEmissive {
+    pub light_id: FunLuxLightId,
+    pub candidate_weight: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct FunLuxGiParticipant {
+    pub cache_kind: FunLuxCacheKind,
+    pub dynamic: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct FunLuxProbeCacheParticipant {
+    pub probe_id: u32,
+    pub participates_in_relighting: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct FunLuxLightDatabase {
+    pub revision: u64,
+    pub direct_light_count: u32,
+    pub emissive_candidate_count: u32,
+    pub gi_participant_count: u32,
+    pub virtual_shadow_caster_count: u32,
+}
+
+impl FunLuxLightDatabase {
+    pub const EMPTY: Self = Self {
+        revision: 0,
+        direct_light_count: 0,
+        emissive_candidate_count: 0,
+        gi_participant_count: 0,
+        virtual_shadow_caster_count: 0,
+    };
+
+    #[must_use]
+    pub const fn with_revision(revision: u64) -> Self {
+        Self {
+            revision,
+            ..Self::EMPTY
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunLuxLightEventKind {
+    LightChanged,
+    EmissiveCandidatePromoted,
+    ShadowInvalidated,
+    GiCacheInvalidated,
+    ProbeCacheInvalidated,
+}
+
+impl FunLuxLightEventKind {
+    pub const ALL: [Self; 5] = [
+        Self::LightChanged,
+        Self::EmissiveCandidatePromoted,
+        Self::ShadowInvalidated,
+        Self::GiCacheInvalidated,
+        Self::ProbeCacheInvalidated,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LightChanged => "light_changed",
+            Self::EmissiveCandidatePromoted => "emissive_candidate_promoted",
+            Self::ShadowInvalidated => "shadow_invalidated",
+            Self::GiCacheInvalidated => "gi_cache_invalidated",
+            Self::ProbeCacheInvalidated => "probe_cache_invalidated",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Message)]
+pub struct FunLuxLightEvent {
+    pub kind: FunLuxLightEventKind,
+    pub light_id: FunLuxLightId,
+    pub revision: u64,
+}
+
+impl FunLuxLightEvent {
+    #[must_use]
+    pub const fn new(kind: FunLuxLightEventKind, light_id: FunLuxLightId, revision: u64) -> Self {
+        Self {
+            kind,
+            light_id,
+            revision,
+        }
+    }
+}
+
 impl FunLuxFeatureSet {
     pub const DEFAULT_REALTIME: Self = Self {
         direct_lighting: true,
@@ -307,5 +467,37 @@ mod tests {
         assert!(!features.uses_cache(FunLuxCacheKind::Radiance));
         assert!(!features.uses_cache(FunLuxCacheKind::Surface));
         assert!(!features.uses_cache(FunLuxCacheKind::Probe));
+    }
+
+    #[test]
+    fn lux_light_components_are_ecs_authored_and_database_backed() {
+        let light = FunLuxLight::new(
+            FunLuxLightId::new(12),
+            FunLuxLightKind::Punctual,
+            1200.0,
+            true,
+        );
+        assert!(light.light_id.is_valid());
+        assert_eq!(light.kind.as_str(), "punctual");
+        assert!(light.casts_virtual_shadow);
+
+        let database = FunLuxLightDatabase::with_revision(9);
+        assert_eq!(database.revision, 9);
+        assert_eq!(database.direct_light_count, 0);
+    }
+
+    #[test]
+    fn lux_light_events_cover_shadow_and_gi_invalidation() {
+        assert_eq!(FunLuxLightEventKind::ALL.len(), 5);
+        assert!(
+            FunLuxLightEventKind::ALL
+                .iter()
+                .any(|kind| *kind == FunLuxLightEventKind::ShadowInvalidated)
+        );
+        assert!(
+            FunLuxLightEventKind::ALL
+                .iter()
+                .any(|kind| *kind == FunLuxLightEventKind::GiCacheInvalidated)
+        );
     }
 }

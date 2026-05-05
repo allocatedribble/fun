@@ -37,6 +37,47 @@ The renderer must not pull opaque scene blobs out of gameplay and mutate secret
 render objects. It consumes typed ECS components, archetypes, resources, events,
 observers, and change ticks.
 
+## ECS Renderer Schedule
+
+The renderer path is split into explicit ECS phases:
+
+- Main World: `fun-scene` spawn, hot reload, procedural expansion, gameplay
+  mutation, streaming mutation, editor mutation, lighting mutation, and
+  renderer component mutation.
+- Extract: copy compact renderer-relevant deltas into the Render World.
+- Render World: ECS systems update the GPU scene DB, virtual geometry
+  residency, virtual shadow demand, `fun-lux` light DB, frame graph, upscale/UI
+  composition boundary, and backend execution.
+
+`FunSceneSet` orders scene work as `Resolve`, `Validate`, `Spawn`, and `Patch`.
+`FunRendererSet` orders render work as `Extract`, `PrepareScene`,
+`PrepareResources`, `Visibility`, `VirtualGeometry`, `VirtualShadows`, `Lux`,
+`Upscale`, `UiComposite`, and `Present`. `fun_render` registers the first
+renderer/lux resources and message queues in both the app world and RenderApp
+when the bridge is installed.
+
+The first renderer ECS lane covers these stable events: scene spawned, scene
+patched, chunk loaded/unloaded, geometry changed, material changed, light
+changed, transform changed, page fault, shadow invalidated, GI cache
+invalidated, upscaler reset, device lost/restored, and CEF GPU frame available.
+Change detection must route transform changes to motion data, material changes
+to material tables, geometry changes to page residency, light changes to
+`fun-lux` candidate tables plus shadow invalidation, and scene patches to
+manifest signatures.
+
+Hot-path archetypes are created with marker components instead of opaque render
+objects: `FunStaticRenderable`, `FunDynamicRenderable`, `FunVirtualGeometry`,
+`FunSkinnedRenderable`, `FunProceduralRenderable`, `FunShadowCaster`,
+`FunShadowReceiver`, `FunLuxLight`, `FunLuxEmissive`, `FunLuxGiParticipant`,
+`FunEditorSelectable`, and `FunGameplaySalient`.
+
+Renderer entities carry compact identities and handles. Large material data,
+GPU buffers, residency tables, pipeline state, page allocation, light tables,
+scene manifests, and viewport state live in resources, assets, or renderer
+tables, not on every ECS entity. Sparse components are reserved for editor-only
+metadata, debug-only declarations, optional GI/probe participation, and rare
+special effects.
+
 ## Default Renderer
 
 `fun-renderer` is the product default renderer even while the first visual
@@ -137,9 +178,19 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::FUN_RENDERER_FRAME_GENERATION_CONTRACT`
 - `fun_renderer::FUN_RENDERER_LIGHTING_SCALE_POLICY`
 - `fun_renderer::FUN_RENDERER_DYNAMIC_SCENE_TARGET`
+- `fun_scene::FunSceneSet`
 - `fun_renderer::FunRendererEcsSchedulePolicy`
+- `fun_renderer::FunRendererSet`
+- `fun_renderer::FUN_RENDERER_ECS_PHASE_DESCRIPTORS`
+- `fun_renderer::FUN_RENDERER_DATA_PLACEMENT_POLICY`
+- `fun_renderer::FUN_RENDERER_CHANGE_DETECTION_RULES`
 - `fun_renderer::FunRendererGpuSceneObject`
 - `fun_renderer::FunRendererFrameGraphNode`
+- `fun_renderer::FunRendererEcsEvent`
+- `fun_lux::FUN_LUX_ECS_SCHEMA_VERSION`
+- `fun_lux::FunLuxLight`
+- `fun_lux::FunLuxLightDatabase`
+- `fun_lux::FunLuxLightEvent`
 
 These tables use stable labels and typed owners so future migration work can be
 audited without parsing prose.

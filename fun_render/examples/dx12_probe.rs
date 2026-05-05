@@ -1,7 +1,7 @@
 use bevy::render::settings::{Backends, PowerPreference};
 
 fn main() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: Backends::DX12,
         flags: wgpu::InstanceFlags::empty(),
         memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),

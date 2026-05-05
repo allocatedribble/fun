@@ -90,6 +90,9 @@ world. Bevy renderer changes are allowed only for backend capability reporting,
 sanctioned native handle or command-list access, diagnostics, and unavoidable
 low-level scheduling primitives. The detailed contract lives in
 [`docs/renderer_ownership.md`](docs/renderer_ownership.md).
+The renderer ECS contract is already represented by `FunSceneSet`,
+`FunRendererSet`, renderer/lux marker components, compact handle components,
+resource-backed GPU scene tables, and typed renderer/lux message lanes.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. `legacy` is a temporary
 transition backend only and should be removed after one migration cycle.
 
