@@ -105,7 +105,6 @@
         <div class="property-list">
           <article><strong>Control address</strong><span class="mono">{auth?.control_addr ?? '127.0.0.1:0'}</span></article>
           <article><strong>Session</strong><span class="mono">{auth?.session_id ?? 'none'}</span></article>
-          <article><strong>Update cap</strong><span>{runtime?.update_rate_limit_hz ?? 20} Hz</span></article>
           <article><strong>Dropped packets</strong><span>{state.runtimeDiagnostics?.dropped_packets ?? 0}</span></article>
         </div>
       </section>

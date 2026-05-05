@@ -1,0 +1,12 @@
+[package]
+name = "virtual_geometry_bake"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fun_render = { path = "../../fun_render", default-features = false }
+serde.workspace = true
+serde_json.workspace = true

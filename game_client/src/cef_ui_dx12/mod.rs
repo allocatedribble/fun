@@ -1,9 +1,9 @@
 //! Windows-only CEF accelerated paint interop for `game_client`.
 //!
-//! This module is the single first-pass trapdoor for raw wgpu DX12 handle
-//! extraction and D3D11On12 bridge creation. `fun_ui_cef` still owns browser
-//! lifetime and callbacks; this module only owns the native transport boundary
-//! used by the game presentation host.
+//! This module adapts CEF accelerated paint callbacks to the renderer-owned
+//! DX12 transport policy. `fun_render::dx12_native` remains the only approved
+//! HAL extraction boundary; `fun_ui_cef` still owns browser lifetime and
+//! callbacks.
 
 pub mod bridge;
 pub mod diagnostics;

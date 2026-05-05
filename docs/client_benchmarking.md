@@ -83,6 +83,15 @@ both files below:
 - `target\benchmarks\client\<timestamp>\summary.json`
 - `target\benchmarks\client\<timestamp>\summary.md`
 
+`benchmark_client.ps1` calls the stack runner through a resolved stack profile.
+By default it selects the checked-in `default.<backend>.<present>` profile when
+one exists, then passes benchmark flags as command-line overrides so existing
+lanes keep their explicit settings. Use `-StackProfile <profile-name>` only for
+lanes that intentionally need a different profile contract. Invalid profiles
+fail closed in `run_stack.ps1` profile validation, and every emitted
+`summary.json` records the additive, schema-marked `stack_runner` object with
+the resolved profile, override map, command, and runner session path.
+
 Required 144 FPS lanes are run through the same script, not a separate
 measurement universe:
 
@@ -504,12 +513,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_rt_matrix.
 
 That matrix records both `rt_feature_gates.rt_feature_hash` from the requested
 Fun RT gates and `render_capabilities.backend_capability_hash` from the Bevy
-startup capability line into every `summary.json`. Its lanes cover baseline
-Solari, direct-only, GI-only, direct+GI, DLSS RR diagnostic, half-resolution GI
-reservoirs, async readback on/off, and BLAS compaction budget variants. Some
-gates are still policy metadata until the matching Solari pass is wired; they
-remain captured so later tiers cannot land without before/after numbers under
-the same names.
+startup capability line into every `summary.json`. When Bevy's
+`bevy_dx12_backend_diagnostics` feature emits the compact
+`[bevy render] dx12 backend:` startup line, the benchmark parser also records it
+as `dx12_backend_diagnostics` with the Bevy snapshot schema version, redacted
+adapter identity, selected backend, present mode, frame-latency setting, and
+pipeline-cache policy. Its lanes cover baseline Solari, direct-only, GI-only,
+direct+GI, DLSS RR diagnostic, half-resolution GI reservoirs, async readback
+on/off, and BLAS compaction budget variants. Some gates are still policy
+metadata until the matching Solari pass is wired; they remain captured so later
+tiers cannot land without before/after numbers under the same names.
 
 ## Default Client Matrix
 

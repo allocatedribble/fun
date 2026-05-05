@@ -25,8 +25,8 @@
   </button>
 
   <div class="hud-cluster bottom-right" data-hit-region="scoreboard">
-    <span>FPS</span>
-    <strong>60</strong>
+    <span>Render</span>
+    <strong>{state.runtimeStatus?.client_process.state ?? runtimeLabel}</strong>
   </div>
 
   <nav class="hud-actions" aria-label="HUD actions">

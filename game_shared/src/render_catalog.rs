@@ -93,18 +93,35 @@ pub const MATERIAL_FLOOR: MaterialPresetId = MaterialPresetId(1);
 pub const MATERIAL_WALL: MaterialPresetId = MaterialPresetId(2);
 pub const MATERIAL_RAMP: MaterialPresetId = MaterialPresetId(3);
 pub const MATERIAL_COVER: MaterialPresetId = MaterialPresetId(4);
+pub const MATERIAL_CONCRETE: MaterialPresetId = MaterialPresetId(5);
+pub const MATERIAL_DOOR: MaterialPresetId = MaterialPresetId(6);
+pub const MATERIAL_PROP_NEUTRAL: MaterialPresetId = MaterialPresetId(7);
 
 pub const ASSET_FLOOR: RenderAssetId = RenderAssetId(1);
 pub const ASSET_FLOOR_COLLIDER: RenderAssetId = RenderAssetId(2);
 pub const ASSET_WALL: RenderAssetId = RenderAssetId(3);
 pub const ASSET_RAMP: RenderAssetId = RenderAssetId(4);
 pub const ASSET_COVER_CUBE: RenderAssetId = RenderAssetId(5);
+pub const ASSET_FLOOR_TILE: RenderAssetId = RenderAssetId(6);
+pub const ASSET_WALL_LONG: RenderAssetId = RenderAssetId(7);
+pub const ASSET_COVER_LOW: RenderAssetId = RenderAssetId(8);
+pub const ASSET_COVER_TALL: RenderAssetId = RenderAssetId(9);
+pub const ASSET_DOOR_PANEL: RenderAssetId = RenderAssetId(10);
+pub const ASSET_PROP_CRATE: RenderAssetId = RenderAssetId(11);
+pub const ASSET_PILLAR: RenderAssetId = RenderAssetId(12);
 
 pub const COLLIDER_NONE: ColliderAssetId = ColliderAssetId(0);
 pub const COLLIDER_FLOOR: ColliderAssetId = ColliderAssetId(1);
 pub const COLLIDER_WALL: ColliderAssetId = ColliderAssetId(2);
 pub const COLLIDER_RAMP: ColliderAssetId = ColliderAssetId(3);
 pub const COLLIDER_COVER_CUBE: ColliderAssetId = ColliderAssetId(4);
+pub const COLLIDER_FLOOR_TILE: ColliderAssetId = ColliderAssetId(5);
+pub const COLLIDER_WALL_LONG: ColliderAssetId = ColliderAssetId(6);
+pub const COLLIDER_COVER_LOW: ColliderAssetId = ColliderAssetId(7);
+pub const COLLIDER_COVER_TALL: ColliderAssetId = ColliderAssetId(8);
+pub const COLLIDER_DOOR_PANEL: ColliderAssetId = ColliderAssetId(9);
+pub const COLLIDER_PROP_CRATE: ColliderAssetId = ColliderAssetId(10);
+pub const COLLIDER_PILLAR: ColliderAssetId = ColliderAssetId(11);
 
 pub const MATERIAL_PRESETS: &[MaterialPreset] = &[
     MaterialPreset {
@@ -126,6 +143,21 @@ pub const MATERIAL_PRESETS: &[MaterialPreset] = &[
         id: MATERIAL_COVER,
         name: "demo_cover_orange",
         srgb: [204, 102, 77, 255],
+    },
+    MaterialPreset {
+        id: MATERIAL_CONCRETE,
+        name: "demo_concrete_neutral",
+        srgb: [132, 136, 128, 255],
+    },
+    MaterialPreset {
+        id: MATERIAL_DOOR,
+        name: "demo_door_dark_metal",
+        srgb: [66, 69, 73, 255],
+    },
+    MaterialPreset {
+        id: MATERIAL_PROP_NEUTRAL,
+        name: "demo_prop_neutral",
+        srgb: [145, 118, 82, 255],
     },
 ];
 
@@ -250,6 +282,191 @@ pub const DEMO_RENDER_CATALOG: &[RenderCatalogEntry] = &[
         visual_importance: VisualImportance::GameplayCover,
         lighting: LightingParticipation::DIRECT_SHADOW
             .union(LightingParticipation::GI)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_FLOOR_TILE,
+        name: "floor_tile_10m",
+        visual_mesh: "demo/floor_tile_10m.visual",
+        meshlet_mesh: "demo/floor_tile_10m.meshlet",
+        fallback_raster_mesh: "demo/floor_tile_10m.raster",
+        ray_proxy: "demo/floor_tile_10m.ray",
+        collider: Some((
+            COLLIDER_FLOOR_TILE,
+            CatalogCollider::Cuboid {
+                size: [10.0, 0.25, 10.0],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Plane {
+            size: [10.0, 0.0, 10.0],
+        }),
+        material: MATERIAL_FLOOR,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(1),
+        gameplay_tag: "floor_tile",
+        cost_class: RenderCostClass::Simple,
+        visual_importance: VisualImportance::Navigation,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_WALL_LONG,
+        name: "wall_long_10m",
+        visual_mesh: "demo/wall_long_10m.visual",
+        meshlet_mesh: "demo/wall_long_10m.meshlet",
+        fallback_raster_mesh: "demo/wall_long_10m.raster",
+        ray_proxy: "demo/wall_long_10m.ray",
+        collider: Some((
+            COLLIDER_WALL_LONG,
+            CatalogCollider::Cuboid {
+                size: [10.0, 3.0, 1.0],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Cuboid {
+            size: [10.0, 3.0, 1.0],
+        }),
+        material: MATERIAL_WALL,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(2),
+        gameplay_tag: "wall",
+        cost_class: RenderCostClass::Simple,
+        visual_importance: VisualImportance::GameplayCover,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::SPECULAR)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_COVER_LOW,
+        name: "cover_low_block",
+        visual_mesh: "demo/cover_low_block.visual",
+        meshlet_mesh: "demo/cover_low_block.meshlet",
+        fallback_raster_mesh: "demo/cover_low_block.raster",
+        ray_proxy: "demo/cover_low_block.ray",
+        collider: Some((
+            COLLIDER_COVER_LOW,
+            CatalogCollider::Cuboid {
+                size: [2.0, 1.0, 1.0],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Cuboid {
+            size: [2.0, 1.0, 1.0],
+        }),
+        material: MATERIAL_COVER,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(3),
+        gameplay_tag: "cover",
+        cost_class: RenderCostClass::Simple,
+        visual_importance: VisualImportance::GameplayCover,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_COVER_TALL,
+        name: "cover_tall_block",
+        visual_mesh: "demo/cover_tall_block.visual",
+        meshlet_mesh: "demo/cover_tall_block.meshlet",
+        fallback_raster_mesh: "demo/cover_tall_block.raster",
+        ray_proxy: "demo/cover_tall_block.ray",
+        collider: Some((
+            COLLIDER_COVER_TALL,
+            CatalogCollider::Cuboid {
+                size: [1.0, 2.0, 1.0],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Cuboid {
+            size: [1.0, 2.0, 1.0],
+        }),
+        material: MATERIAL_COVER,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(3),
+        gameplay_tag: "cover",
+        cost_class: RenderCostClass::Simple,
+        visual_importance: VisualImportance::GameplayCover,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_DOOR_PANEL,
+        name: "door_panel",
+        visual_mesh: "demo/door_panel.visual",
+        meshlet_mesh: "demo/door_panel.meshlet",
+        fallback_raster_mesh: "demo/door_panel.raster",
+        ray_proxy: "demo/door_panel.ray",
+        collider: Some((
+            COLLIDER_DOOR_PANEL,
+            CatalogCollider::Cuboid {
+                size: [1.25, 2.4, 0.2],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Cuboid {
+            size: [1.25, 2.4, 0.2],
+        }),
+        material: MATERIAL_DOOR,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(4),
+        gameplay_tag: "door",
+        cost_class: RenderCostClass::Simple,
+        visual_importance: VisualImportance::GameplayCover,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::SPECULAR)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_PROP_CRATE,
+        name: "prop_crate",
+        visual_mesh: "demo/prop_crate.visual",
+        meshlet_mesh: "demo/prop_crate.meshlet",
+        fallback_raster_mesh: "demo/prop_crate.raster",
+        ray_proxy: "demo/prop_crate.ray",
+        collider: Some((
+            COLLIDER_PROP_CRATE,
+            CatalogCollider::Cuboid {
+                size: [0.75, 0.75, 0.75],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Cuboid {
+            size: [0.75, 0.75, 0.75],
+        }),
+        material: MATERIAL_PROP_NEUTRAL,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(5),
+        gameplay_tag: "prop",
+        cost_class: RenderCostClass::Tiny,
+        visual_importance: VisualImportance::SetDressing,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::RAY_PROXY),
+    },
+    RenderCatalogEntry {
+        asset_id: ASSET_PILLAR,
+        name: "pillar_block",
+        visual_mesh: "demo/pillar_block.visual",
+        meshlet_mesh: "demo/pillar_block.meshlet",
+        fallback_raster_mesh: "demo/pillar_block.raster",
+        ray_proxy: "demo/pillar_block.ray",
+        collider: Some((
+            COLLIDER_PILLAR,
+            CatalogCollider::Cuboid {
+                size: [1.0, 3.0, 1.0],
+            },
+        )),
+        geometry: Some(CatalogGeometry::Cuboid {
+            size: [1.0, 3.0, 1.0],
+        }),
+        material: MATERIAL_CONCRETE,
+        lod_policy: LodPolicyId(1),
+        occlusion_cell: OcclusionCellId(4),
+        gameplay_tag: "occluder",
+        cost_class: RenderCostClass::Simple,
+        visual_importance: VisualImportance::GameplayCover,
+        lighting: LightingParticipation::DIRECT_SHADOW
+            .union(LightingParticipation::GI)
+            .union(LightingParticipation::SPECULAR)
             .union(LightingParticipation::RAY_PROXY),
     },
 ];

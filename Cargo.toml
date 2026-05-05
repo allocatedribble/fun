@@ -11,6 +11,7 @@ members = [
     "game_server",
     "game_shared",
     "tools/arena_bake",
+    "tools/virtual_geometry_bake",
 ]
 default-members = ["game_launcher"]
 resolver = "3"

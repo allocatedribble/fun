@@ -599,21 +599,43 @@ impl RtVendorEmulation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderGeometryPolicy {
     Hybrid,
-    AllMeshlet,
-    AllRaster,
+    RasterOnly,
+    GpuCulledRaster,
+    MeshletWhereSupported,
+    VirtualStaticExperimental,
 }
 
 impl RenderGeometryPolicy {
     pub fn from_env() -> Self {
-        match std::env::var("FUN_RENDER_GEOMETRY_POLICY")
-            .as_deref()
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Ok("all_meshlet") | Ok("all-meshlet") | Ok("meshlet") => Self::AllMeshlet,
-            Ok("all_raster") | Ok("all-raster") | Ok("raster") => Self::AllRaster,
-            Ok("hybrid") | Ok("") | Err(_) => Self::Hybrid,
-            Ok(other) => {
+        Self::from_env_value(std::env::var("FUN_RENDER_GEOMETRY_POLICY").ok().as_deref())
+    }
+
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value.map(str::to_ascii_lowercase).as_deref() {
+            None | Some("") | Some("hybrid") => Self::Hybrid,
+            Some("raster") | Some("raster_only") | Some("raster-only") | Some("all_raster")
+            | Some("all-raster") => Self::RasterOnly,
+            Some("gpu")
+            | Some("gpu_culled")
+            | Some("gpu-culled")
+            | Some("gpu_culled_raster")
+            | Some("gpu-culled-raster")
+            | Some("gpu_culling")
+            | Some("gpu-culling") => Self::GpuCulledRaster,
+            Some("meshlet")
+            | Some("meshlets")
+            | Some("meshlet_where_supported")
+            | Some("meshlet-where-supported")
+            | Some("all_meshlet")
+            | Some("all-meshlet") => Self::MeshletWhereSupported,
+            Some("virtual_static")
+            | Some("virtual-static")
+            | Some("virtual_static_experimental")
+            | Some("virtual-static-experimental")
+            | Some("funvg")
+            | Some("fun_vg")
+            | Some("fun-vg") => Self::VirtualStaticExperimental,
+            Some(other) => {
                 warn!(
                     target: "fun::render",
                     policy = other,
@@ -623,18 +645,50 @@ impl RenderGeometryPolicy {
             }
         }
     }
+
+    pub const fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Hybrid => "hybrid",
+            Self::RasterOnly => "raster_only",
+            Self::GpuCulledRaster => "gpu_culled_raster",
+            Self::MeshletWhereSupported => "meshlet_where_supported",
+            Self::VirtualStaticExperimental => "virtual_static_experimental",
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
 pub enum RenderGeometryClass {
     SimpleRaster,
+    InstancedStaticRaster,
+    GpuCulledStaticRaster,
+    GpuCulledDynamicRaster,
     MeshletStaticDense,
     MeshletDynamicDense,
+    VirtualStaticCluster,
+    FoliageAggregate,
+    TransparentRaster,
     RayProxyOnly,
     Viewmodel,
 }
 
 impl RenderGeometryClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SimpleRaster => "simple_raster",
+            Self::InstancedStaticRaster => "instanced_static_raster",
+            Self::GpuCulledStaticRaster => "gpu_culled_static_raster",
+            Self::GpuCulledDynamicRaster => "gpu_culled_dynamic_raster",
+            Self::MeshletStaticDense => "meshlet_static_dense",
+            Self::MeshletDynamicDense => "meshlet_dynamic_dense",
+            Self::VirtualStaticCluster => "virtual_static_cluster",
+            Self::FoliageAggregate => "foliage_aggregate",
+            Self::TransparentRaster => "transparent_raster",
+            Self::RayProxyOnly => "ray_proxy_only",
+            Self::Viewmodel => "viewmodel",
+        }
+    }
+
     pub const fn uses_meshlet(self) -> bool {
         matches!(
             self,
@@ -645,7 +699,33 @@ impl RenderGeometryClass {
     pub const fn uses_raster_mesh(self) -> bool {
         matches!(
             self,
-            RenderGeometryClass::SimpleRaster | RenderGeometryClass::Viewmodel
+            RenderGeometryClass::SimpleRaster
+                | RenderGeometryClass::InstancedStaticRaster
+                | RenderGeometryClass::GpuCulledStaticRaster
+                | RenderGeometryClass::GpuCulledDynamicRaster
+                | RenderGeometryClass::FoliageAggregate
+                | RenderGeometryClass::TransparentRaster
+                | RenderGeometryClass::Viewmodel
+        )
+    }
+
+    pub const fn uses_gpu_culling(self) -> bool {
+        matches!(
+            self,
+            RenderGeometryClass::GpuCulledStaticRaster
+                | RenderGeometryClass::GpuCulledDynamicRaster
+                | RenderGeometryClass::VirtualStaticCluster
+        )
+    }
+
+    pub const fn is_static_world(self) -> bool {
+        matches!(
+            self,
+            RenderGeometryClass::InstancedStaticRaster
+                | RenderGeometryClass::GpuCulledStaticRaster
+                | RenderGeometryClass::MeshletStaticDense
+                | RenderGeometryClass::VirtualStaticCluster
+                | RenderGeometryClass::FoliageAggregate
         )
     }
 }
@@ -682,7 +762,7 @@ impl ClientWindowConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClientOpaqueRenderer {
     Deferred,
     Forward,
@@ -1085,9 +1165,10 @@ fn hash_byte(hash: &mut u64, byte: u8) {
 mod tests {
     use super::{
         DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY, FunRenderRtFeatures, NativeDlssConfig,
-        NativeDlssMode, RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
-        default_render_backend, present_mode_from_env_value, render_backend_from_env_value,
-        selected_max_frame_latency_from_env_reader, selected_present_mode_from_env_reader,
+        NativeDlssMode, RenderGeometryClass, RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode,
+        RtOpacityMaskMode, RtVendorEmulation, default_render_backend, present_mode_from_env_value,
+        render_backend_from_env_value, selected_max_frame_latency_from_env_reader,
+        selected_present_mode_from_env_reader,
     };
     use bevy::render::settings::Backends;
     use bevy::solari::prelude::{SolariGeometryMode, SolariHairMode, SolariOpacityMode};
@@ -1099,6 +1180,42 @@ mod tests {
                 .iter()
                 .find_map(|(key, value)| (*key == name).then_some((*value).to_owned()))
         })
+    }
+
+    #[test]
+    fn geometry_policy_keeps_legacy_aliases() {
+        assert_eq!(
+            RenderGeometryPolicy::from_env_value(Some("all_raster")),
+            RenderGeometryPolicy::RasterOnly
+        );
+        assert_eq!(
+            RenderGeometryPolicy::from_env_value(Some("all-meshlet")),
+            RenderGeometryPolicy::MeshletWhereSupported
+        );
+        assert_eq!(
+            RenderGeometryPolicy::from_env_value(Some("gpu_culled_raster")),
+            RenderGeometryPolicy::GpuCulledRaster
+        );
+        assert_eq!(
+            RenderGeometryPolicy::from_env_value(Some("virtual_static_experimental"))
+                .as_env_value(),
+            "virtual_static_experimental"
+        );
+    }
+
+    #[test]
+    fn render_geometry_class_usage_flags_are_stable() {
+        assert!(RenderGeometryClass::MeshletStaticDense.uses_meshlet());
+        assert!(RenderGeometryClass::MeshletDynamicDense.uses_meshlet());
+        assert!(RenderGeometryClass::GpuCulledStaticRaster.uses_raster_mesh());
+        assert!(RenderGeometryClass::TransparentRaster.uses_raster_mesh());
+        assert!(RenderGeometryClass::VirtualStaticCluster.uses_gpu_culling());
+        assert!(!RenderGeometryClass::VirtualStaticCluster.uses_raster_mesh());
+        assert!(RenderGeometryClass::VirtualStaticCluster.is_static_world());
+        assert_eq!(
+            RenderGeometryClass::FoliageAggregate.as_str(),
+            "foliage_aggregate"
+        );
     }
 
     #[test]

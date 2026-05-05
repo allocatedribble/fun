@@ -107,8 +107,7 @@ game window without a native browser child window or an operating-system overlay
 window. The first presentation path uses a fullscreen transparent Bevy UI image
 node backed by the CEF compositor buffer; future optimization can replace the
 asset update path with lower-level dirty-rect GPU uploads while preserving the
-same typed browser/ECS boundary. CEF windowless painting and the Bevy texture
-upload consumer both run at a capped 120 Hz presentation rate.
+same typed browser/ECS boundary.
 
 CEF composition is a HUD/UI layer, not a world-image layer. Render ordering is
 world render, depth/motion vectors, Solari/lighting, DLSS SR/RR if active,

@@ -13,6 +13,7 @@ cloud_diagnostics = ["render_diagnostics"]
 diagnostics = ["game_shared/diagnostics"]
 dlss = ["bevy/dlss"]
 dx12_dlss_native = ["dx12_native_interop", "dep:fun_dx12_dlss"]
+dx12_mesh_shader_experiment = ["dx12_native_interop"]
 dx12_native_interop = ["wgpu/dx12", "dep:windows-core"]
 dx12_native_object_names = ["dx12_native_interop", "dep:windows"]
 force_disable_dlss = ["bevy/force_disable_dlss"]
@@ -31,6 +32,7 @@ winit_presentation = []
 bevy.workspace = true
 fun_dx12_dlss = { path = "../fun_dx12_dlss", optional = true }
 game_shared = { path = "../game_shared" }
+serde.workspace = true
 thunder.workspace = true
 tracing.workspace = true
 wgpu = { version = "29.0.3", default-features = false }

@@ -70,11 +70,20 @@ param(
     [int]$WarmupSeconds = 10,
     [int]$SampleSeconds = 30,
     [string]$Baseline = "",
+    [string]$StackProfile = "",
     [string]$InputLog = "",
     [switch]$KeepRunning
 )
 
 $ErrorActionPreference = "Stop"
+$benchmarkModuleRoot = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "benchmark"
+foreach ($module in @(
+    "Benchmark.Metrics.ps1",
+    "Benchmark.Parse.ps1",
+    "Benchmark.Report.ps1"
+)) {
+    . (Join-Path $benchmarkModuleRoot $module)
+}
 
 function Normalize-WorkspacePath {
     param([string]$Path)
@@ -115,1044 +124,6 @@ function Set-BenchmarkProcessEnv {
     [System.Environment]::SetEnvironmentVariable($Name, $Value, "Process")
 }
 
-function Add-Metric {
-    param(
-        [System.Collections.IDictionary]$Sample,
-        [string]$Name,
-        [string]$Text,
-        [switch]$Milliseconds
-    )
-
-    if ($null -eq $Sample) {
-        return
-    }
-    if ([string]::IsNullOrWhiteSpace($Text) -or $Text -eq "pending") {
-        return
-    }
-
-    $number = 0.0
-    $style = [System.Globalization.NumberStyles]::Float
-    $culture = [System.Globalization.CultureInfo]::InvariantCulture
-    if (-not [double]::TryParse($Text, $style, $culture, [ref]$number)) {
-        return
-    }
-
-    $Sample[$Name] = [double]$number
-    if ($Milliseconds) {
-        $nsName = if ($Name.EndsWith("_ms")) {
-            $Name.Substring(0, $Name.Length - 3) + "_ns"
-        }
-        else {
-            $Name + "_ns"
-        }
-        $Sample[$nsName] = [double]($number * 1000000.0)
-    }
-}
-
-function ConvertTo-MetricName {
-    param([string]$Name)
-
-    return ([regex]::Replace($Name.ToLowerInvariant(), "[^a-z0-9]+", "_")).Trim("_")
-}
-
-function Remove-AnsiEscape {
-    param([string]$Text)
-
-    if ([string]::IsNullOrEmpty($Text)) {
-        return $Text
-    }
-    return [regex]::Replace($Text, "\x1B\[[0-9;]*m", "")
-}
-
-function Add-KeyValueMetrics {
-    param(
-        [System.Collections.IDictionary]$Sample,
-        [string]$Payload,
-        [string]$Prefix,
-        [switch]$Milliseconds
-    )
-
-    $Payload = Remove-AnsiEscape -Text $Payload
-    foreach ($match in [regex]::Matches($Payload, "([A-Za-z0-9_\/]+)=([^\s,]+)")) {
-        $key = ConvertTo-MetricName $match.Groups[1].Value
-        $value = $match.Groups[2].Value
-        $metricName = "$Prefix$key"
-        if ($Milliseconds -and -not $metricName.EndsWith("_ms")) {
-            $metricName = $metricName + "_ms"
-        }
-        Add-Metric -Sample $Sample -Name $metricName -Text $value -Milliseconds:$Milliseconds
-    }
-}
-
-function ConvertTo-KeyValueObject {
-    param(
-        [string]$Payload,
-        [string]$HashKey = "hash"
-    )
-
-    $result = [ordered]@{}
-    $Payload = Remove-AnsiEscape -Text $Payload
-    foreach ($match in [regex]::Matches($Payload, "([A-Za-z0-9_\/]+)=([^\s,]+)")) {
-        $key = ConvertTo-MetricName $match.Groups[1].Value
-        if ($key -eq "hash") {
-            $key = $HashKey
-        }
-        $result[$key] = $match.Groups[2].Value
-    }
-    return $result
-}
-
-function Get-SummaryMetricValue {
-    param(
-        [System.Collections.IDictionary]$Summary,
-        [string]$Name,
-        [string]$Field = "p95"
-    )
-
-    if ($null -eq $Summary -or -not $Summary.Contains("metrics")) {
-        return $null
-    }
-    $metrics = $Summary["metrics"]
-    $entry = if ($metrics -is [System.Collections.IDictionary] -and $metrics.Contains($Name)) {
-        $metrics[$Name]
-    }
-    else {
-        $property = $metrics.PSObject.Properties[$Name]
-        if ($null -ne $property) { $property.Value } else { $null }
-    }
-    if ($null -eq $entry) {
-        return $null
-    }
-    if ($entry -is [System.Collections.IDictionary] -and $entry.Contains($Field)) {
-        return $entry[$Field]
-    }
-    $fieldProperty = $entry.PSObject.Properties[$Field]
-    if ($null -eq $fieldProperty) {
-        return $null
-    }
-    return $fieldProperty.Value
-}
-
-function New-RenderGraphFlameNode {
-    param(
-        [System.Collections.IDictionary]$Summary,
-        [string]$Id,
-        [string]$Label,
-        [string]$Metric,
-        [string[]]$Reads = @(),
-        [string[]]$Writes = @(),
-        [string]$Interop = "none"
-    )
-
-    return [ordered]@{
-        id = $Id
-        label = $Label
-        metric = $Metric
-        gpu_timing_ns = Get-SummaryMetricValue -Summary $Summary -Name $Metric -Field "p95"
-        cpu_encode_ns = $null
-        reads = @($Reads)
-        writes = @($Writes)
-        barriers_known = $false
-        transient_resource_ids = @()
-        native_interop = $Interop
-    }
-}
-
-function Write-RenderGraphFlameMap {
-    param(
-        [string]$Path,
-        [System.Collections.IDictionary]$Summary
-    )
-
-    $parent = Split-Path -Parent $Path
-    New-Item -ItemType Directory -Force -Path $parent | Out-Null
-
-    $nodes = @(
-        New-RenderGraphFlameNode -Summary $Summary -Id "world_render" -Label "World Render" -Metric "standard_raster_gpu_ns" -Writes @("main_hdr_color", "depth", "motion_vectors")
-        New-RenderGraphFlameNode -Summary $Summary -Id "meshlet_visibility" -Label "Meshlet Visibility" -Metric "meshlet_visibility_gpu_ns" -Reads @("depth") -Writes @("visible_meshlets")
-        New-RenderGraphFlameNode -Summary $Summary -Id "solari_lighting" -Label "Solari Lighting" -Metric "solari_gpu_ns" -Reads @("main_hdr_color", "depth", "motion_vectors") -Writes @("main_hdr_color")
-        New-RenderGraphFlameNode -Summary $Summary -Id "clouds" -Label "Clouds" -Metric "cloud_total_gpu_ns" -Reads @("depth", "weather_state") -Writes @("main_hdr_color", "cloud_history")
-        New-RenderGraphFlameNode -Summary $Summary -Id "post_process" -Label "Post Process" -Metric "post_process_gpu_ns" -Reads @("main_hdr_color") -Writes @("post_processed_color")
-        New-RenderGraphFlameNode -Summary $Summary -Id "cef_ui_composition" -Label "CEF UI Composition" -Metric "cef_gpu_copy_ns" -Reads @("cef_ui_texture", "post_processed_color") -Writes @("present_color") -Interop "cef"
-        New-RenderGraphFlameNode -Summary $Summary -Id "debug_overlays" -Label "Debug Overlays" -Metric "ui_overlay_cpu_ns" -Reads @("present_color") -Writes @("present_color")
-        New-RenderGraphFlameNode -Summary $Summary -Id "readback_capture" -Label "Readback/Capture" -Metric "render_readback_readback_requested_count" -Reads @("query_buffers", "screenshot_targets") -Writes @("cpu_readback_buffers") -Interop "readback"
-        New-RenderGraphFlameNode -Summary $Summary -Id "present" -Label "Present" -Metric "present_wait_ns" -Reads @("present_color") -Writes @("swapchain")
-    )
-
-    $edges = @(
-        [ordered]@{ from = "world_render"; to = "meshlet_visibility"; kind = "depth_dependency" }
-        [ordered]@{ from = "world_render"; to = "solari_lighting"; kind = "lighting_input" }
-        [ordered]@{ from = "solari_lighting"; to = "clouds"; kind = "hdr_color" }
-        [ordered]@{ from = "clouds"; to = "post_process"; kind = "hdr_color" }
-        [ordered]@{ from = "post_process"; to = "cef_ui_composition"; kind = "ui_after_post" }
-        [ordered]@{ from = "cef_ui_composition"; to = "debug_overlays"; kind = "overlay_order" }
-        [ordered]@{ from = "debug_overlays"; to = "present"; kind = "present_color" }
-        [ordered]@{ from = "world_render"; to = "readback_capture"; kind = "diagnostic_copy" }
-    )
-
-    $nativeInterop = @()
-    if ($null -ne $Summary.render_command_events) {
-        $nativeInterop = @(
-            $Summary.render_command_events |
-                Where-Object { $_.category -eq "cef_copy" -or $_.operation -eq "native_interop_command_insertion" } |
-                ForEach-Object {
-                    [ordered]@{
-                        operation = $_.operation
-                        category = $_.category
-                        label = $_.label
-                        calls = $_.calls
-                    }
-                }
-        )
-    }
-
-    $payload = [ordered]@{
-        schema_version = 1
-        frame_index = 0
-        source = "benchmark_client_summary"
-        generated_at = (Get-Date).ToString("o")
-        nodes = $nodes
-        edges = $edges
-        native_interop_points = $nativeInterop
-        ordering_policy = "world->lighting->post->cef_ui->debug->present"
-        notes = @(
-            "barriers_known=false until PIX barrier summaries are imported",
-            "CEF UI is modeled after post-processing and before debug/present so it does not feed DLSS or world temporal inputs",
-            "readback_capture is diagnostic/capture-only and should be empty in performance lanes unless explicitly enabled"
-        )
-    }
-
-    $payload | ConvertTo-Json -Depth 12 | Set-Content -Path $Path -Encoding UTF8
-}
-
-function Parse-RenderCapabilitiesLog {
-    param([string[]]$Lines)
-
-    foreach ($line in $Lines) {
-        $capabilities = [regex]::Match($line, "\[bevy render\] capabilities: (?<payload>.*)$")
-        if ($capabilities.Success) {
-            $result = ConvertTo-KeyValueObject -Payload $capabilities.Groups["payload"].Value -HashKey "backend_capability_hash"
-            $result["status"] = "found"
-            return $result
-        }
-    }
-
-    return [ordered]@{
-        status = "not_found"
-        backend_capability_hash = $null
-    }
-}
-
-function Parse-RenderFeatureGatesLog {
-    param([string[]]$Lines)
-
-    foreach ($line in $Lines) {
-        $featureGates = [regex]::Match($line, "\[fun render\] RT gates: (?<payload>.*)$")
-        if ($featureGates.Success) {
-            $result = ConvertTo-KeyValueObject -Payload $featureGates.Groups["payload"].Value -HashKey "rt_feature_hash"
-            $result["status"] = "found"
-            return $result
-        }
-    }
-
-    return [ordered]@{
-        status = "not_found"
-        rt_feature_hash = $null
-    }
-}
-
-function Parse-RenderPresentationLog {
-    param([string[]]$Lines)
-
-    $result = [ordered]@{
-        status = "not_found"
-        startup_status = "not_found"
-        surface_status = "not_found"
-        backend = $null
-        adapter = $null
-        driver = $null
-        present_mode = $null
-        desired_maximum_frame_latency = $null
-        vrr_detected = $null
-        hdr_active = $null
-        swapchain_format = $null
-        window_mode = $null
-        resolution_width = $null
-        resolution_height = $null
-        surface_requested_present_mode = $null
-        surface_selected_present_mode = $null
-        surface_available_present_modes = $null
-    }
-
-    foreach ($line in $Lines) {
-        $presentation = [regex]::Match($line, "\[fun render\] presentation: (?<payload>.*)$")
-        if ($presentation.Success) {
-            $parsed = ConvertTo-KeyValueObject -Payload $presentation.Groups["payload"].Value -HashKey "presentation_hash"
-            foreach ($property in $parsed.GetEnumerator()) {
-                $result[$property.Key] = $property.Value
-            }
-            $result["startup_status"] = "found"
-            $result["status"] = "found"
-            continue
-        }
-
-        $surface = [regex]::Match($line, "\[bevy render\] surface present mode requested (?<requested>[^;]+); selected (?<selected>[^;]+); available (?<available>.+)$")
-        if ($surface.Success) {
-            $result["surface_requested_present_mode"] = $surface.Groups["requested"].Value.Trim()
-            $result["surface_selected_present_mode"] = $surface.Groups["selected"].Value.Trim()
-            $result["surface_available_present_modes"] = $surface.Groups["available"].Value.Trim()
-            $result["surface_status"] = "found"
-            $result["status"] = "found"
-            continue
-        }
-
-        $surfaceConfig = [regex]::Match($line, "\[bevy render\] surface config: format (?<format>[^;]+); width (?<width>\d+); height (?<height>\d+); present_mode (?<present>[^;]+); desired_maximum_frame_latency (?<latency>\d+)")
-        if ($surfaceConfig.Success) {
-            $result["swapchain_format"] = $surfaceConfig.Groups["format"].Value.Trim()
-            $result["resolution_width"] = $surfaceConfig.Groups["width"].Value.Trim()
-            $result["resolution_height"] = $surfaceConfig.Groups["height"].Value.Trim()
-            $result["surface_selected_present_mode"] = $surfaceConfig.Groups["present"].Value.Trim()
-            $result["desired_maximum_frame_latency"] = $surfaceConfig.Groups["latency"].Value.Trim()
-            $result["surface_status"] = "found"
-            $result["status"] = "found"
-        }
-    }
-
-    return $result
-}
-
-function Parse-RenderUploadCallsitesLog {
-    param([string[]]$Lines)
-
-    $callsites = [ordered]@{}
-    foreach ($line in $Lines) {
-        $match = [regex]::Match($line, "\[client perf\] render upload top: rank=(?<rank>\d+) operation=(?<operation>\S+) label=(?<label>\S+) calls=(?<calls>\d+) bytes=(?<bytes>\d+)")
-        if (-not $match.Success) {
-            continue
-        }
-        $operation = $match.Groups["operation"].Value
-        $label = $match.Groups["label"].Value
-        $key = "$operation`n$label"
-        if (-not $callsites.Contains($key)) {
-            $callsites[$key] = [ordered]@{
-                operation = $operation
-                label = $label
-                calls = 0
-                bytes = 0
-                samples = 0
-            }
-        }
-        $entry = $callsites[$key]
-        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
-        $entry.bytes = [uint64]$entry.bytes + [uint64]$match.Groups["bytes"].Value
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $callsites.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.bytes }; Descending = $true }, @{ Expression = { [uint64]$_.calls }; Descending = $true }, label |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    operation = $_.operation
-                    label = $_.label
-                    calls = $_.calls
-                    bytes = $_.bytes
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-RenderChurnEventsLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        $match = [regex]::Match($line, "\[client perf\] render churn top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+)")
-        if (-not $match.Success) {
-            continue
-        }
-        $operation = $match.Groups["operation"].Value
-        $category = $match.Groups["category"].Value
-        $label = $match.Groups["label"].Value
-        $key = "$operation`n$category`n$label"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                operation = $operation
-                category = $category
-                label = $label
-                calls = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    operation = $_.operation
-                    category = $_.category
-                    label = $_.label
-                    calls = $_.calls
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-RenderChurnCreationEventsLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        $match = [regex]::Match($line, "\[client perf\] render churn creation top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+)")
-        if (-not $match.Success) {
-            continue
-        }
-        $operation = $match.Groups["operation"].Value
-        $category = $match.Groups["category"].Value
-        $label = $match.Groups["label"].Value
-        $key = "$operation`n$category`n$label"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                operation = $operation
-                category = $category
-                label = $label
-                calls = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    operation = $_.operation
-                    category = $_.category
-                    label = $_.label
-                    calls = $_.calls
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-RenderCommandEventsLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        $match = [regex]::Match($line, "\[client perf\] render command top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+)")
-        if (-not $match.Success) {
-            continue
-        }
-        $operation = $match.Groups["operation"].Value
-        $category = $match.Groups["category"].Value
-        $label = $match.Groups["label"].Value
-        $key = "$operation`n$category`n$label"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                operation = $operation
-                category = $category
-                label = $label
-                calls = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    operation = $_.operation
-                    category = $_.category
-                    label = $_.label
-                    calls = $_.calls
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-RenderReadbackEventsLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        $match = [regex]::Match($line, "\[client perf\] render readback top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+) latency_frame_sum=(?<latency_frame_sum>\d+) latency_frame_max=(?<latency_frame_max>\d+)")
-        if (-not $match.Success) {
-            continue
-        }
-        $operation = $match.Groups["operation"].Value
-        $category = $match.Groups["category"].Value
-        $label = $match.Groups["label"].Value
-        $key = "$operation`n$category`n$label"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                operation = $operation
-                category = $category
-                label = $label
-                calls = 0
-                latency_frame_sum = 0
-                latency_frame_max = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
-        $entry.latency_frame_sum = [uint64]$entry.latency_frame_sum + [uint64]$match.Groups["latency_frame_sum"].Value
-        $entry.latency_frame_max = [Math]::Max([uint64]$entry.latency_frame_max, [uint64]$match.Groups["latency_frame_max"].Value)
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.calls }; Descending = $true }, @{ Expression = { [uint64]$_.latency_frame_sum }; Descending = $true }, operation, category, label |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    operation = $_.operation
-                    category = $_.category
-                    label = $_.label
-                    calls = $_.calls
-                    latency_frame_sum = $_.latency_frame_sum
-                    latency_frame_max = $_.latency_frame_max
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-RenderShaderEventsLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        $match = [regex]::Match($line, "\[client perf\] render shader top: rank=(?<rank>\d+) operation=(?<operation>\S+) category=(?<category>\S+) label=(?<label>\S+) calls=(?<calls>\d+) elapsed_ns=(?<elapsed_ns>\d+) shader_defs=(?<shader_defs>\d+)")
-        if (-not $match.Success) {
-            continue
-        }
-        $operation = $match.Groups["operation"].Value
-        $category = $match.Groups["category"].Value
-        $label = $match.Groups["label"].Value
-        $key = "$operation`n$category`n$label"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                operation = $operation
-                category = $category
-                label = $label
-                calls = 0
-                elapsed_ns = 0
-                shader_defs = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.calls = [uint64]$entry.calls + [uint64]$match.Groups["calls"].Value
-        $entry.elapsed_ns = [uint64]$entry.elapsed_ns + [uint64]$match.Groups["elapsed_ns"].Value
-        $entry.shader_defs = [uint64]$entry.shader_defs + [uint64]$match.Groups["shader_defs"].Value
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.elapsed_ns }; Descending = $true }, @{ Expression = { [uint64]$_.calls }; Descending = $true }, operation, category, label |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    operation = $_.operation
-                    category = $_.category
-                    label = $_.label
-                    calls = $_.calls
-                    elapsed_ns = $_.elapsed_ns
-                    shader_defs = $_.shader_defs
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-TransientDescriptorCreateLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        if (-not $line.Contains("transient descriptor create top")) {
-            continue
-        }
-        $parsed = ConvertTo-KeyValueObject -Payload $line
-        $resource = [string]$parsed.resource
-        $label = [string]$parsed.label
-        $reason = [string]$parsed.reason
-        $nearMiss = [string]$parsed.near_miss
-        $createPattern = [string]$parsed.create_pattern
-        $format = [string]$parsed.format
-        $width = [string]$parsed.width
-        $height = [string]$parsed.height
-        $size = [string]$parsed.size
-        $usageBits = [string]$parsed.usage_bits
-        $key = "$resource`n$label`n$reason`n$nearMiss`n$createPattern`n$format`n$width`n$height`n$size`n$usageBits"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                resource = $resource
-                label = $label
-                reason = $reason
-                near_miss = $nearMiss
-                create_pattern = $createPattern
-                format = $format
-                width = $width
-                height = $height
-                size = $size
-                usage_bits = $usageBits
-                create_count = 0
-                estimated_bytes = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.create_count = [uint64]$entry.create_count + [uint64]$parsed.create_count
-        $entry.estimated_bytes = [uint64]$entry.estimated_bytes + [uint64]$parsed.estimated_bytes
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.create_count }; Descending = $true }, resource, label, reason, near_miss |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    resource = $_.resource
-                    label = $_.label
-                    reason = $_.reason
-                    near_miss = $_.near_miss
-                    create_pattern = $_.create_pattern
-                    format = $_.format
-                    width = $_.width
-                    height = $_.height
-                    size = $_.size
-                    usage_bits = $_.usage_bits
-                    create_count = $_.create_count
-                    estimated_bytes = $_.estimated_bytes
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-TransientDescriptorLabelVariantLog {
-    param([string[]]$Lines)
-
-    $events = [ordered]@{}
-    foreach ($line in $Lines) {
-        if (-not $line.Contains("transient descriptor label variants")) {
-            continue
-        }
-        $parsed = ConvertTo-KeyValueObject -Payload $line
-        $resource = [string]$parsed.resource
-        $labels = [string]$parsed.labels
-        $format = [string]$parsed.format
-        $width = [string]$parsed.width
-        $height = [string]$parsed.height
-        $size = [string]$parsed.size
-        $usageBits = [string]$parsed.usage_bits
-        $key = "$resource`n$labels`n$format`n$width`n$height`n$size`n$usageBits"
-        if (-not $events.Contains($key)) {
-            $events[$key] = [ordered]@{
-                resource = $resource
-                labels = $labels
-                format = $format
-                width = $width
-                height = $height
-                size = $size
-                usage_bits = $usageBits
-                label_count = 0
-                samples = 0
-            }
-        }
-        $entry = $events[$key]
-        $entry.label_count = [uint64][Math]::Max([uint64]$entry.label_count, [uint64]$parsed.label_count)
-        $entry.samples = [uint64]$entry.samples + 1
-    }
-
-    $rank = 0
-    return @(
-        $events.Values |
-            Sort-Object -Property @{ Expression = { [uint64]$_.label_count }; Descending = $true }, resource, labels |
-            Select-Object -First 10 |
-            ForEach-Object {
-                $rank += 1
-                [ordered]@{
-                    rank = $rank
-                    resource = $_.resource
-                    labels = $_.labels
-                    format = $_.format
-                    width = $_.width
-                    height = $_.height
-                    size = $_.size
-                    usage_bits = $_.usage_bits
-                    label_count = $_.label_count
-                    samples = $_.samples
-                }
-            }
-    )
-}
-
-function Parse-CefUiTransportSelectionLog {
-    param([string[]]$Lines)
-
-    foreach ($line in $Lines) {
-        $selection = [regex]::Match($line, "\[client perf\] cef_ui transport selected: (?<payload>.*)$")
-        if ($selection.Success) {
-            $result = ConvertTo-KeyValueObject -Payload $selection.Groups["payload"].Value -HashKey "transport_hash"
-            $result["status"] = "found"
-            return $result
-        }
-    }
-
-    return [ordered]@{
-        status = "not_found"
-        requested = $null
-        selected = $null
-        backend = $null
-        bridge_ready = $null
-        cpu_fallback_enabled = $null
-        ring_depth = $null
-        copy_mode = $null
-        strict = $null
-        debug_timings = $null
-        fallback_reason = $null
-    }
-}
-
-function Parse-CefUiTransportHealthLog {
-    param([string[]]$Lines)
-
-    $last = $null
-    foreach ($line in $Lines) {
-        $health = [regex]::Match($line, "\[client perf\] cef_ui transport health: (?<payload>.*)$")
-        if ($health.Success) {
-            $last = ConvertTo-KeyValueObject -Payload $health.Groups["payload"].Value -HashKey "transport_health_hash"
-            $last["status"] = if ($last.Contains("status")) { $last["status"] } else { "found" }
-            $last["record_status"] = "found"
-        }
-    }
-
-    if ($null -ne $last) {
-        return $last
-    }
-
-    return [ordered]@{
-        record_status = "not_found"
-        transport = $null
-        status = $null
-        accel_paint_fps = $null
-        paint_fps = $null
-        gpu_copy_ms = $null
-        gpu_copy_ns_per_copy = $null
-        cpu_upload_bytes_per_frame = $null
-        reused_frames = $null
-        not_ready_frames = $null
-        blocking_waits = $null
-        fallback_count = $null
-        ring_depth = $null
-    }
-}
-
-function Parse-ClientPerfLog {
-    param([string[]]$Lines)
-
-    $samples = New-Object "System.Collections.Generic.List[object]"
-    $current = $null
-    $pendingCefUiMetrics = $null
-    $pendingCefUiHealthMetrics = $null
-
-    foreach ($line in $Lines) {
-        $main = [regex]::Match($line, "\[client perf\] fps=(?<fps>\S+) frame_ms=(?<frame_ms>\S+) solari_gpu_ms=(?<solari>\S+) meshlet_visibility_gpu_ms=(?<meshlet>\S+) dlss_rr_gpu_ms=(?<dlss>\S+)")
-        if ($main.Success) {
-            $current = [ordered]@{}
-            Add-Metric -Sample $current -Name "fps" -Text $main.Groups["fps"].Value
-            Add-Metric -Sample $current -Name "frame_ms" -Text $main.Groups["frame_ms"].Value -Milliseconds
-            Add-Metric -Sample $current -Name "solari_gpu_ms" -Text $main.Groups["solari"].Value -Milliseconds
-            Add-Metric -Sample $current -Name "meshlet_visibility_gpu_ms" -Text $main.Groups["meshlet"].Value -Milliseconds
-            Add-Metric -Sample $current -Name "dlss_rr_gpu_ms" -Text $main.Groups["dlss"].Value -Milliseconds
-            if ($null -ne $pendingCefUiMetrics) {
-                foreach ($key in $pendingCefUiMetrics.Keys) {
-                    $current[$key] = $pendingCefUiMetrics[$key]
-                }
-                $pendingCefUiMetrics = $null
-            }
-            if ($null -ne $pendingCefUiHealthMetrics) {
-                foreach ($key in $pendingCefUiHealthMetrics.Keys) {
-                    $current[$key] = $pendingCefUiHealthMetrics[$key]
-                }
-                $pendingCefUiHealthMetrics = $null
-            }
-            $samples.Add($current) | Out-Null
-            continue
-        }
-
-        $cpu = [regex]::Match($line, "\[client perf\] process_cpu_pct=(?<process_cpu>\S+) process_mem_gib=(?<process_mem>\S+) system_cpu_pct=(?<system_cpu>\S+) system_mem_pct=(?<system_mem>\S+)")
-        if ($cpu.Success) {
-            Add-Metric -Sample $current -Name "process_cpu_pct" -Text $cpu.Groups["process_cpu"].Value
-            Add-Metric -Sample $current -Name "process_mem_gib" -Text $cpu.Groups["process_mem"].Value
-            Add-Metric -Sample $current -Name "system_cpu_pct" -Text $cpu.Groups["system_cpu"].Value
-            Add-Metric -Sample $current -Name "system_mem_pct" -Text $cpu.Groups["system_mem"].Value
-            continue
-        }
-
-        $passes = [regex]::Match($line, "\[client perf\] solari passes gpu_ms: (?<payload>.*)$")
-        if ($passes.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $passes.Groups["payload"].Value -Prefix "solari_pass_" -Milliseconds
-            continue
-        }
-
-        $budget = [regex]::Match($line, "\[client perf\] solari budget: (?<payload>.*)$")
-        if ($budget.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $budget.Groups["payload"].Value -Prefix "solari_budget_"
-            continue
-        }
-
-        $top = [regex]::Match($line, "\[client perf\] top render timings (?<payload>.*)$")
-        if ($top.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $top.Groups["payload"].Value -Prefix "top_render_" -Milliseconds
-            continue
-        }
-
-        $nonSolariGpu = [regex]::Match($line, "\[client perf\] non_solari gpu_ms: (?<payload>.*)$")
-        if ($nonSolariGpu.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $nonSolariGpu.Groups["payload"].Value -Prefix "" -Milliseconds
-            continue
-        }
-
-        $cloudGpu = [regex]::Match($line, "\[client perf\] clouds gpu_ms: (?<payload>.*)$")
-        if ($cloudGpu.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $cloudGpu.Groups["payload"].Value -Prefix "cloud_" -Milliseconds
-            continue
-        }
-
-        $cloudCpu = [regex]::Match($line, "\[client perf\] clouds cpu_ns: (?<payload>.*)$")
-        if ($cloudCpu.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $cloudCpu.Groups["payload"].Value -Prefix "cloud_"
-            continue
-        }
-
-        $cloudState = [regex]::Match($line, "\[client perf\] clouds state: (?<payload>.*)$")
-        if ($cloudState.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $cloudState.Groups["payload"].Value -Prefix "cloud_"
-            continue
-        }
-
-        $nonSolariCpu = [regex]::Match($line, "\[client perf\] non_solari cpu_ns: (?<payload>.*)$")
-        if ($nonSolariCpu.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $nonSolariCpu.Groups["payload"].Value -Prefix ""
-            continue
-        }
-
-        $renderPaths = [regex]::Match($line, "\[client perf\] render paths: (?<payload>.*)$")
-        if ($renderPaths.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $renderPaths.Groups["payload"].Value -Prefix ""
-            continue
-        }
-
-        $meshletBuffers = [regex]::Match($line, "\[client perf\] meshlet buffers: (?<payload>.*)$")
-        if ($meshletBuffers.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $meshletBuffers.Groups["payload"].Value -Prefix "meshlet_"
-            continue
-        }
-
-        $renderUploads = [regex]::Match($line, "\[client perf\] render uploads: (?<payload>.*)$")
-        if ($renderUploads.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $renderUploads.Groups["payload"].Value -Prefix "render_upload_"
-            continue
-        }
-
-        $renderChurn = [regex]::Match($line, "\[client perf\] render churn: (?<payload>.*)$")
-        if ($renderChurn.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $renderChurn.Groups["payload"].Value -Prefix "render_churn_"
-            continue
-        }
-
-        $renderCommands = [regex]::Match($line, "\[client perf\] render commands: (?<payload>.*)$")
-        if ($renderCommands.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $renderCommands.Groups["payload"].Value -Prefix "render_command_"
-            continue
-        }
-
-        $renderReadbacks = [regex]::Match($line, "\[client perf\] render readbacks: (?<payload>.*)$")
-        if ($renderReadbacks.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $renderReadbacks.Groups["payload"].Value -Prefix "render_readback_"
-            continue
-        }
-
-        $renderShaders = [regex]::Match($line, "\[client perf\] render shaders: (?<payload>.*)$")
-        if ($renderShaders.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $renderShaders.Groups["payload"].Value -Prefix "render_shader_"
-            continue
-        }
-
-        $radianceCache = [regex]::Match($line, "\[client perf\] radiance cache: (?<payload>.*)$")
-        if ($radianceCache.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $radianceCache.Groups["payload"].Value -Prefix "radiance_cache_"
-            continue
-        }
-
-        if ($line.Contains("transient render resource arena frame")) {
-            Add-KeyValueMetrics -Sample $current -Payload $line -Prefix "transient_"
-            continue
-        }
-
-        if ($line.Contains("render graph budget pressure")) {
-            Add-KeyValueMetrics -Sample $current -Payload $line -Prefix "render_scheduler_"
-            continue
-        }
-
-        $scheduleCpu = [regex]::Match($line, "\[client perf\] schedule cpu_ns: (?<payload>.*)$")
-        if ($scheduleCpu.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $scheduleCpu.Groups["payload"].Value -Prefix "schedule_"
-            continue
-        }
-
-        $scheduleDetail = [regex]::Match($line, "\[client perf\] schedule detail: (?<payload>.*)$")
-        if ($scheduleDetail.Success) {
-            Add-KeyValueMetrics -Sample $current -Payload $scheduleDetail.Groups["payload"].Value -Prefix "schedule_"
-            continue
-        }
-
-        $cefUi = [regex]::Match($line, "\[client perf\] cef_ui transport: (?<payload>.*)$")
-        if ($cefUi.Success) {
-            if ($null -eq $current) {
-                $pendingCefUiMetrics = [ordered]@{}
-                Add-KeyValueMetrics -Sample $pendingCefUiMetrics -Payload $cefUi.Groups["payload"].Value -Prefix ""
-            }
-            else {
-                Add-KeyValueMetrics -Sample $current -Payload $cefUi.Groups["payload"].Value -Prefix ""
-            }
-            continue
-        }
-
-        $cefUiHealth = [regex]::Match($line, "\[client perf\] cef_ui transport health: (?<payload>.*)$")
-        if ($cefUiHealth.Success) {
-            if ($null -eq $current) {
-                $pendingCefUiHealthMetrics = [ordered]@{}
-                Add-KeyValueMetrics -Sample $pendingCefUiHealthMetrics -Payload $cefUiHealth.Groups["payload"].Value -Prefix "cef_health_"
-            }
-            else {
-                Add-KeyValueMetrics -Sample $current -Payload $cefUiHealth.Groups["payload"].Value -Prefix "cef_health_"
-            }
-            continue
-        }
-    }
-
-    return $samples
-}
-
-function Get-Percentile {
-    param(
-        [double[]]$Values,
-        [double]$Percentile
-    )
-
-    if ($Values.Count -eq 0) {
-        return $null
-    }
-
-    $sorted = @($Values | Sort-Object)
-    $rank = [Math]::Ceiling(($Percentile / 100.0) * $sorted.Count)
-    $index = [Math]::Max(0, [Math]::Min($sorted.Count - 1, $rank - 1))
-    return [double]$sorted[$index]
-}
-
-function Round-Metric {
-    param(
-        [double]$Value,
-        [string]$MetricName = ""
-    )
-
-    if ($MetricName.EndsWith("_ns")) {
-        return [Math]::Round($Value, 0)
-    }
-
-    return [Math]::Round($Value, 4)
-}
-
-function Get-SummaryStats {
-    param([object[]]$Samples)
-
-    $metricNames = @{}
-    foreach ($sample in $Samples) {
-        foreach ($key in $sample.Keys) {
-            $metricNames[$key] = $true
-        }
-    }
-
-    $stats = [ordered]@{}
-    foreach ($metricName in ($metricNames.Keys | Sort-Object)) {
-        $values = @()
-        foreach ($sample in $Samples) {
-            if ($sample.Contains($metricName)) {
-                $values += [double]$sample[$metricName]
-            }
-        }
-
-        if ($values.Count -eq 0) {
-            continue
-        }
-
-        $measure = $values | Measure-Object -Average -Minimum -Maximum
-        $stats[$metricName] = [ordered]@{
-            count = $values.Count
-            mean = Round-Metric -Value ([double]$measure.Average) -MetricName $metricName
-            min = Round-Metric -Value ([double]$measure.Minimum) -MetricName $metricName
-            max = Round-Metric -Value ([double]$measure.Maximum) -MetricName $metricName
-            p50 = Round-Metric -Value (Get-Percentile -Values $values -Percentile 50) -MetricName $metricName
-            p95 = Round-Metric -Value (Get-Percentile -Values $values -Percentile 95) -MetricName $metricName
-            p99 = Round-Metric -Value (Get-Percentile -Values $values -Percentile 99) -MetricName $metricName
-        }
-    }
-
-    return $stats
-}
-
 function Get-RepoGitLines {
     param(
         [string]$RepoRoot,
@@ -1173,818 +144,6 @@ function Get-RepoGitLines {
     finally {
         Pop-Location
     }
-}
-
-function Get-HardwareInfo {
-    $gpu = @()
-    $cpu = @()
-
-    try {
-        $gpu = @(Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, AdapterRAM)
-    }
-    catch {
-        $gpu = @()
-    }
-
-    try {
-        $cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed)
-    }
-    catch {
-        $cpu = @()
-    }
-
-    return [ordered]@{
-        cpu = $cpu
-        gpu = $gpu
-    }
-}
-
-function Get-BenchmarkEnvValue {
-    param(
-        [string]$Name,
-        [string]$Default = "not_collected"
-    )
-
-    $value = [System.Environment]::GetEnvironmentVariable($Name, "Process")
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $Default
-    }
-    return $value
-}
-
-function Get-BenchmarkEnvUInt64 {
-    param([string]$Name)
-
-    $value = [System.Environment]::GetEnvironmentVariable($Name, "Process")
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $null
-    }
-    $parsed = 0UL
-    if ([UInt64]::TryParse($value, [ref]$parsed)) {
-        return $parsed
-    }
-    return $null
-}
-
-function Get-AdapterRamBytes {
-    try {
-        $adapter = @(Get-CimInstance Win32_VideoController | Select-Object -First 1)
-        if ($adapter.Count -eq 0 -or $null -eq $adapter[0].AdapterRAM) {
-            return $null
-        }
-        return [UInt64]$adapter[0].AdapterRAM
-    }
-    catch {
-        return $null
-    }
-}
-
-function Get-Dx12MemoryBudgetInfo {
-    $localBudget = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_BUDGET_BYTES"
-    $localUsage = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_USAGE_BYTES"
-    $availableForReservation = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_AVAILABLE_FOR_RESERVATION_BYTES"
-    $currentReservation = Get-BenchmarkEnvUInt64 -Name "FUN_BENCH_DX12_LOCAL_CURRENT_RESERVATION_BYTES"
-    $adapterRam = Get-AdapterRamBytes
-    $hasBudgetSample = $null -ne $localBudget -or $null -ne $localUsage -or $null -ne $availableForReservation -or $null -ne $currentReservation
-    $status = if ($hasBudgetSample) {
-        "provided"
-    }
-    elseif ($null -ne $adapterRam) {
-        "adapter_ram_only"
-    }
-    else {
-        "not_collected"
-    }
-    $source = if ($hasBudgetSample) {
-        "env_or_native_collector"
-    }
-    elseif ($null -ne $adapterRam) {
-        "win32_video_controller_adapter_ram"
-    }
-    else {
-        "none"
-    }
-
-    return [ordered]@{
-        status = $status
-        source = $source
-        local_budget_bytes = $localBudget
-        local_usage_bytes = $localUsage
-        local_available_for_reservation_bytes = $availableForReservation
-        local_current_reservation_bytes = $currentReservation
-        adapter_ram_bytes = $adapterRam
-    }
-}
-
-function Get-ActivePowerScheme {
-    try {
-        $line = (& powercfg /getactivescheme 2>$null | Select-Object -First 1)
-        if ([string]::IsNullOrWhiteSpace($line)) {
-            return [ordered]@{ status = "not_found" }
-        }
-        $match = [regex]::Match($line, "Power Scheme GUID:\s*(?<guid>[A-Fa-f0-9-]+)\s*\((?<name>[^)]+)\)")
-        if ($match.Success) {
-            return [ordered]@{
-                status = "found"
-                guid = $match.Groups["guid"].Value
-                name = $match.Groups["name"].Value
-            }
-        }
-        return [ordered]@{
-            status = "unparsed"
-            raw = $line
-        }
-    }
-    catch {
-        return [ordered]@{ status = "not_collected" }
-    }
-}
-
-function Get-ChassisClass {
-    try {
-        $chassis = @(Get-CimInstance Win32_SystemEnclosure | ForEach-Object { $_.ChassisTypes } | ForEach-Object { $_ })
-        $laptopTypes = @(8, 9, 10, 14, 30, 31, 32)
-        if (($chassis | Where-Object { $laptopTypes -contains [int]$_ }).Count -gt 0) {
-            return "laptop_or_portable"
-        }
-        if ($chassis.Count -gt 0) {
-            return "desktop_or_workstation"
-        }
-    }
-    catch {
-    }
-    return "not_collected"
-}
-
-function Test-CommandAvailable {
-    param([string]$Name)
-
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
-function Get-BenchmarkEnvironmentInfo {
-    $operatingSystem = $null
-    try {
-        $operatingSystem = Get-CimInstance Win32_OperatingSystem |
-            Select-Object Caption, Version, BuildNumber
-    }
-    catch {
-        $operatingSystem = $null
-    }
-
-    $gpuCount = 0
-    try {
-        $gpuCount = @(Get-CimInstance Win32_VideoController).Count
-    }
-    catch {
-        $gpuCount = 0
-    }
-
-    return [ordered]@{
-        windows = [ordered]@{
-            os = $operatingSystem
-            build = if ($null -ne $operatingSystem) { $operatingSystem.BuildNumber } else { "not_collected" }
-            hags_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_HAGS"
-            hdr_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_HDR"
-            vrr_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_VRR"
-            rebar_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_REBAR"
-        }
-        machine = [ordered]@{
-            chassis_class = Get-ChassisClass
-            gpu_adapter_count = $gpuCount
-            hybrid_graphics_state = if ($gpuCount -gt 1) { "multiple_adapters_observed" } elseif ($gpuCount -eq 1) { "single_adapter_observed" } else { "not_collected" }
-            power_profile = Get-ActivePowerScheme
-        }
-        display = [ordered]@{
-            monitor_refresh_hz = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_MONITOR_REFRESH_HZ"
-            monitor_vrr_state = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_MONITOR_VRR"
-        }
-        tools = [ordered]@{
-            presentmon_available = Test-CommandAvailable -Name "PresentMon"
-            pix_attached = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_PIX_ATTACHED" -Default "false"
-            renderdoc_attached = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_RENDERDOC_ATTACHED" -Default "false"
-        }
-        overlays = [ordered]@{
-            status = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAYS"
-            steam = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_STEAM"
-            discord = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_DISCORD"
-            geforce_experience = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_GFE"
-            amd = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_AMD"
-            xbox_game_bar = Get-BenchmarkEnvValue -Name "FUN_BENCH_ENV_OVERLAY_XBOX_GAME_BAR"
-        }
-    }
-}
-
-function New-Comparison {
-    param(
-        [System.Collections.IDictionary]$CurrentStats,
-        [string]$BaselinePath
-    )
-
-    if ([string]::IsNullOrWhiteSpace($BaselinePath)) {
-        return $null
-    }
-    if (-not (Test-Path $BaselinePath)) {
-        throw "Baseline summary was not found: $BaselinePath"
-    }
-
-    $baselineSummary = Get-Content -Path $BaselinePath -Raw | ConvertFrom-Json
-    $comparison = [ordered]@{}
-
-    foreach ($metricName in ($CurrentStats.Keys | Sort-Object)) {
-        $baselineProperty = $baselineSummary.metrics.PSObject.Properties[$metricName]
-        if ($null -eq $baselineProperty) {
-            continue
-        }
-
-        $currentMean = [double]$CurrentStats[$metricName].mean
-        $baselineMean = [double]$baselineProperty.Value.mean
-        $delta = $currentMean - $baselineMean
-        $displayDelta = Round-Metric -Value $delta -MetricName $metricName
-        $deltaPercent = $null
-        if ([Math]::Abs($baselineMean) -gt 0.000001) {
-            $deltaPercent = ($delta / $baselineMean) * 100.0
-        }
-
-        $higherIsBetter = $metricName -eq "fps"
-        $lowerIsBetter = $metricName.EndsWith("_ms") -or $metricName.EndsWith("_ns")
-        $better = $null
-        if ([double]$displayDelta -eq 0.0) {
-            $better = $true
-        }
-        elseif ($higherIsBetter) {
-            $better = $delta -ge 0.0
-        }
-        elseif ($lowerIsBetter) {
-            $better = $delta -le 0.0
-        }
-
-        $comparison[$metricName] = [ordered]@{
-            baseline_mean = Round-Metric -Value $baselineMean -MetricName $metricName
-            current_mean = Round-Metric -Value $currentMean -MetricName $metricName
-            delta = $displayDelta
-            delta_percent = if ($null -eq $deltaPercent -or [double]$displayDelta -eq 0.0) { 0 } else { Round-Metric -Value $deltaPercent }
-            better = $better
-        }
-    }
-
-    return $comparison
-}
-
-function Test-StatsMetric {
-    param(
-        [System.Collections.IDictionary]$Stats,
-        [string]$Metric
-    )
-
-    return $null -ne $Stats -and $Stats.Contains($Metric)
-}
-
-function Get-StatsMetricValue {
-    param(
-        [System.Collections.IDictionary]$Stats,
-        [string]$Metric,
-        [string]$Field
-    )
-
-    if (-not (Test-StatsMetric -Stats $Stats -Metric $Metric)) {
-        return $null
-    }
-
-    $entry = $Stats[$Metric]
-    if ($entry -is [System.Collections.IDictionary]) {
-        if ($entry.Contains($Field)) {
-            return $entry[$Field]
-        }
-        return $null
-    }
-
-    $property = $entry.PSObject.Properties[$Field]
-    if ($null -eq $property) {
-        return $null
-    }
-    return $property.Value
-}
-
-function New-Dx12DlssRrAcceptance {
-    param(
-        [System.Collections.IDictionary]$Stats,
-        [switch]$Required,
-        [switch]$EnableDx12DlssRr,
-        [switch]$DisableDlssRr,
-        [string]$SolariDenoiseMode,
-        [int]$SampleSeconds,
-        [switch]$InputLogMode,
-        [int]$StressFrameTarget
-    )
-
-    $failures = [System.Collections.Generic.List[string]]::new()
-    $requiredMetrics = [ordered]@{}
-    foreach ($metric in @(
-            "dlss_rr_gpu_ns",
-            "solari_pass_dlss_rr_guide_resolve_ns",
-            "frame_ns"
-        )) {
-        $present = Test-StatsMetric -Stats $Stats -Metric $metric
-        $requiredMetrics[$metric] = [ordered]@{
-            present = $present
-            count = Get-StatsMetricValue -Stats $Stats -Metric $metric -Field "count"
-            mean = Get-StatsMetricValue -Stats $Stats -Metric $metric -Field "mean"
-            p95 = Get-StatsMetricValue -Stats $Stats -Metric $metric -Field "p95"
-        }
-        if ($Required -and -not $present) {
-            $failures.Add("missing_metric:$metric") | Out-Null
-        }
-        if ($Required -and $present) {
-            if ($null -eq $requiredMetrics[$metric]["mean"]) {
-                $failures.Add("missing_metric:$metric.mean") | Out-Null
-            }
-            if ($null -eq $requiredMetrics[$metric]["p95"]) {
-                $failures.Add("missing_metric:$metric.p95") | Out-Null
-            }
-        }
-    }
-
-    if ($Required -and -not (Test-StatsMetric -Stats $Stats -Metric "frame_ns")) {
-        $failures.Add("missing_metric:frame_ns.mean") | Out-Null
-        $failures.Add("missing_metric:frame_ns.p95") | Out-Null
-    }
-
-    $fpsMean = Get-StatsMetricValue -Stats $Stats -Metric "fps" -Field "mean"
-    $estimatedFrames = 0.0
-    if ($null -ne $fpsMean -and -not $InputLogMode -and $SampleSeconds -gt 0) {
-        $estimatedFrames = [double]$fpsMean * [double]$SampleSeconds
-    }
-
-    if ($Required) {
-        if (-not $EnableDx12DlssRr) {
-            $failures.Add("rr_gate_not_enabled") | Out-Null
-        }
-        if ($DisableDlssRr) {
-            $failures.Add("rr_kill_switch_enabled") | Out-Null
-        }
-        if ($SolariDenoiseMode -notin @("rr", "dlss", "dlss-rr", "dlss_rr", "ray-reconstruction")) {
-            $failures.Add("solari_rr_denoise_mode_not_selected") | Out-Null
-        }
-        if ($InputLogMode) {
-            $failures.Add("input_log_cannot_prove_live_500_frame_stress") | Out-Null
-        }
-        if ($estimatedFrames -lt $StressFrameTarget) {
-            $failures.Add("stress_frame_estimate_below_target") | Out-Null
-        }
-    }
-
-    return [ordered]@{
-        schema_version = 1
-        required = [bool]$Required
-        pass = $failures.Count -eq 0
-        failures = @($failures.ToArray())
-        stress_frame_target = $StressFrameTarget
-        estimated_frames = [Math]::Round($estimatedFrames, 0)
-        required_metrics = $requiredMetrics
-    }
-}
-
-function Format-StatValue {
-    param(
-        [System.Collections.IDictionary]$Stats,
-        [string]$Metric,
-        [string]$Field
-    )
-
-    if (-not $Stats.Contains($Metric)) {
-        return "n/a"
-    }
-    return "$($Stats[$Metric][$Field])"
-}
-
-function Write-MarkdownReport {
-    param(
-        [string]$Path,
-        [System.Collections.IDictionary]$Summary
-    )
-
-    $stats = $Summary.metrics
-    $comparison = $Summary.comparison
-    $lines = New-Object "System.Collections.Generic.List[string]"
-    $lines.Add("# Client Benchmark") | Out-Null
-    $lines.Add("") | Out-Null
-    $lines.Add("- Created: $($Summary.created_at)") | Out-Null
-    $lines.Add("- Git: $($Summary.git.commit)") | Out-Null
-    $lines.Add("- Dirty files: $($Summary.git.dirty_count)") | Out-Null
-    if (-not [string]::IsNullOrWhiteSpace($Summary.config.benchmark_profile)) {
-        $lines.Add("- Benchmark profile: $($Summary.config.benchmark_profile)") | Out-Null
-    }
-    if (-not [string]::IsNullOrWhiteSpace($Summary.config.benchmark_matrix_lane)) {
-        $lines.Add("- Matrix lane: $($Summary.config.benchmark_matrix_lane)") | Out-Null
-    }
-    $lines.Add("- Backend: $($Summary.config.render_backend)") | Out-Null
-    $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
-    $startupLatency = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.desired_maximum_frame_latency } else { "n/a" }
-    $surfacePresent = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.surface_selected_present_mode } else { "n/a" }
-    $swapchainFormat = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.swapchain_format } else { "n/a" }
-    $lines.Add("- Max frame latency: requested=$($Summary.config.requested_maximum_frame_latency) startup=$startupLatency") | Out-Null
-    $lines.Add("- Surface present: selected=$surfacePresent swapchain_format=$swapchainFormat") | Out-Null
-    $selectedTransport = if ($Summary.cef_ui_transport_selection.status -eq "found") { $Summary.cef_ui_transport_selection.selected } else { "not_found" }
-    $health = $Summary.cef_ui_transport_health
-    $healthStatus = if ($null -ne $health -and $health.record_status -eq "found") { $health.status } else { "not_found" }
-    $healthRingDepth = if ($null -ne $health -and -not [string]::IsNullOrWhiteSpace([string]$health.ring_depth)) { $health.ring_depth } else { $Summary.config.cef_gpu_ring_depth }
-    $lines.Add("- CEF UI: mode=$($Summary.config.cef_ui_mode) requested_transport=$($Summary.config.cef_paint_transport) selected_transport=$selectedTransport enabled=$($Summary.config.cef_ui_enabled) ring_depth=$healthRingDepth health=$healthStatus") | Out-Null
-    if ($null -ne $health -and $health.record_status -eq "found") {
-        $lines.Add("- CEF transport health: $($health.transport) | accel paint $($health.accel_paint_fps) fps | gpu copy $($health.gpu_copy_ms) ms | CPU upload $($health.cpu_upload_bytes_per_frame) B/frame | reused $($health.reused_frames) frames | fallback $($health.fallback_count)") | Out-Null
-    }
-    $lines.Add("- Solari denoise mode: $($Summary.config.solari_denoise_mode)") | Out-Null
-    $lines.Add("- Solari internal scale: $($Summary.config.solari_internal_scale)") | Out-Null
-    $lines.Add("- Clouds: disabled=$($Summary.config.disable_clouds) profile=$($Summary.config.cloud_profile) quality=$($Summary.config.cloud_quality) internal_scale=$($Summary.config.cloud_internal_scale) temporal=$($Summary.config.cloud_temporal) shadows=$($Summary.config.cloud_shadows)") | Out-Null
-    $lines.Add("- RT feature hash: $($Summary.rt_feature_gates.rt_feature_hash)") | Out-Null
-    $lines.Add("- Backend capability hash: $($Summary.render_capabilities.backend_capability_hash)") | Out-Null
-    $lines.Add("- RT gates: direct=$($Summary.config.rt_sample_direct) indirect=$($Summary.config.rt_sample_indirect) reflections=$($Summary.config.rt_sample_reflections) surface_cache=$($Summary.config.rt_surface_cache) megageom=$($Summary.config.rt_megageom) opacity_mask=$($Summary.config.rt_opacity_mask) hair=$($Summary.config.rt_hair) async_readback=$($Summary.config.rt_async_readback) validation=$($Summary.config.rt_validation)") | Out-Null
-    if ($null -ne $Summary.dx12_memory) {
-        $lines.Add("- DX12 memory: status=$($Summary.dx12_memory.status) source=$($Summary.dx12_memory.source) local_budget_bytes=$($Summary.dx12_memory.local_budget_bytes) local_usage_bytes=$($Summary.dx12_memory.local_usage_bytes) adapter_ram_bytes=$($Summary.dx12_memory.adapter_ram_bytes)") | Out-Null
-    }
-    $lines.Add("- Sample count: $($Summary.samples.count)") | Out-Null
-    $lines.Add("") | Out-Null
-
-    $primaryMetrics = @(
-        "fps",
-        "frame_ns",
-        "frame_ms",
-        "solari_gpu_ns",
-        "meshlet_visibility_gpu_ns",
-        "cloud_total_gpu_ns",
-        "cloud_weather_update_gpu_ns",
-        "cloud_shape_noise_gpu_ns",
-        "cloud_raymarch_gpu_ns",
-        "cloud_temporal_gpu_ns",
-        "cloud_resolve_gpu_ns",
-        "cloud_composite_gpu_ns",
-        "cloud_weather_update_cpu_ns",
-        "cloud_internal_width",
-        "cloud_internal_height",
-        "cloud_primary_steps",
-        "cloud_light_steps",
-        "cloud_history_accept_rate",
-        "cloud_history_reject_rate",
-        "cloud_history_reset_count",
-        "cloud_history_average_age",
-        "cloud_vram_bytes",
-        "meshlet_path_instance_count",
-        "raster_path_instance_count",
-        "ray_proxy_only_count",
-        "meshlet_first_pass_gpu_ns",
-        "meshlet_depth_pyramid_first_gpu_ns",
-        "meshlet_second_pass_gpu_ns",
-        "meshlet_depth_resolve_gpu_ns",
-        "meshlet_material_depth_gpu_ns",
-        "meshlet_depth_pyramid_second_gpu_ns",
-        "meshlet_extract_cpu_ns",
-        "meshlet_prepare_cpu_ns",
-        "meshlet_bind_group_prepare_cpu_ns",
-        "meshlet_material_queue_cpu_ns",
-        "meshlet_material_queue_dirty_instance_count",
-        "meshlet_instance_full_buffer_writes",
-        "meshlet_instance_range_buffer_writes",
-        "meshlet_material_full_buffer_writes",
-        "meshlet_material_range_buffer_writes",
-        "meshlet_view_visibility_buffer_writes",
-        "meshlet_view_reset_cpu_queue_writes",
-        "meshlet_view_reset_cpu_queue_writes_per_view",
-        "meshlet_view_count",
-        "meshlet_instance_buffer_upload_bytes",
-        "meshlet_material_buffer_upload_bytes",
-        "meshlet_view_visibility_buffer_upload_bytes",
-        "meshlet_buffer_reallocations",
-        "meshlet_buffer_capacity_high_water_bytes",
-        "meshlet_view_resource_cache_rebuilds",
-        "meshlet_culling_output_buffer_bytes",
-        "meshlet_indirect_draw_buffer_writes",
-        "meshlet_compaction_buffer_writes",
-        "meshlet_asset_buffer_upload_bytes",
-        "meshlet_asset_buffer_grow_copies",
-        "meshlet_asset_buffer_capacity_bytes",
-        "transient_texture_requests",
-        "transient_texture_creates",
-        "transient_texture_reuses",
-        "transient_texture_aliases",
-        "transient_buffer_requests",
-        "transient_buffer_creates",
-        "transient_buffer_reuses",
-        "transient_buffer_aliases",
-        "transient_cached_texture_slots",
-        "transient_cached_buffer_slots",
-        "transient_texture_descriptor_miss_creates",
-        "transient_texture_lifetime_conflict_creates",
-        "transient_buffer_descriptor_miss_creates",
-        "transient_buffer_lifetime_conflict_creates",
-        "transient_texture_near_miss_size",
-        "transient_texture_near_miss_format",
-        "transient_texture_near_miss_usage",
-        "transient_texture_near_miss_view_formats",
-        "transient_texture_near_miss_other",
-        "transient_buffer_near_miss_size",
-        "transient_buffer_near_miss_usage",
-        "transient_buffer_near_miss_other",
-        "transient_texture_label_variant_descriptors",
-        "transient_buffer_label_variant_descriptors",
-        "transient_texture_every_frame_create_descriptors",
-        "transient_buffer_every_frame_create_descriptors",
-        "transient_texture_resize_like_create_descriptors",
-        "transient_buffer_resize_like_create_descriptors",
-        "render_scheduler_pressure",
-        "schedule_networking_receive_ns",
-        "schedule_world_stream_apply_ns",
-        "schedule_movement_input_ns",
-        "schedule_look_ns",
-        "schedule_physics_movement_ns",
-        "schedule_diagnostics_logging_ns",
-        "schedule_render_config_window_ns",
-        "schedule_solari_runtime_params_update_ns",
-        "schedule_meshlet_extraction_ns",
-        "schedule_render_interpolation_ns",
-        "standard_raster_gpu_ns",
-        "physics_fixed_update_cpu_ns",
-        "network_receive_cpu_ns",
-        "world_stream_apply_cpu_ns",
-        "catalog_lookup_cpu_ns",
-        "world_stream_render_prep_budget_ns",
-        "world_stream_render_prep_max_chunks_per_frame",
-        "world_stream_render_prep_limit_reason_code",
-        "world_stream_render_prep_queue_depth",
-        "world_stream_render_prep_deferred_chunks",
-        "world_stream_render_prep_applied_chunks",
-        "world_stream_render_prep_dynamic_mesh_assets",
-        "post_process_gpu_ns",
-        "ui_overlay_cpu_ns",
-        "present_wait_ns",
-        "cef_on_paint_fps",
-        "cef_on_accelerated_paint_fps",
-        "cef_cpu_upload_bytes",
-        "cef_gpu_copy_bytes",
-        "cef_gpu_copy_ns",
-        "cef_gpu_copy_failures",
-        "cef_gpu_frame_ready_count",
-        "cef_gpu_frame_not_ready_count",
-        "cef_gpu_frame_reused_count",
-        "cef_gpu_frame_blocking_wait_count",
-        "cef_health_accel_paint_fps",
-        "cef_health_paint_fps",
-        "cef_health_gpu_copy_ms",
-        "cef_health_gpu_copy_ns_per_copy",
-        "cef_health_cpu_upload_bytes_per_frame",
-        "cef_health_reused_frames",
-        "cef_health_not_ready_frames",
-        "cef_health_blocking_waits",
-        "cef_health_fallback_count",
-        "cef_health_ring_depth",
-        "cef_transport_fallback_count",
-        "cef_published_generation",
-        "cef_sampled_generation",
-        "cef_stale_frame_count",
-        "render_upload_write_texture_calls",
-        "render_upload_write_texture_bytes",
-        "render_upload_write_buffer_calls",
-        "render_upload_write_buffer_bytes",
-        "render_upload_write_buffer_with_calls",
-        "render_upload_write_buffer_with_bytes",
-        "render_upload_callsite_count",
-        "render_churn_bind_group_creations",
-        "render_churn_bind_group_layout_creations",
-        "render_churn_bind_group_layout_cache_hits",
-        "render_churn_bind_group_layout_cache_misses",
-        "render_churn_pipeline_layout_creations",
-        "render_churn_render_pipeline_queued",
-        "render_churn_compute_pipeline_queued",
-        "render_churn_render_pipeline_creations",
-        "render_churn_compute_pipeline_creations",
-        "render_churn_render_pipeline_ready",
-        "render_churn_compute_pipeline_ready",
-        "render_churn_render_pipeline_errors",
-        "render_churn_compute_pipeline_errors",
-        "render_churn_pipeline_cache_hits",
-        "render_churn_pipeline_cache_misses",
-        "render_churn_material_pipeline_key_count",
-        "render_churn_post_process_pipeline_key_count",
-        "render_churn_cloud_pipeline_key_count",
-        "render_churn_solari_pipeline_key_count",
-        "render_churn_meshlet_pipeline_key_count",
-        "render_churn_ui_pipeline_key_count",
-        "render_churn_debug_overlay_pipeline_key_count",
-        "render_churn_event_count",
-        "render_command_command_encoder_creations",
-        "render_command_render_passes",
-        "render_command_compute_passes",
-        "render_command_command_buffers_submitted",
-        "render_command_queue_submits",
-        "render_command_copy_commands",
-        "render_command_native_interop_command_insertions",
-        "render_command_event_count",
-        "render_readback_readback_requested_count",
-        "render_readback_readback_completed_count",
-        "render_readback_readback_dropped_count",
-        "render_readback_readback_blocking_wait_count",
-        "render_readback_readback_latency_frame_sum",
-        "render_readback_readback_latency_frame_max",
-        "render_readback_map_async_count",
-        "render_readback_poll_count",
-        "render_readback_event_count",
-        "render_shader_shader_module_creations",
-        "render_shader_shader_module_create_ns",
-        "render_shader_shader_variant_requests",
-        "render_shader_shader_def_count",
-        "render_shader_material_specializations",
-        "render_shader_render_pipeline_create_count",
-        "render_shader_render_pipeline_create_ns",
-        "render_shader_compute_pipeline_create_count",
-        "render_shader_compute_pipeline_create_ns",
-        "render_shader_pipeline_create_count",
-        "render_shader_pipeline_create_ns",
-        "render_shader_pipeline_specialization_count",
-        "render_shader_event_count",
-        "dlss_rr_gpu_ns",
-        "solari_pass_dlss_rr_guide_resolve_ns",
-        "solari_pass_direct_ns",
-        "solari_pass_diffuse_ns",
-        "solari_pass_diffuse_initial_ns",
-        "solari_pass_diffuse_spatial_ns",
-        "solari_pass_specular_regular_ns",
-        "solari_pass_specular_psr_ns",
-        "solari_pass_denoise_cheap_ns",
-        "solari_pass_denoise_atrous_1_ns",
-        "solari_pass_denoise_atrous_2_ns",
-        "solari_pass_denoise_atrous_3_ns",
-        "solari_pass_denoise_composite_ns"
-    )
-
-    $lines.Add("## Primary Metrics") | Out-Null
-    $lines.Add("") | Out-Null
-    $lines.Add("| metric | mean | p50 | p95 | p99 | min | max | samples |") | Out-Null
-    $lines.Add("|---|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
-    foreach ($metric in $primaryMetrics) {
-        if ($stats.Contains($metric)) {
-            $row = "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} |" -f `
-                $metric, `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "mean"), `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "p50"), `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "p95"), `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "p99"), `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "min"), `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "max"), `
-                (Format-StatValue -Stats $stats -Metric $metric -Field "count")
-            $lines.Add($row) | Out-Null
-        }
-    }
-    if ($null -ne $Summary.render_upload_callsites -and $Summary.render_upload_callsites.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Render Upload Top Callsites") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | operation | label | calls | bytes | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---:|---:|---:|") | Out-Null
-        foreach ($callsite in $Summary.render_upload_callsites) {
-            $lines.Add("| $($callsite.rank) | $($callsite.operation) | $($callsite.label) | $($callsite.calls) | $($callsite.bytes) | $($callsite.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.render_churn_events -and $Summary.render_churn_events.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Render Resource Churn Top Events") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | operation | category | label | calls | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
-        foreach ($event in $Summary.render_churn_events) {
-            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.render_churn_creation_events -and $Summary.render_churn_creation_events.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Render Resource Creation Churn Top Events") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | operation | category | label | calls | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
-        foreach ($event in $Summary.render_churn_creation_events) {
-            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.render_command_events -and $Summary.render_command_events.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Render Command Top Events") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | operation | category | label | calls | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---:|---:|") | Out-Null
-        foreach ($event in $Summary.render_command_events) {
-            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.render_readback_events -and $Summary.render_readback_events.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Render Readback Top Events") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | operation | category | label | calls | latency frame sum | latency frame max | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---:|---:|---:|---:|") | Out-Null
-        foreach ($event in $Summary.render_readback_events) {
-            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.latency_frame_sum) | $($event.latency_frame_max) | $($event.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.render_shader_events -and $Summary.render_shader_events.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Render Shader Top Events") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | operation | category | label | calls | elapsed ns | shader defs | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---:|---:|---:|---:|") | Out-Null
-        foreach ($event in $Summary.render_shader_events) {
-            $lines.Add("| $($event.rank) | $($event.operation) | $($event.category) | $($event.label) | $($event.calls) | $($event.elapsed_ns) | $($event.shader_defs) | $($event.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.transient_descriptor_creates -and $Summary.transient_descriptor_creates.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Transient Descriptor Create Top Events") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | resource | label | reason | near miss | pattern | format | width | height | size | usage bits | creates | bytes | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
-        foreach ($event in $Summary.transient_descriptor_creates) {
-            $lines.Add("| $($event.rank) | $($event.resource) | $($event.label) | $($event.reason) | $($event.near_miss) | $($event.create_pattern) | $($event.format) | $($event.width) | $($event.height) | $($event.size) | $($event.usage_bits) | $($event.create_count) | $($event.estimated_bytes) | $($event.samples) |") | Out-Null
-        }
-    }
-    if ($null -ne $Summary.transient_descriptor_label_variants -and $Summary.transient_descriptor_label_variants.Count -gt 0) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Transient Descriptor Label Variants") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| rank | resource | labels | format | width | height | size | usage bits | label count | samples |") | Out-Null
-        $lines.Add("|---:|---|---|---|---:|---:|---:|---:|---:|---:|") | Out-Null
-        foreach ($event in $Summary.transient_descriptor_label_variants) {
-            $lines.Add("| $($event.rank) | $($event.resource) | $($event.labels) | $($event.format) | $($event.width) | $($event.height) | $($event.size) | $($event.usage_bits) | $($event.label_count) | $($event.samples) |") | Out-Null
-        }
-    }
-
-    $budgetLedger = [ordered]@{
-        "frame_ns" = 6944444
-        "cloud_total_gpu_ns" = 1200000
-        "meshlet_visibility_gpu_ns" = 1200000
-        "standard_raster_gpu_ns" = 600000
-        "physics_fixed_update_cpu_ns" = 350000
-        "network_receive_cpu_ns" = 150000
-        "world_stream_apply_cpu_ns" = 150000
-        "post_process_gpu_ns" = 250000
-        "ui_overlay_cpu_ns" = 50000
-    }
-    $lines.Add("") | Out-Null
-    $lines.Add("## 144 FPS Budget Ledger") | Out-Null
-    $lines.Add("") | Out-Null
-    $lines.Add("| bucket | target p95 ns | actual p95 ns | pass |") | Out-Null
-    $lines.Add("|---|---:|---:|---|") | Out-Null
-    foreach ($metric in $budgetLedger.Keys) {
-        $target = [double]$budgetLedger[$metric]
-        $actual = if ($stats.Contains($metric)) { [double]$stats[$metric].p95 } else { $null }
-        $pass = if ($null -eq $actual) { "n/a" } elseif ($actual -le $target) { "true" } else { "false" }
-        $actualText = if ($null -eq $actual) { "n/a" } else { [Math]::Round($actual, 0) }
-        $lines.Add("| $metric | $target | $actualText | $pass |") | Out-Null
-    }
-
-    $rrAcceptance = $Summary.rr_acceptance
-    if ($null -ne $rrAcceptance -and $rrAcceptance.required) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## DX12 DLSS RR Acceptance") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("- Pass: $($rrAcceptance.pass)") | Out-Null
-        $lines.Add("- Estimated stress frames: $($rrAcceptance.estimated_frames) / $($rrAcceptance.stress_frame_target)") | Out-Null
-        if ($rrAcceptance.failures.Count -gt 0) {
-            $lines.Add("- Failures: $($rrAcceptance.failures -join ', ')") | Out-Null
-        }
-        else {
-            $lines.Add("- Failures: none") | Out-Null
-        }
-        $lines.Add("") | Out-Null
-        $lines.Add("| required metric | present | mean | p95 | samples |") | Out-Null
-        $lines.Add("|---|---|---:|---:|---:|") | Out-Null
-        foreach ($metric in @("dlss_rr_gpu_ns", "solari_pass_dlss_rr_guide_resolve_ns", "frame_ns")) {
-            $entry = $rrAcceptance.required_metrics[$metric]
-            $lines.Add("| $metric | $($entry["present"]) | $($entry["mean"]) | $($entry["p95"]) | $($entry["count"]) |") | Out-Null
-        }
-    }
-
-    if ($null -ne $comparison) {
-        $lines.Add("") | Out-Null
-        $lines.Add("## Baseline Comparison") | Out-Null
-        $lines.Add("") | Out-Null
-        $lines.Add("| metric | baseline mean | current mean | delta | delta percent | better |") | Out-Null
-        $lines.Add("|---|---:|---:|---:|---:|---|") | Out-Null
-        foreach ($metric in $primaryMetrics) {
-            if ($comparison.Contains($metric)) {
-                $entry = $comparison[$metric]
-                $row = "| {0} | {1} | {2} | {3} | {4} | {5} |" -f `
-                    $metric, `
-                    $entry.baseline_mean, `
-                    $entry.current_mean, `
-                    $entry.delta, `
-                    $entry.delta_percent, `
-                    $entry.better
-                $lines.Add($row) | Out-Null
-            }
-        }
-    }
-
-    $lines.Add("") | Out-Null
-    $lines.Add("Full machine-readable output: summary.json") | Out-Null
-
-    Set-Content -Path $Path -Value $lines -Encoding UTF8
 }
 
 function Stop-StackProcesses {
@@ -2008,11 +167,75 @@ function Stop-StackProcesses {
     }
 }
 
+function Start-BenchmarkStack {
+    param(
+        [string]$ScriptRoot,
+        [string]$StackProfile,
+        [System.Collections.IDictionary]$Overrides,
+        [System.Collections.IDictionary]$Environment,
+        [string]$SessionPath
+    )
+
+    $runStackPath = Join-Path $ScriptRoot "run_stack.ps1"
+    $powerShellPath = (Get-Process -Id $PID).Path
+    if ([string]::IsNullOrWhiteSpace($powerShellPath)) {
+        $powerShellPath = "powershell"
+    }
+
+    foreach ($name in $Environment.Keys) {
+        Set-BenchmarkProcessEnv -Name $name -Value $Environment[$name]
+    }
+
+    $runStackArgs = @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        $runStackPath,
+        "-Profile",
+        $StackProfile
+    )
+
+    foreach ($name in $Overrides.Keys) {
+        $value = $Overrides[$name]
+        if ($null -eq $value) {
+            continue
+        }
+        if ($value -is [bool] -or $value -is [System.Management.Automation.SwitchParameter]) {
+            if ([bool]$value) {
+                $runStackArgs += "-$name"
+            }
+            continue
+        }
+        if ($value -is [string] -and [string]::IsNullOrWhiteSpace($value)) {
+            continue
+        }
+        $runStackArgs += @("-$name", [string]$value)
+    }
+
+    Write-Host "Starting benchmark stack profile=$StackProfile..."
+    & $powerShellPath @runStackArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "run_stack.ps1 failed with exit code $LASTEXITCODE"
+    }
+
+    return [ordered]@{
+        schema_version = "benchmark_stack_runner_v1"
+        launched = $true
+        profile = $StackProfile
+        session_json = $SessionPath
+        command = @($powerShellPath) + $runStackArgs
+        overrides = $Overrides
+        environment_keys = @($Environment.Keys)
+    }
+}
+
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Normalize-WorkspacePath ((Resolve-Path (Join-Path $scriptRoot "..")).Path)
 $runRoot = Join-Path $repoRoot "target\run-stack"
 $logRoot = Join-Path $runRoot "logs"
 $pidFile = Join-Path $runRoot "processes.json"
+$sessionPath = Join-Path $runRoot "session.json"
 $clientLog = if ([string]::IsNullOrWhiteSpace($InputLog)) {
     Join-Path $logRoot "game_client.out.log"
 }
@@ -2043,6 +266,15 @@ while (Test-Path $outputRoot) {
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
 $ranStack = $false
+$stackRunner = [ordered]@{
+    schema_version = "benchmark_stack_runner_v1"
+    launched = $false
+    profile = ""
+    session_json = ""
+    command = @()
+    overrides = [ordered]@{}
+    environment_keys = @()
+}
 $lineOffset = 0
 $errorLineOffset = 0
 $captureFromStart = $BenchmarkLane -eq "streaming_spike"
@@ -2079,40 +311,27 @@ elseif ($CefUiMode -eq "animated_4k_surface") {
     if ($WindowHeight -le 0) { $WindowHeight = 2160 }
 }
 $cefAcceleratedFeatureRequested = $cefUiEnabled -and ($CefPaintTransport -eq "auto" -or $CefPaintTransport -eq "d3d11on12")
+$stackProfileRoot = Join-Path $scriptRoot "stack\profiles"
+$backendPresentStackProfile = "default.$RenderBackend.$PresentMode"
+$resolvedStackProfile = if (-not [string]::IsNullOrWhiteSpace($StackProfile)) {
+    $StackProfile
+}
+elseif (Test-Path (Join-Path $stackProfileRoot "$backendPresentStackProfile.json")) {
+    $backendPresentStackProfile
+}
+else {
+    "default.dx12.immediate"
+}
+$stackRunner.profile = $resolvedStackProfile
 
 try {
     if ([string]::IsNullOrWhiteSpace($InputLog)) {
-        $runStackPath = Join-Path $scriptRoot "run_stack.ps1"
-        $powerShellPath = (Get-Process -Id $PID).Path
-        if ([string]::IsNullOrWhiteSpace($powerShellPath)) {
-            $powerShellPath = "powershell"
-        }
-
-        $runStackArgs = @(
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            $runStackPath,
-            "-RenderDiagnostics",
-            "-RenderBackend",
-            $RenderBackend,
-            "-PresentMode",
-            $PresentMode
-        )
-        Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_PROFILE" -Value $BenchmarkProfile
-        Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_SCENARIO" -Value $BenchmarkScenario
-        Set-BenchmarkProcessEnv -Name "FUN_BENCHMARK_MATRIX_LANE" -Value $BenchmarkMatrixLane
-        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_BENCHMARK_MODE" -Value $CefUiMode
         $benchmarkLogFilter = "info,game_client=info,fun::perf=info,fun::render=debug,bevy_render::transient=debug"
-        Set-BenchmarkProcessEnv -Name "RUST_LOG" -Value $benchmarkLogFilter
-        Set-BenchmarkProcessEnv -Name "BEVY_LOG" -Value $benchmarkLogFilter
+        $acceleratedPaintValue = ""
         if ($CefPaintTransport -eq "default") {
-            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_PAINT_TRANSPORT" -Value ""
-            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_PAINT" -Value ""
+            $acceleratedPaintValue = ""
         }
         else {
-            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_PAINT_TRANSPORT" -Value $CefPaintTransport
             $acceleratedPaintValue = switch ($CefPaintTransport) {
                 "cpu" { "0" }
                 "disabled" { "disabled" }
@@ -2120,126 +339,92 @@ try {
                 "d3d11on12" { "1" }
                 default { "" }
             }
-            Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_PAINT" -Value $acceleratedPaintValue
         }
-        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_ACCELERATED_STRICT" -Value $(if ($CefAcceleratedStrict) { "1" } else { "" })
-        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_GPU_RING_DEPTH" -Value ([string]$CefGpuRingDepth)
-        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_COPY_DIRTY_RECTS" -Value $(if ($CefCopyDirtyRects) { "1" } else { "" })
-        Set-BenchmarkProcessEnv -Name "FUN_CEF_UI_DEBUG_TIMINGS" -Value $(if ($CefDebugTimings) { "1" } else { "" })
-        if ($RequestedMaximumFrameLatency -gt 0) {
-            Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
-            Set-BenchmarkProcessEnv -Name "FUN_RENDER_MAX_FRAME_LATENCY" -Value ([string]$RequestedMaximumFrameLatency)
-            $runStackArgs += @("-RenderMaxFrameLatency", "$RequestedMaximumFrameLatency")
+        $benchmarkStackEnvironment = [ordered]@{
+            FUN_BENCHMARK_PROFILE = $BenchmarkProfile
+            FUN_BENCHMARK_SCENARIO = $BenchmarkScenario
+            FUN_BENCHMARK_MATRIX_LANE = $BenchmarkMatrixLane
+            FUN_CEF_UI_BENCHMARK_MODE = $CefUiMode
+            RUST_LOG = $benchmarkLogFilter
+            BEVY_LOG = $benchmarkLogFilter
+            FUN_CEF_UI_PAINT_TRANSPORT = if ($CefPaintTransport -eq "default") { "" } else { $CefPaintTransport }
+            FUN_CEF_UI_ACCELERATED_PAINT = $acceleratedPaintValue
+            FUN_CEF_UI_ACCELERATED_STRICT = if ($CefAcceleratedStrict) { "1" } else { "" }
+            FUN_CEF_UI_GPU_RING_DEPTH = [string]$CefGpuRingDepth
+            FUN_CEF_UI_COPY_DIRTY_RECTS = if ($CefCopyDirtyRects) { "1" } else { "" }
+            FUN_CEF_UI_DEBUG_TIMINGS = if ($CefDebugTimings) { "1" } else { "" }
+            FUN_PRESENT_MAX_FRAME_LATENCY = if ($RequestedMaximumFrameLatency -gt 0) { [string]$RequestedMaximumFrameLatency } else { "" }
+            FUN_RENDER_MAX_FRAME_LATENCY = if ($RequestedMaximumFrameLatency -gt 0) { [string]$RequestedMaximumFrameLatency } else { "" }
+            FUN_STREAM_RENDER_PREP_BUDGET_MS = if ($StreamRenderPrepBudgetMs -gt 0) { [string]$StreamRenderPrepBudgetMs } else { "" }
+            FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME = if ($StreamRenderPrepMaxChunksPerFrame -gt 0) { [string]$StreamRenderPrepMaxChunksPerFrame } else { "" }
         }
-        else {
-            Set-BenchmarkProcessEnv -Name "FUN_PRESENT_MAX_FRAME_LATENCY" -Value ""
-            Set-BenchmarkProcessEnv -Name "FUN_RENDER_MAX_FRAME_LATENCY" -Value ""
+        $benchmarkStackOverrides = [ordered]@{
+            RenderDiagnostics = $true
+            RenderBackend = $RenderBackend
+            PresentMode = $PresentMode
+            RenderMaxFrameLatency = if ($RequestedMaximumFrameLatency -gt 0) { $RequestedMaximumFrameLatency } else { $null }
+            Release = [bool]$Release
+            StaticBevy = [bool]$StaticBevy
+            CefUi = [bool]$cefUiEnabled
+            CefUiDx12AcceleratedPaint = [bool]$cefAcceleratedFeatureRequested
+            CefPaintTransport = if ($CefPaintTransport -ne "default" -and ($cefUiEnabled -or ($CefPaintTransport -ne "auto" -and $CefPaintTransport -ne "d3d11on12"))) { $CefPaintTransport } else { $null }
+            CefAcceleratedStrict = [bool]$CefAcceleratedStrict
+            CefGpuRingDepth = $CefGpuRingDepth
+            CefCopyDirtyRects = [bool]$CefCopyDirtyRects
+            CefDebugTimings = [bool]$CefDebugTimings
+            EnableDx12DlssRr = [bool]$EnableDx12DlssRr
+            DisableDlssRr = [bool]$DisableDlssRr
+            DisableSolari = [bool]$DisableSolari
+            DisableMeshlets = [bool]$DisableMeshlets
+            DisableClouds = [bool]$DisableClouds
+            DisableFpsOverlay = [bool]$DisableFpsOverlay
+            RtSampleDirect = $RtSampleDirect
+            RtSampleIndirect = $RtSampleIndirect
+            RtSampleReflections = $RtSampleReflections
+            RtSurfaceCache = $RtSurfaceCache
+            RtMegaGeom = $RtMegaGeom
+            RtOpacityMask = $RtOpacityMask
+            RtHair = $RtHair
+            RtAsyncReadback = $RtAsyncReadback
+            RtValidation = $RtValidation
+            RenderUnknownVendor = [bool]$RenderUnknownVendor
+            RenderVendorEmulation = $RenderVendorEmulation
+            CloudQuality = $CloudQuality
+            CloudInternalScale = $CloudInternalScale
+            CloudTemporal = $CloudTemporal
+            CloudShadows = $CloudShadows
+            CloudProfile = $CloudProfile
+            CloudDebugOverlay = $CloudDebugOverlay
+            BenchmarkLogMinimal = $true
+            TraceDiagnostics = [bool]$TraceDiagnostics
+            FrameTimeDiagnostics = [bool]$FrameTimeDiagnostics
+            FrameTimeDiagnosticInterval = if ($FrameTimeDiagnostics) { $FrameTimeDiagnosticInterval } else { $null }
+            FrameTimeDiagnosticMinNs = if ($FrameTimeDiagnostics) { $FrameTimeDiagnosticMinNs } else { $null }
+            FrameTimeDiagnosticMaxDepth = if ($FrameTimeDiagnostics) { $FrameTimeDiagnosticMaxDepth } else { $null }
+            FrameTimeDiagnosticTopChildren = if ($FrameTimeDiagnostics) { $FrameTimeDiagnosticTopChildren } else { $null }
+            FrameTimeDiagnosticTopSpans = if ($FrameTimeDiagnostics) { $FrameTimeDiagnosticTopSpans } else { $null }
+            FrameTimeDiagnosticRowEvents = [bool]$FrameTimeDiagnosticRowEvents
+            SolariDenoiseMode = $SolariDenoiseMode
+            SolariInternalScale = $SolariInternalScale
+            SolariBlasCompactionVertices = if ($SolariBlasCompactionVertices -gt 0) { $SolariBlasCompactionVertices } else { $null }
+            SolariArch = $SolariArch
+            SolariTargetFps = if ($SolariTargetFps -gt 0) { $SolariTargetFps } else { $null }
+            SolariFrameBudgetNs = if ($SolariFrameBudgetNs -gt 0) { $SolariFrameBudgetNs } else { $null }
+            SolariGpuBudgetNs = if ($SolariGpuBudgetNs -gt 0) { $SolariGpuBudgetNs } else { $null }
+            SolariVisualTarget = $SolariVisualTarget
+            RenderGeometryPolicy = $RenderGeometryPolicy
+            MeshletMinTriangles = if ($MeshletMinTriangles -gt 0) { $MeshletMinTriangles } else { $null }
+            StreamRenderPrepBudgetMs = if ($StreamRenderPrepBudgetMs -gt 0) { $StreamRenderPrepBudgetMs } else { $null }
+            StreamRenderPrepMaxChunksPerFrame = if ($StreamRenderPrepMaxChunksPerFrame -gt 0) { $StreamRenderPrepMaxChunksPerFrame } else { $null }
+            WindowWidth = if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) { $WindowWidth } else { $null }
+            WindowHeight = if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) { $WindowHeight } else { $null }
         }
-        if ($Release) { $runStackArgs += "-Release" }
-        if ($StaticBevy) { $runStackArgs += "-StaticBevy" }
-        if ($cefUiEnabled) { $runStackArgs += "-CefUi" }
-        if ($cefAcceleratedFeatureRequested) { $runStackArgs += "-CefUiDx12AcceleratedPaint" }
-        if ($CefPaintTransport -ne "default" -and ($cefUiEnabled -or ($CefPaintTransport -ne "auto" -and $CefPaintTransport -ne "d3d11on12"))) {
-            $runStackArgs += @("-CefPaintTransport", $CefPaintTransport)
-        }
-        if ($CefAcceleratedStrict) { $runStackArgs += "-CefAcceleratedStrict" }
-        $runStackArgs += @("-CefGpuRingDepth", "$CefGpuRingDepth")
-        if ($CefCopyDirtyRects) { $runStackArgs += "-CefCopyDirtyRects" }
-        if ($CefDebugTimings) { $runStackArgs += "-CefDebugTimings" }
-        if ($EnableDx12DlssRr) { $runStackArgs += "-EnableDx12DlssRr" }
-        if ($DisableDlssRr) { $runStackArgs += "-DisableDlssRr" }
-        if ($DisableSolari) { $runStackArgs += "-DisableSolari" }
-        if ($DisableMeshlets) { $runStackArgs += "-DisableMeshlets" }
-        if ($DisableClouds) { $runStackArgs += "-DisableClouds" }
-        if ($DisableFpsOverlay) { $runStackArgs += "-DisableFpsOverlay" }
-        if (-not [string]::IsNullOrWhiteSpace($RtSampleDirect)) { $runStackArgs += @("-RtSampleDirect", $RtSampleDirect) }
-        if (-not [string]::IsNullOrWhiteSpace($RtSampleIndirect)) { $runStackArgs += @("-RtSampleIndirect", $RtSampleIndirect) }
-        if (-not [string]::IsNullOrWhiteSpace($RtSampleReflections)) { $runStackArgs += @("-RtSampleReflections", $RtSampleReflections) }
-        if (-not [string]::IsNullOrWhiteSpace($RtSurfaceCache)) { $runStackArgs += @("-RtSurfaceCache", $RtSurfaceCache) }
-        if (-not [string]::IsNullOrWhiteSpace($RtMegaGeom)) { $runStackArgs += @("-RtMegaGeom", $RtMegaGeom) }
-        if (-not [string]::IsNullOrWhiteSpace($RtOpacityMask)) { $runStackArgs += @("-RtOpacityMask", $RtOpacityMask) }
-        if (-not [string]::IsNullOrWhiteSpace($RtHair)) { $runStackArgs += @("-RtHair", $RtHair) }
-        if (-not [string]::IsNullOrWhiteSpace($RtAsyncReadback)) { $runStackArgs += @("-RtAsyncReadback", $RtAsyncReadback) }
-        if (-not [string]::IsNullOrWhiteSpace($RtValidation)) { $runStackArgs += @("-RtValidation", $RtValidation) }
-        if ($RenderUnknownVendor) { $runStackArgs += "-RenderUnknownVendor" }
-        if (-not [string]::IsNullOrWhiteSpace($RenderVendorEmulation)) { $runStackArgs += @("-RenderVendorEmulation", $RenderVendorEmulation) }
-        if (-not [string]::IsNullOrWhiteSpace($CloudQuality)) { $runStackArgs += @("-CloudQuality", $CloudQuality) }
-        if (-not [string]::IsNullOrWhiteSpace($CloudInternalScale)) { $runStackArgs += @("-CloudInternalScale", $CloudInternalScale) }
-        if (-not [string]::IsNullOrWhiteSpace($CloudTemporal)) { $runStackArgs += @("-CloudTemporal", $CloudTemporal) }
-        if (-not [string]::IsNullOrWhiteSpace($CloudShadows)) { $runStackArgs += @("-CloudShadows", $CloudShadows) }
-        if (-not [string]::IsNullOrWhiteSpace($CloudProfile)) { $runStackArgs += @("-CloudProfile", $CloudProfile) }
-        if (-not [string]::IsNullOrWhiteSpace($CloudDebugOverlay)) { $runStackArgs += @("-CloudDebugOverlay", $CloudDebugOverlay) }
-        $runStackArgs += "-BenchmarkLogMinimal"
-        if ($TraceDiagnostics) { $runStackArgs += "-TraceDiagnostics" }
-        if ($FrameTimeDiagnostics) {
-            $runStackArgs += @(
-                "-FrameTimeDiagnostics",
-                "-FrameTimeDiagnosticInterval",
-                $FrameTimeDiagnosticInterval,
-                "-FrameTimeDiagnosticMinNs",
-                $FrameTimeDiagnosticMinNs,
-                "-FrameTimeDiagnosticMaxDepth",
-                $FrameTimeDiagnosticMaxDepth,
-                "-FrameTimeDiagnosticTopChildren",
-                $FrameTimeDiagnosticTopChildren,
-                "-FrameTimeDiagnosticTopSpans",
-                $FrameTimeDiagnosticTopSpans
-            )
-            if ($FrameTimeDiagnosticRowEvents) { $runStackArgs += "-FrameTimeDiagnosticRowEvents" }
-        }
-        if (-not [string]::IsNullOrWhiteSpace($SolariDenoiseMode)) {
-            $runStackArgs += @("-SolariDenoiseMode", $SolariDenoiseMode)
-        }
-        if (-not [string]::IsNullOrWhiteSpace($SolariInternalScale)) {
-            $runStackArgs += @("-SolariInternalScale", $SolariInternalScale)
-        }
-        if ($SolariBlasCompactionVertices -gt 0) {
-            $runStackArgs += @("-SolariBlasCompactionVertices", "$SolariBlasCompactionVertices")
-        }
-        if (-not [string]::IsNullOrWhiteSpace($SolariArch)) {
-            $runStackArgs += @("-SolariArch", $SolariArch)
-        }
-        if ($SolariTargetFps -gt 0) {
-            $runStackArgs += @("-SolariTargetFps", $SolariTargetFps)
-        }
-        if ($SolariFrameBudgetNs -gt 0) {
-            $runStackArgs += @("-SolariFrameBudgetNs", $SolariFrameBudgetNs)
-        }
-        if ($SolariGpuBudgetNs -gt 0) {
-            $runStackArgs += @("-SolariGpuBudgetNs", $SolariGpuBudgetNs)
-        }
-        if (-not [string]::IsNullOrWhiteSpace($SolariVisualTarget)) {
-            $runStackArgs += @("-SolariVisualTarget", $SolariVisualTarget)
-        }
-        if (-not [string]::IsNullOrWhiteSpace($RenderGeometryPolicy)) {
-            $runStackArgs += @("-RenderGeometryPolicy", $RenderGeometryPolicy)
-        }
-        if ($MeshletMinTriangles -gt 0) {
-            $runStackArgs += @("-MeshletMinTriangles", "$MeshletMinTriangles")
-        }
-        if ($StreamRenderPrepBudgetMs -gt 0) {
-            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_BUDGET_MS" -Value ([string]$StreamRenderPrepBudgetMs)
-            $runStackArgs += @("-StreamRenderPrepBudgetMs", "$StreamRenderPrepBudgetMs")
-        }
-        else {
-            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_BUDGET_MS" -Value ""
-        }
-        if ($StreamRenderPrepMaxChunksPerFrame -gt 0) {
-            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME" -Value ([string]$StreamRenderPrepMaxChunksPerFrame)
-            $runStackArgs += @("-StreamRenderPrepMaxChunksPerFrame", "$StreamRenderPrepMaxChunksPerFrame")
-        }
-        else {
-            Set-BenchmarkProcessEnv -Name "FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME" -Value ""
-        }
-        if ($WindowWidth -gt 0 -and $WindowHeight -gt 0) {
-            $runStackArgs += @("-WindowWidth", "$WindowWidth", "-WindowHeight", "$WindowHeight")
-        }
-
-        Write-Host "Starting benchmark stack..."
-        & $powerShellPath @runStackArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "run_stack.ps1 failed with exit code $LASTEXITCODE"
-        }
+        $stackRunner = Start-BenchmarkStack `
+            -ScriptRoot $scriptRoot `
+            -StackProfile $resolvedStackProfile `
+            -Overrides $benchmarkStackOverrides `
+            -Environment $benchmarkStackEnvironment `
+            -SessionPath $sessionPath
         $ranStack = $true
 
         $waitUntil = (Get-Date).AddSeconds(15)
@@ -2297,6 +482,7 @@ try {
     }
 
     $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
+    $dx12BackendDiagnostics = Parse-Dx12BackendDiagnosticsLog -Lines $allLines
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
     $renderUploadCallsites = Parse-RenderUploadCallsitesLog -Lines $sampleLines
@@ -2395,6 +581,7 @@ try {
             cloud_profile = if ([string]::IsNullOrWhiteSpace($CloudProfile)) { "scattered" } else { $CloudProfile }
             cloud_debug_overlay = if ([string]::IsNullOrWhiteSpace($CloudDebugOverlay)) { "none" } else { $CloudDebugOverlay }
         }
+        stack_runner = $stackRunner
         samples = [ordered]@{
             count = $samples.Count
             warmup_seconds = if ([string]::IsNullOrWhiteSpace($InputLog)) { $WarmupSeconds } else { 0 }
@@ -2405,6 +592,7 @@ try {
         comparison = $comparison
         rr_acceptance = $rrAcceptance
         render_capabilities = $renderCapabilities
+        dx12_backend_diagnostics = $dx12BackendDiagnostics
         rt_feature_gates = $rtFeatureGates
         render_presentation = $renderPresentation
         render_upload_callsites = $renderUploadCallsites

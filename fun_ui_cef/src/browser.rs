@@ -42,7 +42,7 @@ pub const MAIN_BROWSER_PAGE: BrowserUiPage = BrowserUiPage {
     url: FUN_UI_MAIN_URL,
     transparent_background: true,
 };
-pub const CEF_UI_WINDOWLESS_FRAME_RATE_HZ: i32 = 120;
+pub const CEF_UI_WINDOWLESS_FRAME_RATE_HZ: i32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrowserUiPage {
@@ -1007,6 +1007,22 @@ impl CefUiBrowserHandle {
             unmodified_character: event.unmodified_character,
             focus_on_editable_field: 0,
         }));
+        true
+    }
+
+    pub fn set_windowless_frame_rate(&self, frame_rate_hz: i32) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.set_windowless_frame_rate(frame_rate_hz.max(1));
+        true
+    }
+
+    pub fn set_hidden(&self, hidden: bool) -> bool {
+        let Some(host) = browser_from_state(&self.state).and_then(|browser| browser.host()) else {
+            return false;
+        };
+        host.was_hidden(i32::from(hidden));
         true
     }
 

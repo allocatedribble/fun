@@ -23,11 +23,11 @@ pub(crate) use fun_render::RenderWorldStatus as ClientWorldStatus;
 #[cfg(any(test, feature = "benchmarks"))]
 pub use fun_render::benchmark_parse_solari_denoise_mode;
 use fun_render::{
-    ClientRenderConfig, ClientRenderProfile, ClientWindowConfig, FunRenderAppOptions,
-    FunRenderCorePlugin, FunRenderWinitPresentationPlugin, RenderGeometryClass,
-    RenderWorldApplyOptions, RenderWorldContext, RenderWorldStatus, WorldRenderCatalog,
-    apply_render_world_chunk, enable_solari_lighting_for_ready_world,
-    request_solari_lighting_history_reset,
+    ClientRenderConfig, ClientRenderProfile, ClientWindowConfig, DynamicInstanceTable,
+    FunRenderAppOptions, FunRenderCorePlugin, FunRenderWinitPresentationPlugin,
+    PrimitiveRenderCache, RenderGeometryClass, RenderWorldApplyOptions, RenderWorldContext,
+    RenderWorldStatus, StaticInstanceTable, WorldRenderCatalog, apply_render_world_chunk,
+    enable_solari_lighting_for_ready_world, request_solari_lighting_history_reset,
 };
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -47,7 +47,6 @@ use bevy::render::error_handler::{ErrorType, RenderRecoveryStatus};
 use bevy::solari::prelude::SolariRuntimeParams;
 use bevy::{
     app::AppExit,
-    pbr::experimental::meshlet::MeshletMesh,
     prelude::*,
     solari::prelude::{SolariLighting, SolariResetEvent},
     window::PrimaryWindow,
@@ -873,6 +872,8 @@ impl Plugin for GameClientPlugin {
             .insert_resource(Time::<Fixed>::from_hz(DEFAULT_TICK_RATE_HZ))
             .init_resource::<RenderWorldContext>()
             .init_resource::<RenderWorldStatus>()
+            .init_resource::<StaticInstanceTable>()
+            .init_resource::<DynamicInstanceTable>()
             .init_resource::<ClientWorldStreamAckState>()
             .init_resource::<ClientStreamRenderPrepConfig>()
             .init_resource::<ClientPendingWorldStreamChunks>()
@@ -1118,7 +1119,7 @@ fn process_is_alive(pid: u32) -> bool {
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "preview stream application uses the same explicit asset and render stores as network world-stream ingestion"
+    reason = "preview stream application uses the same explicit catalog and primitive-cache resources as network world-stream ingestion"
 )]
 fn apply_static_preview_world_stream(
     mut commands: Commands,
@@ -1126,10 +1127,10 @@ fn apply_static_preview_world_stream(
     mut preview_stream: ResMut<StaticPreviewWorldStream>,
     mut render_world: ResMut<RenderWorldContext>,
     mut world_status: ResMut<RenderWorldStatus>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut static_instance_table: ResMut<StaticInstanceTable>,
+    mut dynamic_instance_table: ResMut<DynamicInstanceTable>,
     catalog: Res<WorldRenderCatalog>,
+    primitive_cache: Res<PrimitiveRenderCache>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     mut runtime: ClientRuntimeProfiler,
     #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
@@ -1153,10 +1154,10 @@ fn apply_static_preview_world_stream(
             &mut commands,
             &mut render_world,
             &mut world_status,
-            &mut meshes,
-            &mut meshlet_meshes,
-            &mut materials,
+            &mut static_instance_table,
+            &mut dynamic_instance_table,
             &catalog,
+            &primitive_cache,
             &render_config,
             RenderWorldApplyOptions {
                 stream_verbose: runtime.log_config.stream_verbose(),
@@ -1901,6 +1902,7 @@ fn receive_server_control(
 fn receive_server_snapshots(
     mut client: ResMut<QuinnetClient>,
     render_world: Res<RenderWorldContext>,
+    mut dynamic_instance_table: ResMut<DynamicInstanceTable>,
     mut transforms: Query<&mut Transform>,
     _log_config: Res<ClientLogConfig>,
 ) {
@@ -1947,6 +1949,7 @@ fn receive_server_snapshots(
                 continue;
             };
             *transform = transform_from_quantized(transform_delta);
+            dynamic_instance_table.mark_transform_dirty(delta.entity, transform_delta);
             applied = applied.saturating_add(1);
         }
 
@@ -2102,7 +2105,7 @@ fn receive_world_stream(
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "render-prep draining owns the explicit render stores and lifecycle transitions formerly handled inline during network receive"
+    reason = "render-prep draining owns explicit catalog/cache resources and lifecycle transitions formerly handled inline during network receive"
 )]
 fn apply_pending_world_stream_chunks(
     mut commands: Commands,
@@ -2111,10 +2114,10 @@ fn apply_pending_world_stream_chunks(
     mut render_world: ClientRenderWorldParam,
     mut pending_stream: ResMut<ClientPendingWorldStreamChunks>,
     prep_config: Res<ClientStreamRenderPrepConfig>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     catalog: Res<WorldRenderCatalog>,
+    primitive_cache: Res<PrimitiveRenderCache>,
+    mut static_instance_table: ResMut<StaticInstanceTable>,
+    mut dynamic_instance_table: ResMut<DynamicInstanceTable>,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     mut runtime: ClientRuntimeProfiler,
     #[cfg(not(all(feature = "render_diagnostics", debug_assertions)))]
@@ -2201,10 +2204,10 @@ fn apply_pending_world_stream_chunks(
             &mut commands,
             &mut render_world.render_world,
             &mut render_world.status,
-            &mut meshes,
-            &mut meshlet_meshes,
-            &mut materials,
+            &mut static_instance_table,
+            &mut dynamic_instance_table,
             &catalog,
+            &primitive_cache,
             &render_config,
             RenderWorldApplyOptions {
                 stream_verbose: _stream_verbose,
@@ -2615,8 +2618,14 @@ fn log_client_diagnostics(
     let mut material_count = 0usize;
     let mut collider_count = 0usize;
     let mut simple_raster_count = 0usize;
+    let mut instanced_static_raster_count = 0usize;
+    let mut gpu_culled_static_raster_count = 0usize;
+    let mut gpu_culled_dynamic_raster_count = 0usize;
     let mut meshlet_static_dense_count = 0usize;
     let mut meshlet_dynamic_dense_count = 0usize;
+    let mut virtual_static_cluster_count = 0usize;
+    let mut foliage_aggregate_count = 0usize;
+    let mut transparent_raster_count = 0usize;
     let mut ray_proxy_only_count = 0usize;
     let mut viewmodel_count = 0usize;
     let mut samples = Vec::new();
@@ -2642,8 +2651,18 @@ fn log_client_diagnostics(
         collider_count += usize::from(collider.is_some());
         match geometry_class {
             Some(RenderGeometryClass::SimpleRaster) => simple_raster_count += 1,
+            Some(RenderGeometryClass::InstancedStaticRaster) => instanced_static_raster_count += 1,
+            Some(RenderGeometryClass::GpuCulledStaticRaster) => {
+                gpu_culled_static_raster_count += 1;
+            }
+            Some(RenderGeometryClass::GpuCulledDynamicRaster) => {
+                gpu_culled_dynamic_raster_count += 1;
+            }
             Some(RenderGeometryClass::MeshletStaticDense) => meshlet_static_dense_count += 1,
             Some(RenderGeometryClass::MeshletDynamicDense) => meshlet_dynamic_dense_count += 1,
+            Some(RenderGeometryClass::VirtualStaticCluster) => virtual_static_cluster_count += 1,
+            Some(RenderGeometryClass::FoliageAggregate) => foliage_aggregate_count += 1,
+            Some(RenderGeometryClass::TransparentRaster) => transparent_raster_count += 1,
             Some(RenderGeometryClass::RayProxyOnly) => ray_proxy_only_count += 1,
             Some(RenderGeometryClass::Viewmodel) => viewmodel_count += 1,
             None => {}
@@ -2704,8 +2723,14 @@ fn log_client_diagnostics(
             colliders = collider_count,
             catalog_assets = catalog.as_ref().map(|catalog| catalog.len()).unwrap_or_default(),
             simple_raster = simple_raster_count,
+            instanced_static_raster = instanced_static_raster_count,
+            gpu_culled_static_raster = gpu_culled_static_raster_count,
+            gpu_culled_dynamic_raster = gpu_culled_dynamic_raster_count,
             meshlet_static_dense = meshlet_static_dense_count,
             meshlet_dynamic_dense = meshlet_dynamic_dense_count,
+            virtual_static_cluster = virtual_static_cluster_count,
+            foliage_aggregate = foliage_aggregate_count,
+            transparent_raster = transparent_raster_count,
             ray_proxy_only = ray_proxy_only_count,
             viewmodel = viewmodel_count,
             "client world diagnostic snapshot"
@@ -2714,16 +2739,30 @@ fn log_client_diagnostics(
             target: "fun::render_catalog",
             catalog_assets = catalog.as_ref().map(|catalog| catalog.len()).unwrap_or_default(),
             simple_raster = simple_raster_count,
+            instanced_static_raster = instanced_static_raster_count,
+            gpu_culled_static_raster = gpu_culled_static_raster_count,
+            gpu_culled_dynamic_raster = gpu_culled_dynamic_raster_count,
             meshlet_static_dense = meshlet_static_dense_count,
             meshlet_dynamic_dense = meshlet_dynamic_dense_count,
+            virtual_static_cluster = virtual_static_cluster_count,
+            foliage_aggregate = foliage_aggregate_count,
+            transparent_raster = transparent_raster_count,
             ray_proxy_only = ray_proxy_only_count,
             viewmodel = viewmodel_count,
             "client render catalog usage snapshot"
         );
     }
+    let raster_path_count = simple_raster_count
+        + instanced_static_raster_count
+        + gpu_culled_static_raster_count
+        + gpu_culled_dynamic_raster_count
+        + virtual_static_cluster_count
+        + foliage_aggregate_count
+        + transparent_raster_count
+        + viewmodel_count;
     perf_counters.set_render_path_counts(
         (meshlet_static_dense_count + meshlet_dynamic_dense_count) as u64,
-        (simple_raster_count + viewmodel_count) as u64,
+        raster_path_count as u64,
         ray_proxy_only_count as u64,
     );
 
@@ -4120,10 +4159,10 @@ fn log_verbose_render_profile(
     let gpu_total = gpu_metrics.iter().map(|metric| metric.current).sum::<f64>();
     let cpu_total = cpu_metrics.iter().map(|metric| metric.current).sum::<f64>();
     let pixel_count = window.map(ClientWindowProfile::physical_pixels);
-    let target_120hz = target_frame_ms(120.0);
-    let frame_budget_pct = frame_ms.map(|frame_ms| (frame_ms / target_120hz) * 100.0);
+    let target_frame_budget = target_frame_ms(60.0);
+    let frame_budget_pct = frame_ms.map(|frame_ms| (frame_ms / target_frame_budget) * 100.0);
     let recorded_gpu_budget_pct = if gpu_total > 0.0 {
-        Some((gpu_total / target_120hz) * 100.0)
+        Some((gpu_total / target_frame_budget) * 100.0)
     } else {
         None
     };
@@ -4141,7 +4180,7 @@ fn log_verbose_render_profile(
         recorded_cpu_ms = cpu_total,
         solari_sum_ms = ?solari_total,
         frame_ms = ?frame_ms,
-        target_120hz_ms = target_120hz,
+        target_frame_budget_ms = target_frame_budget,
         frame_budget_pct = ?frame_budget_pct,
         recorded_gpu_budget_pct = ?recorded_gpu_budget_pct,
         unattributed_frame_ms = ?unattributed_frame_ms,
@@ -4167,7 +4206,7 @@ fn log_verbose_render_profile(
             current_ms = *value,
             current_ns = ms_to_ns(Some(*value)),
             pct_recorded_gpu = ?pct,
-            budget_120hz_pct = (*value / target_120hz) * 100.0,
+            budget_pct = (*value / target_frame_budget) * 100.0,
             ns_per_pixel = ?ns_per_pixel(*value, pixel_count),
             "verbose render GPU group"
         );
@@ -4184,7 +4223,7 @@ fn log_verbose_render_profile(
             average_ms = ?metric.average,
             current_ns = ms_to_ns(Some(metric.current)),
             pct_recorded_gpu = ?pct,
-            budget_120hz_pct = (metric.current / target_120hz) * 100.0,
+            budget_pct = (metric.current / target_frame_budget) * 100.0,
             ns_per_pixel = ?ns_per_pixel(metric.current, pixel_count),
             recommendation = render_profile_recommendation(&metric.path),
             "verbose render GPU metric"
@@ -4644,9 +4683,9 @@ mod tests {
                 benchmark_minimal: true,
             })
             .insert_resource(WorldRenderCatalog::default())
-            .insert_resource(Assets::<Mesh>::default())
-            .insert_resource(Assets::<MeshletMesh>::default())
-            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(PrimitiveRenderCache::default())
+            .init_resource::<StaticInstanceTable>()
+            .init_resource::<DynamicInstanceTable>()
             .insert_resource(StaticPreviewWorldStream::from_chunks(vec![
                 preview_test_chunk(),
             ]))
@@ -4695,9 +4734,9 @@ mod tests {
                 benchmark_minimal: true,
             })
             .insert_resource(WorldRenderCatalog::default())
-            .insert_resource(Assets::<Mesh>::default())
-            .insert_resource(Assets::<MeshletMesh>::default())
-            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(PrimitiveRenderCache::default())
+            .init_resource::<StaticInstanceTable>()
+            .init_resource::<DynamicInstanceTable>()
             .insert_resource(stream)
             .init_resource::<RenderWorldContext>()
             .init_resource::<RenderWorldStatus>()

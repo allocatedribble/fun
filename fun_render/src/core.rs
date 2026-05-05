@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 #[cfg(debug_assertions)]
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -19,11 +21,201 @@ use tracing::info;
 use tracing::warn;
 
 use crate::{
-    ClientOpaqueRenderer, ClientRenderConfig, FunRenderAppOptions, FunRenderRtFeatures,
-    FunSkyPlugin, RenderPathSignature, dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting,
-    pipeline_warmup, prewarm_world_render_catalog, render_path_signature_for_options,
+    ClientOpaqueRenderer, ClientRenderConfig, DynamicInstanceTable,
+    FunEntityRenderStrategyRegistry, FunGeometryClass, FunHiZOcclusionAdaptiveState,
+    FunMaterialClass, FunRenderAppOptions, FunRenderPath, FunRenderRtFeatures, FunSkyPlugin,
+    GeometryResidencyManager, MaterialResidencyManager, RenderPathSignature, StaticInstanceTable,
+    TextureResidencyManager, VirtualGeometryResidency, dlss_correctness, dx12_dlss_rr,
+    dx12_dlss_sr, lighting, pipeline_warmup, prewarm_primitive_render_cache,
+    prewarm_world_render_catalog, render_path_signature_for_options,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FunRenderPhaseKind {
+    DepthPrepass,
+    Shadow,
+    MainOpaque,
+    DeferredGBuffer,
+    Transparent,
+    MeshletVisibility,
+    MeshletResolve,
+    Clouds,
+    Solari,
+    PostProcess,
+    CefUi,
+    DebugOverlay,
+}
+
+impl FunRenderPhaseKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DepthPrepass => "depth_prepass",
+            Self::Shadow => "shadow",
+            Self::MainOpaque => "main_opaque",
+            Self::DeferredGBuffer => "deferred_gbuffer",
+            Self::Transparent => "transparent",
+            Self::MeshletVisibility => "meshlet_visibility",
+            Self::MeshletResolve => "meshlet_resolve",
+            Self::Clouds => "clouds",
+            Self::Solari => "solari",
+            Self::PostProcess => "post_process",
+            Self::CefUi => "cef_ui",
+            Self::DebugOverlay => "debug_overlay",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunDrawSubmissionKind {
+    Direct,
+    Indirect,
+    MultiDraw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunDrawCallRecord {
+    pub phase: FunRenderPhaseKind,
+    pub material_class: FunMaterialClass,
+    pub geometry_class: FunGeometryClass,
+    pub render_path: FunRenderPath,
+    pub submission_kind: FunDrawSubmissionKind,
+    pub draws: u64,
+    pub submitted_instances: u64,
+    pub visible_instances: u64,
+}
+
+impl FunDrawCallRecord {
+    pub const fn new(
+        phase: FunRenderPhaseKind,
+        material_class: FunMaterialClass,
+        geometry_class: FunGeometryClass,
+        render_path: FunRenderPath,
+        submission_kind: FunDrawSubmissionKind,
+        draws: u64,
+    ) -> Self {
+        Self {
+            phase,
+            material_class,
+            geometry_class,
+            render_path,
+            submission_kind,
+            draws,
+            submitted_instances: 0,
+            visible_instances: 0,
+        }
+    }
+
+    pub const fn with_instances(
+        mut self,
+        submitted_instances: u64,
+        visible_instances: u64,
+    ) -> Self {
+        self.submitted_instances = submitted_instances;
+        self.visible_instances = visible_instances;
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, bevy::prelude::Resource)]
+pub struct FunDrawCallCounters {
+    pub frame_index: u64,
+    pub total_draws: u64,
+    pub direct_draws: u64,
+    pub indirect_draws: u64,
+    pub multi_draws: u64,
+    pub draws_by_phase: BTreeMap<FunRenderPhaseKind, u64>,
+    pub draws_by_material_class: BTreeMap<FunMaterialClass, u64>,
+    pub draws_by_geometry_class: BTreeMap<FunGeometryClass, u64>,
+    pub draws_by_render_path: BTreeMap<FunRenderPath, u64>,
+    pub submitted_instances: u64,
+    pub visible_instances: u64,
+    pub culled_instances: u64,
+}
+
+impl Default for FunDrawCallCounters {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl FunDrawCallCounters {
+    pub fn new(frame_index: u64) -> Self {
+        Self {
+            frame_index,
+            total_draws: 0,
+            direct_draws: 0,
+            indirect_draws: 0,
+            multi_draws: 0,
+            draws_by_phase: BTreeMap::new(),
+            draws_by_material_class: BTreeMap::new(),
+            draws_by_geometry_class: BTreeMap::new(),
+            draws_by_render_path: BTreeMap::new(),
+            submitted_instances: 0,
+            visible_instances: 0,
+            culled_instances: 0,
+        }
+    }
+
+    pub fn begin_frame(&mut self, frame_index: u64) {
+        *self = Self::new(frame_index);
+    }
+
+    pub fn record_draw(&mut self, record: FunDrawCallRecord) {
+        self.total_draws = self.total_draws.saturating_add(record.draws);
+        match record.submission_kind {
+            FunDrawSubmissionKind::Direct => {
+                self.direct_draws = self.direct_draws.saturating_add(record.draws);
+            }
+            FunDrawSubmissionKind::Indirect => {
+                self.indirect_draws = self.indirect_draws.saturating_add(record.draws);
+            }
+            FunDrawSubmissionKind::MultiDraw => {
+                self.multi_draws = self.multi_draws.saturating_add(record.draws);
+            }
+        }
+        add_counter(&mut self.draws_by_phase, record.phase, record.draws);
+        add_counter(
+            &mut self.draws_by_material_class,
+            record.material_class,
+            record.draws,
+        );
+        add_counter(
+            &mut self.draws_by_geometry_class,
+            record.geometry_class,
+            record.draws,
+        );
+        add_counter(
+            &mut self.draws_by_render_path,
+            record.render_path,
+            record.draws,
+        );
+        self.record_instances(record.submitted_instances, record.visible_instances);
+    }
+
+    pub fn record_instances(&mut self, submitted_instances: u64, visible_instances: u64) {
+        self.submitted_instances = self.submitted_instances.saturating_add(submitted_instances);
+        self.visible_instances = self.visible_instances.saturating_add(visible_instances);
+        self.culled_instances = self
+            .culled_instances
+            .saturating_add(submitted_instances.saturating_sub(visible_instances));
+    }
+
+    pub fn worst_phase(&self) -> Option<(FunRenderPhaseKind, u64)> {
+        self.draws_by_phase
+            .iter()
+            .max_by_key(|(phase, draws)| (**draws, **phase))
+            .map(|(phase, draws)| (*phase, *draws))
+    }
+}
+
+fn add_counter<K>(counters: &mut BTreeMap<K, u64>, key: K, value: u64)
+where
+    K: Ord,
+{
+    let counter = counters.entry(key).or_default();
+    *counter = counter.saturating_add(value);
+}
 
 #[derive(Debug, Clone)]
 pub struct FunRenderCorePlugin {
@@ -63,6 +255,16 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     let fps_overlay_enabled = render_config.fps_overlay_enabled;
 
     app.insert_resource(opaque_renderer.method())
+        .init_resource::<FunDrawCallCounters>()
+        .init_resource::<GeometryResidencyManager>()
+        .init_resource::<TextureResidencyManager>()
+        .init_resource::<MaterialResidencyManager>()
+        .init_resource::<StaticInstanceTable>()
+        .init_resource::<DynamicInstanceTable>()
+        .init_resource::<crate::gpu_visibility::StaticOpaqueGpuVisibilityConfig>()
+        .init_resource::<FunHiZOcclusionAdaptiveState>()
+        .init_resource::<VirtualGeometryResidency>()
+        .init_resource::<FunEntityRenderStrategyRegistry>()
         .insert_resource(signature)
         .insert_resource(rt_features)
         .insert_resource(render_config)
@@ -76,7 +278,12 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         })
         .add_systems(
             Startup,
-            (lighting::setup_lighting, prewarm_world_render_catalog).chain(),
+            (
+                lighting::setup_lighting,
+                prewarm_world_render_catalog,
+                prewarm_primitive_render_cache,
+            )
+                .chain(),
         );
 
     #[cfg(debug_assertions)]
@@ -105,6 +312,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     app.insert_resource(dx12_native_dlss_sr_support);
     dx12_dlss_rr::install_dx12_native_dlss_rr(app);
     pipeline_warmup::install_fun_pipeline_warmup(app);
+    crate::compute_culling::install_fun_compute_culling(app);
     dx12_dlss_sr::log_dx12_native_dlss_sr_support_once(
         render_config.native_dlss,
         dx12_native_dlss_sr_support,
@@ -134,6 +342,8 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     }
 
     if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+        render_app.init_resource::<FunDrawCallCounters>();
+        render_app.init_resource::<FunEntityRenderStrategyRegistry>();
         render_app.insert_resource(rt_features);
         render_app.add_systems(
             RenderStartup,
@@ -395,4 +605,61 @@ fn reset_solari_lighting_history(
         );
     }
     reset_count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_counters_split_phase_path_geometry_and_material() {
+        let mut counters = FunDrawCallCounters::new(42);
+        counters.record_draw(
+            FunDrawCallRecord::new(
+                FunRenderPhaseKind::MainOpaque,
+                FunMaterialClass::OpaqueComplex,
+                FunGeometryClass::StaticOpaqueDense,
+                FunRenderPath::MeshletStaticDense,
+                FunDrawSubmissionKind::Indirect,
+                4,
+            )
+            .with_instances(10, 6),
+        );
+        counters.record_draw(
+            FunDrawCallRecord::new(
+                FunRenderPhaseKind::Transparent,
+                FunMaterialClass::Transparent,
+                FunGeometryClass::Decal,
+                FunRenderPath::StandardRaster,
+                FunDrawSubmissionKind::Direct,
+                2,
+            )
+            .with_instances(3, 3),
+        );
+
+        assert_eq!(counters.frame_index, 42);
+        assert_eq!(counters.total_draws, 6);
+        assert_eq!(counters.direct_draws, 2);
+        assert_eq!(counters.indirect_draws, 4);
+        assert_eq!(counters.draws_by_phase[&FunRenderPhaseKind::MainOpaque], 4);
+        assert_eq!(
+            counters.draws_by_render_path[&FunRenderPath::MeshletStaticDense],
+            4
+        );
+        assert_eq!(
+            counters.draws_by_geometry_class[&FunGeometryClass::StaticOpaqueDense],
+            4
+        );
+        assert_eq!(
+            counters.draws_by_material_class[&FunMaterialClass::Transparent],
+            2
+        );
+        assert_eq!(counters.submitted_instances, 13);
+        assert_eq!(counters.visible_instances, 9);
+        assert_eq!(counters.culled_instances, 4);
+        assert_eq!(
+            counters.worst_phase(),
+            Some((FunRenderPhaseKind::MainOpaque, 4))
+        );
+    }
 }

@@ -17,6 +17,7 @@ use bevy::render::{
     },
     texture::GpuImage,
 };
+use fun_render::dx12_native::{Dx12CefTransportPolicy, dx12_cef_transport_policy};
 use fun_ui_cef::{
     CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefUiDirtyRectMetadata,
     CefUiFallbackReason, CefUiPaintTransportFallbackReason, render_handler::CefUiFrameGeneration,
@@ -274,6 +275,7 @@ pub struct Dx12CefInterop {
     slots: Mutex<Dx12CefTextureRing>,
     copy_commands: Mutex<Dx12CefCopyCommandState>,
     diagnostics: Dx12CefInteropDiagnostics,
+    transport_policy: Dx12CefTransportPolicy,
     consecutive_accelerated_paint_failures: AtomicU32,
     gpu_copy_ready_logged: AtomicBool,
     bevy_copy_logged: AtomicBool,
@@ -286,6 +288,7 @@ impl fmt::Debug for Dx12CefInterop {
             .field("next_fence_value", &self.next_fence_value())
             .field("next_frame_generation", &self.next_frame_generation())
             .field("ring_len", &self.ring_len())
+            .field("transport_policy", &self.transport_policy)
             .field("diagnostics", &self.diagnostics_snapshot())
             .finish()
     }
@@ -309,6 +312,9 @@ impl Dx12CefInterop {
     }
 
     fn create(handles: Dx12CefNativeHandles) -> Result<Self, Dx12CefInteropError> {
+        let transport_policy = dx12_cef_transport_policy();
+        debug_assert!(transport_policy.copy_through_dx12_native_boundary);
+        debug_assert!(transport_policy.is_nonblocking_gpu_transport());
         let mut d3d11_device = None;
         let mut d3d11_context = None;
         let queue_unknown = handles.d3d12_queue.cast::<IUnknown>().map_err(|error| {
@@ -391,6 +397,7 @@ impl Dx12CefInterop {
             slots: Mutex::new(Dx12CefTextureRing::from_env()),
             copy_commands: Mutex::new(copy_commands),
             diagnostics: Dx12CefInteropDiagnostics::default(),
+            transport_policy,
             consecutive_accelerated_paint_failures: AtomicU32::new(0),
             gpu_copy_ready_logged: AtomicBool::new(false),
             bevy_copy_logged: AtomicBool::new(false),
@@ -403,6 +410,11 @@ impl Dx12CefInterop {
     #[must_use]
     pub fn diagnostics_snapshot(&self) -> Dx12CefInteropDiagnosticSnapshot {
         self.diagnostics.snapshot()
+    }
+
+    #[must_use]
+    pub const fn transport_policy(&self) -> Dx12CefTransportPolicy {
+        self.transport_policy
     }
 
     #[must_use]
@@ -621,6 +633,7 @@ impl Dx12CefInterop {
         &self,
         frame: CefAcceleratedPaintFrame<'_>,
     ) -> Result<Dx12CefCopyResult, Dx12CefInteropError> {
+        debug_assert!(self.transport_policy.is_nonblocking_gpu_transport());
         let (width, height) = validated_frame_extent(frame.width, frame.height)?;
         let copied_bytes = frame_byte_count(width, height)?;
         let source = self.open_shared_texture(frame.shared_handle)?;
@@ -1057,6 +1070,8 @@ impl Dx12CefInterop {
             target = CEF_GPU_FORMAT_POLICY.target_label(),
             conversion = CEF_GPU_FORMAT_POLICY.conversion.as_str(),
             alpha = CEF_GPU_FORMAT_POLICY.alpha.as_str(),
+            transport = self.transport_policy.preferred_path_label(),
+            nonblocking_normal_frames = !self.transport_policy.normal_frame_blocking_wait_allowed,
             "CEF UI GPU format"
         );
     }
@@ -1493,5 +1508,16 @@ mod tests {
     #[test]
     fn accelerated_paint_failure_budget_is_eight_frames() {
         assert_eq!(MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK, 8);
+    }
+
+    #[test]
+    fn dx12_cef_bridge_uses_fun_render_transport_policy() {
+        let policy = dx12_cef_transport_policy();
+
+        assert!(policy.copy_through_dx12_native_boundary);
+        assert!(policy.is_nonblocking_gpu_transport());
+        assert!(policy.cpu_fallback_dirty_rect_only);
+        assert!(policy.keeps_cef_out_of_world_upload_accounting());
+        assert!(policy.keeps_cef_out_of_temporal_reconstruction());
     }
 }

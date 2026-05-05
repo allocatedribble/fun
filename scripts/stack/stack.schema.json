@@ -1,0 +1,211 @@
+{
+  "schema_version": "stack_schema_v1",
+  "profile_schema": {
+    "schema_version": "stack_profile_v1",
+    "top_level_keys": [
+      "schema_version",
+      "name",
+      "description",
+      "build",
+      "features",
+      "env",
+      "processes",
+      "diagnostics",
+      "render",
+      "cef",
+      "security"
+    ],
+    "sections": {
+      "build": ["release", "static_bevy"],
+      "features": [
+        "disable_solari",
+        "disable_meshlets",
+        "disable_clouds",
+        "enable_dx12_dlss_rr",
+        "disable_dlss_rr",
+        "solari_debug_direct_visibility",
+        "render_unknown_vendor"
+      ],
+      "processes": ["server", "client", "launcher"],
+      "diagnostics": [
+        "render",
+        "trace",
+        "render_profile_verbose",
+        "frame_time",
+        "benchmark_log_minimal",
+        "log_stream_verbose",
+        "log_net_verbose",
+        "log_render_verbose"
+      ],
+      "render": [
+        "backend",
+        "present_mode",
+        "max_frame_latency",
+        "geometry_policy",
+        "meshlet_min_triangles",
+        "window_width",
+        "window_height",
+        "maximized",
+        "disable_fps_overlay",
+        "enable_fps_overlay",
+        "solari_arch",
+        "solari_target_fps",
+        "solari_frame_budget_ns",
+        "solari_gpu_budget_ns",
+        "solari_visual_target",
+        "solari_denoise_mode",
+        "solari_internal_scale",
+        "solari_blas_compaction_vertices",
+        "solari_debug_overlay",
+        "cloud_quality",
+        "cloud_internal_scale",
+        "cloud_temporal",
+        "cloud_shadows",
+        "cloud_profile",
+        "cloud_debug_overlay",
+        "stream_render_prep_budget_ms",
+        "stream_render_prep_max_chunks_per_frame"
+      ],
+      "cef": [
+        "enabled",
+        "dx12_accelerated_paint",
+        "paint_transport",
+        "accelerated_strict",
+        "gpu_ring_depth",
+        "copy_dirty_rects",
+        "debug_timings"
+      ],
+      "security": ["tls_mode"]
+    }
+  },
+  "options": [
+    {
+      "name": "RenderBackend",
+      "profile_path": "render.backend",
+      "allowed_values": ["dx12", "vulkan"],
+      "env_vars": ["FUN_RENDER_BACKEND"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "PresentMode",
+      "profile_path": "render.present_mode",
+      "allowed_values": ["immediate", "fifo", "auto_no_vsync", "auto_vsync", "mailbox"],
+      "env_vars": ["FUN_PRESENT_MODE", "FUN_RENDER_PRESENT_MODE"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "RenderMaxFrameLatency",
+      "profile_path": "render.max_frame_latency",
+      "allowed_values": ["0..n"],
+      "env_vars": ["FUN_RENDER_MAX_FRAME_LATENCY", "FUN_PRESENT_MAX_FRAME_LATENCY"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "RenderDiagnostics",
+      "profile_path": "diagnostics.render",
+      "allowed_values": [true, false],
+      "env_vars": [
+        "FUN_RENDER_DIAGNOSTICS",
+        "FUN_RENDER_UPLOAD_COUNTERS",
+        "BEVY_RENDER_UPLOAD_COUNTERS",
+        "FUN_RENDER_CHURN_COUNTERS",
+        "BEVY_RENDER_CHURN_COUNTERS",
+        "FUN_RENDER_COMMAND_COUNTERS",
+        "BEVY_RENDER_COMMAND_COUNTERS",
+        "FUN_RENDER_READBACK_DIAGNOSTICS",
+        "BEVY_RENDER_READBACK_DIAGNOSTICS",
+        "FUN_RENDER_SHADER_DIAGNOSTICS",
+        "BEVY_RENDER_SHADER_DIAGNOSTICS"
+      ],
+      "benchmark_safe": true,
+      "debug_only": true
+    },
+    {
+      "name": "TraceDiagnostics",
+      "profile_path": "diagnostics.trace",
+      "allowed_values": [true, false],
+      "env_vars": ["RUST_LOG", "BEVY_LOG"],
+      "benchmark_safe": false,
+      "debug_only": true
+    },
+    {
+      "name": "FrameTimeDiagnostics",
+      "profile_path": "diagnostics.frame_time",
+      "allowed_values": [true, false],
+      "env_vars": [
+        "FUN_FRAME_TIME_DIAGNOSTICS",
+        "FUN_FRAME_TIME_DIAGNOSTIC_INTERVAL",
+        "FUN_FRAME_TIME_DIAGNOSTIC_MIN_NS",
+        "FUN_FRAME_TIME_DIAGNOSTIC_MAX_DEPTH",
+        "FUN_FRAME_TIME_DIAGNOSTIC_TOP_CHILDREN",
+        "FUN_FRAME_TIME_DIAGNOSTIC_TOP_SPANS",
+        "FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS"
+      ],
+      "benchmark_safe": true,
+      "debug_only": true
+    },
+    {
+      "name": "CefPaintTransport",
+      "profile_path": "cef.paint_transport",
+      "allowed_values": ["default", "disabled", "cpu", "auto", "d3d11on12"],
+      "env_vars": [
+        "FUN_CEF_UI_TRANSPORT_STATUS_PATH",
+        "FUN_CEF_UI_PAINT_TRANSPORT",
+        "FUN_CEF_UI_ACCELERATED_PAINT"
+      ],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "CefAcceleratedStrict",
+      "profile_path": "cef.accelerated_strict",
+      "allowed_values": [true, false],
+      "env_vars": ["FUN_CEF_UI_ACCELERATED_STRICT"],
+      "benchmark_safe": false,
+      "debug_only": true
+    },
+    {
+      "name": "DisableSolari",
+      "profile_path": "features.disable_solari",
+      "allowed_values": [true, false],
+      "env_vars": ["FUN_DISABLE_SOLARI"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "DisableMeshlets",
+      "profile_path": "features.disable_meshlets",
+      "allowed_values": [true, false],
+      "env_vars": ["FUN_DISABLE_MESHLETS"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "DisableClouds",
+      "profile_path": "features.disable_clouds",
+      "allowed_values": [true, false],
+      "env_vars": ["FUN_DISABLE_CLOUDS"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "CloudProfile",
+      "profile_path": "render.cloud_profile",
+      "allowed_values": ["", "scattered", "overcast", "storm_front"],
+      "env_vars": ["FUN_CLOUD_PROFILE"],
+      "benchmark_safe": true,
+      "debug_only": false
+    },
+    {
+      "name": "SecurityTlsMode",
+      "profile_path": "security.tls_mode",
+      "allowed_values": ["development"],
+      "env_vars": ["FUN_GAME_SERVER_TLS_MODE"],
+      "benchmark_safe": true,
+      "debug_only": false
+    }
+  ]
+}

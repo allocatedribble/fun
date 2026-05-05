@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
 use crate::cef_ui_dx12::{
@@ -32,8 +32,9 @@ use fun_host::{
     FunHostMode, FunInputOwner, FunViewportRect,
 };
 use fun_render::{
-    FUN_RENDER_DEBUG_OVERLAY_Z_INDEX, FUN_RENDER_HUD_UI_Z_INDEX, RenderWorldContext,
-    RenderWorldStatus,
+    FUN_RENDER_CEF_UI_Z_INDEX, FUN_RENDER_DEBUG_OVERLAY_Z_INDEX, FunUploadBudget,
+    FunUploadBudgetTracker, RenderWorldContext, RenderWorldStatus, TextureDirtyRect,
+    TextureUploadPath, TextureUploadPlan, TextureUploadPolicy, plan_cef_cpu_dirty_rect_upload,
 };
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
 use fun_ui_cef::diagnostics::{
@@ -76,6 +77,9 @@ const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
 const FUN_CLIENT_FPS_COUNTER_MARGIN: f32 = 12.0;
 const CEF_UI_TRANSPORT_COUNTER_REFRESH: Duration = Duration::from_secs(1);
 const CEF_UI_GPU_BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_millis(750);
+const CEF_UI_TRANSPORT_STATUS_PATH_ENV: &str = "FUN_CEF_UI_TRANSPORT_STATUS_PATH";
+const CEF_UI_FRAME_BUDGET_MS: f64 = 16.7;
+const CEF_UI_CPU_FALLBACK_THROTTLED_RATE_HZ: u64 = 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum GameCefUiSet {
@@ -129,6 +133,7 @@ impl Plugin for GameCefUiPlugin {
             .init_resource::<CefUiStartupState>()
             .init_resource::<SharedDx12CefInteropSlot>()
             .init_resource::<CefUiMessageLoopPump>()
+            .init_resource::<CefUiFrameBudgetThrottle>()
             .init_resource::<CefUiRenderTexture>()
             .init_resource::<CefUiTextureUploads>()
             .init_resource::<CefUiModelCache>()
@@ -177,7 +182,12 @@ impl Plugin for GameCefUiPlugin {
             )
             .add_systems(
                 PreUpdate,
-                pump_cef_ui_message_loop.before(GameCefUiSet::DrainIncoming),
+                (
+                    update_cef_ui_frame_budget_throttle,
+                    pump_cef_ui_message_loop,
+                )
+                    .chain()
+                    .before(GameCefUiSet::DrainIncoming),
             )
             .add_systems(
                 PreUpdate,
@@ -556,6 +566,13 @@ impl CefUiBrowserControl {
 
     pub fn flush_host_envelopes_to_js(&self) -> usize {
         self.browser.flush_host_envelopes_to_js()
+    }
+
+    pub fn set_windowless_frame_rate(&self, frame_rate_hz: u64) -> bool {
+        let Ok(frame_rate_hz) = i32::try_from(frame_rate_hz.max(1)) else {
+            return false;
+        };
+        self.browser.set_windowless_frame_rate(frame_rate_hz)
     }
 }
 
@@ -999,11 +1016,38 @@ impl CefUiMessageLoopPump {
     pub fn interval(&self) -> Duration {
         self.pump_timer.duration()
     }
+
+    pub fn set_interval(&mut self, interval: Duration) {
+        if self.pump_timer.duration() == interval {
+            return;
+        }
+        self.pump_timer = Timer::new(interval, TimerMode::Repeating);
+        self.active_logged = false;
+    }
 }
 
 impl Default for CefUiMessageLoopPump {
     fn default() -> Self {
         Self::disabled()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+struct CefUiFrameBudgetThrottle {
+    world_frame_over_budget: bool,
+    cpu_transport_unchanged: bool,
+    max_paint_rate_hz: u64,
+    last_cef_on_paint_count: u64,
+}
+
+impl Default for CefUiFrameBudgetThrottle {
+    fn default() -> Self {
+        Self {
+            world_frame_over_budget: false,
+            cpu_transport_unchanged: false,
+            max_paint_rate_hz: CEF_UI_RENDER_RATE_HZ,
+            last_cef_on_paint_count: 0,
+        }
     }
 }
 
@@ -1025,6 +1069,15 @@ impl Default for CefUiRenderTexture {
             size: None,
             upload_timer: Timer::new(cef_ui_render_interval(), TimerMode::Repeating),
         }
+    }
+}
+
+impl CefUiRenderTexture {
+    fn set_upload_interval(&mut self, interval: Duration) {
+        if self.upload_timer.duration() == interval {
+            return;
+        }
+        self.upload_timer = Timer::new(interval, TimerMode::Repeating);
     }
 }
 
@@ -1067,9 +1120,13 @@ struct CefUiGpuTextureUpload {
 struct CefUiGpuUploadState {
     image_id: Option<AssetId<Image>>,
     last_generation: Option<UiSurfaceGeneration>,
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
     gpu_copy_failure_logged: bool,
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
     gpu_copy_failure_count: u32,
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
     stale_gpu_frame_count_for_current_token: u32,
+    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
     stale_gpu_frame_token: Option<UiSurfaceGeneration>,
 }
 
@@ -1517,7 +1574,7 @@ fn cef_ui_cpu_start_config(
 }
 
 fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready: bool) {
-    let _ = (browser_config, bridge_ready);
+    write_cef_ui_transport_status(browser_config, bridge_ready);
     game_shared::fun_diag_info!(
         target: "fun::perf::cef_ui_transport",
         requested = browser_config.requested_paint_transport.as_wire_str(),
@@ -1545,6 +1602,58 @@ fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready:
         browser_config.gpu_debug_timings,
         browser_config.paint_transport_fallback_reason.as_wire_str(),
     );
+}
+
+fn write_cef_ui_transport_status(browser_config: &BrowserUiConfig, bridge_ready: bool) {
+    let Some(path) = std::env::var_os(CEF_UI_TRANSPORT_STATUS_PATH_ENV).map(PathBuf::from) else {
+        return;
+    };
+    if path.as_os_str().is_empty() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            tracing::warn!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                ?error,
+                "could not create CEF UI transport status directory"
+            );
+            return;
+        }
+    }
+    let payload = format!(
+        concat!(
+            "{{\n",
+            "  \"requested\": \"{}\",\n",
+            "  \"selected\": \"{}\",\n",
+            "  \"backend\": \"{}\",\n",
+            "  \"bridge_ready\": {},\n",
+            "  \"cpu_fallback_enabled\": {},\n",
+            "  \"ring_depth\": {},\n",
+            "  \"copy_mode\": \"{}\",\n",
+            "  \"strict\": {},\n",
+            "  \"debug_timings\": {},\n",
+            "  \"fallback_reason\": \"{}\"\n",
+            "}}\n"
+        ),
+        browser_config.requested_paint_transport.as_wire_str(),
+        browser_config.paint_transport.as_wire_str(),
+        browser_config.render_backend_hint.as_wire_str(),
+        bridge_ready,
+        !browser_config.accelerated_strict,
+        browser_config.gpu_ring_depth,
+        browser_config.gpu_copy_mode.as_wire_str(),
+        browser_config.accelerated_strict,
+        browser_config.gpu_debug_timings,
+        browser_config.paint_transport_fallback_reason.as_wire_str(),
+    );
+    if let Err(error) = std::fs::write(path, payload) {
+        tracing::warn!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            ?error,
+            "could not write CEF UI transport status"
+        );
+    }
 }
 
 fn start_cef_ui_browser(
@@ -2819,12 +2928,15 @@ fn flush_cef_ui_host_envelopes_to_browser(
 }
 
 const CEF_UI_TEXTURE_BYTES_PER_PIXEL: usize = 4;
-const CEF_UI_TEXTURE_Z_INDEX: i32 = FUN_RENDER_HUD_UI_Z_INDEX;
+const CEF_UI_TEXTURE_Z_INDEX: i32 = FUN_RENDER_CEF_UI_Z_INDEX;
 
 fn cef_ui_render_interval() -> Duration {
-    Duration::from_nanos(
-        (CEF_UI_NANOS_PER_SECOND + CEF_UI_RENDER_RATE_HZ - 1) / CEF_UI_RENDER_RATE_HZ,
-    )
+    cef_ui_render_interval_for_rate(CEF_UI_RENDER_RATE_HZ)
+}
+
+fn cef_ui_render_interval_for_rate(rate_hz: u64) -> Duration {
+    let rate_hz = rate_hz.max(1);
+    Duration::from_nanos((CEF_UI_NANOS_PER_SECOND + rate_hz - 1) / rate_hz)
 }
 
 fn cef_ui_gpu_bridge_startup_timeout_from_env() -> Duration {
@@ -2834,6 +2946,42 @@ fn cef_ui_gpu_bridge_startup_timeout_from_env() -> Duration {
         .filter(|millis| *millis > 0)
         .map(Duration::from_millis)
         .unwrap_or(CEF_UI_GPU_BRIDGE_STARTUP_TIMEOUT)
+}
+
+fn update_cef_ui_frame_budget_throttle(
+    diagnostics: Res<DiagnosticsStore>,
+    startup_state: Res<CefUiStartupState>,
+    counters: Res<CefUiTransportCountersResource>,
+    browser_control: Option<NonSend<CefUiBrowserControl>>,
+    mut pump: ResMut<CefUiMessageLoopPump>,
+    mut render_texture: ResMut<CefUiRenderTexture>,
+    mut throttle: ResMut<CefUiFrameBudgetThrottle>,
+) {
+    let snapshot = counters.snapshot();
+    let transport = startup_state.running_transport;
+    let cpu_transport_unchanged = matches!(transport, Some(CefUiPaintTransport::CpuPaint))
+        && throttle.last_cef_on_paint_count != 0
+        && snapshot.cef_on_paint_count == throttle.last_cef_on_paint_count;
+    let frame_time_ms = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|diagnostic| diagnostic.smoothed());
+    let world_frame_over_budget = cef_ui_world_frame_over_budget(frame_time_ms);
+    let max_paint_rate_hz =
+        cef_ui_max_paint_rate_hz(transport, world_frame_over_budget, cpu_transport_unchanged);
+    let interval = cef_ui_render_interval_for_rate(max_paint_rate_hz);
+
+    pump.set_interval(interval);
+    render_texture.set_upload_interval(interval);
+    if let Some(browser_control) = browser_control.as_ref()
+        && max_paint_rate_hz != throttle.max_paint_rate_hz
+    {
+        let _ = browser_control.set_windowless_frame_rate(max_paint_rate_hz);
+    }
+
+    throttle.world_frame_over_budget = world_frame_over_budget;
+    throttle.cpu_transport_unchanged = cpu_transport_unchanged;
+    throttle.max_paint_rate_hz = max_paint_rate_hz;
+    throttle.last_cef_on_paint_count = snapshot.cef_on_paint_count;
 }
 
 fn pump_cef_ui_message_loop(time: Res<Time>, mut pump: ResMut<CefUiMessageLoopPump>) {
@@ -2850,6 +2998,26 @@ fn pump_cef_ui_message_loop(time: Res<Time>, mut pump: ResMut<CefUiMessageLoopPu
             pump.active_logged = true;
         }
         fun_ui_cef::pump_cef_message_loop_work();
+    }
+}
+
+fn cef_ui_world_frame_over_budget(frame_time_ms: Option<f64>) -> bool {
+    frame_time_ms.is_some_and(|frame_time_ms| frame_time_ms > CEF_UI_FRAME_BUDGET_MS)
+}
+
+const fn cef_ui_max_paint_rate_hz(
+    transport: Option<CefUiPaintTransport>,
+    world_frame_over_budget: bool,
+    cpu_transport_unchanged: bool,
+) -> u64 {
+    match transport {
+        Some(CefUiPaintTransport::CpuPaint)
+            if world_frame_over_budget || cpu_transport_unchanged =>
+        {
+            CEF_UI_CPU_FALLBACK_THROTTLED_RATE_HZ
+        }
+        Some(CefUiPaintTransport::Disabled) => 1,
+        _ => CEF_UI_RENDER_RATE_HZ,
     }
 }
 
@@ -3130,10 +3298,9 @@ fn upload_cef_ui_frame_to_fun_texture(
             .iter()
             .any(|rect| cef_dirty_rect_bounds(size, *rect).is_none());
 
-    let (image_handle, uploaded_bytes) = if render_texture.image.is_none()
-        || render_texture.size != Some(size)
-    {
-        let image = new_cef_ui_texture_image(size, frame.pixels().to_vec());
+    let texture_resized = render_texture.image.is_none() || render_texture.size != Some(size);
+    let (image_handle, uploaded_bytes) = if texture_resized {
+        let image = new_cef_ui_texture_image_uninit(size);
         let image_handle = images.add(image);
         let upload_handle = image_handle.clone();
         render_texture.image = Some(image_handle.clone());
@@ -3151,14 +3318,31 @@ fn upload_cef_ui_frame_to_fun_texture(
             &mut image_nodes,
             image_handle,
         );
-        (upload_handle, expected_byte_len)
+        let uploaded_bytes = cef_ui_cpu_upload_plan(
+            size,
+            &frame.metadata.dirty_rects,
+            true,
+            true,
+            cef_ui_cpu_upload_budget(size, true),
+        )
+        .bytes
+        .try_into()
+        .unwrap_or(0);
+        (upload_handle, uploaded_bytes)
     } else {
         let Some(image_handle) = render_texture.image.as_ref() else {
             return;
         };
-        let uploaded_bytes =
-            cef_ui_texture_upload_byte_count(size, &frame.metadata.dirty_rects, force_full_upload)
-                .unwrap_or(0);
+        let uploaded_bytes = cef_ui_cpu_upload_plan(
+            size,
+            &frame.metadata.dirty_rects,
+            false,
+            true,
+            cef_ui_cpu_upload_budget(size, false),
+        )
+        .bytes
+        .try_into()
+        .unwrap_or(0);
         (image_handle.clone(), uploaded_bytes)
     };
     texture_uploads.latest = Some(CefUiTextureUpload {
@@ -3209,12 +3393,17 @@ fn upload_cef_ui_texture_to_gpu(
             upload_state.last_generation,
             upload.generation,
         );
+    let texture_resized = upload_state.image_id != Some(image_id);
     let Some(gpu_image) = gpu_images.get(&upload.image) else {
         return;
     };
-    let Some(uploaded_bytes) =
-        write_cef_ui_upload_to_gpu(&render_queue, gpu_image, upload, force_full_upload)
-    else {
+    let Some(uploaded_bytes) = write_cef_ui_upload_to_gpu(
+        &render_queue,
+        gpu_image,
+        upload,
+        force_full_upload,
+        texture_resized,
+    ) else {
         return;
     };
     upload_state.image_id = Some(image_id);
@@ -3669,6 +3858,7 @@ fn write_cef_ui_upload_to_gpu(
     gpu_image: &GpuImage,
     upload: &CefUiTextureUpload,
     force_full_upload: bool,
+    texture_resized: bool,
 ) -> Option<usize> {
     let expected_byte_len = cef_ui_texture_byte_len(upload.size)?;
     if upload.pixels.len() != expected_byte_len
@@ -3678,23 +3868,38 @@ fn write_cef_ui_upload_to_gpu(
     {
         return None;
     }
-    let dirty_rects_are_valid = upload
-        .dirty_rects
-        .iter()
-        .all(|rect| cef_dirty_rect_bounds(upload.size, *rect).is_some());
-    if force_full_upload || upload.dirty_rects.is_empty() || !dirty_rects_are_valid {
+    let upload_plan = cef_ui_cpu_upload_plan(
+        upload.size,
+        &upload.dirty_rects,
+        texture_resized,
+        true,
+        cef_ui_cpu_upload_budget(upload.size, texture_resized),
+    );
+    if matches!(
+        upload_plan.path,
+        TextureUploadPath::NoopUnchanged
+            | TextureUploadPath::Defer
+            | TextureUploadPath::RejectFullFrame
+    ) {
+        return Some(0);
+    }
+    if texture_resized && matches!(upload_plan.path, TextureUploadPath::FullFrameOnResize) {
         write_cef_full_texture_to_gpu(render_queue, gpu_image, upload);
         return Some(expected_byte_len);
     }
 
     let mut uploaded_bytes = 0usize;
-    for rect in &upload.dirty_rects {
-        uploaded_bytes = uploaded_bytes.checked_add(write_cef_dirty_rect_to_gpu(
+    for rect in &upload_plan.uploaded_rects {
+        uploaded_bytes = uploaded_bytes.checked_add(write_texture_dirty_rect_to_gpu(
             render_queue,
             gpu_image,
             upload,
             *rect,
         )?)?;
+    }
+    if uploaded_bytes == 0 && texture_resized && force_full_upload {
+        write_cef_full_texture_to_gpu(render_queue, gpu_image, upload);
+        return Some(expected_byte_len);
     }
     Some(uploaded_bytes)
 }
@@ -3722,17 +3927,29 @@ fn write_cef_full_texture_to_gpu(
     );
 }
 
-fn write_cef_dirty_rect_to_gpu(
+fn write_texture_dirty_rect_to_gpu(
     render_queue: &RenderQueue,
     gpu_image: &GpuImage,
     upload: &CefUiTextureUpload,
-    rect: CefDirtyRect,
+    rect: TextureDirtyRect,
 ) -> Option<usize> {
-    let (x, y, width, height) = cef_dirty_rect_bounds(upload.size, rect)?;
+    let (x, y, width, height) = texture_dirty_rect_bounds(upload.size, rect)?;
+    write_cef_texture_region_to_gpu(render_queue, gpu_image, upload, x, y, width, height)
+}
+
+fn write_cef_texture_region_to_gpu(
+    render_queue: &RenderQueue,
+    gpu_image: &GpuImage,
+    upload: &CefUiTextureUpload,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Option<usize> {
     let offset = cef_dirty_rect_offset_bytes(upload.size, x, y)?;
     let mut texture_copy = gpu_image.texture.as_image_copy();
     texture_copy.origin = Origin3d { x, y, z: 0 };
-    let uploaded_bytes = cef_dirty_rect_byte_len(upload.size, rect)?;
+    let uploaded_bytes = texture_region_byte_len(width, height)?;
     render_queue.tracked_write_texture(
         "cef_ui.cpu_paint.dirty_rect",
         texture_copy,
@@ -3790,21 +4007,6 @@ fn sync_cef_ui_image_node(
     render_texture.root_entity = Some(root_entity);
 }
 
-fn new_cef_ui_texture_image(size: UVec2, pixels: Vec<u8>) -> Image {
-    Image::new(
-        Extent3d {
-            width: size.x,
-            height: size.y,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        pixels,
-        TextureFormat::Bgra8UnormSrgb,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    )
-}
-
-#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
 fn new_cef_ui_texture_image_uninit(size: UVec2) -> Image {
     Image::new_uninit(
         Extent3d {
@@ -3845,6 +4047,63 @@ fn cef_ui_texture_byte_len(size: UVec2) -> Option<usize> {
         .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
 }
 
+fn cef_ui_cpu_upload_plan(
+    size: UVec2,
+    dirty_rects: &[CefDirtyRect],
+    resized: bool,
+    page_changed: bool,
+    budget: FunUploadBudget,
+) -> TextureUploadPlan {
+    let dirty_rects = dirty_rects
+        .iter()
+        .filter_map(|rect| cef_dirty_rect_to_texture_dirty_rect(size, *rect))
+        .collect::<Vec<_>>();
+    let mut budget = FunUploadBudgetTracker::new(budget);
+    plan_cef_cpu_dirty_rect_upload(
+        &mut budget,
+        size.x,
+        size.y,
+        &dirty_rects,
+        resized,
+        page_changed,
+        TextureUploadPolicy::default(),
+    )
+}
+
+fn cef_ui_cpu_upload_budget(size: UVec2, resized: bool) -> FunUploadBudget {
+    let mut budget = FunUploadBudget::default();
+    if resized && let Some(full_frame_bytes) = cef_ui_texture_byte_len(size) {
+        budget.cef_budget_bytes = budget.cef_budget_bytes.max(full_frame_bytes as u64);
+    }
+    budget
+}
+
+fn cef_dirty_rect_to_texture_dirty_rect(
+    size: UVec2,
+    rect: CefDirtyRect,
+) -> Option<TextureDirtyRect> {
+    let (x, y, width, height) = cef_dirty_rect_bounds(size, rect)?;
+    Some(TextureDirtyRect::new(x, y, width, height))
+}
+
+fn texture_dirty_rect_bounds(size: UVec2, rect: TextureDirtyRect) -> Option<(u32, u32, u32, u32)> {
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    if rect.x.checked_add(rect.width)? > size.x || rect.y.checked_add(rect.height)? > size.y {
+        return None;
+    }
+    Some((rect.x, rect.y, rect.width, rect.height))
+}
+
+fn texture_region_byte_len(width: u32, height: u32) -> Option<usize> {
+    usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
+}
+
+#[cfg(test)]
 fn cef_ui_texture_upload_byte_count(
     size: UVec2,
     dirty_rects: &[CefDirtyRect],
@@ -4358,6 +4617,57 @@ mod tests {
     }
 
     #[test]
+    fn cef_cpu_upload_plan_uses_cef_budget_not_world_texture_budget() {
+        let plan = cef_ui_cpu_upload_plan(
+            UVec2::new(4, 3),
+            &[CefDirtyRect::new(1, 1, 2, 2)],
+            false,
+            true,
+            FunUploadBudget {
+                texture_budget_bytes: 0,
+                cef_budget_bytes: 16,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(plan.path, TextureUploadPath::DirtyRects);
+        assert_eq!(plan.bytes, 16);
+        assert_eq!(plan.subsystem, fun_render::FunUploadSubsystem::CefCpuPaint);
+    }
+
+    #[test]
+    fn cef_cpu_upload_plan_does_not_full_frame_on_generation_gap() {
+        let plan = cef_ui_cpu_upload_plan(
+            UVec2::new(4, 3),
+            &[CefDirtyRect::new(1, 1, 2, 2)],
+            false,
+            true,
+            FunUploadBudget::default(),
+        );
+
+        assert_eq!(plan.path, TextureUploadPath::DirtyRects);
+        assert_eq!(plan.bytes, 16);
+    }
+
+    #[test]
+    fn cef_cpu_paint_rate_drops_when_world_frame_is_over_budget() {
+        assert!(cef_ui_world_frame_over_budget(Some(20.0)));
+        assert!(!cef_ui_world_frame_over_budget(Some(8.0)));
+        assert_eq!(
+            cef_ui_max_paint_rate_hz(Some(CefUiPaintTransport::CpuPaint), true, false),
+            CEF_UI_CPU_FALLBACK_THROTTLED_RATE_HZ
+        );
+        assert_eq!(
+            cef_ui_max_paint_rate_hz(Some(CefUiPaintTransport::CpuPaint), false, true),
+            CEF_UI_CPU_FALLBACK_THROTTLED_RATE_HZ
+        );
+        assert_eq!(
+            cef_ui_max_paint_rate_hz(Some(CefUiPaintTransport::D3d11On12Accelerated), true, true),
+            CEF_UI_RENDER_RATE_HZ
+        );
+    }
+
+    #[test]
     fn cef_frame_generation_gap_requires_full_texture_upload() {
         assert!(cef_ui_frame_requires_full_texture_upload(
             None,
@@ -4418,14 +4728,14 @@ mod tests {
     }
 
     #[test]
-    fn cef_render_texture_upload_timer_is_capped_at_one_twenty_hz() {
+    fn cef_render_texture_upload_timer_matches_windowless_frame_rate() {
         let render_texture = CefUiRenderTexture::default();
         let message_loop_pump = CefUiMessageLoopPump::external_pump_at_render_rate();
 
-        assert_eq!(CEF_UI_RENDER_RATE_HZ, 120);
+        assert_eq!(CEF_UI_RENDER_RATE_HZ, 60);
         assert_eq!(
             render_texture.upload_timer.duration(),
-            Duration::from_nanos(8_333_334)
+            Duration::from_nanos(16_666_667)
         );
         assert!(message_loop_pump.enabled());
         assert_eq!(

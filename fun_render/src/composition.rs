@@ -5,6 +5,7 @@ pub enum FunRenderCompositionStage {
     SolariLighting,
     DlssReconstruction,
     PostProcessing,
+    CefUi,
     HudUi,
     DebugOverlays,
     Present,
@@ -19,7 +20,8 @@ impl FunRenderCompositionStage {
             Self::SolariLighting => 30,
             Self::DlssReconstruction => 40,
             Self::PostProcessing => 50,
-            Self::HudUi => 60,
+            Self::CefUi => 60,
+            Self::HudUi => 62,
             Self::DebugOverlays => 70,
             Self::Present => 80,
         }
@@ -33,6 +35,7 @@ impl FunRenderCompositionStage {
             Self::SolariLighting => "solari_lighting",
             Self::DlssReconstruction => "dlss_reconstruction",
             Self::PostProcessing => "post_processing",
+            Self::CefUi => "cef_ui",
             Self::HudUi => "hud_ui",
             Self::DebugOverlays => "debug_overlays",
             Self::Present => "present",
@@ -62,26 +65,34 @@ impl FunRenderCompositionStage {
     }
 }
 
-pub const FUN_RENDER_COMPOSITION_ORDER: [FunRenderCompositionStage; 8] = [
+pub const FUN_RENDER_COMPOSITION_ORDER: [FunRenderCompositionStage; 9] = [
     FunRenderCompositionStage::WorldRender,
     FunRenderCompositionStage::DepthMotionVectors,
     FunRenderCompositionStage::SolariLighting,
     FunRenderCompositionStage::DlssReconstruction,
     FunRenderCompositionStage::PostProcessing,
+    FunRenderCompositionStage::CefUi,
     FunRenderCompositionStage::HudUi,
     FunRenderCompositionStage::DebugOverlays,
     FunRenderCompositionStage::Present,
 ];
 
+pub const FUN_RENDER_CEF_UI_STAGE: FunRenderCompositionStage = FunRenderCompositionStage::CefUi;
 pub const FUN_RENDER_HUD_UI_STAGE: FunRenderCompositionStage = FunRenderCompositionStage::HudUi;
 pub const FUN_RENDER_DEBUG_OVERLAY_STAGE: FunRenderCompositionStage =
     FunRenderCompositionStage::DebugOverlays;
 
 pub const FUN_RENDER_HUD_UI_Z_INDEX: i32 = 900_000;
-pub const FUN_RENDER_DEBUG_OVERLAY_Z_INDEX: i32 = FUN_RENDER_HUD_UI_Z_INDEX + 20;
+pub const FUN_RENDER_CEF_UI_Z_INDEX: i32 = FUN_RENDER_HUD_UI_Z_INDEX;
+pub const FUN_RENDER_DEBUG_OVERLAY_Z_INDEX: i32 = FUN_RENDER_CEF_UI_Z_INDEX + 20;
 
 const _: () = {
+    assert!(FUN_RENDER_HUD_UI_STAGE.order_key() > FUN_RENDER_CEF_UI_STAGE.order_key());
     assert!(FUN_RENDER_DEBUG_OVERLAY_Z_INDEX > FUN_RENDER_HUD_UI_Z_INDEX);
+    assert!(FUN_RENDER_DEBUG_OVERLAY_Z_INDEX > FUN_RENDER_CEF_UI_Z_INDEX);
+    assert!(
+        FUN_RENDER_CEF_UI_STAGE.order_key() > FunRenderCompositionStage::PostProcessing.order_key()
+    );
     assert!(FUN_RENDER_HUD_UI_STAGE.order_key() < FUN_RENDER_DEBUG_OVERLAY_STAGE.order_key());
 };
 
@@ -106,9 +117,21 @@ mod tests {
                 > FunRenderCompositionStage::PostProcessing.order_key()
         );
         assert!(
+            FunRenderCompositionStage::CefUi.order_key()
+                > FunRenderCompositionStage::PostProcessing.order_key()
+        );
+        assert!(
             FunRenderCompositionStage::DebugOverlays.order_key()
                 > FunRenderCompositionStage::HudUi.order_key()
         );
+    }
+
+    #[test]
+    fn cef_ui_does_not_feed_temporal_reconstruction() {
+        assert!(!FunRenderCompositionStage::CefUi.feeds_dlss_input_color());
+        assert!(!FunRenderCompositionStage::CefUi.feeds_dlss_depth_or_motion_vectors());
+        assert!(!FunRenderCompositionStage::CefUi.feeds_dlss_rr_guide_buffers());
+        assert!(!FunRenderCompositionStage::CefUi.feeds_temporal_reconstruction());
     }
 
     #[test]
@@ -121,6 +144,10 @@ mod tests {
 
     #[test]
     fn debug_overlay_layer_sits_above_hud_ui_layer() {
+        let cef_position = FUN_RENDER_COMPOSITION_ORDER
+            .iter()
+            .position(|stage| *stage == FUN_RENDER_CEF_UI_STAGE)
+            .expect("CEF UI stage must be in the composition order");
         let hud_position = FUN_RENDER_COMPOSITION_ORDER
             .iter()
             .position(|stage| *stage == FUN_RENDER_HUD_UI_STAGE)
@@ -130,6 +157,7 @@ mod tests {
             .position(|stage| *stage == FUN_RENDER_DEBUG_OVERLAY_STAGE)
             .expect("debug overlay stage must be in the composition order");
 
+        assert!(hud_position > cef_position);
         assert!(debug_position > hud_position);
     }
 }
