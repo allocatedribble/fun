@@ -32,6 +32,22 @@
     "handler_islands": true,
     "cohort_variants": true
   },
+  "function_inflation": {
+    "enabled": true,
+    "profile": "large",
+    "min_expansion_ratio": 6,
+    "max_expansion_ratio": 24,
+    "max_extra_basic_blocks": 96,
+    "max_extra_instructions": 2048,
+    "split_basic_blocks": true,
+    "split_return_paths": true,
+    "semantic_padding": true,
+    "decoy_blocks": true,
+    "guard_braids": true,
+    "ticket_gated_decoys": true,
+    "shadow_equivalent_paths": true,
+    "preserve_benchmark_budget": true
+  },
   "evidence": {
     "class": "redacted",
     "include_raw_memory_bytes": false,

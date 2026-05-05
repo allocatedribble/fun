@@ -1019,7 +1019,9 @@ mod tests {
         warden_service_policy_update_from_pairs,
     };
     use bevy::prelude::*;
-    use fun_warden_core::{ExecutionMode, ProtectionLevel, WardenJsonConfig};
+    use fun_warden_core::{
+        ExecutionMode, ProtectionLevel, WardenFunctionInflationProfile, WardenJsonConfig,
+    };
     use fun_warden_protocol::{
         ClientAttestationStatus, Digest32, FUN_WARDEN_CHALLENGE_ID_ENV, FUN_WARDEN_ENABLED_ENV,
         FUN_WARDEN_MODE_ENV, FUN_WARDEN_PROTECTED_BUNDLE_DIGEST_ENV,
@@ -1145,6 +1147,12 @@ mod tests {
             ]
         );
         assert!(!config.execution_modes().allows(ExecutionMode::DynamicJit));
+        assert!(config.function_inflation.enabled);
+        assert_eq!(
+            config.function_inflation.profile,
+            WardenFunctionInflationProfile::Large
+        );
+        assert!(config.function_inflation.preserve_benchmark_budget);
         assert_eq!(
             config.bevy.integrity_recheck_seconds as f32,
             WARDEN_INTEGRITY_RECHECK_SECONDS
