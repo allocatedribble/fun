@@ -68,6 +68,7 @@ use game_shared::{
 pub const MAX_CEF_UI_HIT_REGIONS: usize = 64;
 const MAX_JS_MESSAGES_PER_FRAME: usize = 64;
 const CEF_UI_RENDER_RATE_HZ: u64 = fun_ui_cef::CEF_UI_WINDOWLESS_FRAME_RATE_HZ as u64;
+const CEF_UI_NANOS_PER_SECOND: u64 = 1_000_000_000;
 const FUN_CLIENT_FPS_COUNTER_Z_INDEX: i32 = FUN_RENDER_DEBUG_OVERLAY_Z_INDEX;
 const FUN_CLIENT_FPS_COUNTER_REFRESH: Duration = Duration::from_millis(250);
 const FUN_CLIENT_FPS_COUNTER_WIDTH: f32 = 88.0;
@@ -972,7 +973,7 @@ pub struct CefUiMessageLoopPump {
 
 impl CefUiMessageLoopPump {
     #[must_use]
-    pub fn external_pump_60hz() -> Self {
+    pub fn external_pump_at_render_rate() -> Self {
         Self {
             enabled: true,
             pump_timer: Timer::new(cef_ui_render_interval(), TimerMode::Repeating),
@@ -1622,7 +1623,7 @@ fn start_cef_ui_browser(
         startup_config.message_loop_strategy,
         CefMessageLoopStrategy::ExternalPump
     ) {
-        world.insert_resource(CefUiMessageLoopPump::external_pump_60hz());
+        world.insert_resource(CefUiMessageLoopPump::external_pump_at_render_rate());
     }
     if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
         state.kind = CefUiStartupStateKind::Running;
@@ -2821,7 +2822,9 @@ const CEF_UI_TEXTURE_BYTES_PER_PIXEL: usize = 4;
 const CEF_UI_TEXTURE_Z_INDEX: i32 = FUN_RENDER_HUD_UI_Z_INDEX;
 
 fn cef_ui_render_interval() -> Duration {
-    Duration::from_nanos(1_000_000_000 / CEF_UI_RENDER_RATE_HZ)
+    Duration::from_nanos(
+        (CEF_UI_NANOS_PER_SECOND + CEF_UI_RENDER_RATE_HZ - 1) / CEF_UI_RENDER_RATE_HZ,
+    )
 }
 
 fn cef_ui_gpu_bridge_startup_timeout_from_env() -> Duration {
@@ -4415,14 +4418,14 @@ mod tests {
     }
 
     #[test]
-    fn cef_render_texture_upload_timer_is_fixed_sixty_hz() {
+    fn cef_render_texture_upload_timer_is_capped_at_one_twenty_hz() {
         let render_texture = CefUiRenderTexture::default();
-        let message_loop_pump = CefUiMessageLoopPump::external_pump_60hz();
+        let message_loop_pump = CefUiMessageLoopPump::external_pump_at_render_rate();
 
-        assert_eq!(CEF_UI_RENDER_RATE_HZ, 60);
+        assert_eq!(CEF_UI_RENDER_RATE_HZ, 120);
         assert_eq!(
             render_texture.upload_timer.duration(),
-            Duration::from_nanos(16_666_666)
+            Duration::from_nanos(8_333_334)
         );
         assert!(message_loop_pump.enabled());
         assert_eq!(

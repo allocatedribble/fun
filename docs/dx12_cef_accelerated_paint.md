@@ -46,9 +46,10 @@ CEF windowless OnPaint
   -> Bevy/FUN render composition
 ```
 
-`CEF_UI_WINDOWLESS_FRAME_RATE_HZ` and `CEF_UI_RENDER_RATE_HZ` are both 60, so the
-browser is configured to request 60 Hz paints. That value is a target, not proof
-that the CEF UI is producing or presenting 60 unique frames under load.
+`CEF_UI_WINDOWLESS_FRAME_RATE_HZ` and `CEF_UI_RENDER_RATE_HZ` are both 120, so
+the browser is configured to request up to 120 Hz paints. That value is a cap,
+not proof that the CEF UI is producing or presenting 120 unique frames under
+load.
 
 With `cef_ui_dx12_accelerated_paint` and the accelerated transport selected, the
 callback-local path is:
@@ -224,7 +225,7 @@ Every benchmark sample also emits a separate health badge line. This is the
 developer-facing transport badge; it is independent of the Svelte RAF FPS badge:
 
 ```text
-[client perf] cef_ui transport health: transport=d3d11on12 status=healthy accel_paint_fps=60 paint_fps=0 gpu_copy_ms=0.180 gpu_copy_ns_per_copy=180000 cpu_upload_bytes_per_frame=0 reused_frames=2 not_ready_frames=0 blocking_waits=0 fallback_count=0 ring_depth=3
+[client perf] cef_ui transport health: transport=d3d11on12 status=healthy accel_paint_fps=120 paint_fps=0 gpu_copy_ms=0.180 gpu_copy_ns_per_copy=180000 cpu_upload_bytes_per_frame=0 reused_frames=2 not_ready_frames=0 blocking_waits=0 fallback_count=0 ring_depth=3
 ```
 
 `benchmark_client.ps1` records the latest line as `cef_ui_transport_health` and
@@ -232,7 +233,7 @@ also folds numeric fields into `cef_health_*` metrics. The DX12 parity dashboard
 renders a compact CEF Transport Health section in the form:
 
 ```text
-CEF transport: d3d11on12 | accel paint 60 fps | gpu copy 0.18 ms | CPU upload 0 B/frame | reused 2 frames | fallback 0
+CEF transport: d3d11on12 | accel paint 120 fps | gpu copy 0.18 ms | CPU upload 0 B/frame | reused 2 frames | fallback 0
 ```
 
 Use that badge, not the Svelte UI FPS badge, when deciding whether the CEF path

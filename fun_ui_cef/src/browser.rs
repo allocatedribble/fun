@@ -42,7 +42,7 @@ pub const MAIN_BROWSER_PAGE: BrowserUiPage = BrowserUiPage {
     url: FUN_UI_MAIN_URL,
     transparent_background: true,
 };
-pub const CEF_UI_WINDOWLESS_FRAME_RATE_HZ: i32 = 60;
+pub const CEF_UI_WINDOWLESS_FRAME_RATE_HZ: i32 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrowserUiPage {
