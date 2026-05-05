@@ -21,11 +21,11 @@ scene authoring and lighting code in maintainable crates.
 ## ECS-First Scene Flow
 
 `fun-scene` is the authoring and scene-entity source of truth. It starts from
-the local Bevy fork's confirmed `bevy_scene`/`bsn!` model and exposes FUN-owned
-`fun!` and `fun_list!` macros. The intended flow is:
+the local Bevy fork's confirmed scene resolver and exposes FUN-owned `fun!` and
+`fun_list!` macros. The intended flow is:
 
 ```text
-bevy_scene / bsn!
+Bevy scene resolver
   -> fun-scene / fun!
   -> ECS entities, typed components, observers, stable identities
   -> fun_render extraction and RenderApp scheduling

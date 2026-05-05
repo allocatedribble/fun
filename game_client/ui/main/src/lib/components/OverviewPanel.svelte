@@ -27,7 +27,7 @@
   const sources: { value: SourceFilter; label: string }[] = [
     { value: 'both', label: 'Both' },
     { value: 'live', label: 'Live' },
-    { value: 'bsn', label: 'BSN' }
+    { value: 'bsn', label: 'Fun Scene' }
   ];
 
   let scroller: HTMLDivElement | undefined;
@@ -158,7 +158,7 @@
         kind: 'directory' as const,
         id: `bsn-root:${root}`,
         title: root.split(/[\\/]/).filter(Boolean).at(-1) ?? root,
-        subtitle: 'BSN root',
+        subtitle: 'Fun scene root',
         path: root,
         scope: { type: 'current_project' as const, projectId: project.id },
         metadata: { role: 'bsn root' }

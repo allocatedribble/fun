@@ -21,7 +21,7 @@ pub const RUNTIME_DIAGNOSTICS_LIST: &str = "runtime.diagnostics.list";
 #[serde(rename_all = "snake_case")]
 pub enum FunEditorCoreService {
     ProjectIndex,
-    BsnIndex,
+    FunSceneIndex,
     MaterialShader,
     EntityStream,
     PreviewRenderer,
@@ -33,7 +33,7 @@ impl FunEditorCoreService {
     pub const fn as_wire_str(self) -> &'static str {
         match self {
             Self::ProjectIndex => "project_index",
-            Self::BsnIndex => "bsn_index",
+            Self::FunSceneIndex => "fun_scene_index",
             Self::MaterialShader => "material_shader",
             Self::EntityStream => "entity_stream",
             Self::PreviewRenderer => "preview_renderer",
@@ -174,7 +174,7 @@ pub const FUN_EDITOR_SERVICES: &[FunEditorServiceDescriptor] = &[
         command_ids: &[PROJECTS_AUTHORIZED_LIST, PROJECT_EDIT_OPEN, PROJECT_OPEN],
     },
     FunEditorServiceDescriptor {
-        service: FunEditorCoreService::BsnIndex,
+        service: FunEditorCoreService::FunSceneIndex,
         rust_owner: "fun_editor_core",
         command_ids: &[PROJECT_OPEN],
     },

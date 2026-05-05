@@ -387,7 +387,7 @@ export const fallbackCommands: HostCommandDescriptor[] = [
   descriptor('editor.commands.list', 'List Commands', 'Returns the searchable command registry.', 'editor', 'No input.', 'CommandDescriptor[]'),
   descriptor('editor.events.list', 'List Events', 'Returns the in-memory event log.', 'editor', 'No input.', 'EditorEvent[]'),
   descriptor('project.open', 'Open Project', 'Opens the Fun workspace.', 'project', 'Optional path.', 'CommandResult<ProjectSummary>'),
-  descriptor('project.bsn.index', 'Index BSN Sources', 'Returns bsn! and bsn_list! source records.', 'project', 'No input.', 'CommandResult<BsnIndexSummary>'),
+  descriptor('project.bsn.index', 'Index Fun Scene Sources', 'Returns fun! and fun_list! source records.', 'project', 'No input.', 'CommandResult<BsnIndexSummary>'),
   descriptor('material.shader.list', 'List Material Shaders', 'Lists native WGSL material shader files.', 'material', 'Project ID.', 'CommandResult<MaterialShaderCatalog>'),
   descriptor('material.shader.load', 'Load Material Shader', 'Reads a project-owned WGSL material shader file.', 'material', 'MaterialShaderLoadRequest.', 'CommandResult<MaterialShaderDocument>'),
   descriptor('material.shader.save', 'Save Material Shader', 'Writes a project-owned WGSL material shader file.', 'material', 'MaterialShaderSaveRequest.', 'CommandResult<MaterialShaderDocument>'),
@@ -1143,7 +1143,7 @@ function fallbackRowById(entityId: string): EntityRowSummary | null {
 function fallbackComponents(row: EntityRowSummary): ComponentSummary[] {
   if (row.source_kind === 'source_bsn') {
     return fallbackBsnIndex.records[0].component_type_tokens.map((name) =>
-      componentSummary(name, 'from BSN token scan', row.source)
+      componentSummary(name, 'from Fun scene token scan', row.source)
     );
   }
 
@@ -1210,7 +1210,7 @@ function fallbackSourcePreview(row: EntityRowSummary): SourcePreview | null {
     path: row.source,
     start_line: row.source_span?.start.line ?? 1,
     end_line: row.source_span?.end.line ?? 1,
-    text: 'commands.spawn_scene_list(bsn_list![...]);'
+    text: 'commands.spawn_fun_scene_list(fun_list![...]);'
   };
 }
 

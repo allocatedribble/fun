@@ -19,7 +19,7 @@
   ];
   const sources: { value: SourceFilter; label: string }[] = [
     { value: 'live', label: 'Live' },
-    { value: 'bsn', label: 'BSN' },
+    { value: 'bsn', label: 'Fun Scene' },
     { value: 'both', label: 'Both' }
   ];
 
@@ -139,7 +139,7 @@
                 {row.source_kind === 'server_live' ? 'server live' : row.source_kind === 'client_live' ? 'client live' : row.live_snapshot ? 'live' : 'static'}
               </span>
               <span class="mini-tag">{row.component_count}</span>
-              <span class="mini-tag">{row.source_kind === 'source_bsn' ? 'BSN' : 'RT'}</span>
+              <span class="mini-tag">{row.source_kind === 'source_bsn' ? 'Fun' : 'RT'}</span>
             </span>
           </button>
         {:else}

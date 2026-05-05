@@ -1,11 +1,6 @@
 use avian3d::prelude::{Collider, RigidBody};
-use bevy::{
-    prelude::*,
-    scene::{
-        prelude::{CommandsSceneExt, Scene as BsnScene, bsn, bsn_list},
-        template_value,
-    },
-};
+use bevy::prelude::*;
+use fun_scene::prelude::*;
 use game_shared::{
     ASSET_COVER_CUBE, ASSET_FLOOR, ASSET_FLOOR_COLLIDER, ASSET_RAMP, ASSET_WALL,
     COLLIDER_COVER_CUBE, COLLIDER_FLOOR, COLLIDER_RAMP, COLLIDER_WALL, DEMO_LEVEL_ID,
@@ -97,9 +92,6 @@ pub struct StreamedWorldEntity {
     pub color: Option<PackedColorRgba8>,
 }
 
-#[derive(Debug, Default, Clone, Copy, Component)]
-pub struct SceneStableIdentity(pub NetEntity);
-
 impl StreamedWorldEntity {
     #[must_use]
     pub const fn catalog(catalog: WorldCatalogRef) -> Self {
@@ -129,12 +121,12 @@ impl SceneEntity {
 }
 
 pub fn spawn_default_scene(mut commands: Commands) {
-    commands.spawn_scene_list(bsn_list![
+    commands.spawn_fun_scene_list(fun_list![
         (
             #Floor
-            template_value(Networked::world())
-            template_value(SceneStableIdentity(FLOOR_ENTITY))
-            template_value(StreamedWorldEntity::catalog(catalog_ref(
+            fun_value(Networked::world())
+            fun_value(FunSceneStableIdentity(FLOOR_ENTITY))
+            fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_FLOOR.0,
                 MATERIAL_FLOOR.0,
                 0,
@@ -144,42 +136,42 @@ pub fn spawn_default_scene(mut commands: Commands) {
         (
             #FloorCollider
             Name::new("FloorCollider")
-            template_value(Networked::world())
-            template_value(SceneStableIdentity(FLOOR_COLLIDER_ENTITY))
-            template_value(StreamedWorldEntity::catalog(catalog_ref(
+            fun_value(Networked::world())
+            fun_value(FunSceneStableIdentity(FLOOR_COLLIDER_ENTITY))
+            fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_FLOOR_COLLIDER.0,
                 MATERIAL_FLOOR.0,
                 COLLIDER_FLOOR.0,
             )))
-            template_value(RigidBody::Static)
+            fun_value(RigidBody::Static)
             Collider::cuboid(60.0, 0.5, 60.0)
             Transform::from_xyz(0.0, -0.25, 0.0)
         ),
         (
             #Wall
-            template_value(Networked::world())
-            template_value(SceneStableIdentity(WALL_ENTITY))
-            template_value(StreamedWorldEntity::catalog(catalog_ref(
+            fun_value(Networked::world())
+            fun_value(FunSceneStableIdentity(WALL_ENTITY))
+            fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_WALL.0,
                 MATERIAL_WALL.0,
                 COLLIDER_WALL.0,
             )))
-            template_value(RigidBody::Static)
+            fun_value(RigidBody::Static)
             Collider::cuboid(5.0, 3.0, 1.0)
             Transform::from_xyz(0.0, 1.5, -8.0)
         ),
         (
             #Ramp
-            template_value(Networked::world())
-            template_value(SceneStableIdentity(RAMP_ENTITY))
-            template_value(StreamedWorldEntity::catalog(catalog_ref(
+            fun_value(Networked::world())
+            fun_value(FunSceneStableIdentity(RAMP_ENTITY))
+            fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_RAMP.0,
                 MATERIAL_RAMP.0,
                 COLLIDER_RAMP.0,
             )))
-            template_value(RigidBody::Static)
+            fun_value(RigidBody::Static)
             Collider::cuboid(3.0, 0.5, 6.0)
-            template_value(Transform::from_xyz(-6.0, 0.25, -2.0)
+            fun_value(Transform::from_xyz(-6.0, 0.25, -2.0)
                 .with_rotation(Quat::from_rotation_z(-12.0_f32.to_radians())))
         ),
         demo_cube(COVER_A_ENTITY, Vec3::new(3.0, 1.0, 2.0)),
@@ -188,24 +180,27 @@ pub fn spawn_default_scene(mut commands: Commands) {
     ]);
 }
 
-fn demo_cube(entity: NetEntity, translation: Vec3) -> impl BsnScene {
-    bsn! {
-        template_value(Networked::world())
-        template_value(SceneStableIdentity(entity))
-        template_value(StreamedWorldEntity::catalog(catalog_ref(
+fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
+    fun! {
+        fun_value(Networked::world())
+        fun_value(FunSceneStableIdentity(entity))
+        fun_value(StreamedWorldEntity::catalog(catalog_ref(
             ASSET_COVER_CUBE.0,
             MATERIAL_COVER.0,
             COLLIDER_COVER_CUBE.0,
         )))
-        template_value(RigidBody::Static)
+        fun_value(RigidBody::Static)
         Collider::cuboid(1.0, 1.0, 1.0)
-        template_value(Transform::from_translation(translation))
+        fun_value(Transform::from_translation(translation))
     }
 }
 
 pub fn apply_scene_stable_identities(
     mut commands: Commands,
-    query: Query<(Entity, &SceneStableIdentity, &Networked), Without<NetworkIdentity>>,
+    query: Query<
+        (Entity, &FunSceneStableIdentity<NetEntity>, &Networked),
+        Without<NetworkIdentity>,
+    >,
 ) {
     for (entity, stable_identity, networked) in &query {
         commands.entity(entity).insert((
@@ -677,7 +672,7 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             bevy::asset::AssetPlugin::default(),
-            bevy::scene::ScenePlugin,
+            FunScenePlugin,
         ));
         app.add_systems(
             Startup,

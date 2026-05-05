@@ -2,14 +2,53 @@
 
 extern crate self as fun_scene;
 
+pub mod asset;
+pub mod authoring;
+pub mod diagnostics;
+pub mod format;
+pub mod lux_components;
+pub mod manifest;
+pub mod observers;
+pub mod patch;
+pub mod plugin;
+pub mod prelude;
+pub mod renderer_components;
+pub mod resolved;
+pub mod scene;
+pub mod scene_list;
+pub mod spawn;
+pub mod stable_identity;
+pub mod streaming;
+pub mod template;
+pub mod template_value;
+pub mod validation;
+
 pub use bevy_scene;
-pub use bevy_scene::{
-    CommandsSceneExt, EntityCommandsSceneExt, EntityWorldMutSceneExt, PatchFromTemplate,
-    PatchTemplate, Scene, SceneComponent, SceneList, ScenePlugin, WorldSceneExt, template_value,
-};
+#[deprecated(note = "use fun_scene::fun instead of the temporary bsn alias")]
+pub use fun_scene_macros::fun as bsn;
+#[deprecated(note = "use fun_scene::fun_list instead of the temporary bsn_list alias")]
+pub use fun_scene_macros::fun_list as bsn_list;
 pub use fun_scene_macros::{fun, fun_list};
 
-use bevy_ecs::prelude::{Component, Resource};
+pub use asset::*;
+pub use authoring::*;
+pub use diagnostics::*;
+pub use format::*;
+pub use lux_components::*;
+pub use manifest::*;
+pub use observers::*;
+pub use patch::*;
+pub use plugin::*;
+pub use renderer_components::*;
+pub use resolved::*;
+pub use scene::*;
+pub use scene_list::*;
+pub use spawn::*;
+pub use stable_identity::*;
+pub use streaming::*;
+pub use template::*;
+pub use template_value::*;
+pub use validation::*;
 
 pub const FUN_SCENE_SCHEMA_VERSION: u16 = 1;
 pub const FUN_SCENE_PACKAGE_NAME: &str = "fun-scene";
@@ -37,128 +76,6 @@ impl FunSceneOwner {
             Self::ServerAuthority => "game_server",
             Self::Editor => "fun_host",
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
-pub struct FunSceneEntityId(pub u64);
-
-impl FunSceneEntityId {
-    pub const INVALID: Self = Self(0);
-
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn is_valid(self) -> bool {
-        self.0 != Self::INVALID.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunSceneRendererDeclarationKind {
-    GpuSceneObject,
-    VirtualGeometrySource,
-    VirtualShadowCaster,
-    StreamingPageSource,
-    RuntimeProceduralGeometry,
-}
-
-impl FunSceneRendererDeclarationKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::GpuSceneObject => "gpu_scene_object",
-            Self::VirtualGeometrySource => "virtual_geometry_source",
-            Self::VirtualShadowCaster => "virtual_shadow_caster",
-            Self::StreamingPageSource => "streaming_page_source",
-            Self::RuntimeProceduralGeometry => "runtime_procedural_geometry",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct FunSceneRendererDeclaration {
-    pub kind: FunSceneRendererDeclarationKind,
-    pub owner: FunSceneOwner,
-}
-
-impl FunSceneRendererDeclaration {
-    #[must_use]
-    pub const fn new(kind: FunSceneRendererDeclarationKind) -> Self {
-        Self {
-            kind,
-            owner: FunSceneOwner::Renderer,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunSceneLightingDeclarationKind {
-    DirectLight,
-    EmissiveCandidate,
-    VirtualShadowDemandPage,
-    RadianceCacheSeed,
-    SurfaceCacheSeed,
-    ProbeCacheSeed,
-}
-
-impl FunSceneLightingDeclarationKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::DirectLight => "direct_light",
-            Self::EmissiveCandidate => "emissive_candidate",
-            Self::VirtualShadowDemandPage => "virtual_shadow_demand_page",
-            Self::RadianceCacheSeed => "radiance_cache_seed",
-            Self::SurfaceCacheSeed => "surface_cache_seed",
-            Self::ProbeCacheSeed => "probe_cache_seed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct FunSceneLightingDeclaration {
-    pub kind: FunSceneLightingDeclarationKind,
-    pub owner: FunSceneOwner,
-}
-
-impl FunSceneLightingDeclaration {
-    #[must_use]
-    pub const fn new(kind: FunSceneLightingDeclarationKind) -> Self {
-        Self {
-            kind,
-            owner: FunSceneOwner::Lighting,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
-pub struct FunSceneAuthoringPolicy {
-    pub bevy_scene_bsn_reuse_confirmed: bool,
-    pub fun_macro_is_primary_authoring_surface: bool,
-    pub deterministic_manifest_required: bool,
-    pub server_editor_renderer_shared_authority: bool,
-    pub renderer_consumes_ecs_archetypes: bool,
-    pub lighting_consumes_ecs_declarations: bool,
-}
-
-impl FunSceneAuthoringPolicy {
-    pub const DEFAULT: Self = Self {
-        bevy_scene_bsn_reuse_confirmed: true,
-        fun_macro_is_primary_authoring_surface: true,
-        deterministic_manifest_required: true,
-        server_editor_renderer_shared_authority: true,
-        renderer_consumes_ecs_archetypes: true,
-        lighting_consumes_ecs_declarations: true,
-    };
-}
-
-impl Default for FunSceneAuthoringPolicy {
-    fn default() -> Self {
-        Self::DEFAULT
     }
 }
 
@@ -247,5 +164,15 @@ mod tests {
             lighting.kind.as_str(),
             FunSceneLightingDeclarationKind::DirectLight.as_str()
         );
+    }
+
+    #[test]
+    fn validation_policy_requires_safe_asset_boundary() {
+        let policy = FunSceneValidationPolicy::DEFAULT;
+
+        assert!(policy.reject_arbitrary_rust_expressions);
+        assert!(policy.validate_schema_before_spawn);
+        assert!(policy.require_deterministic_stable_ids);
+        assert!(policy.retain_renderer_lux_component_authority);
     }
 }

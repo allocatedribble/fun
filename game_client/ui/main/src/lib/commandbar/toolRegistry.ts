@@ -12,7 +12,7 @@ import { scopeTargetLabel } from './scopeRegistry';
 const builtinTools: EditorToolDefinition[] = [
   tool('project.current.get', 'Current Project', 'Read the active project identity and roots.', 'project', 'read', ['project', 'workspace', 'current']),
   tool('projects.recent.list', 'Recent Projects', 'List recent projects and project switch targets.', 'project', 'read', ['recent', 'project', 'switch']),
-  tool('project.bsn.index', 'BSN Scene Index', 'Search indexed BSN scenes and invocations.', 'scene', 'read', ['scene', 'bsn', 'index']),
+  tool('project.bsn.index', 'Fun Scene Index', 'Search indexed Fun scenes and invocations.', 'scene', 'read', ['scene', 'fun_scene', 'index']),
   tool('entity.search', 'Search Entities', 'Search static and live ECS entity rows.', 'entity', 'read', ['entity', 'outliner', 'component']),
   tool('entity.details.get', 'Inspect Entity', 'Read details for the selected entity.', 'entity', 'read', ['inspect', 'entity', 'component']),
   tool('runtime.status.get', 'Runtime Status', 'Read client, server, and host runtime state.', 'runtime', 'read', ['runtime', 'client', 'server']),

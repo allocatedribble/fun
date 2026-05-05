@@ -237,13 +237,13 @@
     </section>
 
     <section class="details-section">
-      <h3>BSN source span</h3>
+      <h3>Fun scene source span</h3>
       {#if details.row.source_span}
         <p class="mono path-text">
           {details.row.source_span.path}:{details.row.source_span.start.line}:{details.row.source_span.start.column}
         </p>
       {:else}
-        <p class="muted">No BSN span for this row.</p>
+        <p class="muted">No Fun scene span for this row.</p>
       {/if}
     </section>
 

@@ -14,13 +14,10 @@ use bevy::{
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
     render::view::Msaa,
-    scene::{
-        prelude::{CommandsSceneExt, Scene as BsnScene, bsn},
-        template_value,
-    },
     window::{CursorGrabMode, CursorOptions},
 };
 use fun_host::{FunClientHostState, FunInputOwner};
+use fun_scene::prelude::*;
 use game_shared::{DEFAULT_CORRECTION_HALF_LIFE_SECONDS, PLAYER_SPAWN};
 
 pub struct FirstPersonControllerPlugin {
@@ -272,12 +269,12 @@ impl Default for LookSettings {
 }
 
 fn spawn_player(mut commands: Commands) {
-    commands.spawn_scene(player_scene(base_camera_scene()));
+    commands.spawn_fun_scene(player_scene(base_camera_scene()));
 }
 
-fn player_scene(camera: impl BsnScene) -> impl BsnScene {
+fn player_scene(camera: impl FunScene) -> impl FunScene {
     let spawn_transform = Transform::from_xyz(PLAYER_SPAWN[0], PLAYER_SPAWN[1], PLAYER_SPAWN[2]);
-    bsn! {
+    fun! {
         #Player
         Player
         Name::new("Player")
@@ -285,12 +282,12 @@ fn player_scene(camera: impl BsnScene) -> impl BsnScene {
         MovementInputState::default()
         CharacterVelocity::default()
         MovementContactCache::default()
-        template_value(NetworkInterpolationState::new(spawn_transform))
+        fun_value(NetworkInterpolationState::new(spawn_transform))
         LookSettings::default()
-        template_value(RigidBody::Kinematic)
+        fun_value(RigidBody::Kinematic)
         Collider::capsule(PLAYER_RADIUS, PLAYER_CAPSULE_LENGTH)
         Visibility::default()
-        template_value(spawn_transform)
+        fun_value(spawn_transform)
         Children [(
             #YawPivot
             YawPivot
@@ -309,14 +306,14 @@ fn player_scene(camera: impl BsnScene) -> impl BsnScene {
     }
 }
 
-fn base_camera_scene() -> impl BsnScene {
-    bsn! {
+fn base_camera_scene() -> impl FunScene {
+    fun! {
         Camera3d
         Camera {
             clear_color: ClearColorConfig::Custom(Color::BLACK),
         }
-        template_value(Msaa::Off)
-        template_value(Projection::from(PerspectiveProjection {
+        fun_value(Msaa::Off)
+        fun_value(Projection::from(PerspectiveProjection {
             fov: 75.0_f32.to_radians(),
             ..default()
         }))
