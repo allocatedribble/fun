@@ -40,7 +40,7 @@ first-order migration blockers.
 | question | current answer |
 | --- | --- |
 | What does `fun_render` own today? | The Bevy-facing product renderer plugin, Winit presentation, config/env parsing, Solari/cloud/meshlet integration, DX12 native interop gate, CEF texture composition bridge, diagnostics/benchmark counters, upload arena experiments, DLSS correctness/native-SR scaffolding, and the bridge re-export surface for `fun-renderer`, `fun-lux`, and `fun-scene`. |
-| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
+| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, shared page scheduler, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
 | Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
 | Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | The product code path is now GPU-only/fail-closed: CEF CPU `OnPaint` frames are rejected, Bevy UI image composition has been removed from `game_client`, and `fun-renderer::RendererCefCompositor` owns the late UI layer contract. Runtime proof is still blocked until the strict D3D11On12 lane reports `bridge_ready=true` with nonzero GPU copy bytes. |
@@ -487,12 +487,67 @@ CEF GPU transport product claims until `graphics_backend_truth_state` is
 `trusted_dx12` or `auto_resolved_dx12` and `dx12_native_interop_support` is
 `supported`.
 
+## Pass 10 Shared Page Scheduler
+
+`fun-renderer/src/page.rs` now owns the shared virtual-resource page scheduler.
+It is the residency spine for virtual geometry, virtual shadows, streamed
+textures, GI/radiance cache pages, material cache pages, and future neural cache
+data. Virtual geometry and virtual shadows must use this API instead of
+inventing separate residency systems.
+
+Page identity and state are explicit:
+
+- `LogicalPageId { owner, value }`
+- `PhysicalPageSlot { index, generation }`
+- `PageGeneration`
+- `PageResidencyState`
+- `PageUploadState`
+- `PageEvictionState`
+
+The residency states are `missing`, `requested`, `uploading`, `resident`,
+`pinned`, `eviction_candidate`, `evicting`, and `invalidated`. Physical slots
+are generation-checked and return to the free list with a bumped generation
+after eviction or invalidation.
+
+The first priority heuristic is deterministic and inspectable. It scores:
+
+- projected area;
+- camera proximity;
+- visibility confidence;
+- temporal instability;
+- motion magnitude;
+- luminance/contrast importance;
+- shadow receiver demand;
+- gameplay salience;
+- editor focus.
+
+`PagePriorityScore` stores both the final score and a
+`PagePriorityBreakdown`, so later learned predictors can imitate or augment the
+heuristic without hiding why a page was requested.
+
+Diagnostics now cover:
+
+- page faults per frame;
+- evictions per frame;
+- upload bytes by owner;
+- resident pages by owner;
+- page age heatmap;
+- priority heatmap;
+- pinned page count;
+- fault storm detector;
+- high-water marks.
+
+`PageOwnerFrameRequests` is the shared owner-facing submission API. The focused
+tests exercise virtual geometry and virtual shadows as independent mock owners
+using the same scheduler path. The debug artifact is controlled by
+`FUN_RENDERER_PAGE_SCHEDULER_BENCHMARK_ARTIFACT`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
 | --- | --- | --- | --- | --- |
 | Product presentation | `game_client/src/lib.rs`, `fun_render/src/winit.rs`, `fun_render/src/core.rs` | `game_client` + `fun_render` | `fun-renderer` core through `fun_render` bridge | Current visible frame path. |
-| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,frame_graph.rs,heuristics.rs,resource.rs,scene.rs,ui/cef.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, GPU scene DB records, resource model, renderer-owned CEF compositor, not product swapchain ownership. |
+| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,frame_graph.rs,heuristics.rs,page.rs,resource.rs,scene.rs,ui/cef.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, GPU scene DB records, shared page scheduler, resource model, renderer-owned CEF compositor, not product swapchain ownership. |
 | Lighting/Lux seams | `fun-lux/src/{lib.rs,api.rs}` | `fun-lux` | `fun-lux` | Buildable substrate and ECS extraction/update hooks. |
 | Scene substrate | `fun-scene/src/*`, `fun-scene-macros/src/*`, `game_scene/src/*` | `fun-scene` + `game_scene` | same split | Active and first-party. |
 | CEF/Svelte product UI | `game_client/ui/main`, `game_client/src/cef_ui.rs`, `fun_ui_cef/src/*`, `fun_host/src/lib.rs`, `fun-renderer/src/ui/cef.rs` | browser lifetime in `fun_ui_cef`, host/app bridge in `game_client`, compositor contract in `fun-renderer` | CEF/Svelte UI with renderer-owned GPU compositor | Active product lane now imports GPU tokens into `RendererCefCompositor`; visible swapchain composition still awaits renderer present handoff. |
@@ -563,6 +618,8 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | --- | --- |
 | Renderer core compile | `cargo check -p fun-renderer` |
 | Renderer core tests | `cargo test -p fun-renderer --lib` |
+| Renderer page scheduler tests | `cargo test -p fun-renderer --lib page` |
+| Renderer page scheduler artifact | `$env:FUN_RENDERER_PAGE_SCHEDULER_BENCHMARK_ARTIFACT='target\page-scheduler\pass10-fault-eviction.txt'; cargo test -p fun-renderer --lib fault_eviction_benchmark_artifact_records_shared_owner_metrics` |
 | Renderer frame graph tests | `cargo test -p fun-renderer --lib frame_graph` |
 | Renderer frame graph debug artifact | `$env:FUN_RENDERER_FRAME_GRAPH_DEBUG_ARTIFACT='target\frame-graph\pass6\renderer_frame_graph_debug.txt'; cargo test -p fun-renderer --lib frame_graph_debug_artifact_names_passes_resources_and_markers` |
 | Renderer scene DB tests | `cargo test -p fun-renderer --lib scene` |
@@ -618,3 +675,6 @@ For future behavior passes, the first rollback path remains:
 - Bevy ECS is already the intended data substrate and is already compiled into
   `fun-renderer`; the next runtime migration should connect visible frame
   ownership without breaking that ECS-first shape.
+- Route virtual geometry, virtual shadow, streamed texture, GI/radiance,
+  material-cache, and neural-cache residency through the shared page scheduler
+  before adding owner-specific GPU implementations.

@@ -6,6 +6,7 @@ pub mod ecs;
 pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
+pub mod page;
 pub mod parity;
 pub mod pipeline;
 pub mod resource;
@@ -783,6 +784,7 @@ pub use ecs::*;
 pub use frame_graph::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
+pub use page::*;
 pub use pipeline::*;
 pub use resource::*;
 pub use scene::*;

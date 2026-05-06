@@ -125,6 +125,12 @@ Renderer resource ownership is represented by `RendererResourceClass`,
 `ResourceFrameAllocationDiagnostics`, and `HOT_UPLOAD_KILL_LIST`; `fun_render`
 may keep `FunUploadArena` as a compatibility shim, but allocator policy belongs
 to `fun-renderer`.
+The shared page scheduler is represented by `PageScheduler`, `LogicalPageId`,
+`PhysicalPageSlot`, `PageOwner`, `PageResidencyState`, `PagePriorityScore`, and
+`PageSchedulerDiagnostics`. Virtual geometry, virtual shadows, streamed
+textures, GI/radiance caches, material caches, and future neural cache data use
+the same residency API so page priority, fault storms, uploads, and evictions
+are comparable across systems.
 The renderer-owned frame graph is represented by `RendererFrameGraph`,
 `RendererFrameDescription`, typed pass/resource declarations, graph validation
 failures, pass timing placeholders, resource lifetimes, and debug artifacts.
