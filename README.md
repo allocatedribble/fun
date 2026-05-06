@@ -240,6 +240,15 @@ uses authored inputs such as `Renderable`, `VirtualGeometryAuthoring`,
 `MlInferencePriority`. `HeuristicDebugOverlay` records the component causes for
 each priority so CEF/Svelte diagnostics can explain page, light, and cache
 decisions without a Bevy UI runtime surface.
+The shared scheduler language is represented by `fun_renderer::scheduler`.
+It normalizes projected area, motion, temporal history error, luminance
+variance, material and alpha/specular risk, occlusion confidence, gameplay
+salience, editor focus, and camera proximity into one explainable priority
+score. Geometry pages, shadow pages, light candidate budgets, GI cache updates,
+reflection ray budgets, texture residency, shading-rate decisions, and optional
+ML inference density consume the same score and emit comparable budget
+recommendations, heatmaps, high-priority miss counters, stability scores, and
+p95/p99 frame-impact artifacts.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. During the current
 transition, unset or `auto` resolves to the legacy Bevy/wgpu product path with a
 loud diagnostic; the exact future flip point is
