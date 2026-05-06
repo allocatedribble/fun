@@ -108,7 +108,7 @@ counts, pipeline cache hit/miss counts, and top churn events.
 Generate the focused cardinality report from an existing matrix:
 
 ```powershell
-python tools\dx12_pipeline_cardinality_report.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-pipeline-cardinality `
   --matrix target\dx12-parity\current\matrix.json `
   --output-dir target\dx12-pix
 ```

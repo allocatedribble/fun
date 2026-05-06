@@ -41,19 +41,19 @@ and pass cost depends on resolution, scene, driver, and queue behavior.
 Capture a named Criterion baseline before a change:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_criterion.ps1 -SaveBaseline before
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline before
 ```
 
 Compare the candidate against that baseline:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_criterion.ps1 -Baseline before -SaveBaseline after
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --baseline before --save-baseline after
 ```
 
 For fast compile/smoke validation while editing benchmark code:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_criterion.ps1 -SaveBaseline smoke -WarmupSeconds 0.1 -MeasurementSeconds 0.2 -SampleSize 10
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline smoke --warmup-seconds 0.1 --measurement-seconds 0.2 --sample-size 10
 ```
 
 The first Criterion suite lives at `game_client/benches/client_costs.rs` and
@@ -70,33 +70,56 @@ Criterion writes its HTML and raw estimates under `target\criterion`.
 
 ## Runtime Benchmark Command
 
-Use the client benchmark script for repeatable captures:
+Use the Rust benchmark CLI for repeatable captures. During the transition, the
+PowerShell files in `scripts\` are compatibility wrappers around these
+subcommands and preserve old parameter names as `--legacy-arg` metadata.
+
+```powershell
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client
+```
+
+The wrapper remains available only for existing reviewer habits:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1
 ```
 
-The script starts the server and client through `scripts\run_stack.ps1`, enables
-render diagnostics, warms up, samples the client log, stops the stack, and writes
-both files below:
+The Rust command starts the server and client through `fun-bench run-stack`,
+enables render diagnostics, warms up, samples the client log, stops the stack,
+and writes the canonical telemetry bundle first. Legacy files below are
+rendered compatibility views generated from the decoded bundle:
+
+- `target\benchmarks\client\<timestamp>\benchmark.funpb.zst`
+- `target\benchmarks\client\<timestamp>\summary.json`
+- `target\benchmarks\client\<timestamp>\summary.md`
+
+The hard telemetry contract lives in the umbrella docs:
+
+- [`../../docs/data-platform/protobuf-telemetry-standard.md`](../../docs/data-platform/protobuf-telemetry-standard.md)
+- [`../../docs/data-platform/telemetry-size-runtime-budgets.md`](../../docs/data-platform/telemetry-size-runtime-budgets.md)
+- [`../../docs/data-platform/diagnostic-retention-policy.md`](../../docs/data-platform/diagnostic-retention-policy.md)
+
+Benchmark captures use `BenchmarkCapture` unless a narrower lane explicitly
+declares `HotPathCounters`, `SampledRuntime`, or `TargetedTrace`.
+
+During transition, older consumers may still read:
 
 - `target\benchmarks\client\<timestamp>\summary.json`
 - `target\benchmarks\client\<timestamp>\summary.md`
 
-`benchmark_client.ps1` calls the stack runner through a resolved stack profile.
-By default it selects the checked-in `default.<backend>.<present>` profile when
-one exists, then passes benchmark flags as command-line overrides so existing
-lanes keep their explicit settings. Use `-StackProfile <profile-name>` only for
-lanes that intentionally need a different profile contract. Invalid profiles
-fail closed in `run_stack.ps1` profile validation, and every emitted
+`fun-bench client` calls the stack runner through a resolved stack profile. By
+default it selects `default.<backend>.<present>`, then passes benchmark flags as
+command-line overrides so existing lanes keep their explicit settings. Use
+`--stack-profile <profile-name>` only for lanes that intentionally need a
+different profile contract. Every emitted
 `summary.json` records the additive, schema-marked `stack_runner` object with
 the resolved profile, override map, command, and runner session path.
 
-Required 144 FPS lanes are run through the same script, not a separate
+Required 144 FPS lanes are run through the same Rust engine, not a separate
 measurement universe:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_required_lanes.ps1 -RenderBackend dx12 -PresentMode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- required-lanes --render-backend dx12 --present-mode immediate
 ```
 
 Each lane writes its own `summary.json`:
@@ -153,7 +176,7 @@ for the buckets that are currently measurable.
 
 Use the DX12 parity matrix when comparing Windows DX12 against the Vulkan
 control lane. It is measurement-first: every lane is routed through
-`scripts\benchmark_client.ps1`, every lane records backend, present mode, CEF
+`fun-bench client`, every lane records backend, present mode, CEF
 visibility/transport, feature toggles, hardware, Windows build, manual display
 annotations, and metric presence.
 
@@ -165,20 +188,20 @@ native interop, then bring up DLSS Super Resolution and only later consider Ray
 Reconstruction.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity
 ```
 
 For script/schema validation without launching the client:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -PlanOnly
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --plan-only
 ```
 
 The quick profile captures the Vulkan and DX12 present-mode controls plus the
 highest-risk UI and feature lanes. The full profile adds every declared lane:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize full -ContinueOnFailure
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size full --continue-on-failure
 ```
 
 Use the present matrix before changing any Windows present defaults. It expands
@@ -197,7 +220,7 @@ still needs a dedicated host/window-mode switch before it can be included as a
 live lane.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize present -ContinueOnFailure
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size present --continue-on-failure
 ```
 
 Use the stream-pressure matrix before claiming meshlet/world-stream p95
@@ -205,7 +228,7 @@ improvements. It runs the `streaming_spike` lane through DX12 and Vulkan
 controls, then expands DX12 render-prep budget and chunk-cap tuning lanes:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize stream_pressure -ContinueOnFailure
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size stream-pressure --continue-on-failure
 ```
 
 The live controls are:
@@ -220,7 +243,7 @@ actually bounded reallocations and whether the render-prep budget is limiting
 time-to-ready:
 
 ```powershell
-python tools\dx12_meshlet_stream_pressure_report.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-meshlet-stream-pressure `
   --matrix-json target\dx12-parity\stream-pressure\matrix.json `
   --markdown-report target\dx12-parity\stream-pressure\dx12_meshlet_stream_pressure_report.md `
   --json-report target\dx12-parity\stream-pressure\dx12_meshlet_stream_pressure_report.json
@@ -266,7 +289,7 @@ until those recommendations come from comparable live runs.
 For an explicit default/benchmark decision artifact, run:
 
 ```powershell
-python tools\dx12_present_decision_report.py --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_present_decision_report.md --json-report target\dx12-parity\current\dx12_present_decision_report.json
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-present-decision --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_present_decision_report.md --json-report target\dx12-parity\current\dx12_present_decision_report.json
 ```
 
 The decision report keeps the product default unchanged unless the required
@@ -351,7 +374,7 @@ Readback diagnostics are recorded as
 For the focused command/readback decision artifact, run:
 
 ```powershell
-python tools\dx12_command_readback_report.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-command-readback `
   --matrix-json target\dx12-parity\current\matrix.json `
   --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
   --json-report target\dx12-parity\current\dx12_command_readback_report.json
@@ -387,13 +410,13 @@ submit counts, and GPU queue idle intervals.
 Use the JSON file as the baseline for a second run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -Baseline target\benchmarks\client\<baseline>\summary.json
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --baseline target\benchmarks\client\<baseline>\summary.json
 ```
 
 For a generated DX12 parity dashboard from one Vulkan JSON and one DX12 JSON:
 
 ```powershell
-python tools\dx12_parity_report.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity `
   --vulkan target\benchmarks\client\<vulkan>\summary.json `
   --dx12 target\benchmarks\client\<dx12>\summary.json `
   --markdown target\benchmarks\dx12_parity\dashboard.md `
@@ -417,17 +440,20 @@ post-parity Tier 19 experiments. The parity dashboard prints moonshot
 eligibility and a `DX12 Memory Budget` table when native/DXGI budget samples or
 adapter RAM are available.
 
+The legacy Python DX12 report wrapper paths were removed in Pass 13. CI and
+agent workflows must call `fun-data report <kind>` directly.
+
 ## DX12 Perf Regression Gate
 
 Use the local gate when a baseline and candidate `summary.json` are available
 from the same hardware, resolution, present mode, CEF mode, and build profile:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 `
-  -Baseline target\benchmarks\client\<baseline>\summary.json `
-  -Current target\benchmarks\client\<candidate>\summary.json `
-  -ReportPath target\benchmarks\dx12_perf_gate\report.md `
-  -JsonOut target\benchmarks\dx12_perf_gate\report.json
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check `
+  --baseline target\benchmarks\client\<baseline>\summary.json `
+  --current target\benchmarks\client\<candidate>\summary.json `
+  --report-path target\benchmarks\dx12_perf_gate\report.md `
+  --json-out target\benchmarks\dx12_perf_gate\report.json
 ```
 
 The checked-in envelope is
@@ -445,7 +471,7 @@ create-count increases. Use `-FailOnWarning` only for local ratcheting runs.
 CI runs correctness-only self-tests on normal Windows runners:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -SelfTest
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --self-test
 ```
 
 ## DX12 Doctrine Gate
@@ -454,12 +480,13 @@ Use the doctrine gate for hardware-free PR checks and to validate supplied CEF
 summary artifacts:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1 -SelfTest
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_doctrine.ps1 -SummaryPath target\benchmarks\client\<candidate>\summary.json
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --self-test
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --summary-path target\benchmarks\client\<candidate>\summary.json
 ```
 
-The checker requires `.dx12_change_category`, blocks `dlss-sr` changes until
+The old PowerShell paths remain compatibility wrappers. The checker requires
+`.dx12_change_category`, blocks `dlss-sr` changes until
 `docs\dx12_dlss_boundary_gate.md` says the baseline is ready, denies raw DX12
 HAL extraction outside `fun_render\src\dx12_native`, and fails accelerated CEF
 summary artifacts that report nonzero `cef_cpu_upload_bytes`.
@@ -469,13 +496,26 @@ non-blocking. It targets self-hosted runners labeled `windows` and `dx12-perf`;
 those runners can execute the full benchmark matrix when the sibling path
 dependencies are present.
 
+During the Rust tooling cutover, umbrella CI runs direct Rust benchmark/report
+fixtures under:
+
+```text
+target/data-platform-cutover/fun-fixtures/
+```
+
+Standalone `fun` CI emits the same direct Rust artifact shape when `..\fun-cli`
+is present. If the nested checkout is tested alone, it writes a skip JSON
+artifact and the umbrella root workflow remains the authoritative cutover gate.
+
 For parser-only checks against an existing client log:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -InputLog target\run-stack\logs\game_client.out.log
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --input-log target\run-stack\logs\game_client.out.log --dry-run
 ```
 
 For static CPU-vs-GPU CEF visual checks after capturing matched UI screenshots:
+the remaining PowerShell utility is optional local analysis and is tracked as a
+non-core follow-up in the root migration ledger.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare_cef_ui_screenshots.ps1 `
@@ -487,7 +527,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare_cef_ui_screens
 For denoiser and DLSS Ray Reconstruction comparisons:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_denoisers.ps1
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- denoisers
 ```
 
 That matrix runs `off`, `cheap-temporal`, `balanced-fast`, `balanced`,
@@ -508,7 +548,7 @@ is fixed.
 For the RT/Solari capability matrix:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_rt_matrix.ps1 -RenderBackend dx12 -PresentMode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- rt-matrix --render-backend dx12 --present-mode immediate
 ```
 
 That matrix records both `rt_feature_gates.rt_feature_hash` from the requested
@@ -634,13 +674,13 @@ artifacts when a run depends on the default backend policy.
 The quick iteration benchmark is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend dx12 -PresentMode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --render-backend dx12 --present-mode immediate
 ```
 
 The required performance benchmark for changes that claim client performance is:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -Release -StaticBevy -RenderBackend dx12 -PresentMode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --release --static-bevy --render-backend dx12 --present-mode immediate
 ```
 
 When a change touches one of these systems, also run the matching isolation case:
@@ -701,7 +741,7 @@ Use this shape in commit messages, PR notes, or review replies:
 
 ```text
 Client benchmark:
-- Command: scripts\benchmark_client.ps1 ...
+- Command: cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client ...
 - Baseline: target\benchmarks\client\<timestamp>\summary.json
 - Candidate: target\benchmarks\client\<timestamp>\summary.json
 - FPS mean/p50/p95: ... -> ... (...%)

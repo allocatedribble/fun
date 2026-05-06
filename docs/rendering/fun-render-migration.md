@@ -140,7 +140,7 @@ override `FUN_CEF_UI_ALLOW_CPU_FALLBACK=1`; stack scripts clear that override by
 default. This keeps product lanes from silently treating CPU `OnPaint` uploads
 as a working accelerated UI path.
 
-`tools/dx12_parity_report.py` reads the embedded capability report and adds a
+`fun-data report dx12-parity` reads the embedded capability report and adds a
 `Renderer Capability Report` table to the dashboard. Accelerated CEF lanes now
 fail if the capability report says CPU runtime fallback is allowed, if CPU
 upload bytes are nonzero, or if the transport health decision is `disabled` or
@@ -461,7 +461,7 @@ The required backend parity scene catalog now lives in
 `target/run-stack/cef-ui-transport.json`, and CEF transport logs/status include
 the same backend truth fields. `scripts/benchmark_client.ps1` merges renderer
 backend truth into `cef_ui_transport_selection`, and
-`tools/dx12_parity_report.py` fails a DX12 lane when the report says the actual
+`fun-data report dx12-parity` fails a DX12 lane when the report says the actual
 backend is not DX12.
 
 Current local evidence:
@@ -630,7 +630,6 @@ Synthetic tests cover a skinned dynamic actor scene, procedural invalidation
 scene, destruction-fragment stress artifact, coexistence with static virtual
 geometry, and fun-scene declaration-to-submission conversion. The upload/dirty
 artifact is controlled by `FUN_RENDERER_DYNAMIC_GEOMETRY_BENCHMARK_ARTIFACT`.
-
 
 ## Pass 13 Virtual Shadows And Lux Policy
 
@@ -832,7 +831,6 @@ p95/p99 frame time, page faults, evictions, shadow misses, visual instability
 proxy, and false positives/negatives. The renderer benchmark artifact is written
 by setting `FUN_RENDERER_ML_BENCHMARK_ARTIFACT`.
 
-
 ## Pass 19 Shared Heuristic Scheduler
 
 `fun-renderer/src/scheduler.rs` now owns the shared renderer work-priority
@@ -969,6 +967,7 @@ and stale transition feature flags are disallowed.
 the active stage, `auto -> fun` resolution, legacy diagnostic policy, product UI
 policy, CEF fallback policy, and ownership map for `fun-renderer`, `fun_render`,
 `fun-scene`, `fun-lux`, and `fun-ai`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
@@ -983,7 +982,7 @@ policy, CEF fallback policy, and ownership map for `fun-renderer`, `fun_render`,
 | DX12 parity/benchmark tools | `scripts/benchmark_dx12_parity.ps1`, `scripts/benchmark_client.ps1`, `tools/dx12_*`, `tools/check_dx12_*` | `fun` tooling | remains benchmark/governance tooling | Active. |
 | CEF parity/visual checks | `tools/compare_cef_ui_screenshots.ps1`, `scripts/stack/profiles/cef.*.json`, `scripts/benchmark_dx12_parity.ps1 -MatrixSize cef_transport` | `fun` tooling | remains benchmark/governance tooling | Plan and health parsing exist; full healthy matrix blocked. |
 | Upload arena and upload reports | `fun-renderer/src/resource.rs`, `fun_render/src/upload_{arena,budget,labels,ranges,report}.rs`, `fun_render/src/instance_tables.rs`, `docs/dx12_upload_audit.md` | policy in `fun-renderer`, compatibility shim in `fun_render` | renderer-owned resource model with bridge shims until measured owners are migrated | Boundary exists; resource classes and allocation diagnostics are typed; top offenders still generic Bevy write helpers. |
-| Pipeline diagnostics | `fun_render/src/pipeline_warmup.rs`, `docs/dx12_descriptor_pipeline_churn.md`, `docs/dx12_shader_quality.md`, `tools/dx12_pipeline_cardinality_report.py` | `fun_render` + Bevy diagnostics | renderer diagnostics through `fun-renderer`/engine hooks | Runtime creation still measured after warmup. |
+| Pipeline diagnostics | `fun_render/src/pipeline_warmup.rs`, `docs/dx12_descriptor_pipeline_churn.md`, `docs/dx12_shader_quality.md`, `fun-data report dx12-pipeline-cardinality` | `fun_render` + Bevy diagnostics | renderer diagnostics through `fun-renderer`/engine hooks | Runtime creation still measured after warmup. |
 | Native interop | `fun_render/src/dx12_native/*`, `game_client/src/cef_ui_dx12/*` | `fun_render` interop gate, `game_client` CEF bridge | `fun-renderer` backend abstraction after migration | Centralized gate exists; raw command-list accessor still intentionally limited. |
 
 ## Known Blockers
@@ -1064,9 +1063,9 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | Lux GI/reflection artifacts | `$root=(Get-Location).Path; $env:FUN_LUX_GI_REFLECTION_SCENE_ARTIFACT=Join-Path $root 'target\gi\pass15-reflection-scene.txt'; $env:FUN_LUX_GI_PROCEDURAL_INVALIDATION_ARTIFACT=Join-Path $root 'target\gi\pass15-procedural-invalidation.txt'; $env:FUN_LUX_GI_CACHE_STABILITY_ARTIFACT=Join-Path $root 'target\gi\pass15-cache-stability.txt'; cargo test -p fun-lux --lib gi::tests::gi_reflection_invalidation_and_stability_artifacts_are_stable -- --exact --nocapture` |
 | Renderer upscaling tests | `cargo test -p fun-renderer --lib upscaling` |
 | Renderer upscaling artifact | `$root=(Get-Location).Path; $env:FUN_RENDERER_UPSCALING_BENCHMARK_ARTIFACT=Join-Path $root 'target\upscaling\pass16-upscaling-boundary.txt'; cargo test -p fun-renderer --lib upscaling::tests::upscaling_benchmark_artifact_records_diagnostics -- --exact --nocapture` |
+| Renderer upscaling feature compile | `cargo check -p fun-renderer --features upscaling,dlss,fsr,frame_generation,cef_gpu_only` |
 | Renderer frame-generation tests | `cargo test -p fun-renderer --lib frame_generation` |
 | Renderer frame-generation artifact | `$root=(Get-Location).Path; $env:FUN_RENDERER_FRAME_GENERATION_BENCHMARK_ARTIFACT=Join-Path $root 'target\frame-generation\pass17-frame-generation-boundary.txt'; cargo test -p fun-renderer --lib frame_generation::tests::benchmark_artifact_records_generated_and_presented_counts -- --exact --nocapture` |
-| Renderer upscaling feature compile | `cargo check -p fun-renderer --features upscaling,dlss,fsr,frame_generation,cef_gpu_only` |
 | Renderer ML scaffold tests | `cargo test -p fun-renderer --features experimental_renderer_ml --lib ml` |
 | Renderer ML scaffold artifact | `$root=(Get-Location).Path; $env:FUN_RENDERER_ML_BENCHMARK_ARTIFACT=Join-Path $root 'target\ml\pass18-shadow-page-prior.txt'; cargo test -p fun-renderer --features experimental_renderer_ml --lib ml::tests::benchmark_artifact_compares_required_lanes -- --exact --nocapture` |
 | Renderer shared scheduler tests | `cargo test -p fun-renderer --lib scheduler` |
@@ -1094,10 +1093,10 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | CEF accelerated lane compile | `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked` |
 | Scene migration check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1 -SelfTest`; then without `-SelfTest` |
 | Product UI policy check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_product_ui_policy.ps1 -SelfTest`; then `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_product_ui_policy.ps1 -EmitArtifact target\cef-parity\pass8-product-ui-policy.json` |
-| DX12 doctrine check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dx12_doctrine.ps1 -SelfTest`; then without `-SelfTest` |
+| DX12 doctrine check | `cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --self-test`; then without `--self-test` |
 | Renderer backend truth smoke | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -BenchmarkLane presentation_floor -BenchmarkProfile pass9_backend_truth -BenchmarkScenario dx12_truth_smoke -BenchmarkMatrixLane dx12_backend_truth_smoke -RenderBackend dx12 -PresentMode immediate -WarmupSeconds 1 -SampleSeconds 2 -DisableClouds -DisableSolari -DisableMeshlets -DisableFpsOverlay -WindowWidth 320 -WindowHeight 180` |
 | Renderer backend truth parse-only artifact | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -InputLog target\run-stack\logs\game_client.err.log -BenchmarkProfile pass9_backend_truth -BenchmarkScenario dx12_truth_smoke -BenchmarkMatrixLane dx12_backend_truth_smoke -RenderBackend dx12 -PresentMode immediate -WarmupSeconds 0 -SampleSeconds 0 -DisableClouds -DisableSolari -DisableMeshlets -DisableFpsOverlay -WindowWidth 320 -WindowHeight 180` |
-| DX12 perf gate parser | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dx12_perf_regression.ps1 -SelfTest` |
+| DX12 perf gate parser | `cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --self-test` |
 | DX12 parity plan | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_dx12_parity.ps1 -PlanOnly` |
 | CEF transport plan | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_dx12_parity.ps1 -MatrixSize cef_transport -PlanOnly` |
 | Runtime smoke | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate` |

@@ -424,42 +424,41 @@ runtime paths.
 
 ## Client Benchmarking
 
-Client changes must be measurable. Use Criterion through
-[`scripts/benchmark_criterion.ps1`](scripts/benchmark_criterion.ps1) for
-deterministic code-path costs, and use
-[`scripts/benchmark_client.ps1`](scripts/benchmark_client.ps1) to capture FPS,
+Client changes must be measurable. Use the Rust `fun-bench criterion` command
+for deterministic code-path costs, and use `fun-bench client` to capture FPS,
 frame nanoseconds, Solari pass timings, meshlet timings, DLSS RR timings, CPU,
-memory, and before/after deltas.
+memory, and before/after deltas. The PowerShell files in `scripts/` are
+compatibility wrappers only.
 
 Default Criterion capture:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_criterion.ps1 -SaveBaseline before
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline before
 ```
 
 Default runtime capture:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 -RenderBackend dx12 -PresentMode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --render-backend dx12 --present-mode immediate
 ```
 
 Windows DX12/Vulkan parity capture:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity
 ```
 
 Present pacing matrix and dashboard artifact:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize present -ContinueOnFailure
-python tools\dx12_parity_report.py --vulkan target\benchmarks\client\<vulkan>\summary.json --dx12 target\benchmarks\client\<dx12>\summary.json --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size present --continue-on-failure
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --vulkan target\benchmarks\client\<vulkan>\summary.json --dx12 target\benchmarks\client\<dx12>\summary.json --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
 ```
 
 Local DX12 regression gate once matched baseline/candidate summaries exist:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\check_dx12_perf_regression.ps1 -Baseline target\benchmarks\client\<baseline>\summary.json -Current target\benchmarks\client\<candidate>\summary.json -ReportPath target\benchmarks\dx12_perf_gate\report.md
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --baseline target\benchmarks\client\<baseline>\summary.json --current target\benchmarks\client\<candidate>\summary.json --report-path target\benchmarks\dx12_perf_gate\report.md
 ```
 
 `-RenderDiagnostics` also enables render upload counters for
@@ -473,7 +472,9 @@ barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
 native interop, then bring up DLSS SR before RR.
 The live pass checklist is
 [`docs/dx12_parity_decision_pass.md`](docs/dx12_parity_decision_pass.md), and
-the hardware-free doctrine checker is `tools\check_dx12_doctrine.ps1`.
+the hardware-free doctrine checker is
+`fun-bench dx12-doctrine-check`; `tools\check_dx12_doctrine.ps1` remains a
+compatibility wrapper.
 It also enables transient render-resource descriptor diagnostics; the reuse,
 near-miss, and aliasing contract is in
 [`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).
@@ -484,13 +485,13 @@ parity dashboard now reports DX12 memory budget/usage fields when available.
 Denoiser and DLSS Ray Reconstruction comparison:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_denoisers.ps1
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- denoisers
 ```
 
 Rich tracing diagnostics:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend dx12 -PresentMode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --render-diagnostics --trace-diagnostics --render-backend dx12 --present-mode immediate
 ```
 
 The standard runtime path is Solari plus meshlets with the BalancedFast

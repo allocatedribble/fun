@@ -30,7 +30,7 @@ The local Bevy fork records:
 
 `scripts/benchmark_client.ps1` stores these under the `render_shader_*` prefix
 and writes `render_shader_events` to `summary.json`.
-`tools/dx12_parity_report.py` classifies observed DX12 shader module or
+`fun-data report dx12-parity` classifies observed DX12 shader module or
 pipeline creation in the sample window as `shader compilation`, and higher
 shader/material specialization pressure as `shader variant pressure`.
 

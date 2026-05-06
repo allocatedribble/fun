@@ -35,7 +35,7 @@ failures, or become default without before/after benchmark evidence.
 
 ## Benchmark Integration
 
-`tools/dx12_parity_report.py` emits:
+`fun-data report dx12-parity` emits:
 
 - `DX12 Memory Budget`: local budget, usage, reservation, adapter RAM, source,
   and status when available.

@@ -31,7 +31,7 @@ The local Bevy fork records:
 
 `scripts/benchmark_client.ps1` stores the metrics under the
 `render_command_*` prefix and writes `render_command_events` to `summary.json`.
-`tools/dx12_parity_report.py` compares the same metrics between Vulkan and
+`fun-data report dx12-parity` compares the same metrics between Vulkan and
 DX12 and classifies higher DX12 submit or command-buffer counts as
 `submission fragmentation`.
 
@@ -39,7 +39,7 @@ For the focused Tier 10 command/readback pass, generate the smaller decision
 artifact with:
 
 ```powershell
-python tools\dx12_command_readback_report.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-command-readback `
   --matrix-json target\dx12-parity\current\matrix.json `
   --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
   --json-report target\dx12-parity\current\dx12_command_readback_report.json

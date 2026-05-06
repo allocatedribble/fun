@@ -13,7 +13,7 @@ Status: measurement slice, upload cleanup tier 3.1 + pass5 resource ownership bo
   `[client perf] render upload top:` callsites.
 - `scripts/benchmark_client.ps1` records upload totals in `metrics` and
   aggregates top callsites under `render_upload_callsites`.
-- `tools/dx12_parity_report.py` turns the DX12 summary's
+- `fun-data report dx12-parity` turns the DX12 summary's
   `render_upload_callsites` into a top-callsite kill list with calls/frame,
   bytes/frame, calls/sec, bytes/sec, p95 impact guess, and a recommended fix.
 

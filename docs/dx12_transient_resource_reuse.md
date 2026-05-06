@@ -55,7 +55,7 @@ Benchmark JSON stores top rows under:
 Generate a focused reuse decision artifact with:
 
 ```powershell
-python tools\dx12_transient_reuse_report.py --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_transient_reuse_report.md --json-report target\dx12-parity\current\dx12_transient_reuse_report.json
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-transient-reuse --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_transient_reuse_report.md --json-report target\dx12-parity\current\dx12_transient_reuse_report.json
 ```
 
 The report aggregates top descriptor-create rows, label variants, transient

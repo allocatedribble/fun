@@ -1,8 +1,21 @@
 # Client Diagnostics
 
-The client now treats diagnostics as structured tracing data first and plain log
-text second. The existing `[client perf]` lines stay in place for scripts, but
-the same data is emitted with fields that can be filtered by tracing targets.
+The client now treats diagnostics as typed telemetry first and plain log text as
+a rendered/debug view. Any diagnostic, trace, report-source, or benchmark data
+that crosses a process, file, network, or backend boundary must be encoded as a
+compressed protobuf bundle following the umbrella hard-budget docs:
+
+- [`../../docs/data-platform/protobuf-telemetry-standard.md`](../../docs/data-platform/protobuf-telemetry-standard.md)
+- [`../../docs/data-platform/telemetry-size-runtime-budgets.md`](../../docs/data-platform/telemetry-size-runtime-budgets.md)
+- [`../../docs/data-platform/diagnostic-retention-policy.md`](../../docs/data-platform/diagnostic-retention-policy.md)
+
+The existing `[client perf]` lines stay in place only as script/debug views.
+The same facts must come from bundle-backed typed fields when they are retained,
+uploaded, compared, or rendered into reports.
+
+Default runtime diagnostics are `HotPathDisabled`. Always-on frame/render/network
+counters must fit `HotPathCounters`; richer captures must use `SampledRuntime`
+or `TargetedTrace` with an explicit duration and byte cap.
 
 ## Run With Rich Tracing
 

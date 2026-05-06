@@ -52,7 +52,7 @@ Use the focused Tier 10 report to prove readback behavior before changing
 render scheduling:
 
 ```powershell
-python tools\dx12_command_readback_report.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-command-readback `
   --matrix-json target\dx12-parity\current\matrix.json `
   --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
   --json-report target\dx12-parity\current\dx12_command_readback_report.json

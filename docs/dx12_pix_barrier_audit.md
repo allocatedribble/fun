@@ -185,11 +185,11 @@ loss.
 
 ## Current Evidence Attachment
 
-`tools/dx12_pix_barrier_summary.py` writes the pass artifact required by the
+`fun-data report dx12-pix-barrier-summary` writes the pass artifact required by the
 barrier gate:
 
 ```powershell
-python tools\dx12_pix_barrier_summary.py `
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-pix-barrier-summary `
   --matrix target\dx12-parity\current\matrix.json `
   --pix target\dx12-pix\pix_export.csv `
   --output-dir target\dx12-pix

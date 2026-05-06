@@ -74,87 +74,38 @@ param(
     [int]$FrameTimeDiagnosticTopChildren = 16,
     [int]$FrameTimeDiagnosticTopSpans = 32,
     [switch]$FrameTimeDiagnosticRowEvents,
-    [int]$StartupDelaySeconds = 2
+    [int]$StartupDelaySeconds = 2,
+    [switch]$DryRun,
+    [string]$OutputRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "FunBench.Compat.ps1")
 
-$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$stackRoot = Join-Path $scriptRoot "stack"
-foreach ($module in @(
-    "Stack.Paths.ps1",
-    "Stack.Env.ps1",
-    "Stack.Security.ps1",
-    "Stack.Cef.ps1",
-    "Stack.Diagnostics.ps1",
-    "Stack.Render.ps1",
-    "Stack.Build.ps1",
-    "Stack.Process.ps1",
-    "Stack.Schema.ps1"
-)) {
-    . (Join-Path $stackRoot $module)
-}
-
-$request = New-StackRunRequest -BoundParameters $PSBoundParameters -ProfileRoot (Join-Path $stackRoot "profiles")
-$paths = New-StackPaths -ScriptRoot $scriptRoot -Release $request.Release
-Initialize-StackDirectories -Paths $paths
-
-$events = @()
-$events += Resolve-StackCefRequest -Request $request -Paths $paths
-$diagnostics = Get-StackDiagnosticsState -Request $request
-$buildPlan = New-StackBuildPlan -Request $request -Diagnostics $diagnostics
-$events += $buildPlan.warnings
-
-Set-StackRuntimeEnv -Request $request
-Set-StackProfileEnv -Request $request
-Set-StackDiagnosticsEnv -Request $request -Diagnostics $diagnostics
-Set-StackCefEnv -Request $request -Paths $paths
-Set-StackRenderEnv -Request $request -Paths $paths
-$events += Set-StackDevelopmentTokens -Request $request
-Set-StackPathEnv -Paths $paths
-
-foreach ($event in $events) {
-    if ($event.severity -eq "warn") {
-        Write-Warning $event.message
-    }
-    elseif ($event.message) {
-        Write-Host $event.message
-    }
-}
-if ($request.CefUi -and -not $request.NoClient) {
-    Write-Host "Enabling game_client/cef_ui for the CEF browser UI."
-}
-if ($request.CefUiDx12AcceleratedPaint -and -not $request.NoClient) {
-    Write-Host "Selecting CEF D3D11On12 accelerated paint transport for the DX12 client."
-}
-if (-not $request.NoClient) {
-    if ($request.PlanOnly) {
-        Write-Host "Resolved unified Fun client in $env:FUN_START_MODE mode."
-    }
-    else {
-        Write-Host "Starting unified Fun client in $env:FUN_START_MODE mode."
-    }
-}
-
-$envSnapshot = Export-StackEnvSnapshot -Request $request
-if ($request.PlanOnly) {
-    Write-StackSessionMetadata -Request $request -Paths $paths -BuildPlan $buildPlan -Processes @() -EnvSnapshot $envSnapshot -Events $events -Status "planned"
-    Write-Host "Planned stack session: $($paths.session_file)"
-    Write-Host "Logs: $($paths.log_root)"
-    return
-}
-
-Stop-PreviousStackProcesses -PidFile $paths.pid_file
-Invoke-StackBuild -Paths $paths -BuildPlan $buildPlan
-Copy-StackDynamicLinkLibraries -Paths $paths -BuildPlan $buildPlan
-if ($request.CefUi -and -not $request.NoClient) {
-    Copy-CefRuntimeFiles -ProfileTargetDir $paths.profile_target_dir
-}
-
-$started = Start-StackProcesses -Request $request -Paths $paths
-Write-StackSessionMetadata -Request $request -Paths $paths -BuildPlan $buildPlan -Processes $started -EnvSnapshot (Export-StackEnvSnapshot -Request $request) -Events $events -Status "launched"
-Confirm-StackProcesses -Processes $started
-
-Write-Host "Process metadata: $($paths.pid_file)"
-Write-Host "Session metadata: $($paths.session_file)"
-Write-Host "Logs: $($paths.log_root)"
+Invoke-FunBenchCompat `
+    -Subcommand "run-stack" `
+    -BoundParameters $PSBoundParameters `
+    -ActualParameters @(
+        "Profile",
+        "PlanOnly",
+        "Release",
+        "StaticBevy",
+        "NoClient",
+        "Launcher",
+        "CefUi",
+        "CefUiDx12AcceleratedPaint",
+        "CefPaintTransport",
+        "CefAcceleratedStrict",
+        "CefGpuRingDepth",
+        "CefCopyDirtyRects",
+        "CefDebugTimings",
+        "RenderDiagnostics",
+        "TraceDiagnostics",
+        "FrameTimeDiagnostics",
+        "RenderBackend",
+        "PresentMode",
+        "RenderMaxFrameLatency",
+        "StartupDelaySeconds",
+        "DryRun",
+        "OutputRoot"
+    )

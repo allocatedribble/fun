@@ -41,7 +41,7 @@ specific enough to act on.
 
 ## Report Integration
 
-`tools/dx12_parity_report.py` emits a `Vendor-Specific Follow-Up` section. The
+`fun-data report dx12-parity` emits a `Vendor-Specific Follow-Up` section. The
 section reports:
 
 - inferred adapter vendor;

@@ -128,8 +128,9 @@ Allowed statuses: `missing`, `measured`, `optimized`, `blocked`,
 ## Live Gate Controls
 
 - PR metadata file: `.dx12_change_category`
-- Doctrine checker: `tools\check_dx12_doctrine.ps1`
-- Hardware-free validation: `tools\check_dx12_doctrine.ps1 -SelfTest`
+- Doctrine checker: `fun-bench dx12-doctrine-check`
+- Hardware-free validation: `fun-bench dx12-doctrine-check --self-test`
+- Compatibility wrapper: `tools\check_dx12_doctrine.ps1`
 
 Every later DX12 PR updates this document when it changes a gate status,
 attaches a new evidence artifact, or makes one of the decision-log calls.
