@@ -4,6 +4,7 @@ pub mod api;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
+pub mod frame_generation;
 pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;

@@ -191,6 +191,15 @@ any frame-generation handoff. Native/debug upscaling is the fallback path;
 DLSS SR and FSR hooks remain capability-gated and require diagnostics to prove
 valid motion vectors, masks, HDR/exposure handling, mip-bias policy, history
 state, and UI separation.
+The frame-generation boundary is represented by
+`fun_renderer::frame_generation`. It consumes display-resolution HUD-less scene
+color, UI color/alpha, depth, motion vectors, frame timing, present resources,
+and reset flags, then produces presentable frame candidates plus pacing
+diagnostics without flattening UI early. DLSS FG and FSR FG are vendor hooks
+behind capability, backend-truth, present-lifetime, UI-readability, and
+frame-pacing gates. FG is off by default for docked editor viewports and only
+eligible for game runtime, play-in-editor, immersive editor viewports, or
+cinematic preview when explicitly enabled and valid.
 The renderer-owned GPU scene database is represented by `GpuSceneDatabase`.
 It stores generation-checked view, instance, mesh, material, light, and page
 metadata records, derives records from `fun-scene` declarations, retains

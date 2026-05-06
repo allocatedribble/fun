@@ -100,6 +100,11 @@ pub enum FrameGraphResourceType {
     ReactiveMask,
     TransparencyMask,
     HdrMetadata,
+    FrameTiming,
+    PresentResources,
+    FrameGenerationResetFlags,
+    PresentableFrames,
+    PacingDiagnostics,
     NormalsMaterialIds,
     UiColorAlpha,
     FinalComposedOutput,
@@ -108,7 +113,7 @@ pub enum FrameGraphResourceType {
 }
 
 impl FrameGraphResourceType {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 18] = [
         Self::RenderResolutionSceneColor,
         Self::DisplayResolutionSceneColor,
         Self::Depth,
@@ -117,6 +122,11 @@ impl FrameGraphResourceType {
         Self::ReactiveMask,
         Self::TransparencyMask,
         Self::HdrMetadata,
+        Self::FrameTiming,
+        Self::PresentResources,
+        Self::FrameGenerationResetFlags,
+        Self::PresentableFrames,
+        Self::PacingDiagnostics,
         Self::NormalsMaterialIds,
         Self::UiColorAlpha,
         Self::FinalComposedOutput,
@@ -135,6 +145,11 @@ impl FrameGraphResourceType {
             Self::ReactiveMask => "reactive_mask",
             Self::TransparencyMask => "transparency_mask",
             Self::HdrMetadata => "hdr_metadata",
+            Self::FrameTiming => "frame_timing",
+            Self::PresentResources => "present_resources",
+            Self::FrameGenerationResetFlags => "frame_generation_reset_flags",
+            Self::PresentableFrames => "presentable_frames",
+            Self::PacingDiagnostics => "pacing_diagnostics",
             Self::NormalsMaterialIds => "normals_material_ids",
             Self::UiColorAlpha => "ui_color_alpha",
             Self::FinalComposedOutput => "final_composed_output",
@@ -482,6 +497,32 @@ impl RendererFrameGraph {
             FrameGraphResourceType::HdrMetadata,
             "hdr_metadata",
         ));
+        let frame_timing = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.frame_timing",
+            FrameGraphResourceType::FrameTiming,
+            "frame_timing",
+        ));
+        let present_resources = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.present_resources",
+            FrameGraphResourceType::PresentResources,
+            "present_resources",
+        ));
+        let frame_generation_reset_flags =
+            graph.declare_resource(FrameGraphResourceDescriptor::new(
+                "fun_renderer.resource.frame_generation_reset_flags",
+                FrameGraphResourceType::FrameGenerationResetFlags,
+                "frame_generation_reset_flags",
+            ));
+        let presentable_frames = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.presentable_frames",
+            FrameGraphResourceType::PresentableFrames,
+            "presentable_frames",
+        ));
+        let pacing_diagnostics = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.pacing_diagnostics",
+            FrameGraphResourceType::PacingDiagnostics,
+            "pacing_diagnostics",
+        ));
         let normals_material = graph.declare_resource(FrameGraphResourceDescriptor::new(
             "fun_renderer.resource.normals_material_ids",
             FrameGraphResourceType::NormalsMaterialIds,
@@ -518,6 +559,9 @@ impl RendererFrameGraph {
             "fun_renderer::frame_graph::clear",
         ));
         graph.add_pass_write(clear, render_scene);
+        graph.add_pass_write(clear, frame_timing);
+        graph.add_pass_write(clear, present_resources);
+        graph.add_pass_write(clear, frame_generation_reset_flags);
         if !description.include_static_scene_placeholder && !description.include_upscaling_slot {
             graph.add_pass_write(clear, display_scene);
         }
@@ -608,7 +652,12 @@ impl RendererFrameGraph {
             graph.add_pass_read(frame_generation, ui);
             graph.add_pass_read(frame_generation, depth);
             graph.add_pass_read(frame_generation, motion);
+            graph.add_pass_read(frame_generation, frame_timing);
+            graph.add_pass_read(frame_generation, present_resources);
+            graph.add_pass_read(frame_generation, frame_generation_reset_flags);
             graph.add_pass_write(frame_generation, history);
+            graph.add_pass_write(frame_generation, presentable_frames);
+            graph.add_pass_write(frame_generation, pacing_diagnostics);
         }
 
         let compose = graph.register_pass(FrameGraphPassDescriptor::new(
@@ -622,6 +671,9 @@ impl RendererFrameGraph {
         ));
         graph.add_pass_read(compose, display_scene);
         graph.add_pass_read(compose, ui);
+        if description.include_frame_generation_slot {
+            graph.add_pass_read(compose, presentable_frames);
+        }
         graph.add_pass_write(compose, final_output);
 
         if description.include_diagnostics_readback {
@@ -647,6 +699,7 @@ impl RendererFrameGraph {
             "fun_renderer::frame_graph::present",
         ));
         graph.add_pass_read(present, final_output);
+        graph.add_pass_read(present, present_resources);
 
         graph
     }
@@ -1076,11 +1129,29 @@ impl RendererFrameGraph {
         else {
             return;
         };
+        let Some(upscale) = self.pass_handle_for_role(FrameGraphPassRole::UpscaleBoundary) else {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::FrameGenerationContractBroken,
+                pass: Some(frame_generation),
+                resource: None,
+            });
+            return;
+        };
+        if upscale.0 >= frame_generation.0 {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::FrameGenerationContractBroken,
+                pass: Some(frame_generation),
+                resource: None,
+            });
+        }
         let required = [
             FrameGraphResourceType::DisplayResolutionSceneColor,
             FrameGraphResourceType::UiColorAlpha,
             FrameGraphResourceType::Depth,
             FrameGraphResourceType::MotionVectors,
+            FrameGraphResourceType::FrameTiming,
+            FrameGraphResourceType::PresentResources,
+            FrameGraphResourceType::FrameGenerationResetFlags,
         ];
         for resource_type in required {
             if !self.pass_reads_resource_type(frame_generation, resource_type) {
@@ -1090,6 +1161,50 @@ impl RendererFrameGraph {
                     resource: self.resource_handle_for_type(resource_type),
                 });
             }
+        }
+        for resource_type in [
+            FrameGraphResourceType::HistoryBuffer,
+            FrameGraphResourceType::PresentableFrames,
+            FrameGraphResourceType::PacingDiagnostics,
+        ] {
+            if !self.pass_writes_resource_type(frame_generation, resource_type) {
+                failures.push(FrameGraphValidationFailure {
+                    code: FrameGraphValidationFailureCode::FrameGenerationContractBroken,
+                    pass: Some(frame_generation),
+                    resource: self.resource_handle_for_type(resource_type),
+                });
+            }
+        }
+        if self.pass_reads_resource_type(
+            frame_generation,
+            FrameGraphResourceType::FinalComposedOutput,
+        ) {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::FrameGenerationContractBroken,
+                pass: Some(frame_generation),
+                resource: self
+                    .resource_handle_for_type(FrameGraphResourceType::FinalComposedOutput),
+            });
+        }
+        let Some(compose) = self.pass_handle_for_role(FrameGraphPassRole::Compose) else {
+            return;
+        };
+        if !self.pass_reads_resource_type(compose, FrameGraphResourceType::PresentableFrames) {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::FrameGenerationContractBroken,
+                pass: Some(compose),
+                resource: self.resource_handle_for_type(FrameGraphResourceType::PresentableFrames),
+            });
+        }
+        let Some(present) = self.pass_handle_for_role(FrameGraphPassRole::Present) else {
+            return;
+        };
+        if !self.pass_reads_resource_type(present, FrameGraphResourceType::PresentResources) {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::FrameGenerationContractBroken,
+                pass: Some(present),
+                resource: self.resource_handle_for_type(FrameGraphResourceType::PresentResources),
+            });
         }
     }
 
@@ -1223,9 +1338,23 @@ mod tests {
             FrameGraphResourceType::UiColorAlpha,
             FrameGraphResourceType::Depth,
             FrameGraphResourceType::MotionVectors,
+            FrameGraphResourceType::FrameTiming,
+            FrameGraphResourceType::PresentResources,
+            FrameGraphResourceType::FrameGenerationResetFlags,
         ] {
             assert!(
                 graph.pass_reads_resource_type(frame_generation, resource_type),
+                "{}",
+                resource_type.as_str()
+            );
+        }
+        for resource_type in [
+            FrameGraphResourceType::HistoryBuffer,
+            FrameGraphResourceType::PresentableFrames,
+            FrameGraphResourceType::PacingDiagnostics,
+        ] {
+            assert!(
+                graph.pass_writes_resource_type(frame_generation, resource_type),
                 "{}",
                 resource_type.as_str()
             );
