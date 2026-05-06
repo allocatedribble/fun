@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory + pass3-diagnostics-facts
+status: inventory + pass4-pipeline-registry
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -39,7 +39,7 @@ first-order migration blockers.
 | Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
 | Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | Not proven. The experimental D3D11On12 path exists, but the latest strict local status selected `disabled` with `fallback_reason=render_backend_not_dx12`; the latest non-strict live lane selected CPU fallback. Current product CEF composition still uses a Bevy UI `ImageNode` target. |
-| Which runtime pipeline gates still fail? | The local pipeline cardinality report records runtime creation p95 maxima: render pipeline `22`, compute pipeline `82`, shader pipeline `104`. The DX12 perf gate treats runtime render, compute, and shader pipeline creation after warmup as hard failures. |
+| Which runtime pipeline gates still fail? | The older local pipeline cardinality report records runtime creation p95 maxima: render pipeline `22`, compute pipeline `82`, shader pipeline `104`. Pass 4 adds a `fun-renderer` pipeline registry plus a bridge warmup plan, fixes the compute-culling read-only storage binding mismatch, and records a new selected-DX12/actual-Vulkan smoke artifact with render, compute, and shader pipeline creation p95 all `0` after warmup. A true DX12 artifact is still required because capability diagnostics report `actual_backend=vulkan`. |
 | Is DX12 real DX12 or fallback? | The Bevy/wgpu renderer can select DX12 through the stack profiles and `RenderPlugin`, and diagnostics report the requested backend. The CEF accelerated bridge is not ready: both local CEF artifacts report `backend=dx12` but `bridge_ready=false` and `fallback_reason=render_backend_not_dx12`. |
 | What must migrate before DLSS/FSR/FG? | CEF GPU-only health, hot upload cleanup, runtime PSO/shader creation, PIX/barrier evidence, presentation matrix evidence, and renderer-owned scene/UI/upscale separation. `docs/dx12_dlss_boundary_gate.md` still says `DX12 baseline ready for DLSS SR bring-up: no`. |
 
@@ -167,6 +167,91 @@ current local repo state:
 These blockers match the migration doctrine that runtime pipeline creation and
 CEF transport readiness are first-order constraints, not distant cleanup.
 
+## Pass 4 Pipeline Registry
+
+`fun-renderer` now exposes `pipeline::PipelineRegistry` as the renderer-core
+pipeline inventory. Each registered pipeline has:
+
+- stable ID;
+- static label;
+- render or compute kind;
+- shader path and entry point;
+- shader variant ID;
+- feature, backend, and quality-tier masks;
+- warmup boundary policy;
+- pass dependencies;
+- benchmark runtime-creation policy.
+
+The registry includes the current compute-culling pipeline labels queued by
+`fun_render`, cloud compute/view-composite labels, and first renderer-owned
+placeholders for CEF composition, virtual geometry, virtual shadows, Lux direct
+lighting, upscaling, and frame generation. Shader variants are constrained to
+the explicit axes allowed by the renderer migration plan: backend, HDR/LDR,
+MSAA, skinning, alpha mode, lighting tier, shadow tier, upscaler mode, and
+virtual geometry.
+
+`fun_render::pipeline_warmup` now builds a renderer-initialization warmup plan
+from that registry even when the Bevy `PipelineCache` warmup executor is
+disabled. `FUN_RENDER_PIPELINE_WARMUP=observed` still controls the current Bevy
+queue processing path, but the bridge now logs the registry counts and first
+eligible warmup label so warmup coverage can be compared against runtime
+creation events.
+
+Pass 4 also fixes the concrete validation loop recorded during Pass 3. The
+compute-culling shader declares bindings 1, 2, and 7 as read-only storage; the
+pipeline layout now uses Bevy's `storage_buffer_read_only` helper for those
+bindings instead of writable storage buffers. The focused unit test
+`shader_read_only_storage_inputs_match_pipeline_layout_contract` locks that
+contract.
+
+### Pass 4 Runtime Evidence
+
+Runtime smoke was attempted with:
+
+```powershell
+$env:FUN_RENDERER_BACKEND='fun'
+$env:FUN_RENDER_PIPELINE_WARMUP='observed'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 `
+  -BenchmarkLane cpu_floor `
+  -BenchmarkProfile pass4_pipeline `
+  -BenchmarkScenario runtime_creation_zero_smoke `
+  -BenchmarkMatrixLane dx12_pipeline_smoke `
+  -RenderBackend dx12 `
+  -PresentMode immediate `
+  -WarmupSeconds 2 `
+  -SampleSeconds 3 `
+  -DisableClouds `
+  -DisableSolari `
+  -DisableMeshlets `
+  -DisableFpsOverlay `
+  -WindowWidth 320 `
+  -WindowHeight 180
+```
+
+The live wrapper did not exit before the local command timeout, so the child
+stack was stopped and the captured client log was parsed through
+`scripts/benchmark_client.ps1 -InputLog`. The resulting artifact is:
+
+- `target/benchmarks/client/20260506-005505-031/summary.json`
+- `target/benchmarks/client/20260506-005505-031/summary.md`
+- `target/dx12-perf-gate/pass4-pipeline/report.{md,json}`
+- `target/dx12-perf-gate/pass4-pipeline/pipeline_cardinality_report.{md,json}`
+
+The pipeline cardinality report records:
+
+| metric | p95 max |
+| --- | ---: |
+| render pipeline creation | 0 |
+| compute pipeline creation | 0 |
+| shader pipeline creation | 0 |
+
+This is evidence that the pass has a remediation path for hot-path pipeline
+creation and that the compute-culling validation loop no longer dominates the
+captured steady-state sample. It is not proof of a healthy DX12 lane: startup
+capability diagnostics for this local run still reported
+`selected_backend=dx12`, `actual_backend=vulkan`, and
+`fallback_reason=actual_backend_mismatch`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
@@ -191,9 +276,9 @@ CEF transport readiness are first-order constraints, not distant cleanup.
 | DX12 upload kill-list | Current parity dashboard lists top offenders under Bevy generic rows, including `uniform_buffer.rs:311`, `buffer_vec.rs:183`, `gpu_image.rs:84`, and Solari constant rows. | Bevy + `fun_render` diagnostics | Prevents speculative upload rewrites. | Label split or owning-system attribution for top rows. |
 | CEF accelerated lane classified `cef_transport_bound` | Root ledger and CEF docs record the failed accelerated lane; `target/benchmarks/client/20260504-005500-247/summary.json` selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, zero GPU copy bytes, and zero accelerated paint FPS. | `game_client` CEF DX12 bridge over `fun_render::dx12_native` | Blocks GPU-only product UI and DLSS/upscale boundary proof. | Strict D3D11On12 lane with `selected=d3d11on12`, `bridge_ready=true`, `cef_cpu_upload_bytes=0`, nonzero `cef_gpu_copy_bytes`, no normal-frame blocking waits. |
 | Strict D3D11On12 lane disabled | `target/run-stack/cef-ui-transport.json` last written 2026-05-05 reports `requested=d3d11on12`, `selected=disabled`, `backend=dx12`, `bridge_ready=false`, `cpu_fallback_enabled=false`, `strict=true`, `fallback_reason=render_backend_not_dx12`. | `game_client` startup/interop | Confirms strict GPU-only UI currently fails closed instead of presenting UI. | Fix backend/bridge readiness detection, then rerun strict stack lane. |
-| Runtime render pipeline creation | `target/dx12-pix/pipeline_cardinality_report.md` reports render pipeline p95 `22`. | Bevy pipeline cache + `fun_render` warmup | DX12 perf gate hard failure; blocks DLSS/FG claims. | `FUN_RENDER_PIPELINE_WARMUP=observed` lane with render pipeline creations at steady-state zero or justified scene-transition rows. |
-| Runtime compute pipeline creation | Same report records compute pipeline p95 `82`. | Bevy/Solari/meshlet pipelines + `fun_render` warmup | DX12 perf gate hard failure; indicates PSO churn or late warmup. | Creation-focused events plus warmup comparison; reduce late compute variants. |
-| Runtime shader pipeline creation | Same report records shader pipeline create p95 `104`, led by PBR, Solari, meshlet, and UI families. | Bevy/Solari/meshlet/UI pipeline families | DX12 perf gate hard failure; UI family also keeps Bevy UI cost visible. | `render_shader_*` counters zero after warmup or explicitly bound to scene load. |
+| Runtime render pipeline creation | Older `target/dx12-pix/pipeline_cardinality_report.md` reports render pipeline p95 `22`; Pass 4 smoke parse reports render pipeline p95 `0` after observed warmup. | Bevy pipeline cache + `fun_render` warmup, with registry metadata in `fun-renderer` | DX12 perf gate hard failure when nonzero after warmup; blocks DLSS/FG claims until a real DX12 artifact is clean. | Rerun a true DX12 lane after backend mismatch is resolved; preserve zero render pipeline p95 and name any nonzero pipeline label. |
+| Runtime compute pipeline creation | Older report records compute pipeline p95 `82`; Pass 4 smoke parse reports compute pipeline p95 `0` after observed warmup. | Bevy/Solari/meshlet pipelines + `fun_render` warmup, with registry metadata in `fun-renderer` | Hard failure if nonzero after warmup; compute-culling read-only binding mismatch is fixed. | Keep creation-focused events and verify warmup coverage against registry labels. |
+| Runtime shader pipeline creation | Older report records shader pipeline create p95 `104`; Pass 4 smoke parse reports shader pipeline p95 `0` after observed warmup. | Bevy/Solari/meshlet/UI pipeline families plus `fun-renderer` variant axes | Hard failure if nonzero after warmup; UI family remains visible until Bevy UI product paths are removed. | Keep shader variants on explicit registry axes and block ad hoc stringly permutations. |
 | DLSS boundary gate not ready | `docs/dx12_dlss_boundary_gate.md` says `DX12 baseline ready for DLSS SR bring-up: no`. CEF health, uploads, barriers, and pipeline creation are not ready. | `fun_render` DLSS scaffold today; intended `fun-renderer` presentation boundary | DLSS/FSR/FG cannot be used for performance claims. | Gate flips to `yes` with attached parity, CEF GPU, upload, PIX/barrier, present, and pipeline evidence. |
 | Runtime Bevy UI product dependency | Current CEF and FPS paths spawn Bevy UI `Node`, `ImageNode`, `Text`, and `FpsOverlayPlugin`. | `game_client` + `fun_render` | Violates long-term product UI rule; keeps UI pipeline creation in frame path. | Replace product UI composition with renderer-owned CEF compositor and renderer debug primitives/CEF diagnostics. |
 

@@ -5,6 +5,7 @@ pub mod api;
 pub mod ecs;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
+pub mod pipeline;
 
 pub use fun_lux;
 pub use fun_scene;
@@ -775,6 +776,7 @@ pub use api::*;
 pub use ecs::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
+pub use pipeline::*;
 
 #[must_use]
 pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRendererOwner {

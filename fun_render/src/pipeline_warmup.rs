@@ -2,8 +2,16 @@ use std::time::{Duration, Instant};
 
 use bevy::{
     prelude::*,
-    render::{Render, RenderApp, RenderSystems, render_resource::PipelineCache},
+    render::{
+        Render, RenderApp, RenderSystems, render_resource::PipelineCache, settings::Backends,
+    },
 };
+use fun_renderer::{
+    FunRendererBackend, PipelineRegistry, PipelineWarmupBoundary, PipelineWarmupPlan,
+    PipelineWarmupRequest, QualityTier,
+};
+
+use crate::selected_render_backend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunPipelineWarmupMode {
@@ -45,6 +53,57 @@ impl FunPipelineWarmupConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Resource)]
+pub struct RendererPipelineWarmupPlan {
+    pub boundary: PipelineWarmupBoundary,
+    pub backend: FunRendererBackend,
+    pub quality_tier: QualityTier,
+    pub eligible_pipeline_count: u32,
+    pub total_pipeline_count: u32,
+    pub shader_module_count: u32,
+    pub shader_variant_count: u32,
+    pub first_pipeline_label: Option<&'static str>,
+}
+
+impl RendererPipelineWarmupPlan {
+    fn from_registry_plan(registry: PipelineRegistry, plan: PipelineWarmupPlan) -> Self {
+        Self {
+            boundary: plan.boundary,
+            backend: plan.backend,
+            quality_tier: plan.quality_tier,
+            eligible_pipeline_count: plan.eligible_pipeline_count as u32,
+            total_pipeline_count: plan.total_pipeline_count as u32,
+            shader_module_count: registry.shader_module_count() as u32,
+            shader_variant_count: registry.shader_variant_count() as u32,
+            first_pipeline_label: plan.first_pipeline_label,
+        }
+    }
+
+    fn diagnostic_fields(
+        self,
+    ) -> (
+        &'static str,
+        &'static str,
+        &'static str,
+        u32,
+        u32,
+        u32,
+        u32,
+        &'static str,
+    ) {
+        (
+            self.boundary.as_str(),
+            self.backend.as_str(),
+            self.quality_tier.as_str(),
+            self.eligible_pipeline_count,
+            self.total_pipeline_count,
+            self.shader_module_count,
+            self.shader_variant_count,
+            self.first_pipeline_label.unwrap_or("none"),
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 struct FunPipelineWarmupState {
     frames_run: u32,
@@ -53,12 +112,49 @@ struct FunPipelineWarmupState {
 
 pub fn install_fun_pipeline_warmup(app: &mut App) {
     let config = FunPipelineWarmupConfig::from_env();
-    if !config.is_enabled() {
-        return;
-    }
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
     };
+    let registry = PipelineRegistry::default();
+    let request = PipelineWarmupRequest::renderer_initialization(selected_pipeline_backend());
+    let plan = registry.warmup_plan(request);
+    let bridge_plan = RendererPipelineWarmupPlan::from_registry_plan(registry, plan);
+    let (
+        boundary,
+        backend,
+        quality_tier,
+        eligible_pipeline_count,
+        total_pipeline_count,
+        shader_module_count,
+        shader_variant_count,
+        first_pipeline_label,
+    ) = bridge_plan.diagnostic_fields();
+    render_app.insert_resource(bridge_plan);
+    game_shared::fun_diag_info!(
+        target: "fun::render",
+        boundary = boundary,
+        backend = backend,
+        quality_tier = quality_tier,
+        eligible_pipelines = eligible_pipeline_count,
+        total_pipelines = total_pipeline_count,
+        shader_modules = shader_module_count,
+        shader_variants = shader_variant_count,
+        first_pipeline = first_pipeline_label,
+        "Renderer pipeline registry warmup plan"
+    );
+    let _ = (
+        boundary,
+        backend,
+        quality_tier,
+        eligible_pipeline_count,
+        total_pipeline_count,
+        shader_module_count,
+        shader_variant_count,
+        first_pipeline_label,
+    );
+    if !config.is_enabled() {
+        return;
+    }
     render_app.insert_resource(config);
     render_app.add_systems(
         Render,
@@ -72,6 +168,15 @@ pub fn install_fun_pipeline_warmup(app: &mut App) {
         budget_ms = config.budget.as_secs_f64() * 1000.0,
         "Fun pipeline warmup enabled"
     );
+}
+
+fn selected_pipeline_backend() -> FunRendererBackend {
+    let selected = selected_render_backend();
+    if selected.contains(Backends::DX12) {
+        FunRendererBackend::Dx12
+    } else {
+        FunRendererBackend::Vulkan
+    }
 }
 
 fn run_fun_pipeline_warmup(
@@ -201,5 +306,34 @@ mod tests {
             FunPipelineWarmupMode::Exhaustive,
             &state(u32::MAX, u32::MAX)
         ));
+    }
+
+    #[test]
+    fn warmup_plan_uses_fun_renderer_pipeline_registry() {
+        let registry = PipelineRegistry::default();
+        let request = PipelineWarmupRequest {
+            boundary: PipelineWarmupBoundary::RendererInitialization,
+            backend: FunRendererBackend::Dx12,
+            quality_tier: QualityTier::Balanced,
+            features: fun_renderer::PipelineFeatureMask::ALL,
+        };
+        let plan =
+            RendererPipelineWarmupPlan::from_registry_plan(registry, registry.warmup_plan(request));
+
+        assert!(plan.eligible_pipeline_count >= 10);
+        assert_eq!(
+            plan.boundary,
+            PipelineWarmupBoundary::RendererInitialization
+        );
+        assert_eq!(plan.backend, FunRendererBackend::Dx12);
+        assert_eq!(plan.quality_tier, QualityTier::Balanced);
+        assert!(plan.total_pipeline_count >= plan.eligible_pipeline_count);
+        assert!(plan.shader_module_count > 0);
+        assert!(plan.shader_variant_count > 0);
+        assert_eq!(
+            plan.first_pipeline_label,
+            Some("fun_compute_culling_reset_pipeline")
+        );
+        assert!(fun_renderer::PipelineQualityTierMask::ALL.contains_tier(plan.quality_tier));
     }
 }

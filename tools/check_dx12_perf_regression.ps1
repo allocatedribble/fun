@@ -65,6 +65,101 @@ function Get-MetricValue {
     return [double]$value
 }
 
+function Get-ArrayProperty {
+    param(
+        [object]$Object,
+        [string]$Name
+    )
+
+    $value = Get-JsonProperty -Object $Object -Name $Name
+    if ($null -eq $value) {
+        return @()
+    }
+    return @($value)
+}
+
+function Get-EventCallCount {
+    param([object]$Event)
+
+    foreach ($name in @("calls", "count", "samples")) {
+        $value = Get-JsonProperty -Object $Event -Name $name
+        if ($null -ne $value) {
+            return [double]$value
+        }
+    }
+    return 1.0
+}
+
+function Test-PipelineCreationEvidenceMatch {
+    param(
+        [object]$Event,
+        [string]$RuleId
+    )
+
+    $operation = ([string](Get-JsonProperty -Object $Event -Name "operation")).ToLowerInvariant()
+    $category = ([string](Get-JsonProperty -Object $Event -Name "category")).ToLowerInvariant()
+    $combined = "$operation $category"
+
+    if ($RuleId -eq "runtime_render_pipeline_creation") {
+        return $combined.Contains("render_pipeline") -or ($combined.Contains("render") -and $combined.Contains("pipeline"))
+    }
+    if ($RuleId -eq "runtime_compute_pipeline_creation") {
+        return $combined.Contains("compute_pipeline") -or ($combined.Contains("compute") -and $combined.Contains("pipeline"))
+    }
+    if ($RuleId -eq "runtime_shader_pipeline_creation") {
+        return $combined.Contains("shader") -or $combined.Contains("pipeline_created")
+    }
+    return $false
+}
+
+function Get-PipelineCreationEvidence {
+    param(
+        [object]$Summary,
+        [string]$RuleId
+    )
+
+    if (@(
+        "runtime_render_pipeline_creation",
+        "runtime_compute_pipeline_creation",
+        "runtime_shader_pipeline_creation"
+    ) -notcontains $RuleId) {
+        return ""
+    }
+
+    $eventProperty = if ($RuleId -eq "runtime_shader_pipeline_creation") {
+        "render_shader_events"
+    }
+    else {
+        "render_churn_creation_events"
+    }
+
+    $parts = New-Object "System.Collections.Generic.List[string]"
+    foreach ($event in Get-ArrayProperty -Object $Summary -Name $eventProperty) {
+        if (-not (Test-PipelineCreationEvidenceMatch -Event $event -RuleId $RuleId)) {
+            continue
+        }
+        $calls = Get-EventCallCount -Event $event
+        if ($calls -le 0.0) {
+            continue
+        }
+        $label = [string](Get-JsonProperty -Object $event -Name "label")
+        if ([string]::IsNullOrWhiteSpace($label)) {
+            $label = "<unknown>"
+        }
+        $operation = [string](Get-JsonProperty -Object $event -Name "operation")
+        $category = [string](Get-JsonProperty -Object $event -Name "category")
+        $parts.Add(("pipeline={0} operation={1} category={2} calls={3:0.###}" -f $label, $operation, $category, $calls)) | Out-Null
+        if ($parts.Count -ge 3) {
+            break
+        }
+    }
+
+    if ($parts.Count -eq 0) {
+        return ""
+    }
+    return ($parts.ToArray() -join "; ")
+}
+
 function Test-AcceleratedCefLane {
     param([object]$Summary)
 
@@ -164,7 +259,12 @@ function Invoke-PerfRule {
     if ([string]$Rule.comparison -eq "max_absolute") {
         if ($currentValue -gt [double]$Rule.limit) {
             $status = if ($Severity -eq "hard") { "fail" } else { "warn" }
-            return New-RuleResult -Severity $Severity -Rule $Rule -Status $status -Detail ([string]$Rule.message) -CurrentValue $currentValue -Observed $currentValue
+            $detail = [string]$Rule.message
+            $evidence = Get-PipelineCreationEvidence -Summary $CurrentSummary -RuleId ([string]$Rule.id)
+            if (-not [string]::IsNullOrWhiteSpace($evidence)) {
+                $detail = "$detail Evidence: $evidence"
+            }
+            return New-RuleResult -Severity $Severity -Rule $Rule -Status $status -Detail $detail -CurrentValue $currentValue -Observed $currentValue
         }
         return New-RuleResult -Severity $Severity -Rule $Rule -Status "pass" -Detail "within absolute limit" -CurrentValue $currentValue -Observed $currentValue
     }
@@ -332,6 +432,41 @@ function New-SyntheticSummary {
             cef_stale_frame_count = [ordered]@{ mean = $CefStaleFrames; p95 = $CefStaleFrames }
         }
     }
+    $renderChurnEvents = @()
+    if ($RenderPipelineCreations -gt 0.0) {
+        $renderChurnEvents += [ordered]@{
+            rank = 1
+            operation = "render_pipeline_created"
+            category = "renderer_pipeline_registry"
+            label = "fun_compute_culling_lod_select_pipeline"
+            calls = $RenderPipelineCreations
+            samples = 1
+        }
+    }
+    if ($ComputePipelineCreations -gt 0.0) {
+        $renderChurnEvents += [ordered]@{
+            rank = 1
+            operation = "compute_pipeline_created"
+            category = "renderer_pipeline_registry"
+            label = "fun_compute_culling_meshlet_cluster_pipeline"
+            calls = $ComputePipelineCreations
+            samples = 1
+        }
+    }
+    $shaderEvents = @()
+    if ($ShaderPipelineCreations -gt 0.0) {
+        $shaderEvents += [ordered]@{
+            rank = 1
+            operation = "pipeline_created"
+            category = "renderer_shader_registry"
+            label = "fun_compute_culling_lod_select_pipeline"
+            calls = $ShaderPipelineCreations
+            elapsed_ns = 1000
+            shader_defs = "COMPUTE_CULLING"
+        }
+    }
+    $payload["render_churn_creation_events"] = @($renderChurnEvents)
+    $payload["render_shader_events"] = @($shaderEvents)
     $json = $payload | ConvertTo-Json -Depth 8
     return $json | ConvertFrom-Json
 }
@@ -357,6 +492,10 @@ if ($SelfTest) {
     $failureReport = Invoke-PerfGate -BaselineSummary $baselineSummaryForSelfTest -CurrentSummary $failure -Envelope $envelope -LaneName $Lane
     if ($failureReport.status -ne "fail" -or $failureReport.hard_failures -lt 3) {
         throw "Self-test failure scenario failed: status=$($failureReport.status) hard=$($failureReport.hard_failures)"
+    }
+    $failureDetails = ($failureReport.results | ForEach-Object { $_.detail }) -join " "
+    if ($failureDetails -notmatch "fun_compute_culling_lod_select_pipeline") {
+        throw "Self-test failure scenario did not name the runtime pipeline label."
     }
     Write-Output "DX12 perf regression gate self-test passed."
     exit 0

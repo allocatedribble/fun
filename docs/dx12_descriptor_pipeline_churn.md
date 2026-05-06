@@ -203,6 +203,38 @@ This is a warmup control surface, not a full variant enumerator. Scene-aware
 material enumeration should come after the churn counters identify which
 runtime pipelines are created after loading.
 
+Pass 4 adds a renderer-core registry in `fun-renderer/src/pipeline.rs`.
+`fun_render` reads that registry at startup and logs a
+renderer-initialization warmup plan before the current Bevy `PipelineCache`
+warmup executor runs. The registry is metadata first: it gives every known or
+reserved renderer pipeline a stable ID, static label, shader path, feature mask,
+backend mask, quality-tier mask, warmup boundary, and pass dependency list. The
+execution path still consumes Bevy cached pipelines until `fun-renderer` owns
+the visible backend.
+
+Shader variants in the registry are limited to the explicit axes that are
+allowed to create permutations:
+
+- backend;
+- HDR/LDR;
+- MSAA;
+- skinning/static;
+- alpha/opaque;
+- lighting tier;
+- shadow tier;
+- upscaler mode;
+- virtual/non-virtual geometry.
+
+New hot-path pipeline work should first register its static label and variant
+axes in `fun-renderer`; benchmark failures should then name the exact runtime
+label through `render_churn_creation_events` or `render_shader_events`.
+
+Pass 4 smoke evidence lives under
+`target/dx12-perf-gate/pass4-pipeline/`. The log-parsed cardinality report
+records render, compute, and shader pipeline creation p95 all at `0` after
+observed warmup, but the same run reported selected DX12 with actual Vulkan, so
+it is pipeline-remediation evidence rather than final DX12 acceptance evidence.
+
 Layout canonicalization remains blocked until `render_churn_creation_events`
 or PIX descriptor rows identify a specific family and a binding-structure
 comparison proves the layouts are compatible.

@@ -13,6 +13,7 @@ use fun_scene::{
 use crate::{
     FunRendererBackend, FunRendererFrameGenerationContract, FunRendererFrameGraphStage,
     FunRendererRuntimeBackend, FunRendererSubsystem,
+    pipeline::{PIPELINE_REGISTRY_SCHEMA_VERSION, PipelineRegistry, PipelineRuntimeCounters},
 };
 
 pub const FUN_RENDERER_ECS_SCHEMA_VERSION: u16 = 2;
@@ -1420,10 +1421,28 @@ impl Default for FunRenderCapabilityMatrix {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct FunPipelineRegistry {
+    pub schema_version: u16,
     pub pipeline_count: u32,
+    pub shader_module_count: u32,
+    pub shader_variant_count: u32,
     pub dirty_pipeline_count: u32,
+    pub runtime_counters: PipelineRuntimeCounters,
+}
+
+impl Default for FunPipelineRegistry {
+    fn default() -> Self {
+        let registry = PipelineRegistry::default();
+        Self {
+            schema_version: PIPELINE_REGISTRY_SCHEMA_VERSION,
+            pipeline_count: registry.pipeline_count() as u32,
+            shader_module_count: registry.shader_module_count() as u32,
+            shader_variant_count: registry.shader_variant_count() as u32,
+            dirty_pipeline_count: 0,
+            runtime_counters: PipelineRuntimeCounters::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]

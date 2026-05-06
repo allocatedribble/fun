@@ -8,7 +8,7 @@ use bevy::{
         render_resource::{
             BindGroupLayoutDescriptor, BindGroupLayoutEntries, CachedComputePipelineId,
             ComputePipelineDescriptor, PipelineCache, ShaderStages, ShaderType,
-            binding_types::{storage_buffer, uniform_buffer},
+            binding_types::{storage_buffer, storage_buffer_read_only, uniform_buffer},
         },
     },
     shader::Shader,
@@ -501,6 +501,16 @@ pub struct FunComputeCullingPipelines {
     pub generate_indirect_args: CachedComputePipelineId,
 }
 
+pub const CULLING_VIEW_CONSTANTS_READ_ONLY: bool = false;
+pub const CULLING_INSTANCE_METADATA_READ_ONLY: bool = true;
+pub const CULLING_MESHLET_CLUSTER_METADATA_READ_ONLY: bool = true;
+pub const CULLING_VISIBILITY_FLAGS_READ_ONLY: bool = false;
+pub const CULLING_COMPACT_IDS_READ_ONLY: bool = false;
+pub const CULLING_INDIRECT_ARGS_READ_ONLY: bool = false;
+pub const CULLING_COUNTERS_READ_ONLY: bool = false;
+pub const CULLING_HIZ_READ_ONLY: bool = true;
+pub const CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET: bool = false;
+
 pub fn install_fun_compute_culling(app: &mut App) {
     let config = FunComputeCullingConfig::from_env();
     app.insert_resource(config);
@@ -536,14 +546,18 @@ pub fn init_compute_culling_pipelines(
         &BindGroupLayoutEntries::sequential(
             ShaderStages::COMPUTE,
             (
-                uniform_buffer::<FunGpuCullingViewConstants>(false),
-                storage_buffer::<FunGpuCullingInstanceMetadata>(false),
-                storage_buffer::<FunGpuMeshletClusterMetadata>(false),
-                storage_buffer::<u32>(false),
-                storage_buffer::<u32>(false),
-                storage_buffer::<FunGpuDrawIndirectArgs>(false),
-                storage_buffer::<u32>(false),
-                storage_buffer::<f32>(true),
+                uniform_buffer::<FunGpuCullingViewConstants>(CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET),
+                storage_buffer_read_only::<FunGpuCullingInstanceMetadata>(
+                    CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET,
+                ),
+                storage_buffer_read_only::<FunGpuMeshletClusterMetadata>(
+                    CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET,
+                ),
+                storage_buffer::<u32>(CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET),
+                storage_buffer::<u32>(CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET),
+                storage_buffer::<FunGpuDrawIndirectArgs>(CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET),
+                storage_buffer::<u32>(CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET),
+                storage_buffer_read_only::<f32>(CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET),
             ),
         ),
     );
@@ -1086,5 +1100,22 @@ mod tests {
                 "missing compute culling shader entry point: {entry_point}"
             );
         }
+    }
+
+    #[test]
+    fn shader_read_only_storage_inputs_match_pipeline_layout_contract() {
+        let shader = include_str!("compute_culling.wgsl");
+
+        assert!(shader.contains("@group(0) @binding(1) var<storage, read> instances"));
+        assert!(shader.contains("@group(0) @binding(2) var<storage, read> clusters"));
+        assert!(CULLING_INSTANCE_METADATA_READ_ONLY);
+        assert!(CULLING_MESHLET_CLUSTER_METADATA_READ_ONLY);
+        assert!(CULLING_HIZ_READ_ONLY);
+        assert!(!CULLING_VIEW_CONSTANTS_READ_ONLY);
+        assert!(!CULLING_VISIBILITY_FLAGS_READ_ONLY);
+        assert!(!CULLING_COMPACT_IDS_READ_ONLY);
+        assert!(!CULLING_INDIRECT_ARGS_READ_ONLY);
+        assert!(!CULLING_COUNTERS_READ_ONLY);
+        assert!(!CULLING_BINDINGS_HAVE_DYNAMIC_OFFSET);
     }
 }
