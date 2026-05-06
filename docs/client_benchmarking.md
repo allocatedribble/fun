@@ -576,6 +576,35 @@ The artifact writer emits both `.json` and `.md` files with the same stem.
 Renderer performance notes should cite one of these artifacts before claiming a
 pass improved, regressed, or merely moved complexity.
 
+## Renderer Research Spike Benchmarks
+
+Pass 22 keeps exploratory graphics work isolated from the default renderer.
+The registered spikes and compile-time gates are:
+
+| spike | feature flag | owner | promotion floor |
+| --- | --- | --- | --- |
+| Work Graphs | `experimental_work_graphs` | `fun-renderer` | capability check, runtime opt-in, benchmark comparison, deterministic fallback |
+| Mesh shader path | `mesh_shader_path` | `fun-renderer` | capability check, benchmark gate, compute fallback preserved |
+| Radiance/neural cache | `radiance_neural_cache` | `fun-lux` | stability, invalidation, latency, memory, and quality comparison |
+| Learned page-priority predictor | `learned_page_priority_predictor` | `fun-ai` contract through `fun-renderer` | page faults fall, p95/p99 remain stable, false negatives controlled, deterministic fallback |
+| Neural texture compression | `neural_texture_compression` | offline asset pipeline | asset size, decode cost, quality, streaming, and cache-pressure comparison |
+
+Local validation:
+
+```powershell
+cargo test -p fun-renderer --lib research
+cargo test -p fun-lux --lib research
+$root=(Get-Location).Path
+$env:FUN_RENDERER_RESEARCH_SPIKE_ARTIFACT=Join-Path $root 'target\research\pass22-research-spikes.json'
+cargo test -p fun-renderer --lib research::tests::research_spike_artifact_records_recommendations -- --exact --nocapture
+```
+
+The artifact writer emits both `.json` and `.md` files with the same stem.
+Spike recommendations must be one of `abandon`, `keep_experimental`, or
+`promote_to_production_pass`; promotion is invalid if a spike becomes a default
+boot dependency, loses compile/runtime disable support, lacks capability facts,
+or lacks a benchmark artifact.
+
 ## Default Client Matrix
 
 The quick iteration benchmark is:

@@ -724,6 +724,10 @@ pub struct RendererCompiledFeatureSupport {
     pub virtual_shadows: bool,
     pub hybrid_gi: bool,
     pub experimental_ml: bool,
+    pub experimental_work_graphs: bool,
+    pub mesh_shader_path: bool,
+    pub learned_page_priority_predictor: bool,
+    pub neural_texture_compression: bool,
 }
 
 impl RendererCompiledFeatureSupport {
@@ -741,6 +745,10 @@ impl RendererCompiledFeatureSupport {
         virtual_shadows: cfg!(feature = "virtual_shadows"),
         hybrid_gi: cfg!(feature = "hybrid_gi"),
         experimental_ml: cfg!(feature = "experimental_renderer_ml"),
+        experimental_work_graphs: cfg!(feature = "experimental_work_graphs"),
+        mesh_shader_path: cfg!(feature = "mesh_shader_path"),
+        learned_page_priority_predictor: cfg!(feature = "learned_page_priority_predictor"),
+        neural_texture_compression: cfg!(feature = "neural_texture_compression"),
     };
 
     #[must_use]
@@ -759,6 +767,10 @@ impl RendererCompiledFeatureSupport {
             virtual_shadows: cfg!(feature = "virtual_shadows"),
             hybrid_gi: cfg!(feature = "hybrid_gi"),
             experimental_ml: features.experimental_ml,
+            experimental_work_graphs: cfg!(feature = "experimental_work_graphs"),
+            mesh_shader_path: cfg!(feature = "mesh_shader_path"),
+            learned_page_priority_predictor: cfg!(feature = "learned_page_priority_predictor"),
+            neural_texture_compression: cfg!(feature = "neural_texture_compression"),
         }
     }
 }
@@ -950,6 +962,10 @@ impl RendererCapabilityFacts {
                 virtual_shadows: true,
                 hybrid_gi: true,
                 experimental_ml: true,
+                experimental_work_graphs: true,
+                mesh_shader_path: true,
+                learned_page_priority_predictor: true,
+                neural_texture_compression: true,
             },
         }
     }
@@ -962,6 +978,10 @@ impl RendererCapabilityFacts {
     #[must_use]
     pub const fn supports_experimental_features(self) -> bool {
         self.compiled_features.experimental_ml
+            || self.compiled_features.experimental_work_graphs
+            || self.compiled_features.mesh_shader_path
+            || self.compiled_features.learned_page_priority_predictor
+            || self.compiled_features.neural_texture_compression
             || self.work_graphs_supported
             || self.neural_texture_compression_supported
     }

@@ -13,6 +13,7 @@ workspace = true
 default = []
 hybrid_gi = []
 many_light = []
+radiance_neural_cache = []
 virtual_shadows = []
 
 # Compatibility aliases for Pass 1 callers. New code should use the canonical

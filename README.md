@@ -270,6 +270,15 @@ feature flags, p50/p95/p99 timing, renderer metrics, fallback reasons, and hard
 gate results for runtime pipeline creation, backend fallback, CPU CEF fallback,
 page-fault storms, unsupported FG, product Bevy UI usage, and performance
 claims without artifacts.
+Renderer research spikes are represented by `fun_renderer::research` and
+`fun_lux::research`. Work Graphs, the mesh-shader virtual-geometry fast path,
+the radiance/neural cache, the learned page-priority predictor, and neural
+texture compression each have their own compile-time feature flag and require a
+runtime opt-in plus benchmark comparison before promotion. None of these spikes
+is a default renderer boot requirement; mesh shaders must keep the compute
+fallback, the learned predictor must keep deterministic heuristic fallback
+through `fun-ai`, and neural texture compression stays an offline asset-pipeline
+experiment until evidence proves it can be promoted.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. During the current
 transition, unset or `auto` resolves to the legacy Bevy/wgpu product path with a
 loud diagnostic; the exact future flip point is

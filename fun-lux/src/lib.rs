@@ -3,6 +3,7 @@
 pub mod api;
 pub mod gi;
 pub mod many_light;
+pub mod research;
 pub mod shadow;
 
 use bevy_ecs::{
@@ -16,6 +17,7 @@ use bevy_ecs::{
 pub use api::*;
 pub use gi::*;
 pub use many_light::*;
+pub use research::*;
 pub use shadow::*;
 
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
