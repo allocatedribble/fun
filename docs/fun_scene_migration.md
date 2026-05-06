@@ -16,6 +16,22 @@ runtime data model while moving product scene authoring away from direct Bevy
   data belongs in `fun-scene`; game-specific arenas and benchmark scenes stay in
   `game_scene`.
 
+## Renderer Migration Ownership
+
+Scene migration feeds the Pass 1 renderer crate split:
+
+- `fun-scene` owns scene authoring, stable identities, manifests, streaming
+  declarations, and renderer/lux authoring components.
+- `fun-renderer` owns renderer-core traits, backend abstraction, frame graph,
+  scene database, resource allocation, pass registration, presentation, and the
+  no-op clear-color boot path.
+- `fun-lux` owns lighting/GI modes, light database contracts, shadow/GI policy,
+  and denoising/reconstruction hooks.
+- `fun_render` owns the Bevy-facing bridge settings, feature toggles, extraction
+  hook registry, debug overlay hooks, and benchmark hooks.
+- `fun-ai` owns reusable model runtime policy. Renderer-facing model hooks are
+  tensor schemas and proposal surfaces only.
+
 ## Authoring Rule
 
 New scene code should use:

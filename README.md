@@ -90,6 +90,15 @@ editor during migration. It owns extraction, app/plugin integration, feature
 flags, legacy compatibility, diagnostics, and benchmark integration. It exposes
 `fun_renderer` and `fun_lux` to Bevy/game integration, but it is no longer the
 renderer brain.
+Pass 1 formalizes this split with buildable feature flags:
+`fun_renderer_legacy`, `fun_renderer_new_core`, `fun_renderer_dx12`,
+`fun_renderer_vulkan`, `fun_renderer_cef_gpu_only`, `fun_renderer_upscale`,
+`fun_renderer_dlss`, `fun_renderer_fsr`, `fun_renderer_frame_generation`,
+`fun_renderer_experimental_ml`, `fun_lux_many_light`,
+`fun_lux_virtual_shadows`, and `fun_lux_hybrid_gi`.
+The first `fun-renderer` core boot path is compile-only and can produce a
+clear-color frame through `NoopRendererCore`; product swapchain presentation is
+still a later integration pass.
 
 AI ownership is separate: `fun-ai` owns model registry, model manifests,
 inference backend selection, evals, model trust/versioning, and offline

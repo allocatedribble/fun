@@ -341,6 +341,59 @@ output is simple.
   cycle.
 - Long-term legacy path: removed.
 
+## Pass 1 Crate And Feature Skeleton
+
+Pass 1 establishes buildable ownership seams without adding heavyweight render
+behavior. The feature flags are intentionally named after the long-term product
+boundaries so later passes can move behavior behind the same switches instead of
+inventing local aliases.
+
+Renderer bridge flags in `fun_render` forward into `fun-renderer`:
+
+- `fun_renderer_legacy`
+- `fun_renderer_new_core`
+- `fun_renderer_dx12`
+- `fun_renderer_vulkan`
+- `fun_renderer_cef_gpu_only`
+- `fun_renderer_upscale`
+- `fun_renderer_dlss`
+- `fun_renderer_fsr`
+- `fun_renderer_frame_generation`
+- `fun_renderer_experimental_ml`
+
+Lighting flags forward through `fun-renderer` into `fun-lux`:
+
+- `fun_lux_many_light`
+- `fun_lux_virtual_shadows`
+- `fun_lux_hybrid_gi`
+
+The compile-only API seams are:
+
+- `fun_renderer::RendererCoreSettings`
+- `fun_renderer::RendererFeatureToggles`
+- `fun_renderer::DeviceBackend`
+- `fun_renderer::FrameGraphInterface`
+- `fun_renderer::ResourceAllocator`
+- `fun_renderer::SceneDatabase`
+- `fun_renderer::PassRegistry`
+- `fun_renderer::Presentation`
+- `fun_renderer::NoopRendererCore`
+- `fun_lux::LuxSettings`
+- `fun_lux::LuxFeatureToggles`
+- `fun_lux::LightDatabase`
+- `fun_lux::LuxRendererHooks`
+- `fun_lux::NoopLuxCore`
+- `fun_render::RendererBridgeSettings`
+- `fun_render::BridgeFeatureToggles`
+- `fun_render::RendererBridgeHooks`
+- `fun_render::install_renderer_bridge_api`
+
+`NoopRendererCore` can boot a clear-color frame and submit it through the
+compile-only `Presentation` interface. It is not wired to the product swapchain
+yet, so the product legacy Bevy renderer remains the only fully visible runtime
+presentation path until a later pass connects backend resources and window
+presentation.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output
@@ -431,6 +484,9 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::FUN_RENDERER_FRAME_GENERATION_CONTRACT`
 - `fun_renderer::FUN_RENDERER_LIGHTING_SCALE_POLICY`
 - `fun_renderer::FUN_RENDERER_DYNAMIC_SCENE_TARGET`
+- `fun_renderer::RendererCoreSettings`
+- `fun_renderer::RendererFeatureToggles`
+- `fun_renderer::NoopRendererCore`
 - `fun_scene::FunSceneSet`
 - `fun_renderer::FunRendererEcsSchedulePolicy`
 - `fun_renderer::FunRendererSet`
@@ -518,6 +574,9 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::EDITOR_OPERATION_DESCRIPTORS`
 - `fun_scene::EDITOR_OBSERVER_DESCRIPTORS`
 - `fun_lux::FUN_LUX_ECS_SCHEMA_VERSION`
+- `fun_lux::LuxSettings`
+- `fun_lux::LuxFeatureToggles`
+- `fun_lux::NoopLuxCore`
 - `fun_lux::LuxLight`
 - `fun_lux::LuxLightDatabase`
 - `fun_lux::LuxLightEvent`

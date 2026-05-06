@@ -3,6 +3,7 @@ compile_error!("fun_render/dx12_dlss_native is a Windows-only experimental featu
 #[cfg(all(feature = "dx12_native_interop", not(target_os = "windows")))]
 compile_error!("fun_render/dx12_native_interop is a Windows-only experimental feature");
 
+pub mod bridge;
 mod catalog;
 mod compiled_world;
 mod composition;
@@ -39,6 +40,12 @@ pub mod virtual_geometry;
 pub mod winit;
 pub mod world_stream;
 
+pub use bridge::{
+    BRIDGE_HOOKS, BridgeFeatureToggles, BridgeHookDescriptor, BridgeHookKind,
+    FUN_RENDER_BRIDGE_API_SCHEMA_VERSION, RendererBridgeHooks, RendererBridgeSettings,
+    install_renderer_bridge_api, renderer_bridge_benchmark_noop,
+    renderer_bridge_debug_overlay_noop, renderer_bridge_extract_noop,
+};
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 pub use catalog::catalog_ref_summary;
 pub use catalog::{
@@ -140,21 +147,26 @@ pub use fun_renderer::fun_lux;
 pub use fun_renderer::fun_scene;
 pub use fun_renderer::heuristics::*;
 pub use fun_renderer::{
-    FUN_RENDER_BRIDGE_PACKAGE_NAME, FUN_RENDERER_AI_INTERFACE_DESCRIPTORS,
-    FUN_RENDERER_AI_OWNER_PACKAGE_NAME, FUN_RENDERER_BACKEND_DESCRIPTORS,
-    FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME, FUN_RENDERER_DYNAMIC_SCENE_TARGET,
-    FUN_RENDERER_FRAME_GENERATION_CONTRACT, FUN_RENDERER_LIGHTING_SCALE_POLICY,
-    FUN_RENDERER_PACKAGE_NAME, FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS,
-    FUN_RENDERER_PRODUCT_TOPOLOGY, FUN_RENDERER_REQUIRES_BEVY_ECS,
-    FUN_RENDERER_RUNTIME_BACKEND_ENV, FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME,
-    FUN_RENDERER_SCHEMA_VERSION, FUN_RENDERER_SUBSYSTEM_DESCRIPTORS,
-    FUN_RENDERER_UI_RUNTIME_POLICY, FunRendererAiInterfaceDescriptor, FunRendererAiInterfaceKind,
-    FunRendererAiOwnedSurface, FunRendererBackend, FunRendererBackendDescriptor,
-    FunRendererBevyRole, FunRendererCefRuntimePolicy, FunRendererDynamicSceneTarget,
-    FunRendererFrameGenerationContract, FunRendererFrameGraphStage, FunRendererLightingScalePolicy,
-    FunRendererOwner, FunRendererPresentationFeature, FunRendererPresentationFeatureDescriptor,
+    BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
+    FUN_RENDERER_AI_INTERFACE_DESCRIPTORS, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
+    FUN_RENDERER_BACKEND_DESCRIPTORS, FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME,
+    FUN_RENDERER_DYNAMIC_SCENE_TARGET, FUN_RENDERER_FRAME_GENERATION_CONTRACT,
+    FUN_RENDERER_LIGHTING_SCALE_POLICY, FUN_RENDERER_PACKAGE_NAME,
+    FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS, FUN_RENDERER_PRODUCT_TOPOLOGY,
+    FUN_RENDERER_REQUIRES_BEVY_ECS, FUN_RENDERER_RUNTIME_BACKEND_ENV,
+    FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME, FUN_RENDERER_SCHEMA_VERSION,
+    FUN_RENDERER_SUBSYSTEM_DESCRIPTORS, FUN_RENDERER_UI_RUNTIME_POLICY, FrameGraphInterface,
+    FunRendererAiInterfaceDescriptor, FunRendererAiInterfaceKind, FunRendererAiOwnedSurface,
+    FunRendererBackend, FunRendererBackendDescriptor, FunRendererBevyRole,
+    FunRendererCefRuntimePolicy, FunRendererDynamicSceneTarget, FunRendererFrameGenerationContract,
+    FunRendererFrameGraphStage, FunRendererLightingScalePolicy, FunRendererOwner,
+    FunRendererPresentationFeature, FunRendererPresentationFeatureDescriptor,
     FunRendererProductTopology, FunRendererRuntimeBackend, FunRendererSubsystem,
-    FunRendererSubsystemDescriptor, FunRendererUiRuntimePolicy, owner_for_subsystem,
+    FunRendererSubsystemDescriptor, FunRendererUiRuntimePolicy, NoopRendererCore, PassDescriptor,
+    PassHandle, PassKind, PassRegistry, PresentResult, Presentation,
+    RENDERER_CORE_API_SCHEMA_VERSION, RendererCoreBootReport, RendererCoreSettings,
+    RendererFeatureToggles, ResourceAllocator, ResourceHandle, ResourceKind, ResourceRequest,
+    SceneDatabase, SceneInstanceId, SceneInstanceRecord, owner_for_subsystem,
 };
 pub use gpu_visibility::{
     FUN_GPU_VISIBILITY_SCHEMA_VERSION, GPU_VIS_OBJECT_CEF_UI, GPU_VIS_OBJECT_DEBUG,

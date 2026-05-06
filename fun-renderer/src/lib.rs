@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod api;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
 #[cfg(feature = "bevy_ecs")]
@@ -619,6 +620,7 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
     ai_owner_package: FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
 };
 
+pub use api::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
 #[cfg(feature = "bevy_ecs")]

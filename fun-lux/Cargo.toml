@@ -9,6 +9,12 @@ name = "fun_lux"
 [lints]
 workspace = true
 
+[features]
+default = []
+fun_lux_hybrid_gi = []
+fun_lux_many_light = []
+fun_lux_virtual_shadows = []
+
 [dependencies]
 bevy_ecs.workspace = true
 fun_scene.workspace = true

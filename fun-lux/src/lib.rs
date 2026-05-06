@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod api;
+
 use bevy_ecs::{
     entity::Entity,
     lifecycle::RemovedComponents,
@@ -7,6 +9,8 @@ use bevy_ecs::{
     schedule::SystemSet,
     system::{Query, ResMut},
 };
+
+pub use api::*;
 
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
 pub const FUN_LUX_PACKAGE_NAME: &str = "fun-lux";
