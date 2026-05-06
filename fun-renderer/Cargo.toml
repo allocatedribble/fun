@@ -51,6 +51,4 @@ fun_lux.workspace = true
 fun_ai_core = { workspace = true, optional = true }
 fun_scene.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

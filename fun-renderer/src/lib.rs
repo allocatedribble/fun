@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod benchmark;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
@@ -788,6 +789,7 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 };
 
 pub use api::*;
+pub use benchmark::*;
 pub use dynamic_geometry::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;

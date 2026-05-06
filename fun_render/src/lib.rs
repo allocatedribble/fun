@@ -158,6 +158,7 @@ pub use extraction::{
     extract_fun_scene_renderables_to_renderer_database,
 };
 pub use fun_renderer;
+pub use fun_renderer::benchmark::*;
 pub use fun_renderer::ecs::*;
 pub use fun_renderer::frame_graph::*;
 pub use fun_renderer::fun_lux;

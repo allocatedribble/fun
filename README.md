@@ -261,6 +261,15 @@ support, RT/VRS/work-graph support, and compiled feature gates to choose safe
 defaults or reject unsupported requests with explicit reasons. `fun_render`
 exports a CEF/Svelte-safe settings UI model derived from the typed selection;
 benchmark artifacts record the full selected settings needed to reproduce a run.
+Renderer benchmark gates are represented by `fun_renderer::benchmark`. The
+suite declares clear/present, static, CEF UI, DX12/Vulkan parity, upload,
+pipeline hot-loop, virtual geometry, dynamic geometry, procedural invalidation,
+many-light, virtual shadow, GI/reflection, upscaling, and FG pacing scenes. JSON
+and Markdown artifacts record active settings, capability facts, git revisions,
+feature flags, p50/p95/p99 timing, renderer metrics, fallback reasons, and hard
+gate results for runtime pipeline creation, backend fallback, CPU CEF fallback,
+page-fault storms, unsupported FG, product Bevy UI usage, and performance
+claims without artifacts.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. During the current
 transition, unset or `auto` resolves to the legacy Bevy/wgpu product path with a
 loud diagnostic; the exact future flip point is

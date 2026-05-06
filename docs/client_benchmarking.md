@@ -524,6 +524,58 @@ on/off, and BLAS compaction budget variants. Some gates are still policy
 metadata until the matching Solari pass is wired; they remain captured so later
 tiers cannot land without before/after numbers under the same names.
 
+## Renderer Benchmark Suite
+
+Renderer-core benchmark artifacts use schema `fun.renderer.benchmark.v1` and
+are owned by `fun_renderer::benchmark`. The suite declares these stable scene
+IDs so agents can compare renderer progress without relying on memory:
+
+- `renderer.benchmark.scene.clear_present`
+- `renderer.benchmark.scene.static_scene`
+- `renderer.benchmark.scene.cef_ui_composition`
+- `renderer.benchmark.scene.dx12_vulkan_parity`
+- `renderer.benchmark.scene.upload_stress`
+- `renderer.benchmark.scene.pipeline_warmup_hot_loop`
+- `renderer.benchmark.scene.virtual_geometry_stress`
+- `renderer.benchmark.scene.dynamic_geometry_stress`
+- `renderer.benchmark.scene.procedural_invalidation`
+- `renderer.benchmark.scene.many_light_stress`
+- `renderer.benchmark.scene.virtual_shadow_stress`
+- `renderer.benchmark.scene.gi_reflection_scene`
+- `renderer.benchmark.scene.upscaling_scene`
+- `renderer.benchmark.scene.fg_eligibility_pacing`
+
+Every artifact records active renderer settings, capability facts, git
+revisions, feature flags, optional captures, p50/p95/p99 CPU and GPU frame
+time, pass timings, upload bytes, allocation counts, runtime pipeline creation,
+page faults, evictions, visible/drawn clusters, light/candidate counts, shadow
+page refreshes, GI cache occupancy, CEF import/composite latency, upscaler
+time, FG generated/presented counts, Bevy UI dependency status, and fallback
+reasons.
+
+The hard gates are:
+
+- no unexpected runtime pipeline creation in the hot loop;
+- no silent backend fallback;
+- no product CPU CEF fallback;
+- no unbounded page-fault storm;
+- no unsupported frame generation;
+- no hidden product Bevy UI dependency;
+- no performance claim without a JSON or Markdown artifact.
+
+Local validation:
+
+```powershell
+cargo test -p fun-renderer --lib benchmark
+$root=(Get-Location).Path
+$env:FUN_RENDERER_BENCHMARK_ARTIFACT=Join-Path $root 'target\benchmarks\renderer\pass21-renderer-benchmark.json'
+cargo test -p fun-renderer --lib benchmark::tests::benchmark_artifacts_record_json_markdown_and_gate_status -- --exact --nocapture
+```
+
+The artifact writer emits both `.json` and `.md` files with the same stem.
+Renderer performance notes should cite one of these artifacts before claiming a
+pass improved, regressed, or merely moved complexity.
+
 ## Default Client Matrix
 
 The quick iteration benchmark is:
