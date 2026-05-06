@@ -605,6 +605,30 @@ Spike recommendations must be one of `abandon`, `keep_experimental`, or
 boot dependency, loses compile/runtime disable support, lacks capability facts,
 or lacks a benchmark artifact.
 
+## Renderer Default-Flip Benchmark Gate
+
+Pass 23 makes `FUN_RENDERER_BACKEND=fun` the default core path. The benchmark
+contract is now:
+
+- unset or `auto` resolves to `fun`;
+- explicit `legacy` remains loud and diagnostic-only;
+- product Bevy UI and CPU CEF fallback gates remain closed;
+- renderer ownership is recorded before any performance claim is made.
+
+Local validation:
+
+```powershell
+cargo test -p fun-renderer --lib default_flip
+cargo test -p fun_render --lib auto_backend_initializes_fun_core_by_default
+cargo test -p fun_render --lib explicit_legacy_backend_is_diagnostic_only_and_loud
+$root=(Get-Location).Path
+$env:FUN_RENDERER_DEFAULT_FLIP_ARTIFACT=Join-Path $root 'target\default-flip\pass23-default-flip.txt'
+cargo test -p fun-renderer --lib default_flip::tests::default_flip_artifact_records_stage_policy_and_owners -- --exact --nocapture
+```
+
+Attach `target\default-flip\pass23-default-flip.txt` next to renderer benchmark
+artifacts when a run depends on the default backend policy.
+
 ## Default Client Matrix
 
 The quick iteration benchmark is:

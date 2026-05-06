@@ -7,7 +7,7 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["offscreen", "volumetric_clouds"]
+default = ["offscreen", "volumetric_clouds", "fun_renderer_core"]
 benchmarks = []
 cef_gpu_only = ["fun_renderer/cef_gpu_only"]
 cloud_diagnostics = ["render_diagnostics"]

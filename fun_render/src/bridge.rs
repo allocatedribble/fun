@@ -350,7 +350,7 @@ pub fn renderer_bridge_initialize_runtime(
             resolved_backend = settings.backend_selection.resolved.as_env_value(),
             reason = settings.backend_selection.reason.as_str(),
             future_default_flip_location = settings.backend_selection.future_default_flip_location,
-            "FUN_RENDERER_BACKEND routed to legacy Bevy/wgpu presentation for this transition pass"
+            "FUN_RENDERER_BACKEND explicitly routed to the diagnostic-only legacy Bevy/wgpu presentation lane"
         );
     }
 
@@ -421,12 +421,12 @@ mod tests {
         assert_eq!(settings.runtime_backend, FunRendererRuntimeBackend::Auto);
         assert_eq!(
             settings.backend_selection.resolved,
-            FunRendererRuntimeBackend::Legacy
+            FunRendererRuntimeBackend::Fun
         );
         assert_eq!(settings.preferred_backend, FunRendererBackend::Dx12);
 
         let state = app.world().resource::<RendererBridgeRuntimeState>();
-        assert!(state.legacy_product_path_active);
+        assert!(!state.legacy_product_path_active);
         assert!(!state.fun_core_initialized);
 
         let hooks = app.world().resource::<RendererBridgeHooks>();
@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_backend_keeps_legacy_product_path_loud() {
+    fn auto_backend_initializes_fun_core_by_default() {
         let mut app = App::new();
         install_renderer_bridge_api(
             &mut app,
@@ -549,11 +549,33 @@ mod tests {
 
         let state = app.world().resource::<RendererBridgeRuntimeState>();
         assert!(state.initialized_once);
+        assert!(!state.legacy_product_path_active);
+        assert!(!state.loud_diagnostic_required);
+        assert!(state.fun_core_initialized);
+        assert!(state.core_boot.is_some());
+        assert_eq!(state.selection.requested, FunRendererRuntimeBackend::Auto);
+        assert_eq!(state.selection.resolved, FunRendererRuntimeBackend::Fun);
+    }
+
+    #[test]
+    fn explicit_legacy_backend_is_diagnostic_only_and_loud() {
+        let mut app = App::new();
+        install_renderer_bridge_api(
+            &mut app,
+            RendererBridgeSettings::from_runtime_backend(FunRendererRuntimeBackend::Legacy),
+        );
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(renderer_bridge_initialize_runtime);
+        schedule.run(app.world_mut());
+
+        let state = app.world().resource::<RendererBridgeRuntimeState>();
+        assert!(state.initialized_once);
         assert!(state.legacy_product_path_active);
         assert!(state.loud_diagnostic_required);
         assert!(!state.fun_core_initialized);
         assert!(state.core_boot.is_none());
-        assert_eq!(state.selection.requested, FunRendererRuntimeBackend::Auto);
+        assert_eq!(state.selection.requested, FunRendererRuntimeBackend::Legacy);
         assert_eq!(state.selection.resolved, FunRendererRuntimeBackend::Legacy);
     }
 }

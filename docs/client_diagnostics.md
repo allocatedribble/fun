@@ -110,8 +110,9 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
 
 ## Targets
 
-- `fun::render`: backend, present mode, Solari, meshlets, DLSS RR, and denoiser
-  mode.
+- `fun::render`: selected renderer backend, actual renderer backend,
+  `FUN_RENDERER_BACKEND` resolution, explicit legacy diagnostic routing,
+  present mode, Solari, meshlets, DLSS RR, and denoiser mode.
 - `fun::render::clouds`: cloud configuration, render-path cloud signature
   fields, history reset requests, reset generation/counts, and future per-view
   cloud render setup.

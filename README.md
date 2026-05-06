@@ -116,10 +116,12 @@ Pass 2 makes the ownership split the canonical feature surface:
 `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`,
 `hybrid_gi`, and `experimental_renderer_ml`. The older
 `fun_renderer_*`/`fun_lux_*` feature names remain compatibility aliases for the
-transition. The `fun_render` bridge now installs a typed backend selector and
-can boot the `fun-renderer` no-op core plus `fun-lux` baseline policy when
-`FUN_RENDERER_BACKEND=fun` is selected. Product swapchain presentation still
-stays on the legacy Bevy/wgpu path until the later visible-frame handoff.
+transition. The `fun_render` bridge now installs a typed backend selector;
+unset, `auto`, and `FUN_RENDERER_BACKEND=fun` resolve to the `fun-renderer`
+core and `fun-lux` baseline policy. `FUN_RENDERER_BACKEND=legacy` is loud and
+diagnostic-only for the remaining transition cycle. The Winit presentation
+shell remains a compatibility bridge until the renderer-owned visible-frame
+handoff, but it is no longer the default renderer selection.
 
 AI ownership is separate: `fun-ai` owns model registry, model manifests,
 inference backend selection, evals, model trust/versioning, and offline
@@ -279,11 +281,13 @@ is a default renderer boot requirement; mesh shaders must keep the compute
 fallback, the learned predictor must keep deterministic heuristic fallback
 through `fun-ai`, and neural texture compression stays an offline asset-pipeline
 experiment until evidence proves it can be promoted.
-`FUN_RENDERER_BACKEND=fun` is the long-term default. During the current
-transition, unset or `auto` resolves to the legacy Bevy/wgpu product path with a
-loud diagnostic; the exact future flip point is
-`fun_render::bridge::RendererBridgeSettings::from_env`. `legacy` is temporary
-and should be removed after one migration cycle.
+`FUN_RENDERER_BACKEND=fun` is the default. Unset or `auto` resolves to `fun`;
+`legacy` is explicit, loud, and diagnostic-only while the final compatibility
+lane is retired. The default flip is encoded in
+`fun_render::bridge::RendererBridgeSettings::from_env` and
+`fun_renderer::default_flip`, with CEF/Svelte GPU-only UI, Bevy UI product
+usage, CPU CEF fallback, duplicate upload systems, duplicate lighting/shadow
+policy, and stale transition feature flags all tracked as retirement gates.
 
 Presentation is split by caller. `game_client` enables
 `fun_render/winit_presentation` and adds the Winit presentation plugin for the

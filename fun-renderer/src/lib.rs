@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod benchmark;
+pub mod default_flip;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
@@ -39,7 +40,7 @@ pub const FUN_RENDERER_RUNTIME_BACKEND_ENV: &str = "FUN_RENDERER_BACKEND";
 pub const FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION: &str =
     "fun_render::bridge::RendererBridgeSettings::from_env";
 pub const FUN_RENDERER_CURRENT_AUTO_RESOLUTION: FunRendererRuntimeBackend =
-    FunRendererRuntimeBackend::Legacy;
+    FunRendererRuntimeBackend::Fun;
 
 const _: () = {
     assert!(FUN_RENDERER_REQUIRES_BEVY_ECS);
@@ -182,10 +183,11 @@ impl FunRendererBackendSelection {
             requested,
             resolved,
             reason,
-            loud_diagnostic_required: !matches!(
+            loud_diagnostic_required: matches!(
                 reason,
-                FunRendererBackendSelectionReason::ExplicitFun
-            ),
+                FunRendererBackendSelectionReason::ExplicitLegacy
+                    | FunRendererBackendSelectionReason::InvalidValueDefaultedToAuto
+            ) || matches!(resolved, FunRendererRuntimeBackend::Legacy),
             future_default_flip_location: FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION,
         }
     }
@@ -849,18 +851,15 @@ mod tests {
     }
 
     #[test]
-    fn runtime_backend_selection_is_loud_until_fun_default_flip() {
+    fn runtime_backend_selection_defaults_to_fun_after_default_flip() {
         let default_selection = FunRendererRuntimeBackend::selection_from_env_reader(|_| None);
         assert_eq!(default_selection.requested, FunRendererRuntimeBackend::Auto);
-        assert_eq!(
-            default_selection.resolved,
-            FunRendererRuntimeBackend::Legacy
-        );
+        assert_eq!(default_selection.resolved, FunRendererRuntimeBackend::Fun);
         assert_eq!(
             default_selection.reason,
             FunRendererBackendSelectionReason::DefaultAuto
         );
-        assert!(default_selection.loud_diagnostic_required);
+        assert!(!default_selection.loud_diagnostic_required);
         assert_eq!(
             default_selection.future_default_flip_location,
             FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION
@@ -868,20 +867,31 @@ mod tests {
 
         assert_eq!(
             FunRendererRuntimeBackend::from_env_reader(|_| None),
-            FunRendererRuntimeBackend::Legacy
+            FunRendererRuntimeBackend::Fun
         );
+        let legacy_selection = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+            (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("legacy")
+        });
+        assert_eq!(legacy_selection.resolved, FunRendererRuntimeBackend::Legacy);
         assert_eq!(
-            FunRendererRuntimeBackend::selection_from_env_reader(|name| {
-                (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("legacy")
-            })
-            .resolved,
-            FunRendererRuntimeBackend::Legacy
+            legacy_selection.reason,
+            FunRendererBackendSelectionReason::ExplicitLegacy
         );
+        assert!(legacy_selection.loud_diagnostic_required);
         let fun_selection = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
             (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("fun")
         });
         assert_eq!(fun_selection.resolved, FunRendererRuntimeBackend::Fun);
         assert!(!fun_selection.loud_diagnostic_required);
+        let invalid_selection = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+            (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("typo")
+        });
+        assert_eq!(invalid_selection.resolved, FunRendererRuntimeBackend::Fun);
+        assert_eq!(
+            invalid_selection.reason,
+            FunRendererBackendSelectionReason::InvalidValueDefaultedToAuto
+        );
+        assert!(invalid_selection.loud_diagnostic_required);
         assert_eq!(FunRendererRuntimeBackend::Auto.as_env_value(), "auto");
         assert!(FunRendererRuntimeBackend::Legacy.is_transition_only());
         assert!(!FunRendererRuntimeBackend::Fun.is_transition_only());

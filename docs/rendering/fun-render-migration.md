@@ -40,9 +40,9 @@ first-order migration blockers.
 | question | current answer |
 | --- | --- |
 | What does `fun_render` own today? | The Bevy-facing product renderer plugin, Winit presentation, config/env parsing, Solari/cloud/meshlet integration, DX12 native interop gate, CEF texture composition bridge, diagnostics/benchmark counters, upload arena experiments, DLSS correctness/native-SR scaffolding, and the bridge re-export surface for `fun-renderer`, `fun-lux`, and `fun-scene`. |
-| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, shared page scheduler, static virtual geometry asset/runtime substrate, dynamic geometry/procedural submission substrate, page-based virtual shadow storage, shared heuristic scheduler, quality/settings schema, capability-aware default selector, renderer benchmark suite/perf gates, renderer-owned upscaling/frame-generation diagnostics, renderer-facing ML request/fallback interfaces, and isolated research-spike registry/evidence gates. It does not yet own the product swapchain or visible frame execution. |
+| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, shared page scheduler, static virtual geometry asset/runtime substrate, dynamic geometry/procedural submission substrate, page-based virtual shadow storage, shared heuristic scheduler, quality/settings schema, capability-aware default selector, renderer benchmark suite/perf gates, renderer-owned upscaling/frame-generation diagnostics, renderer-facing ML request/fallback interfaces, isolated research-spike registry/evidence gates, and the Pass 23 default-flip/legacy-retirement contract. It is now the default renderer core selected by `auto`, but the final visible swapchain handoff is still a tracked compatibility bridge gate. |
 | Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
-| Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
+| Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderCorePlugin` now defaults `auto` to the `fun-renderer`/`fun-lux` core path. `FunRenderWinitPresentationPlugin` still installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery as the visible compatibility shell until renderer-owned present takes over. Explicit `FUN_RENDERER_BACKEND=legacy` is loud and diagnostic-only. |
 | Can product UI run GPU-only today? | The product code path is now GPU-only/fail-closed: CEF CPU `OnPaint` frames are rejected, Bevy UI image composition has been removed from `game_client`, and `fun-renderer::RendererCefCompositor` owns the late UI layer contract. Runtime proof is still blocked until the strict D3D11On12 lane reports `bridge_ready=true` with nonzero GPU copy bytes. |
 | Which runtime pipeline gates still fail? | The older local pipeline cardinality report records runtime creation p95 maxima: render pipeline `22`, compute pipeline `82`, shader pipeline `104`. Pass 4 adds a `fun-renderer` pipeline registry plus a bridge warmup plan, fixes the compute-culling read-only storage binding mismatch, and records a new selected-DX12/actual-Vulkan smoke artifact with render, compute, and shader pipeline creation p95 all `0` after warmup. A true DX12 artifact is still required because capability diagnostics report `actual_backend=vulkan`. |
 | Is DX12 real DX12 or fallback? | Pass 9 makes this a runtime truth contract instead of a requested-backend guess. The latest local smoke requested and selected DX12, but the renderer capability report says `actual_graphics_backend=vulkan`, `fallback_graphics_backend=vulkan`, and `graphics_backend_truth_state=actual_backend_mismatch`. This blocks CEF GPU transport and all premium rendering gates. |
@@ -52,8 +52,8 @@ first-order migration blockers.
 
 | crate/module | current owner | intended owner | migration status | current feature flags | validation commands |
 | --- | --- | --- | --- | --- | --- |
-| `fun_render` | Bevy/game renderer bridge, but still the product renderer brain for Winit presentation, Solari, meshlets, clouds, CEF texture composition, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, legacy compatibility during transition. | Runtime selector is installed by `FunRenderCorePlugin`; `FUN_RENDERER_BACKEND=fun` boots the no-op core/lux path; product presentation still here. | `default=[offscreen,volumetric_clouds]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
-| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB records, frame graph skeleton, ECS heuristic systems, shared scheduler priority language, quality/settings schema, capability-aware defaults, benchmark scene/gate/artifact schema, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural submission substrate, page-based virtual shadow storage, renderer-owned CEF compositor, upload/upscale seams, `upscaling::Upscaler*` selection/evaluation diagnostics, `frame_generation::FrameGeneration*` eligibility/disable diagnostics, `ml::RendererPredictionClient` request/fallback scaffolding, and `research::RENDERER_RESEARCH_SPIKES` isolation/evidence contracts. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, dynamic/procedural geometry submission, shared heuristic scheduler, quality/settings policy, page scheduler, CEF compositor, benchmark/perf-gate truth, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. Research spikes stay opt-in and are not default boot dependencies. | Exists as real crate; product swapchain and visible backend execution not wired. Pass 11 adds static virtual geometry format/runtime. Pass 12 adds `DynamicGeometrySubmission`, `DynamicGeometryDatabase`, classic mesh packets, optional dynamic cluster packets for selected classes, procedural chunk revision invalidation, destruction-fragment stress accounting, and upload/dirty-record diagnostics. Pass 13 adds `VirtualShadowStorage`, directional clipmap/local-light page pools, shadow page-table records, invalidation reasons, refresh prioritization, cache/miss diagnostics, and a stable shadow-page artifact. Pass 16 adds the neutral upscaler interface, native/debug fallback mode, DLSS SR and FSR readiness hooks, motion-vector validation, UI separation rejection, and a stable upscaling benchmark artifact. Pass 17 adds the neutral FG interface, DLSS/FSR FG readiness hooks, disable reasons, present-resource lifetime checks, UI readability policy, editor/game policy, and a stable FG benchmark artifact. Pass 18 adds optional `experimental_renderer_ml` shadow-page-prior request/evaluation hooks while keeping reusable model runtime ownership in `fun-ai`. Pass 19 adds `scheduler::SharedHeuristicScheduler`, normalized priority inputs, system integration hooks, shared budget recommendations, diagnostics heatmaps, debug overlays, and p95/p99 benchmark artifacts. Pass 20 adds `settings::RendererSettingsRequest`, the Baseline/Hybrid/High/RT-assisted/Vendor-enhanced/Experimental ladder, capability-aware default/rejection selection, reproducible settings artifacts, and a typed CEF/Svelte UI model via `fun_render`. Pass 21 adds `benchmark::RENDERER_BENCHMARK_SCENES`, JSON/Markdown artifact writers, p50/p95/p99 metrics, and hard gates for pipeline churn, backend fallback, CPU CEF fallback, page-fault storms, unsupported FG, Bevy UI product usage, and claims without artifacts. Pass 22 adds feature-gated Work Graphs, mesh shader, learned page-priority, and neural texture compression spike contracts plus JSON/Markdown recommendation artifacts. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`, `experimental_work_graphs`, `mesh_shader_path`, `learned_page_priority_predictor`, `neural_texture_compression`; old names are aliases. | `cargo check -p fun-renderer`; `cargo check -p fun-renderer --features experimental_renderer_ml`; `cargo check -p fun-renderer --features experimental_work_graphs,mesh_shader_path,learned_page_priority_predictor,neural_texture_compression,experimental_renderer_ml`; `cargo check -p fun-renderer --features upscaling,dlss,fsr,frame_generation,cef_gpu_only`; `cargo test -p fun-renderer --lib research`; `cargo test -p fun-renderer --lib benchmark`; `cargo test -p fun-renderer --lib settings`; `cargo test -p fun-renderer --lib scheduler`; `cargo test -p fun-renderer --features experimental_renderer_ml --lib ml`; `cargo test -p fun-renderer --lib`; `cargo test -p fun-renderer --lib frame_generation`; `cargo test -p fun-renderer --lib upscaling`; `cargo test -p fun-renderer --lib frame_graph`; `cargo test -p fun-renderer --lib scene`; `cargo test -p fun-renderer --lib virtual_geometry`; `cargo test -p fun-renderer --lib dynamic_geometry`; `cargo test -p fun-renderer --lib virtual_shadow`; `cargo test -p fun-renderer --lib cef`; `cargo test -p fun_render --no-default-features --lib settings_bridge`; `cargo test -p fun_render --lib extraction`. |
+| `fun_render` | Bevy/game renderer bridge and visible Winit compatibility shell, plus current Solari/cloud/meshlet integration, CEF texture bridge, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing until those lanes are fully moved behind renderer-owned execution. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, and explicit diagnostic legacy routing. | Runtime selector is installed by `FunRenderCorePlugin`; unset, `auto`, and `FUN_RENDERER_BACKEND=fun` boot the no-op core/lux path by default. Explicit `legacy` is loud and diagnostic-only. | `default=[offscreen,volumetric_clouds,fun_renderer_core]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
+| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB records, frame graph skeleton, ECS heuristic systems, shared scheduler priority language, quality/settings schema, capability-aware defaults, benchmark scene/gate/artifact schema, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural submission substrate, page-based virtual shadow storage, renderer-owned CEF compositor, upload/upscale seams, `upscaling::Upscaler*` selection/evaluation diagnostics, `frame_generation::FrameGeneration*` eligibility/disable diagnostics, `ml::RendererPredictionClient` request/fallback scaffolding, `research::RENDERER_RESEARCH_SPIKES` isolation/evidence contracts, and `default_flip` policy/artifact coverage. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, dynamic/procedural geometry submission, shared heuristic scheduler, quality/settings policy, page scheduler, CEF compositor, benchmark/perf-gate truth, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. Research spikes stay opt-in and are not default boot dependencies. | Exists as real crate; `auto` now resolves to `fun` and the bridge boots the no-op core/lux path by default. Product swapchain and visible backend execution are still a tracked compatibility-shell gate rather than a completed renderer-owned present path. Pass 23 adds `default_flip` status, stage catalog, retirement policy, artifact writer, and tests that make legacy product routing, product Bevy UI, CPU CEF fallback, duplicate upload systems, duplicate lighting/shadow policy, and stale transition flags explicit gates. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`, `experimental_work_graphs`, `mesh_shader_path`, `learned_page_priority_predictor`, `neural_texture_compression`; old names are aliases until cleanup. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib default_flip`; `cargo test -p fun-renderer --features experimental_renderer_ml`; `cargo check -p fun-renderer --features upscaling,dlss,fsr,frame_generation,cef_gpu_only`; `cargo test -p fun-renderer --lib`; `cargo test -p fun_render --lib auto_backend_initializes_fun_core_by_default`; `cargo test -p fun_render --lib explicit_legacy_backend_is_diagnostic_only_and_loud`; `cargo test -p fun_render --no-default-features --lib settings_bridge`; `cargo test -p fun_render --lib extraction`. |
 | `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics, many-light candidate/reservoir policy, hybrid GI/reflection policy, shadow policy decisions separate from renderer storage, and `research::RADIANCE_NEURAL_CACHE_RESEARCH_CONTRACT`. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. Research radiance/neural-cache work stays under `fun-lux` with optional `fun-ai` support. | Exists as real crate; now exposes baseline no-op frame and shutdown reports for bridge boot. Pass 13 adds `shadow::ShadowPolicyEngine` for caster selection, quality tier, soft-shadow mode, reconstruction mode, directional clipmap budget, local-light shadow budget, and policy diagnostics. Pass 14 adds `many_light::GpuLightDatabase`, clustered/Forward+ candidate lists, temporal/spatial reservoirs, emissive promotion, budgeted shadow request intents, and benchmark/shadow/overlay artifacts. Pass 15 adds `gi::SurfaceCache`, GI quality tiers, persistent cache invalidation/update lifecycle, reflection source selection, and GI/reflection debug artifacts. Pass 22 adds the opt-in `radiance_neural_cache` research contract, requiring deterministic surface-cache fallback and stability/invalidation/latency/memory/quality comparison before promotion. | `many_light`, `virtual_shadows`, `hybrid_gi`, `radiance_neural_cache`; no default features; old `fun_lux_*` names are aliases. | `cargo check -p fun-lux`; `cargo check -p fun-lux --features radiance_neural_cache`; `cargo test -p fun-lux --lib`; `cargo test -p fun-lux --lib research`; `cargo test -p fun-lux --lib shadow`; `cargo test -p fun-lux --lib many_light`; `cargo test -p fun-lux --lib gi`. |
 | `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `tools/check_fun_scene_migration.ps1`. |
 | `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI now publishes accelerated ready-frame tokens into `RendererCefCompositor` and rejects CPU `OnPaint` product fallback. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `tools/check_product_ui_policy.ps1`; `scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate`. |
@@ -62,7 +62,7 @@ first-order migration blockers.
 | `game_scene` | Game-specific scene catalog over `fun_scene`, default arenas, deterministic manifests/chunks. | Game-specific catalog only; generic scene authority stays in `fun-scene`. | Migrated off direct `bsn!` usage. | No explicit feature flags. | `cargo test -p game_scene --locked`; `tools/check_fun_scene_migration.ps1`. |
 | `fun_dx12_dlss` | Fail-closed native Windows DLSS C ABI scaffold and runtime discovery surface. | Native bridge crate consumed by `fun-renderer`/`fun_render` after DX12 baseline is ready. | Scaffolded; Streamline/NGX evaluation not linked. | No listed package-level feature flags in this inventory pass. | `cargo check -p fun_dx12_dlss`; DLSS SR acceptance remains blocked by boundary gate. |
 
-## Pass 2 Runtime Selector
+## Runtime Selector
 
 `FUN_RENDERER_BACKEND` is now parsed into
 `fun_renderer::FunRendererBackendSelection` and installed by
@@ -70,19 +70,17 @@ first-order migration blockers.
 
 | env value | requested | current resolved path | diagnostic policy | notes |
 | --- | --- | --- | --- | --- |
-| unset | `auto` | `legacy` | loud | Preserves the current Bevy/wgpu product presentation path for this pass. |
-| `auto` | `auto` | `legacy` | loud | Explicitly asks for transition policy selection. |
-| `legacy` | `legacy` | `legacy` | loud | Temporary escape hatch for one migration cycle. |
+| unset | `auto` | `fun` | normal info | Default core path; boots `NoopRendererCore`, submits the minimal frame graph, calls `NoopLuxCore`, and records diagnostics. |
+| `auto` | `auto` | `fun` | normal info | Explicitly asks for current default policy selection. |
+| `legacy` | `legacy` | `legacy` | loud | Diagnostic-only compatibility lane for the remaining transition cycle. |
 | `fun` | `fun` | `fun` | normal info | Boots `NoopRendererCore`, produces and presents a clear-color no-op frame, calls `NoopLuxCore`, records diagnostics, and shuts down cleanly. |
-| invalid value | `auto` | `legacy` | loud | Invalid values are treated as accidental fallback and must be visible in diagnostics. |
+| invalid value | `auto` | `fun` | loud | Invalid values default to `auto -> fun`, but still emit a loud diagnostic because the override was malformed. |
 
-The exact future default flip point is
-`fun_render::bridge::RendererBridgeSettings::from_env`. Changing that function
-from current `auto -> legacy` policy to default `fun` is the handoff point.
-
-The no-op `fun` path is intentionally not product-visible yet. It proves the
-bridge/core/lux crate boundary and lifecycle without taking the swapchain away
-from the current known-booting Bevy/wgpu path.
+The default flip point remains
+`fun_render::bridge::RendererBridgeSettings::from_env`, with stage and
+retirement metadata in `fun_renderer::default_flip`. The default core is now
+`fun`; the visible Winit shell is tracked as a compatibility bridge until
+renderer-owned present replaces it.
 
 ## Pass 2 Feature Map
 
@@ -936,12 +934,47 @@ summary containing the synthetic Pass 22 recommendations. The recommendation
 vocabulary is deliberately small: `abandon`, `keep_experimental`, or
 `promote_to_production_pass`.
 
+## Pass 23 Default Flip And Legacy Retirement
+
+`fun-renderer/src/default_flip.rs` records the six-stage default flip as typed
+renderer policy:
+
+1. internal minimal scene;
+2. benchmark scenes;
+3. editor/launcher viewport surfaces;
+4. selected `game_client` scenes;
+5. global default;
+6. legacy diagnostic-only retirement.
+
+The active stage is `global_default`. `FUN_RENDERER_BACKEND` unset or `auto`
+now resolves to `fun`, and `fun_render::RendererBridgeSettings::compiled_default`
+boots the renderer-core path by default. `game_client` requests
+`fun_render/fun_renderer_core` through its dependency feature list, so a product
+client build does not depend on an accidental transitive default feature to get
+the new core.
+
+The remaining legacy lane is explicit and loud:
+
+```powershell
+$env:FUN_RENDERER_BACKEND='legacy'
+```
+
+That lane exists only as diagnostic compatibility while visible presentation is
+fully moved behind renderer-owned present. The retirement policy is fail-closed:
+product Bevy UI is disallowed, CPU CEF product fallback is disallowed, duplicate
+upload systems are disallowed, duplicate lighting/shadow policy is disallowed,
+and stale transition feature flags are disallowed.
+
+`FUN_RENDERER_DEFAULT_FLIP_ARTIFACT` writes a compact text artifact that records
+the active stage, `auto -> fun` resolution, legacy diagnostic policy, product UI
+policy, CEF fallback policy, and ownership map for `fun-renderer`, `fun_render`,
+`fun-scene`, `fun-lux`, and `fun-ai`.
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
 | --- | --- | --- | --- | --- |
-| Product presentation | `game_client/src/lib.rs`, `fun_render/src/winit.rs`, `fun_render/src/core.rs` | `game_client` + `fun_render` | `fun-renderer` core through `fun_render` bridge | Current visible frame path. |
-| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,benchmark.rs,dynamic_geometry.rs,ecs.rs,frame_generation.rs,frame_graph.rs,heuristics.rs,ml.rs,page.rs,pipeline.rs,research.rs,resource.rs,scheduler.rs,settings.rs,scene.rs,ui/cef.rs,upscaling.rs,virtual_geometry.rs,virtual_shadow.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, benchmark scene/gate/artifact schema, frame-graph skeleton, GPU scene DB records, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural bridge, virtual-shadow page storage, shared heuristic scheduler, quality/settings ladder, resource model, renderer-owned CEF compositor, upscaling/frame-generation diagnostics, renderer-facing ML request/fallback scaffolding, research-spike contracts, not product swapchain ownership. |
+| Product presentation | `game_client/src/lib.rs`, `fun_render/src/winit.rs`, `fun_render/src/core.rs` | `game_client` + `fun_render` compatibility shell with `fun-renderer` default core | `fun-renderer` core through `fun_render` bridge | `auto` now boots the `fun-renderer` core; visible frame handoff remains the next compatibility retirement gate. |
+| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,benchmark.rs,default_flip.rs,dynamic_geometry.rs,ecs.rs,frame_generation.rs,frame_graph.rs,heuristics.rs,ml.rs,page.rs,pipeline.rs,research.rs,resource.rs,scheduler.rs,settings.rs,scene.rs,ui/cef.rs,upscaling.rs,virtual_geometry.rs,virtual_shadow.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, default-flip/legacy-retirement policy, benchmark scene/gate/artifact schema, frame-graph skeleton, GPU scene DB records, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural bridge, virtual-shadow page storage, shared heuristic scheduler, quality/settings ladder, resource model, renderer-owned CEF compositor, upscaling/frame-generation diagnostics, renderer-facing ML request/fallback scaffolding, and research-spike contracts. |
 | Renderer asset tooling | `tools/virtual_geometry_bake/src/*` | `fun-renderer` API through `virtual_geometry_bake` tool | `fun-renderer` + tooling front-end | Deterministic `.funvg.json` emitter uses renderer-owned static virtual geometry format and scheduler-compatible page IDs. |
 | Lighting/Lux seams | `fun-lux/src/{lib.rs,api.rs,gi.rs,many_light.rs,research.rs,shadow.rs}` | `fun-lux` | `fun-lux` | Buildable substrate, ECS extraction/update hooks, virtual-shadow policy decisions, many-light GPU records, clustered candidates, reservoirs, emissive promotion, GI quality ladder, surface-cache lifecycle, reflection source mix, radiance/neural-cache research contract, and shadow request intents separate from renderer page storage. |
 | Scene substrate | `fun-scene/src/*`, `fun-scene-macros/src/*`, `game_scene/src/*` | `fun-scene` + `game_scene` | same split | Active and first-party. |
@@ -1013,6 +1046,8 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | --- | --- |
 | Renderer core compile | `cargo check -p fun-renderer` |
 | Renderer core tests | `cargo test -p fun-renderer --lib` |
+| Renderer default flip tests | `cargo test -p fun-renderer --lib default_flip`; `cargo test -p fun_render --lib auto_backend_initializes_fun_core_by_default`; `cargo test -p fun_render --lib explicit_legacy_backend_is_diagnostic_only_and_loud` |
+| Renderer default flip artifact | `$root=(Get-Location).Path; $env:FUN_RENDERER_DEFAULT_FLIP_ARTIFACT=Join-Path $root 'target\default-flip\pass23-default-flip.txt'; cargo test -p fun-renderer --lib default_flip::tests::default_flip_artifact_records_stage_policy_and_owners -- --exact --nocapture` |
 | Renderer page scheduler tests | `cargo test -p fun-renderer --lib page` |
 | Renderer page scheduler artifact | `$env:FUN_RENDERER_PAGE_SCHEDULER_BENCHMARK_ARTIFACT='target\page-scheduler\pass10-fault-eviction.txt'; cargo test -p fun-renderer --lib fault_eviction_benchmark_artifact_records_shared_owner_metrics` |
 | Static virtual geometry tests | `cargo test -p fun-renderer --lib virtual_geometry` |
@@ -1073,14 +1108,16 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 
 ## First Rollback Strategy
 
-Pass 2 adds typed selector and no-op boot behavior. Rollback is the nested
-`fun` commit that changes `fun-renderer`, `fun-lux`, `fun_render`, and this
-document, followed by the umbrella root commit that advances the `fun` gitlink
-and appends the ledger entry.
+Pass 23 flips `auto` to `fun`, enables `fun_renderer_core` for the bridge/client
+surface, and adds `fun_renderer::default_flip` retirement metadata. Rollback is
+the nested `fun` commit that changes `fun-renderer`, `fun_render`,
+`game_client`, and this document, followed by the umbrella root commit that
+advances the `fun` gitlink and appends the ledger entry.
 
 For future behavior passes, the first rollback path remains:
 
-1. Set `FUN_RENDERER_BACKEND=legacy` while the transition flag exists.
+1. Set `FUN_RENDERER_BACKEND=legacy` only for diagnostic compatibility while
+   the transition flag exists.
 2. Disable CEF product UI with `-CefPaintTransport disabled` for render-only
    diagnosis. Do not re-enable CPU `OnPaint` upload as a product fallback.
 3. Revert the nested `fun` behavior commit before the umbrella root gitlink
@@ -1095,9 +1132,9 @@ For future behavior passes, the first rollback path remains:
   a non-Bevy-UI compositor with zero CPU upload bytes.
 - Do not move generic Bevy upload helpers into `FunUploadArena` until the
   semantic owner and render-schedule insertion point are known.
-- Do not treat `fun-renderer` as product-visible just because it compiles. It is
-  the intended default renderer core, but the visible swapchain is still Bevy
-  Winit/wgpu through `fun_render`.
+- Do not treat the visible-frame retirement as complete merely because `auto`
+  now resolves to `fun`. `fun-renderer` is the default core, but renderer-owned
+  present still needs the compatibility-shell handoff proof.
 - Bevy ECS is already the intended data substrate and is already compiled into
   `fun-renderer`; the next runtime migration should connect visible frame
   ownership without breaking that ECS-first shape.
