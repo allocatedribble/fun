@@ -574,6 +574,38 @@ mod tests {
     }
 
     #[test]
+    fn minimal_fun_scene_spawns_with_stable_identity() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            FunScenePlugin,
+        ));
+
+        let entity = app
+            .world_mut()
+            .spawn_fun_scene(fun! {
+                #MinimalScene
+                fun_value(SceneStableIdentity(NetEntity(77)))
+                Transform::from_xyz(1.0, 2.0, 3.0)
+            })
+            .expect("fun! scene should spawn through WorldFunSceneExt")
+            .id();
+
+        let identity = app
+            .world()
+            .get::<SceneStableIdentity>(entity)
+            .expect("spawned scene should carry stable identity");
+        assert_eq!(identity.0, NetEntity(77));
+
+        let transform = app
+            .world()
+            .get::<Transform>(entity)
+            .expect("spawned scene should carry authored transform");
+        assert_eq!(transform.translation.to_array(), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
     fn default_scene_manifest_signature_changes_without_reassigning_stable_ids() {
         let mut entities = default_scene_entity_manifests();
         let original_ids = entities
