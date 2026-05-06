@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod gi;
 pub mod many_light;
 pub mod shadow;
 
@@ -13,6 +14,7 @@ use bevy_ecs::{
 };
 
 pub use api::*;
+pub use gi::*;
 pub use many_light::*;
 pub use shadow::*;
 
@@ -171,7 +173,7 @@ pub const FUN_LUX_POLICY_DESCRIPTORS: [LuxPolicyDescriptor; 6] = [
         stable_id: "fun_lux.policy.global_illumination",
         subsystem: LuxSubsystem::GlobalIllumination,
         policy_kind: LuxPolicyKind::GlobalIllumination,
-        default_path: "radiance_cache",
+        default_path: "surface_cache",
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },

@@ -93,6 +93,17 @@ lights, temporal/spatial reuse, validity, rejection reasons, and shadowed
 candidate counts. Important emissive geometry can be promoted into candidates,
 and selected shadow-casting lights emit budgeted shadow request intents for the
 renderer-owned virtual shadow storage.
+Hybrid GI and reflections are represented by `fun_lux::gi`. The production
+world representation is exactly one persistent surface cache; quality tiers
+range from ambient/probe fallback through screen-space, screen-space plus
+surface cache, selective hardware RT assist, and experimental neural/radiance
+assistance. Surface-cache cells track occupancy, age, validity, update cost,
+history rejection, and explicit invalidation reasons for procedural edits,
+destruction, time-of-day or weather jumps, material changes, camera cuts, and
+major scene-streaming events. Reflection source selection follows the ordered
+ladder of screen trace, surface cache, optional RT assist, and
+denoise/reconstruction, with compact debug artifacts explaining source mix and
+cache stability.
 
 `fun_render` remains the shared Bevy-facing bridge for the game client and the
 editor during migration. It owns extraction, app/plugin integration, feature
