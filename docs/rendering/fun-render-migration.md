@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory + pass4-pipeline-registry
+status: inventory + pass5-resource-ownership
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -26,7 +26,11 @@ first-order migration blockers.
   `docs/dx12_dlss_boundary_gate.md`.
 - Local evidence: `target/run-stack/cef-ui-transport.json` last written
   `2026-05-05 22:52:31`, `target/dx12-pix/pipeline_cardinality_report.md`,
-  `target/dx12-parity/current/dx12_parity_report.{md,json}`, and the
+  `target/dx12-parity/current/dx12_parity_report.{md,json}`,
+  `target/benchmarks/client/20260506-005505-031/summary.json`,
+  `target/benchmarks/client/20260506-011124-520/summary.json`,
+  `target/dx12-upload/pass5-resource-ownership/upload_perf_report.{md,json}`,
+  and the
   2026-05-04 CEF accelerated benchmark summary at
   `target/benchmarks/client/20260504-005500-247/summary.json`.
 
@@ -48,7 +52,7 @@ first-order migration blockers.
 | crate/module | current owner | intended owner | migration status | current feature flags | validation commands |
 | --- | --- | --- | --- | --- | --- |
 | `fun_render` | Bevy/game renderer bridge, but still the product renderer brain for Winit presentation, Solari, meshlets, clouds, CEF texture composition, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, legacy compatibility during transition. | Runtime selector is installed by `FunRenderCorePlugin`; `FUN_RENDERER_BACKEND=fun` boots the no-op core/lux path; product presentation still here. | `default=[offscreen,volumetric_clouds]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
-| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB skeleton, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, upload/CEF/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`. |
+| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB skeleton, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, upload/CEF/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. Pass 5 adds resource classes, allocation diagnostics, and the hot upload kill-list as renderer-core policy. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`; `cargo test -p fun-renderer --lib resource`. |
 | `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. | Exists as real crate; now exposes baseline no-op frame and shutdown reports for bridge boot. | `many_light`, `virtual_shadows`, `hybrid_gi`; no default features; old `fun_lux_*` names are aliases. | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib`. |
 | `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `tools/check_fun_scene_migration.ps1`. |
 | `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI can be compiled but uses Bevy UI image composition. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate`. |
@@ -252,6 +256,47 @@ capability diagnostics for this local run still reported
 `selected_backend=dx12`, `actual_backend=vulkan`, and
 `fallback_reason=actual_backend_mismatch`.
 
+## Pass 5 Resource Ownership
+
+`fun-renderer` now owns the renderer resource policy in
+`fun-renderer/src/resource.rs`. The model is compile-checked and intentionally
+small: upload resources, transient resources, persistent resources, imported
+resources, and readback/debug resources each have typed sub-kinds and
+allocation diagnostics.
+
+The first allocator contract is still conservative. The renderer policy says:
+
+| contract | value |
+|---|---|
+| policy owner | `fun-renderer` |
+| compatibility shim owner | `fun_render` |
+| hidden transient allocations in major passes | forbidden |
+| force Bevy prepare-stage helpers through upload arena | false |
+| semantic owner required before generic helper migration | true |
+
+`fun_render::FunUploadArena` now exposes `FUN_UPLOAD_ARENA_RESOURCE_SHIM`, which
+marks the existing staging-belt arena as a bridge compatibility shim under the
+renderer-owned resource model. It still requires an existing command encoder
+and creates no ad hoc encoder. This preserves the previous upload-arena
+restraint: generic Bevy `DynamicUniformBuffer` and `RawBufferVec` helper rows
+remain observe-only until their owning render systems are labeled and a
+schedule insertion point is known.
+
+`fun_renderer::resource::HOT_UPLOAD_KILL_LIST` ties the current small-buffer
+offenders to `target/dx12-parity/current/dx12_parity_report.json`:
+
+| owner row | current status | migration gate |
+|---|---|---|
+| `DynamicUniformBuffer` `uniform_buffer.rs:311` | Bevy generic helper, observe-only | semantic owner split |
+| `RawBufferVec` `buffer_vec.rs:183` | Bevy generic helper, observe-only | batch or semantic owner split |
+| `DynamicUniformBuffer` `uniform_buffer.rs:140` | Bevy generic helper, observe-only | semantic owner split |
+| `RawBufferVec` `buffer_vec.rs:442` | Bevy generic helper, observe-only | batch or semantic owner split |
+
+The allocation diagnostic payload is
+`ResourceFrameAllocationDiagnostics`: per frame upload bytes/count, transient
+bytes/count, persistent bytes/count, imported-resource count, readback
+bytes/count, top allocation sites, and high-water marks.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
@@ -264,7 +309,7 @@ capability diagnostics for this local run still reported
 | CEF DX12 accelerated transport | `game_client/src/cef_ui_dx12/*`, `fun_render/src/dx12_native/cef.rs`, `docs/dx12_cef_accelerated_paint.md` | `game_client` interop over `fun_render::dx12_native` | `fun-renderer` compositor/backend boundary with `fun_ui_cef` callbacks | Partially implemented; latest local status blocked. |
 | DX12 parity/benchmark tools | `scripts/benchmark_dx12_parity.ps1`, `scripts/benchmark_client.ps1`, `tools/dx12_*`, `tools/check_dx12_*` | `fun` tooling | remains benchmark/governance tooling | Active. |
 | CEF parity/visual checks | `tools/compare_cef_ui_screenshots.ps1`, `scripts/stack/profiles/cef.*.json`, `scripts/benchmark_dx12_parity.ps1 -MatrixSize cef_transport` | `fun` tooling | remains benchmark/governance tooling | Plan and health parsing exist; full healthy matrix blocked. |
-| Upload arena and upload reports | `fun_render/src/upload_{arena,budget,labels,ranges,report}.rs`, `fun_render/src/instance_tables.rs`, `docs/dx12_upload_audit.md` | `fun_render` | small-buffer policy should move toward renderer core once measured owners are known | Boundary exists; top offenders still generic Bevy write helpers. |
+| Upload arena and upload reports | `fun-renderer/src/resource.rs`, `fun_render/src/upload_{arena,budget,labels,ranges,report}.rs`, `fun_render/src/instance_tables.rs`, `docs/dx12_upload_audit.md` | policy in `fun-renderer`, compatibility shim in `fun_render` | renderer-owned resource model with bridge shims until measured owners are migrated | Boundary exists; resource classes and allocation diagnostics are typed; top offenders still generic Bevy write helpers. |
 | Pipeline diagnostics | `fun_render/src/pipeline_warmup.rs`, `docs/dx12_descriptor_pipeline_churn.md`, `docs/dx12_shader_quality.md`, `tools/dx12_pipeline_cardinality_report.py` | `fun_render` + Bevy diagnostics | renderer diagnostics through `fun-renderer`/engine hooks | Runtime creation still measured after warmup. |
 | Native interop | `fun_render/src/dx12_native/*`, `game_client/src/cef_ui_dx12/*` | `fun_render` interop gate, `game_client` CEF bridge | `fun-renderer` backend abstraction after migration | Centralized gate exists; raw command-list accessor still intentionally limited. |
 
@@ -272,7 +317,7 @@ capability diagnostics for this local run still reported
 
 | blocker | current evidence | owner now | migration impact | next proof |
 | --- | --- | --- | --- | --- |
-| `FunUploadArena` boundary | `fun_render::FunUploadArena` wraps `wgpu::util::StagingBelt` and tracks/budgets aligned buffer writes. `docs/dx12_upload_audit.md` says not to force Bevy prepare-stage `RenderQueue` helpers through ad hoc encoders. | `fun_render` | Required before moving hot small-buffer upload ownership into `fun-renderer`. | Top semantic owners for `DynamicUniformBuffer`/`RawBufferVec` rows, then measured before/after with no submit regression. |
+| `FunUploadArena` boundary | `fun_render::FunUploadArena` wraps `wgpu::util::StagingBelt` and tracks/budgets aligned buffer writes. `FUN_UPLOAD_ARENA_RESOURCE_SHIM` records it as a bridge compatibility shim for `fun_renderer::resource` staging-buffer pages. `docs/dx12_upload_audit.md` says not to force Bevy prepare-stage `RenderQueue` helpers through ad hoc encoders. | policy in `fun-renderer`, shim in `fun_render` | Foundation for moving measured small-buffer owners into renderer resource ownership without increasing submit pressure. | Top semantic owners for `DynamicUniformBuffer`/`RawBufferVec` rows, then measured before/after with no submit regression. |
 | DX12 upload kill-list | Current parity dashboard lists top offenders under Bevy generic rows, including `uniform_buffer.rs:311`, `buffer_vec.rs:183`, `gpu_image.rs:84`, and Solari constant rows. | Bevy + `fun_render` diagnostics | Prevents speculative upload rewrites. | Label split or owning-system attribution for top rows. |
 | CEF accelerated lane classified `cef_transport_bound` | Root ledger and CEF docs record the failed accelerated lane; `target/benchmarks/client/20260504-005500-247/summary.json` selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, zero GPU copy bytes, and zero accelerated paint FPS. | `game_client` CEF DX12 bridge over `fun_render::dx12_native` | Blocks GPU-only product UI and DLSS/upscale boundary proof. | Strict D3D11On12 lane with `selected=d3d11on12`, `bridge_ready=true`, `cef_cpu_upload_bytes=0`, nonzero `cef_gpu_copy_bytes`, no normal-frame blocking waits. |
 | Strict D3D11On12 lane disabled | `target/run-stack/cef-ui-transport.json` last written 2026-05-05 reports `requested=d3d11on12`, `selected=disabled`, `backend=dx12`, `bridge_ready=false`, `cpu_fallback_enabled=false`, `strict=true`, `fallback_reason=render_backend_not_dx12`. | `game_client` startup/interop | Confirms strict GPU-only UI currently fails closed instead of presenting UI. | Fix backend/bridge readiness detection, then rerun strict stack lane. |

@@ -14,6 +14,10 @@ use crate::{
     FunRendererBackend, FunRendererFrameGenerationContract, FunRendererFrameGraphStage,
     FunRendererRuntimeBackend, FunRendererSubsystem,
     pipeline::{PIPELINE_REGISTRY_SCHEMA_VERSION, PipelineRegistry, PipelineRuntimeCounters},
+    resource::{
+        RENDERER_RESOURCE_SCHEMA_VERSION, RendererResourceKind, ResourceFrameAllocationDiagnostics,
+        ResourceOwnershipPhase, UploadResourceKind,
+    },
 };
 
 pub const FUN_RENDERER_ECS_SCHEMA_VERSION: u16 = 2;
@@ -1393,11 +1397,52 @@ pub struct FunRendererPageAllocator {
     pub pending_faults: u32,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct FunRendererUploadArena {
+    pub schema_version: u16,
+    pub resource_kind: RendererResourceKind,
+    pub ownership_phase: ResourceOwnershipPhase,
     pub frame_index: u64,
     pub bytes_reserved: u64,
     pub bytes_written: u64,
+    pub diagnostics: ResourceFrameAllocationDiagnostics,
+}
+
+impl Default for FunRendererUploadArena {
+    fn default() -> Self {
+        Self {
+            schema_version: RENDERER_RESOURCE_SCHEMA_VERSION,
+            resource_kind: RendererResourceKind::Upload(UploadResourceKind::StagingBufferPages),
+            ownership_phase: ResourceOwnershipPhase::RendererOwnedPolicy,
+            frame_index: 0,
+            bytes_reserved: 0,
+            bytes_written: 0,
+            diagnostics: ResourceFrameAllocationDiagnostics::default(),
+        }
+    }
+}
+
+impl FunRendererUploadArena {
+    pub fn begin_frame(&mut self, frame_index: u64) {
+        self.frame_index = frame_index;
+        self.bytes_reserved = 0;
+        self.bytes_written = 0;
+        self.diagnostics.begin_frame(frame_index);
+    }
+
+    pub fn record_upload_allocation(
+        &mut self,
+        stable_id: &'static str,
+        kind: RendererResourceKind,
+        bytes_reserved: u64,
+        bytes_written: u64,
+        allocations: u32,
+    ) {
+        self.bytes_reserved = self.bytes_reserved.saturating_add(bytes_reserved);
+        self.bytes_written = self.bytes_written.saturating_add(bytes_written);
+        self.diagnostics
+            .record_allocation(stable_id, kind, bytes_reserved, allocations);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]

@@ -1,6 +1,6 @@
 # DX12 Upload Path Audit
 
-Status: measurement slice, upload cleanup tier 3.1.
+Status: measurement slice, upload cleanup tier 3.1 + pass5 resource ownership boundary.
 
 ## Instrumentation
 
@@ -75,3 +75,65 @@ Do not force Bevy prepare-stage `RenderQueue::write_buffer` helpers through it
 by creating ad hoc per-callsite encoders or submits; that would trade upload
 allocation pressure for submit and synchronization pressure. Move a hot owner
 only after the report's kill list and a render-schedule insertion point agree.
+
+## Pass 5 Resource Ownership Boundary
+
+`fun-renderer/src/resource.rs` is now the renderer-owned resource model. It
+defines the resource classes that future passes must allocate through:
+
+| class | current kinds |
+|---|---|
+| `upload` | staging buffer pages, ring allocations, transient upload batches |
+| `transient` | frame-lifetime textures, frame-lifetime buffers, pass-local scratch |
+| `persistent` | material tables, mesh tables, page pools, shadow page pools, GI/radiance caches, texture residency pools |
+| `imported` | CEF shared textures, swapchain resources, vendor SDK resources |
+| `readback_debug` | diagnostics readback, screenshots, benchmark captures |
+
+The current policy is explicit:
+
+| field | value |
+|---|---|
+| policy owner | `fun-renderer` |
+| compatibility shim owner | `fun_render` |
+| hidden transient allocations in major passes | forbidden |
+| force Bevy prepare-stage helpers through upload arena | false |
+| semantic owner required before generic helper migration | true |
+
+`fun_render::FunUploadArena` remains a compatibility shim under that policy. It
+is not the final allocator. The shim records that it uses staging-buffer pages,
+requires an existing encoder, creates no ad hoc encoder, and must not absorb
+generic Bevy prepare-stage writes until their semantic owners are split.
+
+## Current FunUploadArena Audit
+
+| audit field | current status |
+|---|---|
+| owner module | `fun_render/src/upload_arena.rs` |
+| compatibility contract | `FUN_UPLOAD_ARENA_RESOURCE_SHIM` |
+| backing primitive | `wgpu::util::StagingBelt` with 1 MiB chunks |
+| public API | `new`, `write_buffer_tracked`, `write_buffer_budgeted`, `finish`, `recall_completed`, `stats`, `frame_report` |
+| validation | alignment tests plus `upload_arena_is_renderer_resource_compatibility_shim` |
+| metrics | per-frame write calls/bytes, raw write fallbacks, label stats, frame report top labels |
+| DX12/native assumptions | none directly; callers pass Bevy/wgpu buffers and an existing command encoder |
+| current call sites | `fun_render/src/instance_tables.rs` dynamic instance dirty-range uploads |
+| call-site restraint | `InstanceUploadPlan::creates_ad_hoc_encoder=false` and `requires_existing_encoder=true` for arena writes |
+
+## Pass 5 Hot Upload Kill List
+
+These entries are now represented by `fun_renderer::resource::HOT_UPLOAD_KILL_LIST`
+and tied to `target/dx12-parity/current/dx12_parity_report.json`.
+
+| rank | owner row | current owner | action gate |
+|---:|---|---|---|
+| 1 | `DynamicUniformBuffer` at `uniform_buffer.rs:311` | Bevy generic render resource | split semantic owner before upload-arena migration |
+| 2 | `RawBufferVec` at `buffer_vec.rs:183` | Bevy generic render resource | batch or split semantic owner before upload-arena migration |
+| 3 | `DynamicUniformBuffer` at `uniform_buffer.rs:140` | Bevy generic render resource | split semantic owner before upload-arena migration |
+| 4 | `RawBufferVec` at `buffer_vec.rs:442` | Bevy generic render resource | batch or split semantic owner before upload-arena migration |
+
+The local before artifact for the new boundary is
+`target/benchmarks/client/20260506-005505-031/summary.json`. The Pass 5
+parser-only candidate artifact is
+`target/benchmarks/client/20260506-011124-520/summary.json`, compared by
+`target/dx12-upload/pass5-resource-ownership/upload_perf_report.{md,json}`. A
+live after run is not expected to move performance yet because this pass
+introduces ownership and diagnostics contracts, not a runtime upload rewrite.

@@ -120,6 +120,11 @@ The renderer ECS contract is already represented by `FunSceneSet`,
 components, the `GpuScene` resource with table-level renderer deltas,
 `ExtractedSceneDeltas`, `FrameGraph`, `LuxWorld`, and typed renderer/lux
 message lanes.
+Renderer resource ownership is represented by `RendererResourceClass`,
+`RendererResourceKind`, `RENDERER_RESOURCE_OWNERSHIP_POLICY`,
+`ResourceFrameAllocationDiagnostics`, and `HOT_UPLOAD_KILL_LIST`; `fun_render`
+may keep `FunUploadArena` as a compatibility shim, but allocator policy belongs
+to `fun-renderer`.
 `COMPONENT_GPU_MAPPINGS` keeps ECS authoring components ergonomic while mapping
 them into compact SoA-style GPU tables: instance, transform, material,
 geometry-page, light, and shadow-page tables. Renderer history lives in

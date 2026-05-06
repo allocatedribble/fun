@@ -168,6 +168,27 @@ nodes, DLSS/FSR `UpscalePolicy` adds the corresponding super-resolution node,
 hybrid GI mode adds GI passes, and `VirtualGeometryAuthoring` adds virtual
 geometry passes.
 
+Renderer resource ownership is now a typed `fun-renderer` contract, not an
+implicit side effect of whichever bridge system touched wgpu last.
+`RendererResourceClass` divides allocation ownership into upload, transient,
+persistent, imported, and readback/debug classes. `RendererResourceKind`
+enumerates the first required kinds: staging buffer pages, ring allocations,
+transient upload batches, frame-lifetime textures and buffers, pass-local
+scratch, material/mesh tables, page pools, shadow page pools, GI/radiance
+caches, texture residency pools, CEF shared textures, swapchain resources,
+vendor SDK resources, diagnostics readback, screenshots, and benchmark
+captures.
+
+`RENDERER_RESOURCE_OWNERSHIP_POLICY` is the migration rule for this boundary.
+`fun-renderer` owns allocator policy, `fun_render` may keep compatibility shims,
+major renderer passes may not allocate hidden transient resources outside the
+allocator, and generic Bevy prepare-stage upload helpers must not be forced
+through `FunUploadArena` until a semantic owner and render-schedule insertion
+point are known. `ResourceFrameAllocationDiagnostics` is the canonical per-frame
+payload for upload bytes/counts, transient bytes, persistent bytes,
+imported-resource count, readback bytes, top allocation sites, and high-water
+marks.
+
 `fun-lux` is also ECS-driven. Scene-authored `LuxLight` components become
 compact GPU `LuxLight` records, `LuxEmissive` components become emissive
 candidate records, `LuxGiParticipant` components drive GI cache participation,
@@ -519,6 +540,15 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::RendererCoreSettings`
 - `fun_renderer::RendererFeatureToggles`
 - `fun_renderer::NoopRendererCore`
+- `fun_renderer::RendererResourceClass`
+- `fun_renderer::RendererResourceKind`
+- `fun_renderer::RendererResourceOwner`
+- `fun_renderer::ResourceOwnershipPhase`
+- `fun_renderer::ResourceMigrationPriority`
+- `fun_renderer::RENDERER_RESOURCE_OWNERSHIP_POLICY`
+- `fun_renderer::RENDERER_RESOURCE_CLASS_DESCRIPTORS`
+- `fun_renderer::ResourceFrameAllocationDiagnostics`
+- `fun_renderer::HOT_UPLOAD_KILL_LIST`
 - `fun_scene::FunSceneSet`
 - `fun_renderer::FunRendererEcsSchedulePolicy`
 - `fun_renderer::FunRendererSet`

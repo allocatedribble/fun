@@ -152,6 +152,7 @@ pub use fun_renderer::ecs::*;
 pub use fun_renderer::fun_lux;
 pub use fun_renderer::fun_scene;
 pub use fun_renderer::heuristics::*;
+pub use fun_renderer::resource::*;
 pub use fun_renderer::{
     BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
     FUN_RENDERER_AI_INTERFACE_DESCRIPTORS, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
@@ -284,8 +285,10 @@ pub use static_batches::{
     static_catalog_spec_needs_identity_proxy,
 };
 pub use upload_arena::{
-    FunUploadArena, FunUploadArenaLabelStats, FunUploadArenaStats, FunUploadArenaWriteRequest,
-    UploadArenaError, UploadWriteLabel,
+    FUN_UPLOAD_ARENA_OWNER_MODULE, FUN_UPLOAD_ARENA_RESOURCE_SCHEMA_VERSION,
+    FUN_UPLOAD_ARENA_RESOURCE_SHIM, FunUploadArena, FunUploadArenaLabelStats,
+    FunUploadArenaResourceShim, FunUploadArenaStats, FunUploadArenaWriteRequest, UploadArenaError,
+    UploadWriteLabel,
 };
 pub use upload_budget::{
     FunUploadBudget, FunUploadBudgetClass, FunUploadBudgetDecision, FunUploadBudgetTracker,

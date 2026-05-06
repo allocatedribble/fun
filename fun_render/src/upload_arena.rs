@@ -4,6 +4,10 @@ use bevy::render::{
     render_resource::{Buffer, BufferAddress, BufferSize, COPY_BUFFER_ALIGNMENT, CommandEncoder},
     renderer::RenderDevice,
 };
+use fun_renderer::resource::{
+    RENDERER_RESOURCE_OWNERSHIP_POLICY, RENDERER_RESOURCE_SCHEMA_VERSION, RendererResourceKind,
+    RendererResourceOwner, ResourceOwnershipPhase, UploadResourceKind,
+};
 use wgpu::util::StagingBelt;
 
 use crate::{
@@ -12,6 +16,37 @@ use crate::{
 };
 
 const FUN_UPLOAD_ARENA_CHUNK_BYTES: BufferAddress = 1_048_576;
+pub const FUN_UPLOAD_ARENA_RESOURCE_SCHEMA_VERSION: u16 = RENDERER_RESOURCE_SCHEMA_VERSION;
+pub const FUN_UPLOAD_ARENA_OWNER_MODULE: &str = "fun_render::upload_arena";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunUploadArenaResourceShim {
+    pub schema_version: u16,
+    pub owner_module: &'static str,
+    pub bridge_owner: RendererResourceOwner,
+    pub policy_owner: RendererResourceOwner,
+    pub resource_kind: RendererResourceKind,
+    pub ownership_phase: ResourceOwnershipPhase,
+    pub requires_existing_encoder: bool,
+    pub creates_ad_hoc_encoder: bool,
+    pub force_bevy_prepare_stage_helpers: bool,
+    pub semantic_owner_required_before_generic_helper_migration: bool,
+}
+
+pub const FUN_UPLOAD_ARENA_RESOURCE_SHIM: FunUploadArenaResourceShim = FunUploadArenaResourceShim {
+    schema_version: FUN_UPLOAD_ARENA_RESOURCE_SCHEMA_VERSION,
+    owner_module: FUN_UPLOAD_ARENA_OWNER_MODULE,
+    bridge_owner: RendererResourceOwner::FunRenderBridge,
+    policy_owner: RendererResourceOwner::FunRenderer,
+    resource_kind: RendererResourceKind::Upload(UploadResourceKind::StagingBufferPages),
+    ownership_phase: ResourceOwnershipPhase::BridgeCompatibilityShim,
+    requires_existing_encoder: true,
+    creates_ad_hoc_encoder: false,
+    force_bevy_prepare_stage_helpers: RENDERER_RESOURCE_OWNERSHIP_POLICY
+        .force_bevy_prepare_stage_helpers_through_upload_arena,
+    semantic_owner_required_before_generic_helper_migration: RENDERER_RESOURCE_OWNERSHIP_POLICY
+        .semantic_owner_required_before_generic_helper_migration,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UploadWriteLabel(pub &'static str);
@@ -245,5 +280,27 @@ mod tests {
             validate_write_request(UploadWriteLabel("test.empty"), 0, 0),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn upload_arena_is_renderer_resource_compatibility_shim() {
+        let shim = core::hint::black_box(FUN_UPLOAD_ARENA_RESOURCE_SHIM);
+
+        assert_eq!(shim.schema_version, RENDERER_RESOURCE_SCHEMA_VERSION);
+        assert_eq!(shim.owner_module, "fun_render::upload_arena");
+        assert_eq!(shim.bridge_owner, RendererResourceOwner::FunRenderBridge);
+        assert_eq!(shim.policy_owner, RendererResourceOwner::FunRenderer);
+        assert_eq!(
+            shim.resource_kind,
+            RendererResourceKind::Upload(UploadResourceKind::StagingBufferPages)
+        );
+        assert_eq!(
+            shim.ownership_phase,
+            ResourceOwnershipPhase::BridgeCompatibilityShim
+        );
+        assert!(shim.requires_existing_encoder);
+        assert!(!shim.creates_ad_hoc_encoder);
+        assert!(!shim.force_bevy_prepare_stage_helpers);
+        assert!(shim.semantic_owner_required_before_generic_helper_migration);
     }
 }
