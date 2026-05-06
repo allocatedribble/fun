@@ -126,11 +126,32 @@ The GPU scene database is the render-world ECS resource `GpuScene`. It owns
 compact renderer tables instead of an opaque scene clone:
 
 - `GpuInstanceTable`
+- `GpuTransformTable`
 - `GpuMaterialTable`
 - `GpuGeometryTable`
+- `GpuGeometryPageTable`
 - `GpuLightTable`
+- `GpuShadowPageTable`
 - `GpuPageTable`
 - `GpuSceneRevisionTable`
+
+ECS components stay ergonomic and typed; GPU storage stays compact and
+SoA-oriented. The executable mapping is `COMPONENT_GPU_MAPPINGS`: `Transform`
+feeds the transform table, `Renderable` feeds instance/material/geometry-page
+tables, `VirtualGeometryAuthoring` feeds geometry-page and shadow-page tables,
+`LuxLight` feeds light and shadow-page tables, and `SceneStableIdentity` is the
+cross-table history key. Entities carry compact references such as
+`GeometryRef`, `MaterialRef`, `LuxLightId`, `SceneStableIdentity`, and
+`RendererInstanceId`. Heavy material data, GPU buffers, residency tables,
+shadow page state, reservoir state, cache state, and backend objects live in
+resources/assets/tables, not on scene entities.
+
+Long-lived renderer history is keyed by stable scene identity, not transient
+Bevy `Entity`. `StableHistoryTable` records motion-vector, virtual-geometry
+page, shadow-page, GI-cache, and light-reservoir history under
+`StableHistoryId`. A respawn with the same stable identity can recover or reset
+history according to `HistoryRespawnPolicy`; table compaction for removed
+instances must not invalidate unrelated stable histories.
 
 Extraction copies only compact deltas into `ExtractedSceneDeltas`: changed
 transforms, visibility flags, geometry refs, material refs, light refs, chunk
@@ -421,6 +442,17 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::FUN_RENDERER_DATA_PLACEMENT_POLICY`
 - `fun_renderer::FUN_RENDERER_CHANGE_DETECTION_RULES`
 - `fun_renderer::GpuScene`
+- `fun_renderer::GpuTransformTable`
+- `fun_renderer::GpuGeometryPageTable`
+- `fun_renderer::GpuShadowPageTable`
+- `fun_renderer::RendererInstanceId`
+- `fun_renderer::ComponentGpuMapping`
+- `fun_renderer::COMPONENT_GPU_MAPPINGS`
+- `fun_renderer::GPU_DATA_LAYOUT_POLICY`
+- `fun_renderer::StableHistoryTable`
+- `fun_renderer::StableHistoryId`
+- `fun_renderer::StableHistoryPolicy`
+- `fun_renderer::STABLE_HISTORY_POLICY`
 - `fun_renderer::ExtractedSceneDeltas`
 - `fun_renderer::FrameGraph`
 - `fun_renderer::FRAME_GRAPH_COMPONENT_RULES`

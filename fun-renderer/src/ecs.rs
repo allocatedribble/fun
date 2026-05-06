@@ -6,8 +6,8 @@ use bevy_ecs::{
 };
 use bevy_transform::components::Transform;
 use fun_scene::{
-    CefSurface, PagePriorityHint, Renderable, SuperResolutionMode, UpscalePolicy,
-    ViewportRenderPolicy, VirtualGeometryAuthoring, VirtualGeometryMode,
+    CefSurface, PagePriorityHint, Renderable, SceneStableHistoryKey, SuperResolutionMode,
+    UpscalePolicy, ViewportRenderPolicy, VirtualGeometryAuthoring, VirtualGeometryMode,
 };
 
 use crate::{
@@ -59,6 +59,23 @@ pub struct MaterialHandle(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ViewportId(pub u32);
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
+pub struct RendererInstanceId(pub u32);
+
+impl RendererInstanceId {
+    pub const INVALID: Self = Self(u32::MAX);
+
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.0 != Self::INVALID.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct FunRendererGpuSceneObject {
@@ -262,6 +279,371 @@ pub const FUN_RENDERER_DATA_PLACEMENT_POLICY: FunRendererDataPlacementPolicy =
         gpu_buffer_handles_on_many_entities_allowed: false,
         heavy_data_owner: "resources_assets_tables",
     };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EcsGpuSourceComponent {
+    Transform,
+    Renderable,
+    VirtualGeometryAuthoring,
+    LuxLight,
+    SceneStableIdentity,
+}
+
+impl EcsGpuSourceComponent {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Transform => "Transform",
+            Self::Renderable => "Renderable",
+            Self::VirtualGeometryAuthoring => "VirtualGeometryAuthoring",
+            Self::LuxLight => "LuxLight",
+            Self::SceneStableIdentity => "SceneStableIdentity",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GpuTableKind {
+    Instance,
+    Transform,
+    Material,
+    GeometryPage,
+    Light,
+    ShadowPage,
+}
+
+impl GpuTableKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Instance => "instance_table",
+            Self::Transform => "transform_table",
+            Self::Material => "material_table",
+            Self::GeometryPage => "geometry_page_table",
+            Self::Light => "light_table",
+            Self::ShadowPage => "shadow_page_table",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GpuTableLayout {
+    StructOfArrays,
+}
+
+impl GpuTableLayout {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StructOfArrays => "struct_of_arrays",
+        }
+    }
+}
+
+pub const TRANSFORM_GPU_TABLES: [GpuTableKind; 1] = [GpuTableKind::Transform];
+pub const RENDERABLE_GPU_TABLES: [GpuTableKind; 3] = [
+    GpuTableKind::Instance,
+    GpuTableKind::Material,
+    GpuTableKind::GeometryPage,
+];
+pub const VIRTUAL_GEOMETRY_GPU_TABLES: [GpuTableKind; 2] =
+    [GpuTableKind::GeometryPage, GpuTableKind::ShadowPage];
+pub const LUX_LIGHT_GPU_TABLES: [GpuTableKind; 2] = [GpuTableKind::Light, GpuTableKind::ShadowPage];
+pub const SCENE_STABLE_IDENTITY_GPU_TABLES: [GpuTableKind; 6] = [
+    GpuTableKind::Instance,
+    GpuTableKind::Transform,
+    GpuTableKind::Material,
+    GpuTableKind::GeometryPage,
+    GpuTableKind::Light,
+    GpuTableKind::ShadowPage,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComponentGpuMapping {
+    pub component: EcsGpuSourceComponent,
+    pub gpu_tables: &'static [GpuTableKind],
+    pub ecs_component_is_typed_and_ergonomic: bool,
+    pub gpu_tables_are_compact_soa: bool,
+    pub heavy_gpu_object_attached_to_entity: bool,
+}
+
+pub const COMPONENT_GPU_MAPPINGS: [ComponentGpuMapping; 5] = [
+    ComponentGpuMapping {
+        component: EcsGpuSourceComponent::Transform,
+        gpu_tables: &TRANSFORM_GPU_TABLES,
+        ecs_component_is_typed_and_ergonomic: true,
+        gpu_tables_are_compact_soa: true,
+        heavy_gpu_object_attached_to_entity: false,
+    },
+    ComponentGpuMapping {
+        component: EcsGpuSourceComponent::Renderable,
+        gpu_tables: &RENDERABLE_GPU_TABLES,
+        ecs_component_is_typed_and_ergonomic: true,
+        gpu_tables_are_compact_soa: true,
+        heavy_gpu_object_attached_to_entity: false,
+    },
+    ComponentGpuMapping {
+        component: EcsGpuSourceComponent::VirtualGeometryAuthoring,
+        gpu_tables: &VIRTUAL_GEOMETRY_GPU_TABLES,
+        ecs_component_is_typed_and_ergonomic: true,
+        gpu_tables_are_compact_soa: true,
+        heavy_gpu_object_attached_to_entity: false,
+    },
+    ComponentGpuMapping {
+        component: EcsGpuSourceComponent::LuxLight,
+        gpu_tables: &LUX_LIGHT_GPU_TABLES,
+        ecs_component_is_typed_and_ergonomic: true,
+        gpu_tables_are_compact_soa: true,
+        heavy_gpu_object_attached_to_entity: false,
+    },
+    ComponentGpuMapping {
+        component: EcsGpuSourceComponent::SceneStableIdentity,
+        gpu_tables: &SCENE_STABLE_IDENTITY_GPU_TABLES,
+        ecs_component_is_typed_and_ergonomic: true,
+        gpu_tables_are_compact_soa: true,
+        heavy_gpu_object_attached_to_entity: false,
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EntityAttachedReferenceKind {
+    GeometryRef,
+    MaterialRef,
+    LuxLightId,
+    SceneStableIdentity,
+    RendererInstanceId,
+}
+
+impl EntityAttachedReferenceKind {
+    pub const ALL: [Self; 5] = ENTITY_ATTACHED_REFERENCE_KINDS;
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GeometryRef => "GeometryRef",
+            Self::MaterialRef => "MaterialRef",
+            Self::LuxLightId => "LuxLightId",
+            Self::SceneStableIdentity => "SceneStableIdentity",
+            Self::RendererInstanceId => "RendererInstanceId",
+        }
+    }
+}
+
+pub const ENTITY_ATTACHED_REFERENCE_KINDS: [EntityAttachedReferenceKind; 5] = [
+    EntityAttachedReferenceKind::GeometryRef,
+    EntityAttachedReferenceKind::MaterialRef,
+    EntityAttachedReferenceKind::LuxLightId,
+    EntityAttachedReferenceKind::SceneStableIdentity,
+    EntityAttachedReferenceKind::RendererInstanceId,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuDataLayoutPolicy {
+    pub ecs_components_are_typed: bool,
+    pub gpu_tables_are_soa: bool,
+    pub attach_heavy_gpu_objects_to_entities: bool,
+    pub heavyweight_owner: &'static str,
+    pub allowed_entity_references: &'static [EntityAttachedReferenceKind],
+}
+
+pub const GPU_DATA_LAYOUT_POLICY: GpuDataLayoutPolicy = GpuDataLayoutPolicy {
+    ecs_components_are_typed: true,
+    gpu_tables_are_soa: true,
+    attach_heavy_gpu_objects_to_entities: false,
+    heavyweight_owner: "resources_assets_tables",
+    allowed_entity_references: &ENTITY_ATTACHED_REFERENCE_KINDS,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HistoryTableKind {
+    MotionVectors,
+    VirtualGeometryPages,
+    ShadowPages,
+    GiCache,
+    LightReservoirs,
+}
+
+impl HistoryTableKind {
+    pub const ALL: [Self; 5] = [
+        Self::MotionVectors,
+        Self::VirtualGeometryPages,
+        Self::ShadowPages,
+        Self::GiCache,
+        Self::LightReservoirs,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MotionVectors => "motion_vector_history",
+            Self::VirtualGeometryPages => "virtual_geometry_page_history",
+            Self::ShadowPages => "shadow_page_history",
+            Self::GiCache => "gi_cache_history",
+            Self::LightReservoirs => "light_reservoir_history",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HistoryRespawnPolicy {
+    Recover,
+    Reset,
+}
+
+impl HistoryRespawnPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Recover => "recover",
+            Self::Reset => "reset",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StableHistoryId(pub u64);
+
+impl StableHistoryId {
+    pub const INVALID: Self = Self(0);
+
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn from_scene_key(key: SceneStableHistoryKey) -> Self {
+        Self(key.0.0)
+    }
+
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.0 != Self::INVALID.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StableHistoryRecord {
+    pub stable_id: StableHistoryId,
+    pub table: HistoryTableKind,
+    pub live_instance: Option<RendererInstanceId>,
+    pub generation: u64,
+    pub recover_count: u32,
+    pub reset_count: u32,
+}
+
+impl StableHistoryRecord {
+    #[must_use]
+    pub const fn new(
+        stable_id: StableHistoryId,
+        table: HistoryTableKind,
+        live_instance: RendererInstanceId,
+    ) -> Self {
+        Self {
+            stable_id,
+            table,
+            live_instance: Some(live_instance),
+            generation: 1,
+            recover_count: 0,
+            reset_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Resource)]
+pub struct StableHistoryTable {
+    pub records: Vec<StableHistoryRecord>,
+    pub compacted_removed_instances: u32,
+    pub unrelated_history_invalidations: u32,
+}
+
+impl StableHistoryTable {
+    pub fn note_spawn(
+        &mut self,
+        stable_id: StableHistoryId,
+        table: HistoryTableKind,
+        instance: RendererInstanceId,
+        policy: HistoryRespawnPolicy,
+    ) {
+        if !stable_id.is_valid() || !instance.is_valid() {
+            return;
+        }
+        if let Some(record) = self
+            .records
+            .iter_mut()
+            .find(|record| record.stable_id == stable_id && record.table == table)
+        {
+            match policy {
+                HistoryRespawnPolicy::Recover => {
+                    record.recover_count = record.recover_count.saturating_add(1);
+                }
+                HistoryRespawnPolicy::Reset => {
+                    record.generation = record.generation.saturating_add(1);
+                    record.reset_count = record.reset_count.saturating_add(1);
+                }
+            }
+            record.live_instance = Some(instance);
+            return;
+        }
+        self.records
+            .push(StableHistoryRecord::new(stable_id, table, instance));
+        self.records
+            .sort_by_key(|record| (record.stable_id, record.table.as_str()));
+    }
+
+    pub fn note_despawn(&mut self, stable_id: StableHistoryId) {
+        for record in self
+            .records
+            .iter_mut()
+            .filter(|record| record.stable_id == stable_id)
+        {
+            record.live_instance = None;
+        }
+    }
+
+    pub fn note_compacted_removed_instance(&mut self, removed_instance: RendererInstanceId) {
+        if !removed_instance.is_valid() {
+            return;
+        }
+        self.compacted_removed_instances = self.compacted_removed_instances.saturating_add(1);
+    }
+
+    #[must_use]
+    pub fn record(
+        &self,
+        stable_id: StableHistoryId,
+        table: HistoryTableKind,
+    ) -> Option<&StableHistoryRecord> {
+        self.records
+            .iter()
+            .find(|record| record.stable_id == stable_id && record.table == table)
+    }
+
+    #[must_use]
+    pub fn generation(&self, stable_id: StableHistoryId, table: HistoryTableKind) -> Option<u64> {
+        self.record(stable_id, table)
+            .map(|record| record.generation)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StableHistoryPolicy {
+    pub key_motion_vectors_by_stable_id: bool,
+    pub key_virtual_geometry_pages_by_stable_id: bool,
+    pub key_shadow_pages_by_stable_id: bool,
+    pub key_gi_cache_by_stable_id: bool,
+    pub key_light_reservoirs_by_stable_id: bool,
+    pub key_long_lived_history_by_bevy_entity_allowed: bool,
+}
+
+pub const STABLE_HISTORY_POLICY: StableHistoryPolicy = StableHistoryPolicy {
+    key_motion_vectors_by_stable_id: true,
+    key_virtual_geometry_pages_by_stable_id: true,
+    key_shadow_pages_by_stable_id: true,
+    key_gi_cache_by_stable_id: true,
+    key_light_reservoirs_by_stable_id: true,
+    key_long_lived_history_by_bevy_entity_allowed: false,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunRendererEcsPhase {
@@ -553,9 +935,12 @@ impl Default for FunRendererConfig {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct GpuScene {
     pub instances: GpuInstanceTable,
+    pub transforms: GpuTransformTable,
     pub materials: GpuMaterialTable,
     pub geometry: GpuGeometryTable,
+    pub geometry_pages: GpuGeometryPageTable,
     pub lights: GpuLightTable,
+    pub shadow_pages: GpuShadowPageTable,
     pub pages: GpuPageTable,
     pub revisions: GpuSceneRevisionTable,
 }
@@ -564,26 +949,45 @@ impl GpuScene {
     pub fn record_static_renderable(&mut self, renderable: &Renderable, transform: &Transform) {
         self.instances.instance_count = self.instances.instance_count.saturating_add(1);
         self.instances.dirty_instance_count = self.instances.dirty_instance_count.saturating_add(1);
+        self.transforms.transform_count = self.transforms.transform_count.saturating_add(1);
+        self.transforms.dirty_transform_count =
+            self.transforms.dirty_transform_count.saturating_add(1);
         if renderable.material.is_valid() {
             self.materials.material_count = self.materials.material_count.saturating_add(1);
         }
         if renderable.geometry.is_valid() {
             self.geometry.geometry_count = self.geometry.geometry_count.saturating_add(1);
+            self.geometry_pages.page_record_count =
+                self.geometry_pages.page_record_count.saturating_add(1);
         }
         self.revisions.scene_revision = self.revisions.scene_revision.saturating_add(1);
         self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
         self.instances.current_transform_signature = transform_signature(transform);
+        self.transforms.current_transform_signature = self.instances.current_transform_signature;
     }
 
     pub fn record_removed_renderable(&mut self) {
         self.instances.instance_count = self.instances.instance_count.saturating_sub(1);
         self.instances.removed_instance_count =
             self.instances.removed_instance_count.saturating_add(1);
+        self.instances.compacted_instance_count =
+            self.instances.compacted_instance_count.saturating_add(1);
+        self.transforms.transform_count = self.transforms.transform_count.saturating_sub(1);
+        self.transforms.compacted_transform_count =
+            self.transforms.compacted_transform_count.saturating_add(1);
+        self.geometry_pages.compacted_page_record_count = self
+            .geometry_pages
+            .compacted_page_record_count
+            .saturating_add(1);
         self.pages.released_page_reference_count =
             self.pages.released_page_reference_count.saturating_add(1);
         self.pages.shadow_invalidation_count =
             self.pages.shadow_invalidation_count.saturating_add(1);
         self.pages.gi_invalidation_count = self.pages.gi_invalidation_count.saturating_add(1);
+        self.shadow_pages.invalidated_shadow_page_count = self
+            .shadow_pages
+            .invalidated_shadow_page_count
+            .saturating_add(1);
         self.revisions.scene_revision = self.revisions.scene_revision.saturating_add(1);
         self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
         self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
@@ -596,9 +1000,17 @@ impl GpuScene {
 
     pub fn record_geometry_patch(&mut self) {
         self.geometry.dirty_geometry_count = self.geometry.dirty_geometry_count.saturating_add(1);
+        self.geometry_pages.dirty_page_record_count = self
+            .geometry_pages
+            .dirty_page_record_count
+            .saturating_add(1);
         self.pages.shadow_invalidation_count =
             self.pages.shadow_invalidation_count.saturating_add(1);
         self.pages.gi_invalidation_count = self.pages.gi_invalidation_count.saturating_add(1);
+        self.shadow_pages.invalidated_shadow_page_count = self
+            .shadow_pages
+            .invalidated_shadow_page_count
+            .saturating_add(1);
         self.revisions.geometry_revision = self.revisions.geometry_revision.saturating_add(1);
         self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
     }
@@ -607,6 +1019,8 @@ impl GpuScene {
         self.lights.dirty_light_count = self.lights.dirty_light_count.saturating_add(1);
         self.pages.shadow_invalidation_count =
             self.pages.shadow_invalidation_count.saturating_add(1);
+        self.shadow_pages.dirty_shadow_page_count =
+            self.shadow_pages.dirty_shadow_page_count.saturating_add(1);
         self.revisions.light_revision = self.revisions.light_revision.saturating_add(1);
         self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
     }
@@ -620,6 +1034,12 @@ impl GpuScene {
         self.pages.meshlet_bake_check_count = self.pages.meshlet_bake_check_count.saturating_add(1);
         self.pages.bounds_registration_count =
             self.pages.bounds_registration_count.saturating_add(1);
+        self.geometry_pages.page_record_count =
+            self.geometry_pages.page_record_count.saturating_add(1);
+        self.geometry_pages.dirty_page_record_count = self
+            .geometry_pages
+            .dirty_page_record_count
+            .saturating_add(1);
         self.pages.highest_priority = self
             .pages
             .highest_priority
@@ -630,12 +1050,35 @@ impl GpuScene {
     pub fn record_transform_change(&mut self, transform: &Transform) {
         self.instances.previous_transform_signature = self.instances.current_transform_signature;
         self.instances.current_transform_signature = transform_signature(transform);
+        self.transforms.previous_transform_signature = self.transforms.current_transform_signature;
+        self.transforms.current_transform_signature = self.instances.current_transform_signature;
+        self.transforms.dirty_transform_count =
+            self.transforms.dirty_transform_count.saturating_add(1);
         self.instances.motion_vector_update_count =
             self.instances.motion_vector_update_count.saturating_add(1);
         self.instances.dirty_instance_count = self.instances.dirty_instance_count.saturating_add(1);
         self.pages.shadow_invalidation_count =
             self.pages.shadow_invalidation_count.saturating_add(1);
+        self.shadow_pages.invalidated_shadow_page_count = self
+            .shadow_pages
+            .invalidated_shadow_page_count
+            .saturating_add(1);
         self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
+    }
+
+    pub fn record_history_keyed_spawn(&mut self) {
+        self.transforms.history_keyed_transform_count = self
+            .transforms
+            .history_keyed_transform_count
+            .saturating_add(1);
+        self.geometry_pages.history_keyed_page_count = self
+            .geometry_pages
+            .history_keyed_page_count
+            .saturating_add(1);
+        self.shadow_pages.history_keyed_shadow_page_count = self
+            .shadow_pages
+            .history_keyed_shadow_page_count
+            .saturating_add(1);
     }
 }
 
@@ -644,7 +1087,18 @@ pub struct GpuInstanceTable {
     pub instance_count: u32,
     pub dirty_instance_count: u32,
     pub removed_instance_count: u32,
+    pub compacted_instance_count: u32,
     pub motion_vector_update_count: u32,
+    pub previous_transform_signature: u64,
+    pub current_transform_signature: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuTransformTable {
+    pub transform_count: u32,
+    pub dirty_transform_count: u32,
+    pub compacted_transform_count: u32,
+    pub history_keyed_transform_count: u32,
     pub previous_transform_signature: u64,
     pub current_transform_signature: u64,
 }
@@ -662,9 +1116,25 @@ pub struct GpuGeometryTable {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuGeometryPageTable {
+    pub page_record_count: u32,
+    pub dirty_page_record_count: u32,
+    pub compacted_page_record_count: u32,
+    pub history_keyed_page_count: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct GpuLightTable {
     pub light_count: u32,
     pub dirty_light_count: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuShadowPageTable {
+    pub shadow_page_count: u32,
+    pub dirty_shadow_page_count: u32,
+    pub invalidated_shadow_page_count: u32,
+    pub history_keyed_shadow_page_count: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1183,13 +1653,29 @@ pub fn extract_cef_surfaces(
 }
 
 pub fn apply_scene_deltas_to_gpu_scene(
-    added: Query<(&Renderable, &Transform), Added<Renderable>>,
+    added: Query<(&Renderable, &Transform, Option<&SceneStableHistoryKey>), Added<Renderable>>,
     mut removed: RemovedComponents<Renderable>,
     mut gpu_scene: ResMut<GpuScene>,
+    mut stable_history: Option<ResMut<StableHistoryTable>>,
     mut deltas: ResMut<ExtractedSceneDeltas>,
 ) {
-    for (renderable, transform) in added.iter() {
+    for (renderable, transform, stable_key) in added.iter() {
+        let instance = RendererInstanceId::new(gpu_scene.instances.instance_count);
         gpu_scene.record_static_renderable(renderable, transform);
+        if let Some(stable_key) = stable_key {
+            gpu_scene.record_history_keyed_spawn();
+            if let Some(stable_history) = stable_history.as_deref_mut() {
+                let stable_id = StableHistoryId::from_scene_key(*stable_key);
+                for table in HistoryTableKind::ALL {
+                    stable_history.note_spawn(
+                        stable_id,
+                        table,
+                        instance,
+                        HistoryRespawnPolicy::Recover,
+                    );
+                }
+            }
+        }
     }
     for _ in removed.read() {
         gpu_scene.record_removed_renderable();
@@ -1469,6 +1955,49 @@ mod tests {
     }
 
     #[test]
+    fn component_gpu_mapping_keeps_ecs_typed_and_gpu_tables_soa() {
+        let layout = core::hint::black_box(GPU_DATA_LAYOUT_POLICY);
+
+        assert!(layout.ecs_components_are_typed);
+        assert!(layout.gpu_tables_are_soa);
+        assert!(!layout.attach_heavy_gpu_objects_to_entities);
+        assert_eq!(layout.heavyweight_owner, "resources_assets_tables");
+        assert_eq!(
+            layout.allowed_entity_references,
+            &[
+                EntityAttachedReferenceKind::GeometryRef,
+                EntityAttachedReferenceKind::MaterialRef,
+                EntityAttachedReferenceKind::LuxLightId,
+                EntityAttachedReferenceKind::SceneStableIdentity,
+                EntityAttachedReferenceKind::RendererInstanceId,
+            ]
+        );
+        assert_eq!(GpuTableLayout::StructOfArrays.as_str(), "struct_of_arrays");
+        assert_eq!(COMPONENT_GPU_MAPPINGS.len(), 5);
+        assert!(COMPONENT_GPU_MAPPINGS.iter().all(|mapping| {
+            mapping.ecs_component_is_typed_and_ergonomic
+                && mapping.gpu_tables_are_compact_soa
+                && !mapping.heavy_gpu_object_attached_to_entity
+        }));
+        assert!(
+            COMPONENT_GPU_MAPPINGS
+                .iter()
+                .find(|mapping| mapping.component == EcsGpuSourceComponent::Renderable)
+                .expect("renderable mapping should exist")
+                .gpu_tables
+                .contains(&GpuTableKind::Instance)
+        );
+        assert!(
+            COMPONENT_GPU_MAPPINGS
+                .iter()
+                .find(|mapping| mapping.component == EcsGpuSourceComponent::SceneStableIdentity)
+                .expect("stable identity mapping should exist")
+                .gpu_tables
+                .contains(&GpuTableKind::ShadowPage)
+        );
+    }
+
+    #[test]
     fn render_world_can_host_lux_components_without_renderer_owning_lighting() {
         let mut world = World::new();
         world.insert_resource(LuxLightDatabase::with_revision(5));
@@ -1541,8 +2070,10 @@ mod tests {
 
         let gpu_scene = world.resource::<GpuScene>();
         assert_eq!(gpu_scene.instances.instance_count, 1);
+        assert_eq!(gpu_scene.transforms.transform_count, 1);
         assert_eq!(gpu_scene.materials.material_count, 1);
         assert_eq!(gpu_scene.geometry.geometry_count, 1);
+        assert_eq!(gpu_scene.geometry_pages.page_record_count, 1);
         assert_ne!(gpu_scene.instances.current_transform_signature, 0);
         assert!(
             !world
@@ -1578,9 +2109,13 @@ mod tests {
         let gpu_scene = world.resource::<GpuScene>();
         assert_eq!(gpu_scene.instances.instance_count, 0);
         assert_eq!(gpu_scene.instances.removed_instance_count, 1);
+        assert_eq!(gpu_scene.instances.compacted_instance_count, 1);
+        assert_eq!(gpu_scene.transforms.compacted_transform_count, 1);
+        assert_eq!(gpu_scene.geometry_pages.compacted_page_record_count, 1);
         assert_eq!(gpu_scene.pages.released_page_reference_count, 1);
         assert_eq!(gpu_scene.pages.shadow_invalidation_count, 1);
         assert_eq!(gpu_scene.pages.gi_invalidation_count, 1);
+        assert_eq!(gpu_scene.shadow_pages.invalidated_shadow_page_count, 1);
         assert_eq!(
             world.resource::<ExtractedSceneDeltas>().removed_renderables,
             1
@@ -1595,6 +2130,7 @@ mod tests {
                 instance_count: 1,
                 dirty_instance_count: 0,
                 removed_instance_count: 0,
+                compacted_instance_count: 0,
                 motion_vector_update_count: 0,
                 previous_transform_signature: 0,
                 current_transform_signature: 0,
@@ -1666,12 +2202,22 @@ mod tests {
             gpu_scene.instances.previous_transform_signature,
             first_signature
         );
+        assert_eq!(
+            gpu_scene.transforms.previous_transform_signature,
+            first_signature
+        );
         assert_ne!(
             gpu_scene.instances.current_transform_signature,
             first_signature
         );
+        assert_eq!(
+            gpu_scene.transforms.current_transform_signature,
+            gpu_scene.instances.current_transform_signature
+        );
         assert_eq!(gpu_scene.instances.motion_vector_update_count, 2);
+        assert_eq!(gpu_scene.transforms.dirty_transform_count, 2);
         assert_eq!(gpu_scene.pages.shadow_invalidation_count, 2);
+        assert_eq!(gpu_scene.shadow_pages.invalidated_shadow_page_count, 2);
         assert_eq!(
             world.resource::<ExtractedSceneDeltas>().changed_transforms,
             2
@@ -1715,6 +2261,8 @@ mod tests {
         assert_eq!(gpu_scene.pages.metadata_request_count, 1);
         assert_eq!(gpu_scene.pages.meshlet_bake_check_count, 1);
         assert_eq!(gpu_scene.pages.bounds_registration_count, 1);
+        assert_eq!(gpu_scene.geometry_pages.page_record_count, 1);
+        assert_eq!(gpu_scene.geometry_pages.dirty_page_record_count, 1);
         assert_eq!(gpu_scene.pages.highest_priority, u8::MAX);
         let frame_graph = world.resource::<FrameGraph>();
         assert!(frame_graph.compiled);
@@ -1723,6 +2271,100 @@ mod tests {
         assert_eq!(frame_graph.super_resolution_nodes, 1);
         assert_eq!(frame_graph.gi_nodes, 1);
         assert_eq!(frame_graph.virtual_geometry_nodes, 1);
+    }
+
+    #[test]
+    fn stable_history_recovers_or_resets_when_scene_identity_respawns() {
+        let mut history = StableHistoryTable::default();
+        let stable = StableHistoryId::new(42);
+        let first_instance = RendererInstanceId::new(0);
+        let recovered_instance = RendererInstanceId::new(7);
+        let reset_instance = RendererInstanceId::new(8);
+
+        history.note_spawn(
+            stable,
+            HistoryTableKind::MotionVectors,
+            first_instance,
+            HistoryRespawnPolicy::Recover,
+        );
+        assert_eq!(
+            history.generation(stable, HistoryTableKind::MotionVectors),
+            Some(1)
+        );
+        history.note_despawn(stable);
+        assert_eq!(
+            history
+                .record(stable, HistoryTableKind::MotionVectors)
+                .expect("history should exist")
+                .live_instance,
+            None
+        );
+
+        history.note_spawn(
+            stable,
+            HistoryTableKind::MotionVectors,
+            recovered_instance,
+            HistoryRespawnPolicy::Recover,
+        );
+        let recovered = history
+            .record(stable, HistoryTableKind::MotionVectors)
+            .expect("history should recover");
+        assert_eq!(recovered.generation, 1);
+        assert_eq!(recovered.recover_count, 1);
+        assert_eq!(recovered.live_instance, Some(recovered_instance));
+
+        history.note_spawn(
+            stable,
+            HistoryTableKind::MotionVectors,
+            reset_instance,
+            HistoryRespawnPolicy::Reset,
+        );
+        let reset = history
+            .record(stable, HistoryTableKind::MotionVectors)
+            .expect("history should reset");
+        assert_eq!(reset.generation, 2);
+        assert_eq!(reset.reset_count, 1);
+        assert_eq!(reset.live_instance, Some(reset_instance));
+    }
+
+    #[test]
+    fn compacting_removed_gpu_instances_keeps_unrelated_stable_histories() {
+        let mut history = StableHistoryTable::default();
+        let removed = StableHistoryId::new(100);
+        let unrelated = StableHistoryId::new(200);
+
+        history.note_spawn(
+            removed,
+            HistoryTableKind::VirtualGeometryPages,
+            RendererInstanceId::new(1),
+            HistoryRespawnPolicy::Recover,
+        );
+        history.note_spawn(
+            unrelated,
+            HistoryTableKind::VirtualGeometryPages,
+            RendererInstanceId::new(2),
+            HistoryRespawnPolicy::Recover,
+        );
+        let unrelated_generation = history
+            .generation(unrelated, HistoryTableKind::VirtualGeometryPages)
+            .expect("unrelated history should exist");
+
+        history.note_despawn(removed);
+        history.note_compacted_removed_instance(RendererInstanceId::new(1));
+
+        assert_eq!(history.compacted_removed_instances, 1);
+        assert_eq!(history.unrelated_history_invalidations, 0);
+        assert_eq!(
+            history.generation(unrelated, HistoryTableKind::VirtualGeometryPages),
+            Some(unrelated_generation)
+        );
+        assert_eq!(
+            history
+                .record(unrelated, HistoryTableKind::VirtualGeometryPages)
+                .expect("unrelated history should remain live")
+                .live_instance,
+            Some(RendererInstanceId::new(2))
+        );
     }
 
     fn assert_ordered<'a>(items: impl Iterator<Item = (u16, &'a str)>) {

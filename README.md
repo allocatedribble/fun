@@ -109,6 +109,12 @@ The renderer ECS contract is already represented by `FunSceneSet`,
 components, the `GpuScene` resource with table-level renderer deltas,
 `ExtractedSceneDeltas`, `FrameGraph`, `LuxWorld`, and typed renderer/lux
 message lanes.
+`COMPONENT_GPU_MAPPINGS` keeps ECS authoring components ergonomic while mapping
+them into compact SoA-style GPU tables: instance, transform, material,
+geometry-page, light, and shadow-page tables. Renderer history lives in
+`StableHistoryTable` keyed by scene stable identity, so motion vectors, virtual
+geometry pages, shadow pages, GI cache, and light reservoirs are not keyed by
+transient Bevy `Entity` values.
 Scene-authored component taxonomy names intentionally skip the redundant product
 prefix inside `fun_scene`: `SceneStableIdentity`, `Renderable`, `LuxLight`,
 `VirtualShadowCaster`, `CefSurface`, and `UpscalePolicy` are the canonical
