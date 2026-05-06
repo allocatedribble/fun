@@ -11,3 +11,4 @@ workspace = true
 
 [dependencies]
 bevy_ecs.workspace = true
+fun_scene.workspace = true

@@ -269,6 +269,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<FunRenderCapabilityMatrix>()
         .init_resource::<FunPipelineRegistry>()
         .init_resource::<crate::fun_lux::LuxLightDatabase>()
+        .init_resource::<crate::fun_lux::LuxWorld>()
         .init_resource::<FunSceneManifestRegistry>()
         .init_resource::<FunViewportRegistry>()
         .init_resource::<GeometryResidencyManager>()
@@ -370,6 +371,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<FunRenderCapabilityMatrix>();
         render_app.init_resource::<FunPipelineRegistry>();
         render_app.init_resource::<crate::fun_lux::LuxLightDatabase>();
+        render_app.init_resource::<crate::fun_lux::LuxWorld>();
         render_app.init_resource::<FunSceneManifestRegistry>();
         render_app.init_resource::<FunViewportRegistry>();
         render_app.add_message::<FunRendererEcsEvent>();

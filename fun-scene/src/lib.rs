@@ -106,6 +106,7 @@ pub const FUN_SCENE_PRODUCT_TOPOLOGY: FunSceneProductTopology = FunSceneProductT
 
 #[cfg(test)]
 mod tests {
+    use bevy_color::Color;
     use bevy_ecs::world::World;
     use thunder::prelude::{NetEntity, WorldLevelId, WorldRevision, WorldStreamChunk};
 
@@ -240,6 +241,14 @@ mod tests {
                     bounce_policy: GiBouncePolicy::DynamicBudgeted,
                     cache_policy: GiCachePolicy::Probe,
                 },
+                VirtualShadowCaster {
+                    priority: ShadowPagePriority::High,
+                    dynamic: true,
+                },
+                VirtualShadowReceiver {
+                    refresh_priority: ShadowPagePriority::High,
+                    receives_directional: true,
+                },
                 CefSurface::product(CefRoute::HUD, UiLayer::Hud),
                 ViewportUiTarget {
                     viewport: ViewportId::PRIMARY,
@@ -260,6 +269,11 @@ mod tests {
         assert_eq!(light.kind, LuxLightKind::Directional);
         assert_eq!(light.shadow_policy, LuxShadowPolicy::VirtualDemandPaged);
 
+        let caster = world
+            .get::<VirtualShadowCaster>(entity)
+            .expect("virtual shadow caster authoring should be an ECS component");
+        assert!(caster.dynamic);
+
         let cef = world
             .get::<CefSurface>(entity)
             .expect("CEF surface authoring should be an ECS component");
@@ -276,6 +290,25 @@ mod tests {
             .get::<UpscalePolicy>(entity)
             .expect("upscale policy should be an ECS component");
         assert!(upscale.hudless_required);
+    }
+
+    #[test]
+    fn fun_macro_can_author_cinematic_lux_light() {
+        fn cinematic_sun() -> impl FunScene {
+            fun! {
+                #Sun
+                LuxLight {
+                    kind: LuxLightKind::Directional,
+                    color: {Color::srgb(1.0, 0.94, 0.82)},
+                    intensity_lux: 80_000.0,
+                    range: 0.0,
+                    shadow_policy: LuxShadowPolicy::VirtualDirectionalClipmap,
+                    importance: LuxImportance::Critical
+                }
+            }
+        }
+
+        let _scene = cinematic_sun();
     }
 
     #[test]

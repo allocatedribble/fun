@@ -1,7 +1,7 @@
 use bevy_color::Color;
 use bevy_ecs::prelude::Component;
 
-use crate::{FunFromTemplate, FunSceneOwner};
+use crate::FunSceneOwner;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LuxLightKind {
@@ -19,6 +19,7 @@ pub enum LuxShadowPolicy {
     StaticMap,
     #[default]
     VirtualDemandPaged,
+    VirtualDirectionalClipmap,
     RayTraced,
 }
 
@@ -31,7 +32,7 @@ pub enum LuxImportance {
     Critical,
 }
 
-#[derive(Debug, Default, Clone, FunFromTemplate, Component)]
+#[derive(Debug, Default, Clone, Component)]
 pub struct LuxLight {
     pub kind: LuxLightKind,
     pub color: Color,
@@ -63,7 +64,7 @@ pub enum EmissiveCandidatePolicy {
     AlwaysPromote,
 }
 
-#[derive(Debug, Default, Clone, FunFromTemplate, Component)]
+#[derive(Debug, Default, Clone, Component)]
 pub struct LuxEmissive {
     pub luminance: f32,
     pub candidate_policy: EmissiveCandidatePolicy,
@@ -86,10 +87,31 @@ pub enum GiCachePolicy {
     Probe,
 }
 
-#[derive(Debug, Default, Clone, FunFromTemplate, Component)]
+#[derive(Debug, Default, Clone, Component)]
 pub struct LuxGiParticipant {
     pub bounce_policy: GiBouncePolicy,
     pub cache_policy: GiCachePolicy,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShadowPagePriority {
+    Low,
+    #[default]
+    Normal,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Default, Clone, Component)]
+pub struct VirtualShadowCaster {
+    pub priority: ShadowPagePriority,
+    pub dynamic: bool,
+}
+
+#[derive(Debug, Default, Clone, Component)]
+pub struct VirtualShadowReceiver {
+    pub refresh_priority: ShadowPagePriority,
+    pub receives_directional: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

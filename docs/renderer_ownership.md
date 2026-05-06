@@ -83,6 +83,20 @@ nodes, DLSS/FSR `UpscalePolicy` adds the corresponding super-resolution node,
 hybrid GI mode adds GI passes, and `VirtualGeometryAuthoring` adds virtual
 geometry passes.
 
+`fun-lux` is also ECS-driven. Scene-authored `LuxLight` components become
+compact GPU `LuxLight` records, `LuxEmissive` components become emissive
+candidate records, `LuxGiParticipant` components drive GI cache participation,
+and `VirtualShadowCaster` / `VirtualShadowReceiver` drive virtual shadow page
+demand. The renderer-facing lighting state is the `LuxWorld` resource, which
+groups `LuxLightDatabase`, `LuxClusterGrid`, `LuxReservoirStorage`,
+`LuxShadowRequestQueue`, `LuxGiCache`, and `LuxDiagnostics`.
+
+Lighting work is split into `LuxExtractSet`, `LuxPrepareSet`, and
+`LuxRenderSet`. The prepare lane updates the light database, light clusters,
+emissive candidates, shadow invalidation, and GI cache requests. The render lane
+runs direct lighting, temporal and spatial reservoir reuse, virtual shadow
+filtering, GI trace/cache update, reflection trace, and denoising.
+
 The first renderer ECS lane covers these stable events: scene spawned, scene
 patched, chunk loaded/unloaded, geometry changed, material changed, light
 changed, transform changed, page fault, shadow invalidated, GI cache
@@ -228,6 +242,15 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::FunRendererGpuSceneObject`
 - `fun_renderer::FunRendererFrameGraphNode`
 - `fun_renderer::FunRendererEcsEvent`
+- `fun_lux::LuxExtractSet`
+- `fun_lux::LuxPrepareSet`
+- `fun_lux::LuxRenderSet`
+- `fun_lux::LuxWorld`
+- `fun_lux::LuxClusterGrid`
+- `fun_lux::LuxReservoirStorage`
+- `fun_lux::LuxShadowRequestQueue`
+- `fun_lux::LuxGiCache`
+- `fun_lux::LuxDiagnostics`
 - `fun_scene::SceneStableIdentity`
 - `fun_scene::SceneRevision`
 - `fun_scene::SceneChunkId`
@@ -237,6 +260,8 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::LuxLight`
 - `fun_scene::LuxEmissive`
 - `fun_scene::LuxGiParticipant`
+- `fun_scene::VirtualShadowCaster`
+- `fun_scene::VirtualShadowReceiver`
 - `fun_scene::CefSurface`
 - `fun_scene::ViewportUiTarget`
 - `fun_scene::UpscalePolicy`

@@ -3088,6 +3088,7 @@ name = "fun-lux"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "fun-scene",
 ]
 
 [[package]]

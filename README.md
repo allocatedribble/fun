@@ -94,10 +94,12 @@ The renderer ECS contract is already represented by `FunSceneSet`,
 `FunRendererSet`, unprefixed render-world sets such as `RendererExtractSet` and
 `RendererPrepareSet`, renderer/lux marker components, compact handle
 components, the `GpuScene` resource with table-level renderer deltas,
-`ExtractedSceneDeltas`, `FrameGraph`, and typed renderer/lux message lanes.
+`ExtractedSceneDeltas`, `FrameGraph`, `LuxWorld`, and typed renderer/lux
+message lanes.
 Scene-authored component taxonomy names intentionally skip the redundant product
 prefix inside `fun_scene`: `SceneStableIdentity`, `Renderable`, `LuxLight`,
-`CefSurface`, and `UpscalePolicy` are the canonical forms.
+`VirtualShadowCaster`, `CefSurface`, and `UpscalePolicy` are the canonical
+forms.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. `legacy` is a temporary
 transition backend only and should be removed after one migration cycle.
 
