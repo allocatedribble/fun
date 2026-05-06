@@ -183,6 +183,14 @@ failures, pass timing placeholders, resource lifetimes, and debug artifacts.
 `fun-renderer` owns pass order and execution policy. The initial graph keeps
 HUD-less scene color, UI color/alpha, final composition, and present as
 separate resources from day one.
+The upscaling boundary is represented by `fun_renderer::upscaling`. It consumes
+render-resolution HUD-less scene color, depth, motion vectors, exposure, jitter,
+reactive and transparency masks, and HDR metadata, then produces
+display-resolution HUD-less scene color before late UI composition and before
+any frame-generation handoff. Native/debug upscaling is the fallback path;
+DLSS SR and FSR hooks remain capability-gated and require diagnostics to prove
+valid motion vectors, masks, HDR/exposure handling, mip-bias policy, history
+state, and UI separation.
 The renderer-owned GPU scene database is represented by `GpuSceneDatabase`.
 It stores generation-checked view, instance, mesh, material, light, and page
 metadata records, derives records from `fun-scene` declarations, retains

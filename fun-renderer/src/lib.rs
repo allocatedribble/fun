@@ -13,6 +13,7 @@ pub mod pipeline;
 pub mod resource;
 pub mod scene;
 pub mod ui;
+pub mod upscaling;
 pub mod virtual_geometry;
 pub mod virtual_shadow;
 

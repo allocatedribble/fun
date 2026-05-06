@@ -96,6 +96,10 @@ pub enum FrameGraphResourceType {
     DisplayResolutionSceneColor,
     Depth,
     MotionVectors,
+    Exposure,
+    ReactiveMask,
+    TransparencyMask,
+    HdrMetadata,
     NormalsMaterialIds,
     UiColorAlpha,
     FinalComposedOutput,
@@ -104,11 +108,15 @@ pub enum FrameGraphResourceType {
 }
 
 impl FrameGraphResourceType {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 13] = [
         Self::RenderResolutionSceneColor,
         Self::DisplayResolutionSceneColor,
         Self::Depth,
         Self::MotionVectors,
+        Self::Exposure,
+        Self::ReactiveMask,
+        Self::TransparencyMask,
+        Self::HdrMetadata,
         Self::NormalsMaterialIds,
         Self::UiColorAlpha,
         Self::FinalComposedOutput,
@@ -123,6 +131,10 @@ impl FrameGraphResourceType {
             Self::DisplayResolutionSceneColor => "display_resolution_scene_color",
             Self::Depth => "depth",
             Self::MotionVectors => "motion_vectors",
+            Self::Exposure => "exposure",
+            Self::ReactiveMask => "reactive_mask",
+            Self::TransparencyMask => "transparency_mask",
+            Self::HdrMetadata => "hdr_metadata",
             Self::NormalsMaterialIds => "normals_material_ids",
             Self::UiColorAlpha => "ui_color_alpha",
             Self::FinalComposedOutput => "final_composed_output",
@@ -323,6 +335,7 @@ pub enum FrameGraphValidationFailureCode {
     UiSceneSeparationBroken,
     ComposeContractBroken,
     PresentContractBroken,
+    UpscaleContractBroken,
     FrameGenerationContractBroken,
     InvalidResourceHandle,
 }
@@ -336,6 +349,7 @@ impl FrameGraphValidationFailureCode {
             Self::UiSceneSeparationBroken => "ui_scene_separation_broken",
             Self::ComposeContractBroken => "compose_contract_broken",
             Self::PresentContractBroken => "present_contract_broken",
+            Self::UpscaleContractBroken => "upscale_contract_broken",
             Self::FrameGenerationContractBroken => "frame_generation_contract_broken",
             Self::InvalidResourceHandle => "invalid_resource_handle",
         }
@@ -448,6 +462,26 @@ impl RendererFrameGraph {
             FrameGraphResourceType::MotionVectors,
             "motion_vectors",
         ));
+        let exposure = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.exposure",
+            FrameGraphResourceType::Exposure,
+            "exposure",
+        ));
+        let reactive_mask = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.reactive_mask",
+            FrameGraphResourceType::ReactiveMask,
+            "reactive_mask",
+        ));
+        let transparency_mask = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.transparency_mask",
+            FrameGraphResourceType::TransparencyMask,
+            "transparency_mask",
+        ));
+        let hdr_metadata = graph.declare_resource(FrameGraphResourceDescriptor::new(
+            "fun_renderer.resource.hdr_metadata",
+            FrameGraphResourceType::HdrMetadata,
+            "hdr_metadata",
+        ));
         let normals_material = graph.declare_resource(FrameGraphResourceDescriptor::new(
             "fun_renderer.resource.normals_material_ids",
             FrameGraphResourceType::NormalsMaterialIds,
@@ -505,6 +539,10 @@ impl RendererFrameGraph {
             }
             graph.add_pass_write(scene, depth);
             graph.add_pass_write(scene, motion);
+            graph.add_pass_write(scene, exposure);
+            graph.add_pass_write(scene, reactive_mask);
+            graph.add_pass_write(scene, transparency_mask);
+            graph.add_pass_write(scene, hdr_metadata);
             graph.add_pass_write(scene, normals_material);
         }
 
@@ -549,6 +587,10 @@ impl RendererFrameGraph {
             graph.add_pass_read(upscale, render_scene);
             graph.add_pass_read(upscale, depth);
             graph.add_pass_read(upscale, motion);
+            graph.add_pass_read(upscale, exposure);
+            graph.add_pass_read(upscale, reactive_mask);
+            graph.add_pass_read(upscale, transparency_mask);
+            graph.add_pass_read(upscale, hdr_metadata);
             graph.add_pass_write(upscale, display_scene);
         }
 
@@ -764,6 +806,7 @@ impl RendererFrameGraph {
         self.validate_scene_ui_separation(&mut failures);
         self.validate_compose_contract(&mut failures);
         self.validate_present_contract(&mut failures);
+        self.validate_upscale_contract(&mut failures);
         self.validate_frame_generation_contract(&mut failures);
         failures
     }
@@ -982,6 +1025,47 @@ impl RendererFrameGraph {
                 pass: Some(present),
                 resource: self
                     .resource_handle_for_type(FrameGraphResourceType::FinalComposedOutput),
+            });
+        }
+    }
+
+    fn validate_upscale_contract(&self, failures: &mut Vec<FrameGraphValidationFailure>) {
+        let Some(upscale) = self.pass_handle_for_role(FrameGraphPassRole::UpscaleBoundary) else {
+            return;
+        };
+        let required_reads = [
+            FrameGraphResourceType::RenderResolutionSceneColor,
+            FrameGraphResourceType::Depth,
+            FrameGraphResourceType::MotionVectors,
+            FrameGraphResourceType::Exposure,
+            FrameGraphResourceType::ReactiveMask,
+            FrameGraphResourceType::TransparencyMask,
+            FrameGraphResourceType::HdrMetadata,
+        ];
+        for resource_type in required_reads {
+            if !self.pass_reads_resource_type(upscale, resource_type) {
+                failures.push(FrameGraphValidationFailure {
+                    code: FrameGraphValidationFailureCode::UpscaleContractBroken,
+                    pass: Some(upscale),
+                    resource: self.resource_handle_for_type(resource_type),
+                });
+            }
+        }
+        if !self
+            .pass_writes_resource_type(upscale, FrameGraphResourceType::DisplayResolutionSceneColor)
+        {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::UpscaleContractBroken,
+                pass: Some(upscale),
+                resource: self
+                    .resource_handle_for_type(FrameGraphResourceType::DisplayResolutionSceneColor),
+            });
+        }
+        if self.pass_reads_resource_type(upscale, FrameGraphResourceType::UiColorAlpha) {
+            failures.push(FrameGraphValidationFailure {
+                code: FrameGraphValidationFailureCode::UiSceneSeparationBroken,
+                pass: Some(upscale),
+                resource: self.resource_handle_for_type(FrameGraphResourceType::UiColorAlpha),
             });
         }
     }
