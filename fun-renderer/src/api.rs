@@ -1,4 +1,10 @@
-use crate::{FunRendererBackend, FunRendererRuntimeBackend};
+use crate::{
+    FunRendererBackend, FunRendererRuntimeBackend,
+    frame_graph::{
+        FrameGraphPassRole, RendererFrameDescription, RendererFrameGraph,
+        RendererFrameGraphDebugArtifact, RendererFrameGraphDiagnostics,
+    },
+};
 
 pub const RENDERER_CORE_API_SCHEMA_VERSION: u16 = 1;
 
@@ -126,12 +132,17 @@ impl PassHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PassKind {
     ClearColor,
+    StaticScenePlaceholder,
     GpuSceneUpdate,
+    VirtualResourceFeedback,
     VirtualGeometry,
     VirtualShadow,
     Lighting,
     Upscale,
+    FrameGeneration,
+    UiImportPlaceholder,
     UiComposite,
+    DiagnosticsReadback,
     Present,
 }
 
@@ -140,12 +151,17 @@ impl PassKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ClearColor => "clear_color",
+            Self::StaticScenePlaceholder => "static_scene_placeholder",
             Self::GpuSceneUpdate => "gpu_scene_update",
+            Self::VirtualResourceFeedback => "virtual_resource_feedback",
             Self::VirtualGeometry => "virtual_geometry",
             Self::VirtualShadow => "virtual_shadow",
             Self::Lighting => "lighting",
             Self::Upscale => "upscale",
+            Self::FrameGeneration => "frame_generation",
+            Self::UiImportPlaceholder => "ui_import_placeholder",
             Self::UiComposite => "ui_composite",
+            Self::DiagnosticsReadback => "diagnostics_readback",
             Self::Present => "present",
         }
     }
@@ -256,6 +272,13 @@ pub trait Presentation {
     fn present_clear_color(&mut self, frame: ClearColorFrame) -> PresentResult;
 }
 
+pub trait FrameGraphSubmission {
+    fn submit_frame_description(
+        &mut self,
+        description: RendererFrameDescription,
+    ) -> RendererFrameGraphDiagnostics;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RendererCoreInterfaceMap {
     pub settings: bool,
@@ -331,6 +354,8 @@ pub struct RendererCoreBootReport {
     pub backend: FunRendererBackend,
     pub registered_passes: u16,
     pub produced_clear_color_frame: bool,
+    pub frame_graph_schema_version: u16,
+    pub frame_graph_valid: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,6 +370,8 @@ pub struct RendererCoreDiagnostics {
     pub backend: FunRendererBackend,
     pub capabilities: BackendCapabilities,
     pub registered_passes: u16,
+    pub frame_graph_valid: bool,
+    pub frame_graph_validation_failures: u16,
     pub allocation_count: u32,
     pub instance_count: u32,
     pub presented_frame_count: u64,
@@ -364,6 +391,8 @@ pub struct RendererCoreShutdownReport {
 pub struct NoopRendererCore {
     settings: RendererCoreSettings,
     frame_index: u64,
+    frame_graph: RendererFrameGraph,
+    last_frame_graph_diagnostics: Option<RendererFrameGraphDiagnostics>,
     passes: Vec<PassDescriptor>,
     allocations: u32,
     instances: Vec<SceneInstanceRecord>,
@@ -373,27 +402,27 @@ pub struct NoopRendererCore {
 impl NoopRendererCore {
     #[must_use]
     pub fn boot(settings: RendererCoreSettings) -> (Self, RendererCoreBootReport) {
+        let frame_graph =
+            RendererFrameGraph::from_frame_description(RendererFrameDescription::default());
+        let frame_graph_diagnostics = frame_graph.execute();
         let mut core = Self {
             settings,
             frame_index: 0,
+            frame_graph,
+            last_frame_graph_diagnostics: Some(frame_graph_diagnostics.clone()),
             passes: Vec::new(),
             allocations: 0,
             instances: Vec::new(),
             presented_frame_count: 0,
         };
-        core.register_pass(PassDescriptor::new(
-            "fun_renderer.pass.clear_color",
-            PassKind::ClearColor,
-        ));
-        core.register_pass(PassDescriptor::new(
-            "fun_renderer.pass.present",
-            PassKind::Present,
-        ));
+        core.sync_legacy_pass_descriptors_from_frame_graph();
         let report = RendererCoreBootReport {
             runtime_backend: core.settings.runtime_backend,
             backend: core.settings.backend,
             registered_passes: core.pass_count() as u16,
             produced_clear_color_frame: true,
+            frame_graph_schema_version: frame_graph_diagnostics.schema_version,
+            frame_graph_valid: frame_graph_diagnostics.graph_valid(),
         };
         (core, report)
     }
@@ -418,6 +447,23 @@ impl NoopRendererCore {
     }
 
     #[must_use]
+    pub const fn frame_graph(&self) -> &RendererFrameGraph {
+        &self.frame_graph
+    }
+
+    #[must_use]
+    pub const fn last_frame_graph_diagnostics(&self) -> Option<&RendererFrameGraphDiagnostics> {
+        self.last_frame_graph_diagnostics.as_ref()
+    }
+
+    #[must_use]
+    pub fn frame_graph_debug_artifact(&self) -> Option<RendererFrameGraphDebugArtifact> {
+        self.last_frame_graph_diagnostics
+            .as_ref()
+            .map(|diagnostics| self.frame_graph.debug_artifact(diagnostics))
+    }
+
+    #[must_use]
     pub fn diagnostics(&self) -> RendererCoreDiagnostics {
         let registered_passes = match u16::try_from(self.passes.len()) {
             Ok(value) => value,
@@ -428,6 +474,14 @@ impl NoopRendererCore {
             backend: self.settings.backend,
             capabilities: self.capabilities(),
             registered_passes,
+            frame_graph_valid: self
+                .last_frame_graph_diagnostics
+                .as_ref()
+                .is_some_and(RendererFrameGraphDiagnostics::graph_valid),
+            frame_graph_validation_failures: self
+                .last_frame_graph_diagnostics
+                .as_ref()
+                .map_or(0, RendererFrameGraphDiagnostics::validation_failure_count),
             allocation_count: self.allocations,
             instance_count: self.instance_count(),
             presented_frame_count: self.presented_frame_count,
@@ -444,6 +498,36 @@ impl NoopRendererCore {
             presented_frame_count: self.presented_frame_count,
             clean_shutdown: true,
         }
+    }
+
+    fn sync_legacy_pass_descriptors_from_frame_graph(&mut self) {
+        self.passes.clear();
+        let descriptors: Vec<PassDescriptor> = self
+            .frame_graph
+            .passes()
+            .iter()
+            .map(|pass| {
+                PassDescriptor::new(
+                    pass.descriptor.stable_id,
+                    pass_kind_for_frame_graph_role(pass.descriptor.role),
+                )
+            })
+            .collect();
+        self.passes.extend(descriptors);
+    }
+}
+
+impl FrameGraphSubmission for NoopRendererCore {
+    fn submit_frame_description(
+        &mut self,
+        description: RendererFrameDescription,
+    ) -> RendererFrameGraphDiagnostics {
+        self.frame_index = self.frame_index.max(description.frame_index);
+        self.frame_graph = RendererFrameGraph::from_frame_description(description);
+        let diagnostics = self.frame_graph.execute();
+        self.last_frame_graph_diagnostics = Some(diagnostics.clone());
+        self.sync_legacy_pass_descriptors_from_frame_graph();
+        diagnostics
     }
 }
 
@@ -535,6 +619,21 @@ impl Presentation for NoopRendererCore {
     }
 }
 
+#[must_use]
+pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKind {
+    match role {
+        FrameGraphPassRole::Clear => PassKind::ClearColor,
+        FrameGraphPassRole::StaticScenePlaceholder => PassKind::StaticScenePlaceholder,
+        FrameGraphPassRole::VirtualResourceFeedback => PassKind::VirtualResourceFeedback,
+        FrameGraphPassRole::UiImportPlaceholder => PassKind::UiImportPlaceholder,
+        FrameGraphPassRole::UpscaleBoundary => PassKind::Upscale,
+        FrameGraphPassRole::FrameGenerationBoundary => PassKind::FrameGeneration,
+        FrameGraphPassRole::Compose => PassKind::UiComposite,
+        FrameGraphPassRole::DiagnosticsReadback => PassKind::DiagnosticsReadback,
+        FrameGraphPassRole::Present => PassKind::Present,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,10 +655,24 @@ mod tests {
 
         assert_eq!(report.runtime_backend, FunRendererRuntimeBackend::Fun);
         assert_eq!(report.backend, FunRendererBackend::Dx12);
-        assert_eq!(report.registered_passes, 2);
+        assert_eq!(report.registered_passes, 5);
         assert!(report.produced_clear_color_frame);
+        assert!(report.frame_graph_valid);
 
         let frame = renderer.produce_clear_color_frame();
+        let graph_diagnostics = renderer.submit_frame_description(
+            RendererFrameDescription::static_scene_with_ui(frame.frame_index)
+                .with_upscaling(true)
+                .with_frame_generation(true),
+        );
+        assert!(graph_diagnostics.graph_valid());
+        assert!(
+            renderer
+                .frame_graph_debug_artifact()
+                .expect("debug artifact should exist")
+                .content
+                .contains("fun_renderer.pass.frame_generation_boundary")
+        );
         let result = renderer.present_clear_color(frame);
 
         assert!(result.submitted);
@@ -568,7 +681,9 @@ mod tests {
 
         let diagnostics = renderer.diagnostics();
         assert_eq!(diagnostics.lifecycle, RendererCoreLifecycle::Initialized);
-        assert_eq!(diagnostics.registered_passes, 2);
+        assert_eq!(diagnostics.registered_passes, 7);
+        assert!(diagnostics.frame_graph_valid);
+        assert_eq!(diagnostics.frame_graph_validation_failures, 0);
 
         let shutdown = renderer.shutdown();
         assert!(shutdown.clean_shutdown);

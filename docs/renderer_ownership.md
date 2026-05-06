@@ -549,6 +549,14 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::RENDERER_RESOURCE_CLASS_DESCRIPTORS`
 - `fun_renderer::ResourceFrameAllocationDiagnostics`
 - `fun_renderer::HOT_UPLOAD_KILL_LIST`
+- `fun_renderer::RendererFrameGraph`
+- `fun_renderer::RendererFrameDescription`
+- `fun_renderer::FrameGraphPassType`
+- `fun_renderer::FrameGraphResourceType`
+- `fun_renderer::FrameGraphDiagnosticCategory`
+- `fun_renderer::RendererFrameGraphDiagnostics`
+- `fun_renderer::RendererFrameGraphDebugArtifact`
+- `fun_renderer::FrameGraphSubmission`
 - `fun_scene::FunSceneSet`
 - `fun_renderer::FunRendererEcsSchedulePolicy`
 - `fun_renderer::FunRendererSet`

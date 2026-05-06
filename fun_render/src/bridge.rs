@@ -1,9 +1,10 @@
 use bevy::prelude::{App, Res, ResMut, Resource};
 use fun_renderer::{
-    BackendCapabilities, ClearColorFrame, DeviceBackend, FunRendererBackend,
+    BackendCapabilities, ClearColorFrame, DeviceBackend, FrameGraphSubmission, FunRendererBackend,
     FunRendererBackendSelection, FunRendererRuntimeBackend, NoopRendererCore, PresentResult,
     Presentation, RendererCoreBootReport, RendererCoreDiagnostics, RendererCoreSettings,
-    RendererCoreShutdownReport, RendererFeatureToggles,
+    RendererCoreShutdownReport, RendererFeatureToggles, RendererFrameDescription,
+    RendererFrameGraphDebugArtifact, RendererFrameGraphDiagnostics,
     fun_lux::{LuxBootReport, LuxFrameReport, LuxSettings, LuxShutdownReport, NoopLuxCore},
 };
 use tracing::{info, warn};
@@ -264,15 +265,25 @@ impl Default for RendererBridgeRuntimeState {
     }
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Resource)]
+pub struct RendererBridgeFrameGraphReport {
+    pub submitted_once: bool,
+    pub frame_description: Option<RendererFrameDescription>,
+    pub diagnostics: Option<RendererFrameGraphDiagnostics>,
+    pub debug_artifact: Option<RendererFrameGraphDebugArtifact>,
+}
+
 pub fn install_renderer_bridge_api(app: &mut App, settings: RendererBridgeSettings) {
     app.insert_resource(settings)
         .insert_resource(RendererBridgeRuntimeState::from_settings(settings))
+        .init_resource::<RendererBridgeFrameGraphReport>()
         .init_resource::<RendererBridgeHooks>();
 }
 
 pub fn renderer_bridge_initialize_runtime(
     settings: Res<RendererBridgeSettings>,
     mut state: ResMut<RendererBridgeRuntimeState>,
+    mut frame_graph_report: ResMut<RendererBridgeFrameGraphReport>,
 ) {
     if state.initialized_once {
         return;
@@ -286,6 +297,12 @@ pub fn renderer_bridge_initialize_runtime(
         let (mut core, boot_report) = NoopRendererCore::boot(settings.renderer_core);
         let backend_capabilities = core.capabilities();
         let clear_color_frame = core.produce_clear_color_frame();
+        let frame_description = renderer_bridge_frame_description_from_settings(
+            &settings,
+            clear_color_frame.frame_index,
+        );
+        let frame_graph_diagnostics = core.submit_frame_description(frame_description);
+        let frame_graph_debug_artifact = core.frame_graph_debug_artifact();
         let present_result = core.present_clear_color(clear_color_frame);
         let core_diagnostics = core.diagnostics();
         let core_shutdown = core.shutdown();
@@ -304,6 +321,10 @@ pub fn renderer_bridge_initialize_runtime(
         state.lux_boot = Some(lux_boot);
         state.lux_frame = Some(lux_frame);
         state.lux_shutdown = Some(lux_shutdown);
+        frame_graph_report.submitted_once = true;
+        frame_graph_report.frame_description = Some(frame_description);
+        frame_graph_report.diagnostics = Some(frame_graph_diagnostics.clone());
+        frame_graph_report.debug_artifact = frame_graph_debug_artifact;
 
         info!(
             target: "fun::render",
@@ -312,9 +333,11 @@ pub fn renderer_bridge_initialize_runtime(
             resolved_backend = settings.backend_selection.resolved.as_env_value(),
             preferred_backend = settings.preferred_backend.as_str(),
             registered_passes = boot_report.registered_passes,
+            frame_graph_passes = frame_graph_diagnostics.pass_count,
+            frame_graph_validation_failures = frame_graph_diagnostics.validation_failure_count(),
             clear_color_frame = boot_report.produced_clear_color_frame,
             lux_direct_lighting = lux_boot.direct_lighting.as_str(),
-            "fun-renderer no-op core initialized through fun_render bridge"
+            "fun-renderer core initialized through fun_render bridge frame submission"
         );
     } else {
         warn!(
@@ -329,6 +352,21 @@ pub fn renderer_bridge_initialize_runtime(
     }
 
     state.initialized_once = true;
+}
+
+#[must_use]
+pub fn renderer_bridge_frame_description_from_settings(
+    settings: &RendererBridgeSettings,
+    frame_index: u64,
+) -> RendererFrameDescription {
+    RendererFrameDescription::static_scene_with_ui(frame_index)
+        .with_virtual_resources(
+            settings.features.lux_virtual_shadows || settings.features.lux_hybrid_gi,
+        )
+        .with_upscaling(
+            settings.features.upscale || settings.features.dlss || settings.features.fsr,
+        )
+        .with_frame_generation(settings.features.frame_generation)
 }
 
 pub fn renderer_bridge_extract_noop(mut hooks: bevy::prelude::ResMut<RendererBridgeHooks>) {
@@ -396,6 +434,24 @@ mod tests {
     }
 
     #[test]
+    fn bridge_frame_description_tracks_renderer_feature_slots() {
+        let mut settings =
+            RendererBridgeSettings::from_runtime_backend(FunRendererRuntimeBackend::Fun);
+        settings.features.upscale = true;
+        settings.features.frame_generation = true;
+        settings.features.lux_virtual_shadows = true;
+
+        let description = renderer_bridge_frame_description_from_settings(&settings, 44);
+
+        assert_eq!(description.frame_index, 44);
+        assert!(description.include_static_scene_placeholder);
+        assert!(description.include_ui_placeholder);
+        assert!(description.include_virtual_resource_slot);
+        assert!(description.include_upscaling_slot);
+        assert!(description.include_frame_generation_slot);
+    }
+
+    #[test]
     fn no_op_bridge_systems_are_schedulable() {
         let mut app = App::new();
         install_renderer_bridge_api(&mut app, RendererBridgeSettings::compiled_default());
@@ -455,6 +511,24 @@ mod tests {
                 .core_shutdown
                 .expect("fun renderer should shut down cleanly")
                 .clean_shutdown
+        );
+
+        let frame_graph_report = app.world().resource::<RendererBridgeFrameGraphReport>();
+        assert!(frame_graph_report.submitted_once);
+        assert!(
+            frame_graph_report
+                .diagnostics
+                .as_ref()
+                .expect("frame graph diagnostics")
+                .graph_valid()
+        );
+        assert!(
+            frame_graph_report
+                .debug_artifact
+                .as_ref()
+                .expect("frame graph debug artifact")
+                .content
+                .contains("fun_renderer.pass.compose")
         );
     }
 

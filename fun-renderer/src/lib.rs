@@ -3,6 +3,7 @@
 pub mod api;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
+pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
 pub mod pipeline;
@@ -775,6 +776,7 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 pub use api::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
+pub use frame_graph::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
 pub use pipeline::*;

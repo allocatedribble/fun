@@ -29,8 +29,9 @@ use crate::{
     FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry, GeometryResidencyManager,
     GiCacheUpdatePriorities, GpuScene, HeuristicDebugOverlay, LuxLightPriorities,
     MaterialResidencyManager, MlInferencePriorities, PagePriorities, RenderHeuristicScheduler,
-    RenderPathSignature, RendererViews, ShadingRatePriorities, ShadowPagePriorities,
-    StaticInstanceTable, TextureResidencyManager, VirtualGeometryResidency, begin_heuristic_frame,
+    RenderPathSignature, RendererFrameGraph, RendererViews, ShadingRatePriorities,
+    ShadowPagePriorities, StaticInstanceTable, TextureResidencyManager, VirtualGeometryResidency,
+    begin_heuristic_frame,
     bridge::{
         RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_initialize_runtime,
     },
@@ -275,6 +276,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<GpuScene>()
         .init_resource::<ExtractedSceneDeltas>()
         .init_resource::<FrameGraph>()
+        .init_resource::<RendererFrameGraph>()
         .init_resource::<RendererViews>()
         .init_resource::<RenderHeuristicScheduler>()
         .init_resource::<PagePriorities>()
@@ -398,6 +400,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<GpuScene>();
         render_app.init_resource::<ExtractedSceneDeltas>();
         render_app.init_resource::<FrameGraph>();
+        render_app.init_resource::<RendererFrameGraph>();
         render_app.init_resource::<RendererViews>();
         render_app.init_resource::<RenderHeuristicScheduler>();
         render_app.init_resource::<PagePriorities>();

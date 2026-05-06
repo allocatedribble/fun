@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory + pass5-resource-ownership
+status: inventory + pass6-frame-graph
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -30,6 +30,7 @@ first-order migration blockers.
   `target/benchmarks/client/20260506-005505-031/summary.json`,
   `target/benchmarks/client/20260506-011124-520/summary.json`,
   `target/dx12-upload/pass5-resource-ownership/upload_perf_report.{md,json}`,
+  `target/frame-graph/pass6/renderer_frame_graph_debug.txt`,
   and the
   2026-05-04 CEF accelerated benchmark summary at
   `target/benchmarks/client/20260504-005500-247/summary.json`.
@@ -39,7 +40,7 @@ first-order migration blockers.
 | question | current answer |
 | --- | --- |
 | What does `fun_render` own today? | The Bevy-facing product renderer plugin, Winit presentation, config/env parsing, Solari/cloud/meshlet integration, DX12 native interop gate, CEF texture composition bridge, diagnostics/benchmark counters, upload arena experiments, DLSS correctness/native-SR scaffolding, and the bridge re-export surface for `fun-renderer`, `fun-lux`, and `fun-scene`. |
-| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, frame-graph model, GPU scene DB skeleton, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
+| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, GPU scene DB skeleton, resource ownership policy, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
 | Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
 | Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | Not proven. The experimental D3D11On12 path exists, but the latest strict local status selected `disabled` with `fallback_reason=render_backend_not_dx12`; the latest non-strict live lane selected CPU fallback. Current product CEF composition still uses a Bevy UI `ImageNode` target. |
@@ -297,12 +298,60 @@ The allocation diagnostic payload is
 bytes/count, persistent bytes/count, imported-resource count, readback
 bytes/count, top allocation sites, and high-water marks.
 
+## Pass 6 Renderer-Owned Frame Graph
+
+`fun-renderer` now owns the typed frame graph in
+`fun-renderer/src/frame_graph.rs`. The graph has explicit pass types for render,
+compute, copy/import, readback, presentation, and vendor SDK work. It also has
+explicit resource types for render-resolution scene color, display-resolution
+scene color, depth, motion vectors, normals/material IDs, UI color/alpha, final
+composed output, transient scratch, and history buffers.
+
+The initial graph built from `RendererFrameDescription::static_scene_with_ui`
+contains:
+
+| order | pass | type | role |
+|---:|---|---|---|
+| 0 | `fun_renderer.pass.clear` | render | clear |
+| 1 | `fun_renderer.pass.static_scene_placeholder` | render | HUD-less scene placeholder |
+| 2 | `fun_renderer.pass.ui_import_placeholder` | copy/import | UI color/alpha import placeholder |
+| 3 | `fun_renderer.pass.compose` | render | late scene/UI compose |
+| 4 | `fun_renderer.pass.present` | presentation | final present |
+
+Optional frame-description flags add graph slots without moving ownership out of
+`fun-renderer`:
+
+| flag | added pass | required inputs |
+|---|---|---|
+| `include_virtual_resource_slot` | `virtual_resource_feedback` compute pass | depth, motion vectors |
+| `include_upscaling_slot` | `upscale_boundary` vendor SDK pass | HUD-less scene color, depth, motion vectors |
+| `include_frame_generation_slot` | `frame_generation_boundary` vendor SDK pass | HUD-less display scene color, UI color/alpha, depth, motion vectors |
+| `include_diagnostics_readback` | `diagnostics_readback` readback pass | final composed output |
+
+`RendererFrameGraph::execute` currently emits zero-cost placeholder pass timings,
+stable pass order, resource lifetimes, and validation failures. Validation locks
+the day-one presentation contract:
+
+- scene and UI color remain separate;
+- frame generation receives HUD-less scene color, UI color/alpha, depth, and
+  motion vectors;
+- compose reads display scene color plus UI color/alpha and writes final output;
+- present reads final output and remains the final pass.
+
+`fun_render` now derives a `RendererFrameDescription` from bridge settings and
+submits it through `FrameGraphSubmission` on `NoopRendererCore`. The bridge
+records `RendererBridgeFrameGraphReport`, including graph diagnostics and a
+debug artifact, but it does not own pass order or graph execution policy.
+
+Current debug artifact:
+`target/frame-graph/pass6/renderer_frame_graph_debug.txt`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
 | --- | --- | --- | --- | --- |
 | Product presentation | `game_client/src/lib.rs`, `fun_render/src/winit.rs`, `fun_render/src/core.rs` | `game_client` + `fun_render` | `fun-renderer` core through `fun_render` bridge | Current visible frame path. |
-| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,heuristics.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, not product presentation. |
+| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,frame_graph.rs,heuristics.rs,resource.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, resource model, not product swapchain ownership. |
 | Lighting/Lux seams | `fun-lux/src/{lib.rs,api.rs}` | `fun-lux` | `fun-lux` | Buildable substrate and ECS extraction/update hooks. |
 | Scene substrate | `fun-scene/src/*`, `fun-scene-macros/src/*`, `game_scene/src/*` | `fun-scene` + `game_scene` | same split | Active and first-party. |
 | CEF/Svelte product UI | `game_client/ui/main`, `game_client/src/cef_ui.rs`, `fun_ui_cef/src/*`, `fun_host/src/lib.rs` | `game_client`, `fun_ui_cef`, `fun_host` | CEF/Svelte UI with renderer-owned GPU compositor | UI is active, but final composition still uses Bevy UI image node. |
@@ -371,6 +420,8 @@ this pass. `fun_ui_cef` owns browser surfaces, not Bevy UI.
 | --- | --- |
 | Renderer core compile | `cargo check -p fun-renderer` |
 | Renderer core tests | `cargo test -p fun-renderer --lib` |
+| Renderer frame graph tests | `cargo test -p fun-renderer --lib frame_graph` |
+| Renderer frame graph debug artifact | `$env:FUN_RENDERER_FRAME_GRAPH_DEBUG_ARTIFACT='target\frame-graph\pass6\renderer_frame_graph_debug.txt'; cargo test -p fun-renderer --lib frame_graph_debug_artifact_names_passes_resources_and_markers` |
 | Lux compile/tests | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib` |
 | Bridge compile/tests | `cargo check -p fun_render`; `cargo test -p fun_render --lib` |
 | Client compile | `cargo check -p game_client` |
