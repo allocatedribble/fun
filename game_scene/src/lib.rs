@@ -66,6 +66,7 @@ impl StreamedWorldEntity {
 struct SceneEntity {
     entity: NetEntity,
     name: &'static str,
+    network: NetworkedSceneEntity,
     catalog: WorldCatalogRef,
     translation: Vec3,
     rotation_z_radians: f32,
@@ -76,13 +77,40 @@ impl SceneEntity {
         Transform::from_translation(self.translation)
             .with_rotation(Quat::from_rotation_z(self.rotation_z_radians))
     }
+
+    fn world_spec(self) -> WorldEntitySpec {
+        WorldEntitySpec {
+            entity: self.entity,
+            name: self.name.to_owned(),
+            class: self.network.class,
+            authority: self.network.authority,
+            transform: qtransform(&self.transform()),
+            catalog: Some(self.catalog),
+            render: None,
+            collider: None,
+            color: None,
+        }
+    }
+
+    fn manifest(self) -> SceneEntityManifest {
+        let spec = self.world_spec();
+        SceneEntityManifest {
+            stable_identity: spec.entity,
+            name: spec.name,
+            network: SceneNetworkManifest::from(self.network),
+            transform: spec.transform,
+            catalog: spec.catalog,
+            render: spec.render,
+            material_color: spec.color,
+        }
+    }
 }
 
 pub fn spawn_default_scene(mut commands: Commands) {
     commands.spawn_fun_scene_list(fun_list![
         (
             #Floor
-            fun_value(Networked::world())
+            fun_value(NetworkedSceneEntity::world())
             fun_value(SceneStableIdentity(FLOOR_ENTITY))
             Renderable {
                 geometry: GeometryRef({ASSET_FLOOR.0}),
@@ -117,7 +145,7 @@ pub fn spawn_default_scene(mut commands: Commands) {
         (
             #FloorCollider
             Name::new("FloorCollider")
-            fun_value(Networked::world())
+            fun_value(NetworkedSceneEntity::world())
             fun_value(SceneStableIdentity(FLOOR_COLLIDER_ENTITY))
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_FLOOR_COLLIDER.0,
@@ -130,7 +158,7 @@ pub fn spawn_default_scene(mut commands: Commands) {
         ),
         (
             #Wall
-            fun_value(Networked::world())
+            fun_value(NetworkedSceneEntity::world())
             fun_value(SceneStableIdentity(WALL_ENTITY))
             Renderable {
                 geometry: GeometryRef({ASSET_WALL.0}),
@@ -166,7 +194,7 @@ pub fn spawn_default_scene(mut commands: Commands) {
         ),
         (
             #Ramp
-            fun_value(Networked::world())
+            fun_value(NetworkedSceneEntity::world())
             fun_value(SceneStableIdentity(RAMP_ENTITY))
             Renderable {
                 geometry: GeometryRef({ASSET_RAMP.0}),
@@ -209,7 +237,7 @@ pub fn spawn_default_scene(mut commands: Commands) {
 
 fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
     fun! {
-        fun_value(Networked::world())
+        fun_value(NetworkedSceneEntity::world())
         fun_value(SceneStableIdentity(entity))
         Renderable {
             geometry: GeometryRef({ASSET_COVER_CUBE.0}),
@@ -246,22 +274,10 @@ fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
 }
 
 pub fn apply_scene_stable_identities(
-    mut commands: Commands,
-    query: Query<(Entity, &SceneStableIdentity, &Networked), Without<NetworkIdentity>>,
+    commands: Commands,
+    query: Query<(Entity, &SceneStableIdentity, &NetworkedSceneEntity), Without<NetworkIdentity>>,
 ) {
-    for (entity, stable_identity, networked) in &query {
-        commands.entity(entity).insert((
-            NetworkIdentity {
-                entity: stable_identity.0,
-                class: networked.class,
-            },
-            NetworkAuthority {
-                mode: networked.authority,
-            },
-            networked.scope,
-            networked.priority,
-        ));
-    }
+    apply_networked_scene_identities(commands, query);
 }
 
 #[must_use]
@@ -320,24 +336,16 @@ pub fn default_scene_descriptor() -> SceneDescriptor {
 #[must_use]
 pub fn default_scene_manifest(revision: WorldRevision) -> SceneManifest {
     let specs = default_scene_world_specs();
-    let entities = specs
-        .iter()
-        .map(|spec| SceneEntityManifest {
-            stable_identity: spec.entity,
-            name: spec.name.clone(),
-            transform: spec.transform,
-            catalog: spec.catalog,
-            render: spec.render,
-            material_color: spec.color,
-        })
-        .collect::<Vec<_>>();
-    let chunks = fun_scene::chunk_world_specs(DEMO_LEVEL_ID, revision, specs);
+    let entities = default_scene_entity_manifests();
+    let signature = scene_manifest_signature(&entities);
+    let chunks =
+        fun_scene::chunk_world_specs_with_signature(DEMO_LEVEL_ID, revision, specs, signature.0);
     let stream_chunk_count = chunks.len() as u16;
     SceneManifest {
         id: DEFAULT_SCENE_ID,
         display_name: "Arena Blockout",
         scene_function_name: DEFAULT_SCENE_FUNCTION_NAME,
-        signature: default_scene_manifest_signature(),
+        signature,
         entities,
         chunks,
         renderer: SceneRendererManifest {
@@ -383,17 +391,14 @@ pub fn default_scene_world_stream_chunks(revision: WorldRevision) -> Vec<SceneSt
 pub fn default_scene_world_specs() -> Vec<WorldEntitySpec> {
     default_scene_entities()
         .into_iter()
-        .map(|entity| WorldEntitySpec {
-            entity: entity.entity,
-            name: entity.name.to_owned(),
-            class: ReplicationClass::World,
-            authority: AuthorityMode::StaticServer,
-            transform: qtransform(&entity.transform()),
-            catalog: Some(entity.catalog),
-            render: None,
-            collider: None,
-            color: None,
-        })
+        .map(SceneEntity::world_spec)
+        .collect()
+}
+
+fn default_scene_entity_manifests() -> Vec<SceneEntityManifest> {
+    default_scene_entities()
+        .into_iter()
+        .map(SceneEntity::manifest)
         .collect()
 }
 
@@ -402,6 +407,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: FLOOR_ENTITY,
             name: "Floor",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_FLOOR.0, MATERIAL_FLOOR.0, 0),
             translation: Vec3::ZERO,
             rotation_z_radians: 0.0,
@@ -409,6 +415,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: FLOOR_COLLIDER_ENTITY,
             name: "FloorCollider",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_FLOOR_COLLIDER.0, MATERIAL_FLOOR.0, COLLIDER_FLOOR.0),
             translation: Vec3::new(0.0, -0.25, 0.0),
             rotation_z_radians: 0.0,
@@ -416,6 +423,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: WALL_ENTITY,
             name: "Wall",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_WALL.0, MATERIAL_WALL.0, COLLIDER_WALL.0),
             translation: Vec3::new(0.0, 1.5, -8.0),
             rotation_z_radians: 0.0,
@@ -423,6 +431,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: RAMP_ENTITY,
             name: "Ramp",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_RAMP.0, MATERIAL_RAMP.0, COLLIDER_RAMP.0),
             translation: Vec3::new(-6.0, 0.25, -2.0),
             rotation_z_radians: -12.0_f32.to_radians(),
@@ -430,6 +439,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: COVER_A_ENTITY,
             name: "CoverA",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
             translation: Vec3::new(3.0, 1.0, 2.0),
             rotation_z_radians: 0.0,
@@ -437,6 +447,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: COVER_B_ENTITY,
             name: "CoverB",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
             translation: Vec3::new(5.0, 1.0, -1.5),
             rotation_z_radians: 0.0,
@@ -444,6 +455,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
         SceneEntity {
             entity: COVER_C_ENTITY,
             name: "CoverC",
+            network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
             translation: Vec3::new(7.0, 2.0, 4.0),
             rotation_z_radians: 0.0,
@@ -451,8 +463,9 @@ fn default_scene_entities() -> [SceneEntity; 7] {
     ]
 }
 
+#[cfg(test)]
 fn default_scene_manifest_signature() -> SceneManifestSignature {
-    SceneManifestSignature(world_stream_manifest_signature(&default_scene_world_specs()))
+    scene_manifest_signature(&default_scene_entity_manifests())
 }
 
 const fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> WorldCatalogRef {
@@ -511,12 +524,20 @@ mod tests {
     }
 
     #[test]
-    fn default_scene_manifest_signature_uses_fun_scene_stream_signature() {
-        let specs = default_scene_world_specs();
+    fn default_scene_manifest_signature_uses_fun_scene_manifest_signature() {
+        let entities = default_scene_entity_manifests();
+        let manifest = default_scene_manifest(WorldRevision(3));
 
         assert_eq!(
             default_scene_manifest_signature(),
-            SceneManifestSignature(fun_scene::world_stream_manifest_signature(&specs))
+            scene_manifest_signature(&entities)
+        );
+        assert_eq!(manifest.signature, default_scene_manifest_signature());
+        assert!(
+            manifest
+                .chunks
+                .iter()
+                .all(|chunk| chunk.manifest_signature == manifest.signature.0)
         );
     }
 
@@ -542,5 +563,34 @@ mod tests {
             .collect::<Vec<_>>();
         ids.sort_unstable();
         assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7]);
+
+        let mut history_keys = app.world_mut().query::<&SceneStableHistoryKey>();
+        let mut keys = history_keys
+            .iter(app.world())
+            .map(|key| key.0.0)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, ids);
+    }
+
+    #[test]
+    fn default_scene_manifest_signature_changes_without_reassigning_stable_ids() {
+        let mut entities = default_scene_entity_manifests();
+        let original_ids = entities
+            .iter()
+            .map(|entity| entity.stable_identity)
+            .collect::<Vec<_>>();
+        let original_signature = scene_manifest_signature(&entities);
+
+        entities[0].network.scope_radius_millimeters += 1;
+
+        assert_eq!(
+            original_ids,
+            entities
+                .iter()
+                .map(|entity| entity.stable_identity)
+                .collect::<Vec<_>>()
+        );
+        assert_ne!(original_signature, scene_manifest_signature(&entities));
     }
 }

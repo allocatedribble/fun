@@ -47,14 +47,21 @@ The shared manifest and stream contract lives in `fun_scene`:
 
 - `SceneManifest`
 - `SceneEntityManifest`
+- `SceneNetworkManifest`
 - `SceneDescriptor`
 - `SceneManifestSignature`
 - `SceneRendererManifest`
 - `SceneLuxManifest`
 - `SceneStreamChunk`
 - `SceneManifestProvider`
+- `NetworkedSceneEntity`
+- `SceneStableHistoryKey`
+- `SceneStableEntityIndex`
 - `chunk_world_specs`
+- `chunk_world_specs_with_signature`
 - `try_chunk_world_specs`
+- `try_chunk_world_specs_with_signature`
+- `scene_manifest_signature`
 - `world_stream_manifest_signature`
 - `qtransform`
 
@@ -73,9 +80,26 @@ fun! scene
 
 `SceneManifest::shared_consumer_contract` is the compact machine-checkable
 record for this path. The default game scene now builds its manifest from
-`fun_scene::world_stream_manifest_signature` and `fun_scene::chunk_world_specs`;
+`fun_scene::scene_manifest_signature` and carries that full-scene signature on
+its streamed chunks with `fun_scene::chunk_world_specs_with_signature`;
 `game_server` uses `fun_scene` directly for live stream signatures, chunking,
-and quantized transforms.
+stable network identities, and quantized transforms.
+
+Network-aware scene data is authored with `NetworkedSceneEntity`, not an opaque
+runtime Bevy `Entity`. It carries the replication class, authority mode, scope,
+and priority that eventually become Thunder `NetworkIdentity`,
+`NetworkAuthority`, `ReplicationScope`, and `ReplicationPriority` components.
+The server is the authoritative scene spawner, stable identity assigner, world
+stream manifest generator, and gameplay authority. The client consumes streamed
+chunks, spawns the renderable subset, and applies prediction where needed. The
+editor edits the full scene graph, previews through the same renderer path, and
+can generate deterministic test manifests.
+
+`SceneStableIdentity` remains separate from runtime Bevy `Entity`.
+`SceneStableHistoryKey` and `SceneStableEntityIndex` are the renderer-facing
+bridge for GPU history, motion vectors, and cache invalidation. Scene patches
+may change manifest signatures, networking policy, transforms, materials, or
+lighting, but they must not silently reassign stable IDs.
 
 ## ECS Renderer Schedule
 
@@ -417,9 +441,19 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::SceneChunkId`
 - `fun_scene::SceneManifest`
 - `fun_scene::SceneEntityManifest`
+- `fun_scene::SceneNetworkManifest`
 - `fun_scene::SceneStreamChunk`
 - `fun_scene::SceneRendererManifest`
 - `fun_scene::SceneLuxManifest`
+- `fun_scene::NetworkedSceneEntity`
+- `fun_scene::SceneStableHistoryKey`
+- `fun_scene::SceneStableEntityIndex`
+- `fun_scene::SceneNetworkingPolicy`
+- `fun_scene::SceneNetworkRole`
+- `fun_scene::SCENE_NETWORK_ROLE_DESCRIPTORS`
+- `fun_scene::scene_manifest_signature`
+- `fun_scene::chunk_world_specs_with_signature`
+- `fun_scene::try_chunk_world_specs_with_signature`
 - `fun_scene::Renderable`
 - `fun_scene::VirtualGeometryAuthoring`
 - `fun_scene::RendererBounds`

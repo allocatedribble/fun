@@ -7,6 +7,7 @@ use thunder::prelude::{
 
 pub const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
 pub const MAX_WORLD_STREAM_CHUNKS: usize = u16::MAX as usize;
+pub(crate) const FNV64_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamChunkError {
@@ -27,11 +28,31 @@ pub fn try_chunk_world_specs(
     revision: WorldRevision,
     specs: Vec<WorldEntitySpec>,
 ) -> Result<Vec<WorldStreamChunk>, StreamChunkError> {
+    let manifest_signature = world_stream_manifest_signature(&specs);
+    try_chunk_world_specs_with_signature(level_id, revision, specs, manifest_signature)
+}
+
+#[must_use]
+pub fn chunk_world_specs_with_signature(
+    level_id: &str,
+    revision: WorldRevision,
+    specs: Vec<WorldEntitySpec>,
+    manifest_signature: u64,
+) -> Vec<WorldStreamChunk> {
+    try_chunk_world_specs_with_signature(level_id, revision, specs, manifest_signature)
+        .unwrap_or_default()
+}
+
+pub fn try_chunk_world_specs_with_signature(
+    level_id: &str,
+    revision: WorldRevision,
+    specs: Vec<WorldEntitySpec>,
+    manifest_signature: u64,
+) -> Result<Vec<WorldStreamChunk>, StreamChunkError> {
     let chunk_count = chunk_count_for_spec_len(specs.len())?;
     if chunk_count == 0 {
         return Ok(Vec::new());
     }
-    let manifest_signature = world_stream_manifest_signature(&specs);
 
     Ok(specs
         .chunks(WORLD_STREAM_ENTITIES_PER_CHUNK)
@@ -60,7 +81,7 @@ pub fn chunk_count_for_spec_len(spec_len: usize) -> Result<u16, StreamChunkError
 
 #[must_use]
 pub fn world_stream_manifest_signature(specs: &[WorldEntitySpec]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut hash = FNV64_OFFSET_BASIS;
     hash = fnv1a_u64(hash, specs.len() as u64);
     for spec in specs {
         hash = fnv1a_u64(hash, spec.entity.0);
@@ -93,7 +114,7 @@ fn qvec(value: [f32; 3]) -> QuantizedVec3 {
     QuantizedVec3::from_f32(value, Quantization::MILLIMETERS)
 }
 
-fn hash_replication_class(mut hash: u64, class: ReplicationClass) -> u64 {
+pub(crate) fn hash_replication_class(mut hash: u64, class: ReplicationClass) -> u64 {
     match class {
         ReplicationClass::Pawn => fnv1a(hash, 0),
         ReplicationClass::Projectile => fnv1a(hash, 1),
@@ -108,7 +129,7 @@ fn hash_replication_class(mut hash: u64, class: ReplicationClass) -> u64 {
     }
 }
 
-fn hash_authority_mode(mut hash: u64, authority: AuthorityMode) -> u64 {
+pub(crate) fn hash_authority_mode(mut hash: u64, authority: AuthorityMode) -> u64 {
     match authority {
         AuthorityMode::ServerOnly => fnv1a(hash, 0),
         AuthorityMode::ClientPredicted { owner } => {
@@ -119,7 +140,7 @@ fn hash_authority_mode(mut hash: u64, authority: AuthorityMode) -> u64 {
     }
 }
 
-fn hash_transform(mut hash: u64, transform: QuantizedTransform3) -> u64 {
+pub(crate) fn hash_transform(mut hash: u64, transform: QuantizedTransform3) -> u64 {
     hash = hash_qvec(hash, transform.translation);
     hash = fnv1a_i16(hash, transform.rotation.x);
     hash = fnv1a_i16(hash, transform.rotation.y);
@@ -127,7 +148,7 @@ fn hash_transform(mut hash: u64, transform: QuantizedTransform3) -> u64 {
     fnv1a_i16(hash, transform.rotation.w)
 }
 
-fn hash_catalog(mut hash: u64, catalog: Option<WorldCatalogRef>) -> u64 {
+pub(crate) fn hash_catalog(mut hash: u64, catalog: Option<WorldCatalogRef>) -> u64 {
     match catalog {
         Some(catalog) => {
             hash = fnv1a_u8(hash, 1);
@@ -139,7 +160,7 @@ fn hash_catalog(mut hash: u64, catalog: Option<WorldCatalogRef>) -> u64 {
     }
 }
 
-fn hash_render(mut hash: u64, render: Option<WorldPrimitive>) -> u64 {
+pub(crate) fn hash_render(mut hash: u64, render: Option<WorldPrimitive>) -> u64 {
     match render {
         Some(WorldPrimitive::Plane { size }) => {
             hash = fnv1a_u8(hash, 1);
@@ -153,7 +174,7 @@ fn hash_render(mut hash: u64, render: Option<WorldPrimitive>) -> u64 {
     }
 }
 
-fn hash_collider(mut hash: u64, collider: Option<WorldCollider>) -> u64 {
+pub(crate) fn hash_collider(mut hash: u64, collider: Option<WorldCollider>) -> u64 {
     match collider {
         Some(WorldCollider::Cuboid { size }) => {
             hash = fnv1a_u8(hash, 1);
@@ -163,7 +184,7 @@ fn hash_collider(mut hash: u64, collider: Option<WorldCollider>) -> u64 {
     }
 }
 
-fn hash_color(mut hash: u64, color: Option<PackedColorRgba8>) -> u64 {
+pub(crate) fn hash_color(mut hash: u64, color: Option<PackedColorRgba8>) -> u64 {
     match color {
         Some(color) => {
             hash = fnv1a_u8(hash, 1);
@@ -176,13 +197,13 @@ fn hash_color(mut hash: u64, color: Option<PackedColorRgba8>) -> u64 {
     }
 }
 
-fn hash_qvec(mut hash: u64, value: QuantizedVec3) -> u64 {
+pub(crate) fn hash_qvec(mut hash: u64, value: QuantizedVec3) -> u64 {
     hash = fnv1a_i32(hash, value.x);
     hash = fnv1a_i32(hash, value.y);
     fnv1a_i32(hash, value.z)
 }
 
-fn fnv1a(mut hash: u64, value: u32) -> u64 {
+pub(crate) fn fnv1a(mut hash: u64, value: u32) -> u64 {
     for byte in value.to_le_bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
@@ -190,13 +211,13 @@ fn fnv1a(mut hash: u64, value: u32) -> u64 {
     hash
 }
 
-fn fnv1a_u8(mut hash: u64, value: u8) -> u64 {
+pub(crate) fn fnv1a_u8(mut hash: u64, value: u8) -> u64 {
     hash ^= u64::from(value);
     hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     hash
 }
 
-fn fnv1a_u16(mut hash: u64, value: u16) -> u64 {
+pub(crate) fn fnv1a_u16(mut hash: u64, value: u16) -> u64 {
     for byte in value.to_le_bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
@@ -204,15 +225,15 @@ fn fnv1a_u16(mut hash: u64, value: u16) -> u64 {
     hash
 }
 
-fn fnv1a_i16(hash: u64, value: i16) -> u64 {
+pub(crate) fn fnv1a_i16(hash: u64, value: i16) -> u64 {
     fnv1a_u16(hash, value as u16)
 }
 
-fn fnv1a_i32(hash: u64, value: i32) -> u64 {
+pub(crate) fn fnv1a_i32(hash: u64, value: i32) -> u64 {
     fnv1a(hash, value as u32)
 }
 
-fn fnv1a_u64(mut hash: u64, value: u64) -> u64 {
+pub(crate) fn fnv1a_u64(mut hash: u64, value: u64) -> u64 {
     for byte in value.to_le_bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
@@ -220,7 +241,7 @@ fn fnv1a_u64(mut hash: u64, value: u64) -> u64 {
     hash
 }
 
-fn fnv1a_str(mut hash: u64, value: &str) -> u64 {
+pub(crate) fn fnv1a_str(mut hash: u64, value: &str) -> u64 {
     hash = fnv1a_u64(hash, value.len() as u64);
     for byte in value.bytes() {
         hash = fnv1a_u8(hash, byte);
@@ -341,5 +362,20 @@ mod tests {
         });
 
         assert_ne!(original, world_stream_manifest_signature(&specs));
+    }
+
+    #[test]
+    fn chunks_can_carry_full_scene_manifest_signature() {
+        let signature = 0x515c_6e7e_5e11_0013;
+        let chunks = try_chunk_world_specs_with_signature(
+            "arena/blockout",
+            WorldRevision(1),
+            sample_specs(),
+            signature,
+        )
+        .expect("sample specs fit in chunk table");
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].manifest_signature, signature);
     }
 }

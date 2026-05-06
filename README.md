@@ -69,6 +69,13 @@ benchmark scenes, stress scenes, and editor starter scenes. Generic
 manifest signature, and stream chunk helpers live in `fun-scene`; server,
 client, editor, renderer, and virtual page scheduling consume that shared
 contract.
+Network-aware authoring uses `NetworkedSceneEntity` with replication class,
+authority, scope, and priority. `SceneStableIdentity` remains separate from the
+runtime Bevy `Entity`; `SceneStableHistoryKey` and `SceneStableEntityIndex`
+give renderer extraction stable keys for GPU history, motion vectors, and cache
+invalidation. Manifest signatures are generated from scene entity fields and
+are carried on world-stream chunks so server, client, and editor can detect
+deterministic field changes without reassigning stable IDs.
 
 `fun-lux` is the lighting package. Its Rust library crate is `fun_lux`, housed
 at `fun/fun-lux`, and it owns direct lighting, many-light sampling, virtual

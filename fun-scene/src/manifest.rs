@@ -1,6 +1,12 @@
 use thunder::prelude::{
-    NetEntity, PackedColorRgba8, QuantizedTransform3, WorldCatalogRef, WorldPrimitive,
+    AuthorityMode, NetEntity, PackedColorRgba8, QuantizedTransform3, RelevanceLayers,
+    ReplicationClass, ReplicationPriority, ReplicationScope, WorldCatalogRef, WorldPrimitive,
     WorldRevision, WorldStreamChunk,
+};
+
+use crate::streaming::{
+    FNV64_OFFSET_BASIS, fnv1a, fnv1a_i32, fnv1a_str, fnv1a_u8, fnv1a_u64, hash_authority_mode,
+    hash_catalog, hash_color, hash_render, hash_replication_class, hash_transform,
 };
 
 pub type SceneStreamChunk = WorldStreamChunk;
@@ -10,6 +16,37 @@ pub struct SceneId(pub &'static str);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SceneManifestSignature(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SceneNetworkManifest {
+    pub class: ReplicationClass,
+    pub authority: AuthorityMode,
+    pub scope_radius_millimeters: i32,
+    pub scope_layers: RelevanceLayers,
+    pub scope_faction: u32,
+    pub scope_always_relevant: bool,
+    pub priority_microunits: i32,
+}
+
+impl SceneNetworkManifest {
+    #[must_use]
+    pub fn from_parts(
+        class: ReplicationClass,
+        authority: AuthorityMode,
+        scope: ReplicationScope,
+        priority: ReplicationPriority,
+    ) -> Self {
+        Self {
+            class,
+            authority,
+            scope_radius_millimeters: quantize_f32(scope.radius, 1_000.0),
+            scope_layers: scope.layers,
+            scope_faction: scope.faction,
+            scope_always_relevant: scope.always_relevant,
+            priority_microunits: quantize_f32(priority.0, 1_000_000.0),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SceneDescriptor {
@@ -60,10 +97,42 @@ impl SceneManifest {
 pub struct SceneEntityManifest {
     pub stable_identity: NetEntity,
     pub name: String,
+    pub network: SceneNetworkManifest,
     pub transform: QuantizedTransform3,
     pub catalog: Option<WorldCatalogRef>,
     pub render: Option<WorldPrimitive>,
     pub material_color: Option<PackedColorRgba8>,
+}
+
+#[must_use]
+pub fn scene_manifest_signature(entities: &[SceneEntityManifest]) -> SceneManifestSignature {
+    let mut hash = FNV64_OFFSET_BASIS;
+    hash = fnv1a_u64(hash, entities.len() as u64);
+    for entity in entities {
+        hash = fnv1a_u64(hash, entity.stable_identity.0);
+        hash = fnv1a_str(hash, &entity.name);
+        hash = hash_scene_network(hash, entity.network);
+        hash = hash_transform(hash, entity.transform);
+        hash = hash_catalog(hash, entity.catalog);
+        hash = hash_render(hash, entity.render);
+        hash = hash_color(hash, entity.material_color);
+    }
+    SceneManifestSignature(hash)
+}
+
+fn hash_scene_network(mut hash: u64, network: SceneNetworkManifest) -> u64 {
+    hash = hash_replication_class(hash, network.class);
+    hash = hash_authority_mode(hash, network.authority);
+    hash = fnv1a_i32(hash, network.scope_radius_millimeters);
+    hash = fnv1a_u64(hash, network.scope_layers.0);
+    hash = fnv1a(hash, network.scope_faction);
+    hash = fnv1a_u8(hash, u8::from(network.scope_always_relevant));
+    fnv1a_i32(hash, network.priority_microunits)
+}
+
+fn quantize_f32(value: f32, scale: f32) -> i32 {
+    let scaled = (value * scale).round();
+    scaled.clamp(i32::MIN as f32, i32::MAX as f32) as i32
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,5 +212,80 @@ impl FunSceneManifestPolicy {
 impl Default for FunSceneManifestPolicy {
     fn default() -> Self {
         Self::DEFAULT
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use thunder::prelude::{NetClientId, QuantizedTransform3, RelevanceLayers, WorldCatalogRef};
+
+    use super::*;
+
+    fn entity_manifest() -> SceneEntityManifest {
+        SceneEntityManifest {
+            stable_identity: NetEntity(1),
+            name: String::from("Door"),
+            network: SceneNetworkManifest::from_parts(
+                ReplicationClass::World,
+                AuthorityMode::StaticServer,
+                ReplicationScope {
+                    radius: 512.0,
+                    layers: RelevanceLayers::DEFAULT,
+                    faction: 0,
+                    always_relevant: true,
+                },
+                ReplicationPriority(0.5),
+            ),
+            transform: QuantizedTransform3::default(),
+            catalog: Some(WorldCatalogRef {
+                asset_id: 10,
+                material_id: 20,
+                collider_id: 30,
+            }),
+            render: None,
+            material_color: None,
+        }
+    }
+
+    #[test]
+    fn manifest_signature_changes_when_entity_fields_change() {
+        let original = vec![entity_manifest()];
+        let mut changed = original.clone();
+        changed[0].network = SceneNetworkManifest::from_parts(
+            ReplicationClass::Pawn,
+            AuthorityMode::ClientPredicted {
+                owner: NetClientId(5),
+            },
+            ReplicationScope {
+                radius: 64.0,
+                layers: RelevanceLayers::INFANTRY,
+                faction: 2,
+                always_relevant: false,
+            },
+            ReplicationPriority(2.25),
+        );
+
+        assert_ne!(
+            scene_manifest_signature(&original),
+            scene_manifest_signature(&changed)
+        );
+    }
+
+    #[test]
+    fn network_manifest_quantizes_float_fields_for_stable_signatures() {
+        let network = SceneNetworkManifest::from_parts(
+            ReplicationClass::World,
+            AuthorityMode::StaticServer,
+            ReplicationScope {
+                radius: 1.2345,
+                layers: RelevanceLayers::DEFAULT,
+                faction: 0,
+                always_relevant: true,
+            },
+            ReplicationPriority(0.25),
+        );
+
+        assert_eq!(network.scope_radius_millimeters, 1_235);
+        assert_eq!(network.priority_microunits, 250_000);
     }
 }
