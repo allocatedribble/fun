@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory
+status: inventory + pass2-boundary-stabilized
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -36,8 +36,8 @@ first-order migration blockers.
 | --- | --- |
 | What does `fun_render` own today? | The Bevy-facing product renderer plugin, Winit presentation, config/env parsing, Solari/cloud/meshlet integration, DX12 native interop gate, CEF texture composition bridge, diagnostics/benchmark counters, upload arena experiments, DLSS correctness/native-SR scaffolding, and the bridge re-export surface for `fun-renderer`, `fun-lux`, and `fun-scene`. |
 | What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, frame-graph model, GPU scene DB skeleton, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
-| Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features include `bevy_ecs`, `fun_renderer_new_core`, and `fun_renderer_dx12`. |
-| Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `NoopRendererCore` is not wired to the swapchain. |
+| Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
+| Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | Not proven. The experimental D3D11On12 path exists, but the latest strict local status selected `disabled` with `fallback_reason=render_backend_not_dx12`; the latest non-strict live lane selected CPU fallback. Current product CEF composition still uses a Bevy UI `ImageNode` target. |
 | Which runtime pipeline gates still fail? | The local pipeline cardinality report records runtime creation p95 maxima: render pipeline `22`, compute pipeline `82`, shader pipeline `104`. The DX12 perf gate treats runtime render, compute, and shader pipeline creation after warmup as hard failures. |
 | Is DX12 real DX12 or fallback? | The Bevy/wgpu renderer can select DX12 through the stack profiles and `RenderPlugin`, and diagnostics report the requested backend. The CEF accelerated bridge is not ready: both local CEF artifacts report `backend=dx12` but `bridge_ready=false` and `fallback_reason=render_backend_not_dx12`. |
@@ -47,15 +47,65 @@ first-order migration blockers.
 
 | crate/module | current owner | intended owner | migration status | current feature flags | validation commands |
 | --- | --- | --- | --- | --- | --- |
-| `fun_render` | Bevy/game renderer bridge, but still the product renderer brain for Winit presentation, Solari, meshlets, clouds, CEF texture composition, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, legacy compatibility during transition. | `bridge` API exists; product presentation still here; heavy renderer code still here. | `default=[offscreen,volumetric_clouds]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, `fun_renderer_*`, `fun_lux_*`. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
-| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB skeleton, frame graph skeleton, heuristic scheduler, no-op clear-color boot path. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. | `default=[bevy_ecs,fun_renderer_new_core,fun_renderer_dx12]`, `bevy_ecs`, `fun_renderer_legacy`, `fun_renderer_new_core`, `fun_renderer_dx12`, `fun_renderer_vulkan`, `fun_renderer_cef_gpu_only`, `fun_renderer_upscale`, `fun_renderer_dlss`, `fun_renderer_fsr`, `fun_renderer_frame_generation`, `fun_renderer_experimental_ml`, `fun_lux_*`. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`. |
-| `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. | Exists as real crate; currently substrate and policy, not final renderer lighting implementation. | `fun_lux_many_light`, `fun_lux_virtual_shadows`, `fun_lux_hybrid_gi`; no default features. | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib`. |
+| `fun_render` | Bevy/game renderer bridge, but still the product renderer brain for Winit presentation, Solari, meshlets, clouds, CEF texture composition, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, legacy compatibility during transition. | Runtime selector is installed by `FunRenderCorePlugin`; `FUN_RENDERER_BACKEND=fun` boots the no-op core/lux path; product presentation still here. | `default=[offscreen,volumetric_clouds]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
+| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB skeleton, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, upload/CEF/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`. |
+| `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. | Exists as real crate; now exposes baseline no-op frame and shutdown reports for bridge boot. | `many_light`, `virtual_shadows`, `hybrid_gi`; no default features; old `fun_lux_*` names are aliases. | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib`. |
 | `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `tools/check_fun_scene_migration.ps1`. |
 | `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI can be compiled but uses Bevy UI image composition. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate`. |
 | `fun_host` | Rust-owned host/launcher/editor command authority, current-client preview state, command routing to CEF/Svelte. | Rust authoritative host bridge for Svelte/CEF, not a renderer. | Active; editor preview is current-client metadata, not child process or HWND path. | No explicit feature flags. | `cargo check -p fun_host`; `cargo test -p fun_host --lib`. |
 | `fun_ui_cef` | CEF runtime, browser lifetime, offscreen browser settings, JavaScript bridge, security validation, CPU paint compositor, accelerated callback surface and counters. | Browser subsystem only: callbacks/transport policy/events, while `fun-renderer` owns final GPU compositor contract. | Active; accelerated callback surface exists; CPU `OnPaint` path remains compiled as compatibility lane. | `debug_remote`; no default features. | `cargo check -p fun_ui_cef`; `cargo test -p fun_ui_cef --lib`. |
 | `game_scene` | Game-specific scene catalog over `fun_scene`, default arenas, deterministic manifests/chunks. | Game-specific catalog only; generic scene authority stays in `fun-scene`. | Migrated off direct `bsn!` usage. | No explicit feature flags. | `cargo test -p game_scene --locked`; `tools/check_fun_scene_migration.ps1`. |
 | `fun_dx12_dlss` | Fail-closed native Windows DLSS C ABI scaffold and runtime discovery surface. | Native bridge crate consumed by `fun-renderer`/`fun_render` after DX12 baseline is ready. | Scaffolded; Streamline/NGX evaluation not linked. | No listed package-level feature flags in this inventory pass. | `cargo check -p fun_dx12_dlss`; DLSS SR acceptance remains blocked by boundary gate. |
+
+## Pass 2 Runtime Selector
+
+`FUN_RENDERER_BACKEND` is now parsed into
+`fun_renderer::FunRendererBackendSelection` and installed by
+`fun_render::RendererBridgeSettings::from_env`.
+
+| env value | requested | current resolved path | diagnostic policy | notes |
+| --- | --- | --- | --- | --- |
+| unset | `auto` | `legacy` | loud | Preserves the current Bevy/wgpu product presentation path for this pass. |
+| `auto` | `auto` | `legacy` | loud | Explicitly asks for transition policy selection. |
+| `legacy` | `legacy` | `legacy` | loud | Temporary escape hatch for one migration cycle. |
+| `fun` | `fun` | `fun` | normal info | Boots `NoopRendererCore`, produces and presents a clear-color no-op frame, calls `NoopLuxCore`, records diagnostics, and shuts down cleanly. |
+| invalid value | `auto` | `legacy` | loud | Invalid values are treated as accidental fallback and must be visible in diagnostics. |
+
+The exact future default flip point is
+`fun_render::bridge::RendererBridgeSettings::from_env`. Changing that function
+from current `auto -> legacy` policy to default `fun` is the handoff point.
+
+The no-op `fun` path is intentionally not product-visible yet. It proves the
+bridge/core/lux crate boundary and lifecycle without taking the swapchain away
+from the current known-booting Bevy/wgpu path.
+
+## Pass 2 Feature Map
+
+Canonical feature names:
+
+| feature | owner | current meaning |
+| --- | --- | --- |
+| `legacy_renderer` | `fun_render` + `fun-renderer` | Temporary legacy backend routing capability. |
+| `fun_renderer_core` | `fun-renderer` | Compile the renderer-core boundary and no-op boot path. |
+| `dx12_native_interop` | `fun_render` + `fun-renderer` | DX12 native handle/interop boundary, explicit opt-in only. |
+| `vulkan_backend` | `fun-renderer` | Vulkan backend abstraction hook. |
+| `cef_gpu_only` | `fun-renderer` | CEF GPU-only compositor policy hook. |
+| `upscaling` | `fun-renderer` | Presentation/upscale boundary hook. |
+| `dlss` | `fun_render` + `fun-renderer` | DLSS wiring flag; still blocked by boundary gate for product claims. |
+| `fsr` | `fun-renderer` | FSR wiring hook. |
+| `frame_generation` | `fun-renderer` | Frame-generation boundary hook. |
+| `many_light` | `fun-lux` | Many-light policy hook. |
+| `virtual_geometry` | `fun-renderer` | Virtual geometry policy hook. |
+| `virtual_shadows` | `fun-renderer` + `fun-lux` | Virtual shadow policy hook. |
+| `hybrid_gi` | `fun-lux` | Hybrid GI policy hook. |
+| `experimental_renderer_ml` | `fun-renderer` | Renderer-side model request hook only; reusable model runtime remains in `fun-ai`. |
+
+Compatibility aliases retained for one transition cycle:
+`fun_renderer_legacy`, `fun_renderer_new_core`, `fun_renderer_dx12`,
+`fun_renderer_vulkan`, `fun_renderer_cef_gpu_only`, `fun_renderer_upscale`,
+`fun_renderer_dlss`, `fun_renderer_fsr`, `fun_renderer_frame_generation`,
+`fun_renderer_experimental_ml`, `fun_lux_many_light`,
+`fun_lux_virtual_shadows`, and `fun_lux_hybrid_gi`.
 
 ## Renderer Module Inventory
 
@@ -149,9 +199,10 @@ this pass. `fun_ui_cef` owns browser surfaces, not Bevy UI.
 
 ## First Rollback Strategy
 
-This pass only adds inventory documentation. Rollback is the `fun` commit that
-adds `docs/rendering/fun-render-migration.md`, followed by the umbrella root
-commit that advances the `fun` gitlink and appends the ledger entry.
+Pass 2 adds typed selector and no-op boot behavior. Rollback is the nested
+`fun` commit that changes `fun-renderer`, `fun-lux`, `fun_render`, and this
+document, followed by the umbrella root commit that advances the `fun` gitlink
+and appends the ledger entry.
 
 For future behavior passes, the first rollback path remains:
 

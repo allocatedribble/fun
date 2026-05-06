@@ -90,15 +90,16 @@ editor during migration. It owns extraction, app/plugin integration, feature
 flags, legacy compatibility, diagnostics, and benchmark integration. It exposes
 `fun_renderer` and `fun_lux` to Bevy/game integration, but it is no longer the
 renderer brain.
-Pass 1 formalizes this split with buildable feature flags:
-`fun_renderer_legacy`, `fun_renderer_new_core`, `fun_renderer_dx12`,
-`fun_renderer_vulkan`, `fun_renderer_cef_gpu_only`, `fun_renderer_upscale`,
-`fun_renderer_dlss`, `fun_renderer_fsr`, `fun_renderer_frame_generation`,
-`fun_renderer_experimental_ml`, `fun_lux_many_light`,
-`fun_lux_virtual_shadows`, and `fun_lux_hybrid_gi`.
-The first `fun-renderer` core boot path is compile-only and can produce a
-clear-color frame through `NoopRendererCore`; product swapchain presentation is
-still a later integration pass.
+Pass 2 makes the ownership split the canonical feature surface:
+`legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`,
+`vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`,
+`frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`,
+`hybrid_gi`, and `experimental_renderer_ml`. The older
+`fun_renderer_*`/`fun_lux_*` feature names remain compatibility aliases for the
+transition. The `fun_render` bridge now installs a typed backend selector and
+can boot the `fun-renderer` no-op core plus `fun-lux` baseline policy when
+`FUN_RENDERER_BACKEND=fun` is selected. Product swapchain presentation still
+stays on the legacy Bevy/wgpu path until the later visible-frame handoff.
 
 AI ownership is separate: `fun-ai` owns model registry, model manifests,
 inference backend selection, evals, model trust/versioning, and offline
@@ -144,8 +145,11 @@ uses authored inputs such as `Renderable`, `VirtualGeometryAuthoring`,
 `MlInferencePriority`. `HeuristicDebugOverlay` records the component causes for
 each priority so CEF/Svelte diagnostics can explain page, light, and cache
 decisions without a Bevy UI runtime surface.
-`FUN_RENDERER_BACKEND=fun` is the long-term default. `legacy` is a temporary
-transition backend only and should be removed after one migration cycle.
+`FUN_RENDERER_BACKEND=fun` is the long-term default. During the current
+transition, unset or `auto` resolves to the legacy Bevy/wgpu product path with a
+loud diagnostic; the exact future flip point is
+`fun_render::bridge::RendererBridgeSettings::from_env`. `legacy` is temporary
+and should be removed after one migration cycle.
 
 Presentation is split by caller. `game_client` enables
 `fun_render/winit_presentation` and adds the Winit presentation plugin for the

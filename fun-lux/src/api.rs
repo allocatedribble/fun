@@ -11,9 +11,9 @@ pub struct LuxFeatureToggles {
 
 impl LuxFeatureToggles {
     pub const COMPILED: Self = Self {
-        many_light: cfg!(feature = "fun_lux_many_light"),
-        virtual_shadows: cfg!(feature = "fun_lux_virtual_shadows"),
-        hybrid_gi: cfg!(feature = "fun_lux_hybrid_gi"),
+        many_light: cfg!(feature = "many_light"),
+        virtual_shadows: cfg!(feature = "virtual_shadows"),
+        hybrid_gi: cfg!(feature = "hybrid_gi"),
     };
 
     #[must_use]
@@ -132,17 +132,17 @@ impl LuxSettings {
     #[must_use]
     pub const fn compiled_default() -> Self {
         Self {
-            direct_lighting: if cfg!(feature = "fun_lux_many_light") {
+            direct_lighting: if cfg!(feature = "many_light") {
                 DirectLightingMode::ReservoirManyLight
             } else {
                 DirectLightingMode::TiledClustered
             },
-            shadows: if cfg!(feature = "fun_lux_virtual_shadows") {
+            shadows: if cfg!(feature = "virtual_shadows") {
                 ShadowMode::VirtualDemandPaged
             } else {
                 ShadowMode::StaticMaps
             },
-            gi: if cfg!(feature = "fun_lux_hybrid_gi") {
+            gi: if cfg!(feature = "hybrid_gi") {
                 GiMode::Hybrid
             } else {
                 GiMode::ScreenSpace
@@ -196,6 +196,22 @@ pub struct LuxBootReport {
     pub hybrid_gi_compiled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LuxFrameReport {
+    pub direct_lighting: DirectLightingMode,
+    pub shadows: ShadowMode,
+    pub gi: GiMode,
+    pub reflections: ReflectionMode,
+    pub light_count: u32,
+    pub baseline_noop: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LuxShutdownReport {
+    pub released_lights: u32,
+    pub clean_shutdown: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoopLuxCore {
     settings: LuxSettings,
@@ -226,6 +242,26 @@ impl NoopLuxCore {
     #[must_use]
     pub const fn settings(&self) -> LuxSettings {
         self.settings
+    }
+
+    #[must_use]
+    pub fn baseline_frame(&self) -> LuxFrameReport {
+        LuxFrameReport {
+            direct_lighting: self.settings.direct_lighting,
+            shadows: self.settings.shadows,
+            gi: self.settings.gi,
+            reflections: self.settings.reflections,
+            light_count: self.light_count(),
+            baseline_noop: true,
+        }
+    }
+
+    #[must_use]
+    pub fn shutdown(self) -> LuxShutdownReport {
+        LuxShutdownReport {
+            released_lights: self.lights.len() as u32,
+            clean_shutdown: true,
+        }
     }
 }
 
@@ -293,12 +329,9 @@ mod tests {
     fn compiled_feature_toggles_expose_lux_flags() {
         let toggles = LuxFeatureToggles::compiled();
 
-        assert_eq!(toggles.many_light, cfg!(feature = "fun_lux_many_light"));
-        assert_eq!(
-            toggles.virtual_shadows,
-            cfg!(feature = "fun_lux_virtual_shadows")
-        );
-        assert_eq!(toggles.hybrid_gi, cfg!(feature = "fun_lux_hybrid_gi"));
+        assert_eq!(toggles.many_light, cfg!(feature = "many_light"));
+        assert_eq!(toggles.virtual_shadows, cfg!(feature = "virtual_shadows"));
+        assert_eq!(toggles.hybrid_gi, cfg!(feature = "hybrid_gi"));
     }
 
     #[test]
@@ -310,6 +343,15 @@ mod tests {
         assert_eq!(core.gi_mode(), report.gi);
         assert_eq!(core.reflection_mode(), report.reflections);
         assert!(!core.reconstruction_hook().model_assisted);
+
+        let frame = core.baseline_frame();
+        assert!(frame.baseline_noop);
+        assert_eq!(frame.light_count, 0);
+        assert_eq!(frame.direct_lighting, report.direct_lighting);
+
+        let shutdown = core.shutdown();
+        assert!(shutdown.clean_shutdown);
+        assert_eq!(shutdown.released_lights, 0);
     }
 
     #[test]

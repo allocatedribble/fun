@@ -17,6 +17,10 @@ pub const FUN_RENDERER_AI_OWNER_PACKAGE_NAME: &str = "fun-ai";
 pub const FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME: &str = fun_scene::FUN_SCENE_PACKAGE_NAME;
 pub const FUN_RENDERER_REQUIRES_BEVY_ECS: bool = true;
 pub const FUN_RENDERER_RUNTIME_BACKEND_ENV: &str = "FUN_RENDERER_BACKEND";
+pub const FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION: &str =
+    "fun_render::bridge::RendererBridgeSettings::from_env";
+pub const FUN_RENDERER_CURRENT_AUTO_RESOLUTION: FunRendererRuntimeBackend =
+    FunRendererRuntimeBackend::Legacy;
 
 const _: () = {
     assert!(FUN_RENDERER_REQUIRES_BEVY_ECS);
@@ -25,6 +29,7 @@ const _: () = {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FunRendererRuntimeBackend {
     #[default]
+    Auto,
     Fun,
     Legacy,
 }
@@ -32,24 +37,58 @@ pub enum FunRendererRuntimeBackend {
 impl FunRendererRuntimeBackend {
     #[must_use]
     pub fn from_env() -> Self {
-        let value = std::env::var(FUN_RENDERER_RUNTIME_BACKEND_ENV).ok();
-        Self::from_env_value(value.as_deref()).unwrap_or_default()
+        Self::selection_from_env().resolved
     }
 
     #[must_use]
     pub fn from_env_reader<'a>(mut read: impl FnMut(&'static str) -> Option<&'a str>) -> Self {
+        Self::selection_from_env_reader(|name| read(name)).resolved
+    }
+
+    #[must_use]
+    pub fn selection_from_env() -> FunRendererBackendSelection {
+        let value = std::env::var(FUN_RENDERER_RUNTIME_BACKEND_ENV).ok();
+        Self::selection_from_env_value(value.as_deref())
+    }
+
+    #[must_use]
+    pub fn selection_from_env_reader<'a>(
+        mut read: impl FnMut(&'static str) -> Option<&'a str>,
+    ) -> FunRendererBackendSelection {
         match read(FUN_RENDERER_RUNTIME_BACKEND_ENV) {
-            Some(value) => Self::from_env_value(Some(value)).unwrap_or_default(),
-            None => Self::Fun,
+            Some(value) => Self::selection_from_env_value(Some(value)),
+            None => FunRendererBackendSelection::default_auto(),
+        }
+    }
+
+    #[must_use]
+    pub fn selection_from_env_value(value: Option<&str>) -> FunRendererBackendSelection {
+        match value {
+            None => FunRendererBackendSelection::default_auto(),
+            Some(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return FunRendererBackendSelection::default_auto();
+                }
+                match Self::from_env_value(Some(trimmed)) {
+                    Some(Self::Fun) => FunRendererBackendSelection::explicit_fun(),
+                    Some(Self::Legacy) => FunRendererBackendSelection::explicit_legacy(),
+                    Some(Self::Auto) => FunRendererBackendSelection::explicit_auto(),
+                    None => FunRendererBackendSelection::invalid_defaulted_to_auto(),
+                }
+            }
         }
     }
 
     #[must_use]
     pub fn from_env_value(value: Option<&str>) -> Option<Self> {
         let Some(value) = value.map(str::trim) else {
-            return Some(Self::Fun);
+            return Some(Self::Auto);
         };
-        if value.is_empty() || value.eq_ignore_ascii_case("fun") {
+        if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+            return Some(Self::Auto);
+        }
+        if value.eq_ignore_ascii_case("fun") {
             return Some(Self::Fun);
         }
         if value.eq_ignore_ascii_case("legacy") {
@@ -61,6 +100,7 @@ impl FunRendererRuntimeBackend {
     #[must_use]
     pub const fn as_env_value(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Fun => "fun",
             Self::Legacy => "legacy",
         }
@@ -69,6 +109,116 @@ impl FunRendererRuntimeBackend {
     #[must_use]
     pub const fn is_transition_only(self) -> bool {
         matches!(self, Self::Legacy)
+    }
+
+    #[must_use]
+    pub const fn resolves_to_current_runtime(self) -> Self {
+        match self {
+            Self::Auto => FUN_RENDERER_CURRENT_AUTO_RESOLUTION,
+            Self::Fun => Self::Fun,
+            Self::Legacy => Self::Legacy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FunRendererBackendSelectionReason {
+    DefaultAuto,
+    ExplicitAuto,
+    ExplicitFun,
+    ExplicitLegacy,
+    InvalidValueDefaultedToAuto,
+}
+
+impl FunRendererBackendSelectionReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DefaultAuto => "default_auto",
+            Self::ExplicitAuto => "explicit_auto",
+            Self::ExplicitFun => "explicit_fun",
+            Self::ExplicitLegacy => "explicit_legacy",
+            Self::InvalidValueDefaultedToAuto => "invalid_value_defaulted_to_auto",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunRendererBackendSelection {
+    pub requested: FunRendererRuntimeBackend,
+    pub resolved: FunRendererRuntimeBackend,
+    pub reason: FunRendererBackendSelectionReason,
+    pub loud_diagnostic_required: bool,
+    pub future_default_flip_location: &'static str,
+}
+
+impl FunRendererBackendSelection {
+    #[must_use]
+    pub const fn new(
+        requested: FunRendererRuntimeBackend,
+        reason: FunRendererBackendSelectionReason,
+    ) -> Self {
+        let resolved = requested.resolves_to_current_runtime();
+        Self {
+            requested,
+            resolved,
+            reason,
+            loud_diagnostic_required: !matches!(
+                reason,
+                FunRendererBackendSelectionReason::ExplicitFun
+            ),
+            future_default_flip_location: FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION,
+        }
+    }
+
+    #[must_use]
+    pub const fn default_auto() -> Self {
+        Self::new(
+            FunRendererRuntimeBackend::Auto,
+            FunRendererBackendSelectionReason::DefaultAuto,
+        )
+    }
+
+    #[must_use]
+    pub const fn explicit_auto() -> Self {
+        Self::new(
+            FunRendererRuntimeBackend::Auto,
+            FunRendererBackendSelectionReason::ExplicitAuto,
+        )
+    }
+
+    #[must_use]
+    pub const fn explicit_fun() -> Self {
+        Self::new(
+            FunRendererRuntimeBackend::Fun,
+            FunRendererBackendSelectionReason::ExplicitFun,
+        )
+    }
+
+    #[must_use]
+    pub const fn explicit_legacy() -> Self {
+        Self::new(
+            FunRendererRuntimeBackend::Legacy,
+            FunRendererBackendSelectionReason::ExplicitLegacy,
+        )
+    }
+
+    #[must_use]
+    pub const fn invalid_defaulted_to_auto() -> Self {
+        Self::new(
+            FunRendererRuntimeBackend::Auto,
+            FunRendererBackendSelectionReason::InvalidValueDefaultedToAuto,
+        )
+    }
+
+    #[must_use]
+    pub const fn uses_legacy_product_path(self) -> bool {
+        matches!(self.resolved, FunRendererRuntimeBackend::Legacy)
+    }
+
+    #[must_use]
+    pub const fn uses_fun_renderer_core(self) -> bool {
+        matches!(self.resolved, FunRendererRuntimeBackend::Fun)
     }
 }
 
@@ -665,17 +815,40 @@ mod tests {
     }
 
     #[test]
-    fn runtime_backend_defaults_to_fun_with_temporary_legacy_escape_hatch() {
+    fn runtime_backend_selection_is_loud_until_fun_default_flip() {
+        let default_selection = FunRendererRuntimeBackend::selection_from_env_reader(|_| None);
+        assert_eq!(default_selection.requested, FunRendererRuntimeBackend::Auto);
         assert_eq!(
-            FunRendererRuntimeBackend::from_env_reader(|_| None),
-            FunRendererRuntimeBackend::Fun
-        );
-        assert_eq!(
-            FunRendererRuntimeBackend::from_env_reader(|name| {
-                (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("legacy")
-            }),
+            default_selection.resolved,
             FunRendererRuntimeBackend::Legacy
         );
+        assert_eq!(
+            default_selection.reason,
+            FunRendererBackendSelectionReason::DefaultAuto
+        );
+        assert!(default_selection.loud_diagnostic_required);
+        assert_eq!(
+            default_selection.future_default_flip_location,
+            FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION
+        );
+
+        assert_eq!(
+            FunRendererRuntimeBackend::from_env_reader(|_| None),
+            FunRendererRuntimeBackend::Legacy
+        );
+        assert_eq!(
+            FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+                (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("legacy")
+            })
+            .resolved,
+            FunRendererRuntimeBackend::Legacy
+        );
+        let fun_selection = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+            (name == FUN_RENDERER_RUNTIME_BACKEND_ENV).then_some("fun")
+        });
+        assert_eq!(fun_selection.resolved, FunRendererRuntimeBackend::Fun);
+        assert!(!fun_selection.loud_diagnostic_required);
+        assert_eq!(FunRendererRuntimeBackend::Auto.as_env_value(), "auto");
         assert!(FunRendererRuntimeBackend::Legacy.is_transition_only());
         assert!(!FunRendererRuntimeBackend::Fun.is_transition_only());
         assert_eq!(FunRendererRuntimeBackend::Fun.as_env_value(), "fun");

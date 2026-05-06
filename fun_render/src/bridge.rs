@@ -1,7 +1,12 @@
-use bevy::prelude::{App, Resource};
+use bevy::prelude::{App, Res, ResMut, Resource};
 use fun_renderer::{
-    FunRendererBackend, FunRendererRuntimeBackend, RendererCoreSettings, RendererFeatureToggles,
+    BackendCapabilities, ClearColorFrame, DeviceBackend, FunRendererBackend,
+    FunRendererBackendSelection, FunRendererRuntimeBackend, NoopRendererCore, PresentResult,
+    Presentation, RendererCoreBootReport, RendererCoreDiagnostics, RendererCoreSettings,
+    RendererCoreShutdownReport, RendererFeatureToggles,
+    fun_lux::{LuxBootReport, LuxFrameReport, LuxSettings, LuxShutdownReport, NoopLuxCore},
 };
+use tracing::{info, warn};
 
 pub const FUN_RENDER_BRIDGE_API_SCHEMA_VERSION: u16 = 1;
 
@@ -24,19 +29,22 @@ pub struct BridgeFeatureToggles {
 
 impl BridgeFeatureToggles {
     pub const COMPILED: Self = Self {
-        legacy: cfg!(feature = "fun_renderer_legacy"),
-        new_core: cfg!(feature = "fun_renderer_new_core"),
-        dx12: cfg!(feature = "fun_renderer_dx12"),
-        vulkan: cfg!(feature = "fun_renderer_vulkan"),
-        cef_gpu_only: cfg!(feature = "fun_renderer_cef_gpu_only"),
-        upscale: cfg!(feature = "fun_renderer_upscale"),
-        dlss: cfg!(feature = "fun_renderer_dlss"),
-        fsr: cfg!(feature = "fun_renderer_fsr"),
-        frame_generation: cfg!(feature = "fun_renderer_frame_generation"),
-        experimental_ml: cfg!(feature = "fun_renderer_experimental_ml"),
-        lux_many_light: cfg!(feature = "fun_lux_many_light"),
-        lux_virtual_shadows: cfg!(feature = "fun_lux_virtual_shadows"),
-        lux_hybrid_gi: cfg!(feature = "fun_lux_hybrid_gi"),
+        legacy: cfg!(feature = "legacy_renderer") || cfg!(feature = "fun_renderer_legacy"),
+        new_core: cfg!(feature = "fun_renderer_core") || cfg!(feature = "fun_renderer_new_core"),
+        dx12: cfg!(feature = "dx12_native_interop") || cfg!(feature = "fun_renderer_dx12"),
+        vulkan: cfg!(feature = "vulkan_backend") || cfg!(feature = "fun_renderer_vulkan"),
+        cef_gpu_only: cfg!(feature = "cef_gpu_only") || cfg!(feature = "fun_renderer_cef_gpu_only"),
+        upscale: cfg!(feature = "upscaling") || cfg!(feature = "fun_renderer_upscale"),
+        dlss: cfg!(feature = "dlss") || cfg!(feature = "fun_renderer_dlss"),
+        fsr: cfg!(feature = "fsr") || cfg!(feature = "fun_renderer_fsr"),
+        frame_generation: cfg!(feature = "frame_generation")
+            || cfg!(feature = "fun_renderer_frame_generation"),
+        experimental_ml: cfg!(feature = "experimental_renderer_ml")
+            || cfg!(feature = "fun_renderer_experimental_ml"),
+        lux_many_light: cfg!(feature = "many_light") || cfg!(feature = "fun_lux_many_light"),
+        lux_virtual_shadows: cfg!(feature = "virtual_shadows")
+            || cfg!(feature = "fun_lux_virtual_shadows"),
+        lux_hybrid_gi: cfg!(feature = "hybrid_gi") || cfg!(feature = "fun_lux_hybrid_gi"),
     };
 
     #[must_use]
@@ -64,6 +72,7 @@ impl BridgeFeatureToggles {
 #[derive(Debug, Clone, Copy, PartialEq, Resource)]
 pub struct RendererBridgeSettings {
     pub runtime_backend: FunRendererRuntimeBackend,
+    pub backend_selection: FunRendererBackendSelection,
     pub preferred_backend: FunRendererBackend,
     pub renderer_core: RendererCoreSettings,
     pub features: BridgeFeatureToggles,
@@ -73,11 +82,13 @@ impl RendererBridgeSettings {
     #[must_use]
     pub const fn compiled_default() -> Self {
         let features = BridgeFeatureToggles::COMPILED;
+        let backend_selection = FunRendererBackendSelection::default_auto();
         Self {
-            runtime_backend: FunRendererRuntimeBackend::Fun,
+            runtime_backend: backend_selection.requested,
+            backend_selection,
             preferred_backend: FunRendererBackend::Dx12,
             renderer_core: RendererCoreSettings::new(
-                FunRendererRuntimeBackend::Fun,
+                backend_selection.resolved,
                 FunRendererBackend::Dx12,
                 features.renderer_core_toggles(),
             ),
@@ -88,8 +99,24 @@ impl RendererBridgeSettings {
     #[must_use]
     pub const fn from_runtime_backend(runtime_backend: FunRendererRuntimeBackend) -> Self {
         let mut settings = Self::compiled_default();
+        let backend_selection = match runtime_backend {
+            FunRendererRuntimeBackend::Auto => FunRendererBackendSelection::explicit_auto(),
+            FunRendererRuntimeBackend::Fun => FunRendererBackendSelection::explicit_fun(),
+            FunRendererRuntimeBackend::Legacy => FunRendererBackendSelection::explicit_legacy(),
+        };
         settings.runtime_backend = runtime_backend;
-        settings.renderer_core.runtime_backend = runtime_backend;
+        settings.backend_selection = backend_selection;
+        settings.renderer_core.runtime_backend = backend_selection.resolved;
+        settings
+    }
+
+    #[must_use]
+    pub fn from_env() -> Self {
+        let mut settings = Self::compiled_default();
+        let backend_selection = FunRendererRuntimeBackend::selection_from_env();
+        settings.runtime_backend = backend_selection.requested;
+        settings.backend_selection = backend_selection;
+        settings.renderer_core.runtime_backend = backend_selection.resolved;
         settings
     }
 }
@@ -191,9 +218,117 @@ impl Default for RendererBridgeHooks {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Resource)]
+pub struct RendererBridgeRuntimeState {
+    pub selection: FunRendererBackendSelection,
+    pub initialized_once: bool,
+    pub legacy_product_path_active: bool,
+    pub fun_core_initialized: bool,
+    pub loud_diagnostic_required: bool,
+    pub backend_capabilities: Option<BackendCapabilities>,
+    pub core_boot: Option<RendererCoreBootReport>,
+    pub core_diagnostics: Option<RendererCoreDiagnostics>,
+    pub clear_color_frame: Option<ClearColorFrame>,
+    pub present_result: Option<PresentResult>,
+    pub core_shutdown: Option<RendererCoreShutdownReport>,
+    pub lux_boot: Option<LuxBootReport>,
+    pub lux_frame: Option<LuxFrameReport>,
+    pub lux_shutdown: Option<LuxShutdownReport>,
+}
+
+impl RendererBridgeRuntimeState {
+    #[must_use]
+    pub const fn from_settings(settings: RendererBridgeSettings) -> Self {
+        Self {
+            selection: settings.backend_selection,
+            initialized_once: false,
+            legacy_product_path_active: settings.backend_selection.uses_legacy_product_path(),
+            fun_core_initialized: false,
+            loud_diagnostic_required: settings.backend_selection.loud_diagnostic_required,
+            backend_capabilities: None,
+            core_boot: None,
+            core_diagnostics: None,
+            clear_color_frame: None,
+            present_result: None,
+            core_shutdown: None,
+            lux_boot: None,
+            lux_frame: None,
+            lux_shutdown: None,
+        }
+    }
+}
+
+impl Default for RendererBridgeRuntimeState {
+    fn default() -> Self {
+        Self::from_settings(RendererBridgeSettings::compiled_default())
+    }
+}
+
 pub fn install_renderer_bridge_api(app: &mut App, settings: RendererBridgeSettings) {
     app.insert_resource(settings)
+        .insert_resource(RendererBridgeRuntimeState::from_settings(settings))
         .init_resource::<RendererBridgeHooks>();
+}
+
+pub fn renderer_bridge_initialize_runtime(
+    settings: Res<RendererBridgeSettings>,
+    mut state: ResMut<RendererBridgeRuntimeState>,
+) {
+    if state.initialized_once {
+        return;
+    }
+
+    state.selection = settings.backend_selection;
+    state.loud_diagnostic_required = settings.backend_selection.loud_diagnostic_required;
+    state.legacy_product_path_active = settings.backend_selection.uses_legacy_product_path();
+
+    if settings.backend_selection.uses_fun_renderer_core() {
+        let (mut core, boot_report) = NoopRendererCore::boot(settings.renderer_core);
+        let backend_capabilities = core.capabilities();
+        let clear_color_frame = core.produce_clear_color_frame();
+        let present_result = core.present_clear_color(clear_color_frame);
+        let core_diagnostics = core.diagnostics();
+        let core_shutdown = core.shutdown();
+
+        let (lux_core, lux_boot) = NoopLuxCore::boot(LuxSettings::default());
+        let lux_frame = lux_core.baseline_frame();
+        let lux_shutdown = lux_core.shutdown();
+
+        state.fun_core_initialized = true;
+        state.backend_capabilities = Some(backend_capabilities);
+        state.core_boot = Some(boot_report);
+        state.core_diagnostics = Some(core_diagnostics);
+        state.clear_color_frame = Some(clear_color_frame);
+        state.present_result = Some(present_result);
+        state.core_shutdown = Some(core_shutdown);
+        state.lux_boot = Some(lux_boot);
+        state.lux_frame = Some(lux_frame);
+        state.lux_shutdown = Some(lux_shutdown);
+
+        info!(
+            target: "fun::render",
+            env = fun_renderer::FUN_RENDERER_RUNTIME_BACKEND_ENV,
+            requested_backend = settings.backend_selection.requested.as_env_value(),
+            resolved_backend = settings.backend_selection.resolved.as_env_value(),
+            preferred_backend = settings.preferred_backend.as_str(),
+            registered_passes = boot_report.registered_passes,
+            clear_color_frame = boot_report.produced_clear_color_frame,
+            lux_direct_lighting = lux_boot.direct_lighting.as_str(),
+            "fun-renderer no-op core initialized through fun_render bridge"
+        );
+    } else {
+        warn!(
+            target: "fun::render",
+            env = fun_renderer::FUN_RENDERER_RUNTIME_BACKEND_ENV,
+            requested_backend = settings.backend_selection.requested.as_env_value(),
+            resolved_backend = settings.backend_selection.resolved.as_env_value(),
+            reason = settings.backend_selection.reason.as_str(),
+            future_default_flip_location = settings.backend_selection.future_default_flip_location,
+            "FUN_RENDERER_BACKEND routed to legacy Bevy/wgpu presentation for this transition pass"
+        );
+    }
+
+    state.initialized_once = true;
 }
 
 pub fn renderer_bridge_extract_noop(mut hooks: bevy::prelude::ResMut<RendererBridgeHooks>) {
@@ -218,13 +353,22 @@ mod tests {
     fn bridge_feature_toggles_mirror_compile_flags() {
         let toggles = BridgeFeatureToggles::compiled();
 
-        assert_eq!(toggles.new_core, cfg!(feature = "fun_renderer_new_core"));
-        assert_eq!(toggles.dx12, cfg!(feature = "fun_renderer_dx12"));
+        assert_eq!(
+            toggles.new_core,
+            cfg!(feature = "fun_renderer_core") || cfg!(feature = "fun_renderer_new_core")
+        );
+        assert_eq!(
+            toggles.dx12,
+            cfg!(feature = "dx12_native_interop") || cfg!(feature = "fun_renderer_dx12")
+        );
         assert_eq!(
             toggles.cef_gpu_only,
-            cfg!(feature = "fun_renderer_cef_gpu_only")
+            cfg!(feature = "cef_gpu_only") || cfg!(feature = "fun_renderer_cef_gpu_only")
         );
-        assert_eq!(toggles.lux_many_light, cfg!(feature = "fun_lux_many_light"));
+        assert_eq!(
+            toggles.lux_many_light,
+            cfg!(feature = "many_light") || cfg!(feature = "fun_lux_many_light")
+        );
     }
 
     #[test]
@@ -233,8 +377,16 @@ mod tests {
         install_renderer_bridge_api(&mut app, RendererBridgeSettings::compiled_default());
 
         let settings = app.world().resource::<RendererBridgeSettings>();
-        assert_eq!(settings.runtime_backend, FunRendererRuntimeBackend::Fun);
+        assert_eq!(settings.runtime_backend, FunRendererRuntimeBackend::Auto);
+        assert_eq!(
+            settings.backend_selection.resolved,
+            FunRendererRuntimeBackend::Legacy
+        );
         assert_eq!(settings.preferred_backend, FunRendererBackend::Dx12);
+
+        let state = app.world().resource::<RendererBridgeRuntimeState>();
+        assert!(state.legacy_product_path_active);
+        assert!(!state.fun_core_initialized);
 
         let hooks = app.world().resource::<RendererBridgeHooks>();
         assert!(hooks.contains_kind(BridgeHookKind::PluginRegistration));
@@ -260,5 +412,71 @@ mod tests {
         assert_eq!(hooks.extraction_noop_runs, 1);
         assert_eq!(hooks.debug_overlay_noop_runs, 1);
         assert_eq!(hooks.benchmark_noop_runs, 1);
+    }
+
+    #[test]
+    fn explicit_fun_backend_initializes_noop_core_and_lux() {
+        let mut app = App::new();
+        install_renderer_bridge_api(
+            &mut app,
+            RendererBridgeSettings::from_runtime_backend(FunRendererRuntimeBackend::Fun),
+        );
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(renderer_bridge_initialize_runtime);
+        schedule.run(app.world_mut());
+
+        let state = app.world().resource::<RendererBridgeRuntimeState>();
+        assert!(state.initialized_once);
+        assert!(state.fun_core_initialized);
+        assert!(!state.legacy_product_path_active);
+        assert_eq!(
+            state
+                .core_boot
+                .expect("fun renderer core should boot")
+                .runtime_backend,
+            FunRendererRuntimeBackend::Fun
+        );
+        assert_eq!(
+            state
+                .present_result
+                .expect("fun renderer core should present a no-op frame")
+                .frame_index,
+            1
+        );
+        assert!(
+            state
+                .lux_frame
+                .expect("fun-lux should produce baseline no-op lighting")
+                .baseline_noop
+        );
+        assert!(
+            state
+                .core_shutdown
+                .expect("fun renderer should shut down cleanly")
+                .clean_shutdown
+        );
+    }
+
+    #[test]
+    fn auto_backend_keeps_legacy_product_path_loud() {
+        let mut app = App::new();
+        install_renderer_bridge_api(
+            &mut app,
+            RendererBridgeSettings::from_runtime_backend(FunRendererRuntimeBackend::Auto),
+        );
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(renderer_bridge_initialize_runtime);
+        schedule.run(app.world_mut());
+
+        let state = app.world().resource::<RendererBridgeRuntimeState>();
+        assert!(state.initialized_once);
+        assert!(state.legacy_product_path_active);
+        assert!(state.loud_diagnostic_required);
+        assert!(!state.fun_core_initialized);
+        assert!(state.core_boot.is_none());
+        assert_eq!(state.selection.requested, FunRendererRuntimeBackend::Auto);
+        assert_eq!(state.selection.resolved, FunRendererRuntimeBackend::Legacy);
     }
 }

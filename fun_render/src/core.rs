@@ -31,6 +31,9 @@ use crate::{
     MaterialResidencyManager, MlInferencePriorities, PagePriorities, RenderHeuristicScheduler,
     RenderPathSignature, RendererViews, ShadingRatePriorities, ShadowPagePriorities,
     StaticInstanceTable, TextureResidencyManager, VirtualGeometryResidency, begin_heuristic_frame,
+    bridge::{
+        RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_initialize_runtime,
+    },
     dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting, pipeline_warmup,
     prewarm_primitive_render_cache, prewarm_world_render_catalog,
     render_path_signature_for_options, score_gi_cache_participants, score_lux_lights,
@@ -242,6 +245,8 @@ impl Plugin for FunRenderCorePlugin {
 }
 
 pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
+    install_renderer_bridge_api(app, RendererBridgeSettings::from_env());
+
     let (render_config, solari_settings, solari_runtime_params) = render_path_config_from_env();
     log_fun_render_path(&render_config, &solari_settings, &solari_runtime_params);
     render_config.rt_features.log_config();
@@ -310,6 +315,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .add_systems(
             Startup,
             (
+                renderer_bridge_initialize_runtime,
                 lighting::setup_lighting,
                 prewarm_world_render_catalog,
                 prewarm_primitive_render_cache,

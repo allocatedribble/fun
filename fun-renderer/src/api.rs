@@ -18,16 +18,16 @@ pub struct RendererFeatureToggles {
 
 impl RendererFeatureToggles {
     pub const COMPILED: Self = Self {
-        legacy: cfg!(feature = "fun_renderer_legacy"),
-        new_core: cfg!(feature = "fun_renderer_new_core"),
-        dx12: cfg!(feature = "fun_renderer_dx12"),
-        vulkan: cfg!(feature = "fun_renderer_vulkan"),
-        cef_gpu_only: cfg!(feature = "fun_renderer_cef_gpu_only"),
-        upscale: cfg!(feature = "fun_renderer_upscale"),
-        dlss: cfg!(feature = "fun_renderer_dlss"),
-        fsr: cfg!(feature = "fun_renderer_fsr"),
-        frame_generation: cfg!(feature = "fun_renderer_frame_generation"),
-        experimental_ml: cfg!(feature = "fun_renderer_experimental_ml"),
+        legacy: cfg!(feature = "legacy_renderer"),
+        new_core: cfg!(feature = "fun_renderer_core"),
+        dx12: cfg!(feature = "dx12_native_interop"),
+        vulkan: cfg!(feature = "vulkan_backend"),
+        cef_gpu_only: cfg!(feature = "cef_gpu_only"),
+        upscale: cfg!(feature = "upscaling"),
+        dlss: cfg!(feature = "dlss"),
+        fsr: cfg!(feature = "fsr"),
+        frame_generation: cfg!(feature = "frame_generation"),
+        experimental_ml: cfg!(feature = "experimental_renderer_ml"),
     };
 
     #[must_use]
@@ -257,11 +257,107 @@ pub trait Presentation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RendererCoreInterfaceMap {
+    pub settings: bool,
+    pub backend_capability_model: bool,
+    pub frame_graph_shell: bool,
+    pub gpu_scene_database_shell: bool,
+    pub resource_allocator_shell: bool,
+    pub upload_arena_ownership_seam: bool,
+    pub cef_compositor_interface: bool,
+    pub upscaler_frame_generation_interface: bool,
+    pub pass_diagnostics: bool,
+}
+
+pub const RENDERER_CORE_INTERFACE_MAP: RendererCoreInterfaceMap = RendererCoreInterfaceMap {
+    settings: true,
+    backend_capability_model: true,
+    frame_graph_shell: true,
+    gpu_scene_database_shell: true,
+    resource_allocator_shell: true,
+    upload_arena_ownership_seam: true,
+    cef_compositor_interface: true,
+    upscaler_frame_generation_interface: true,
+    pass_diagnostics: true,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UploadArenaOwnershipSeam {
+    pub owner_crate: &'static str,
+    pub legacy_bridge_borrow_allowed: bool,
+    pub stable_id: &'static str,
+}
+
+pub const RENDERER_UPLOAD_ARENA_SEAM: UploadArenaOwnershipSeam = UploadArenaOwnershipSeam {
+    owner_crate: crate::FUN_RENDERER_CRATE_NAME,
+    legacy_bridge_borrow_allowed: true,
+    stable_id: "fun_renderer.upload_arena.ownership_seam",
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CefCompositorInterface {
+    pub gpu_shared_texture_required: bool,
+    pub cpu_runtime_upload_fallback_allowed: bool,
+    pub owner_crate: &'static str,
+}
+
+pub const RENDERER_CEF_COMPOSITOR_INTERFACE: CefCompositorInterface = CefCompositorInterface {
+    gpu_shared_texture_required: true,
+    cpu_runtime_upload_fallback_allowed: false,
+    owner_crate: crate::FUN_RENDERER_CRATE_NAME,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpscaleFrameGenerationInterface {
+    pub scene_color_ui_color_separate: bool,
+    pub hudless_scene_color_required: bool,
+    pub depth_required: bool,
+    pub motion_vectors_required: bool,
+    pub present_time_resource_lifetimes_required: bool,
+}
+
+pub const RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE: UpscaleFrameGenerationInterface =
+    UpscaleFrameGenerationInterface {
+        scene_color_ui_color_separate: true,
+        hudless_scene_color_required: true,
+        depth_required: true,
+        motion_vectors_required: true,
+        present_time_resource_lifetimes_required: true,
+    };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RendererCoreBootReport {
     pub runtime_backend: FunRendererRuntimeBackend,
     pub backend: FunRendererBackend,
     pub registered_passes: u16,
     pub produced_clear_color_frame: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RendererCoreLifecycle {
+    Initialized,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RendererCoreDiagnostics {
+    pub runtime_backend: FunRendererRuntimeBackend,
+    pub backend: FunRendererBackend,
+    pub capabilities: BackendCapabilities,
+    pub registered_passes: u16,
+    pub allocation_count: u32,
+    pub instance_count: u32,
+    pub presented_frame_count: u64,
+    pub lifecycle: RendererCoreLifecycle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RendererCoreShutdownReport {
+    pub runtime_backend: FunRendererRuntimeBackend,
+    pub backend: FunRendererBackend,
+    pub released_scene_instances: u32,
+    pub presented_frame_count: u64,
+    pub clean_shutdown: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -319,6 +415,35 @@ impl NoopRendererCore {
     #[must_use]
     pub const fn presented_frame_count(&self) -> u64 {
         self.presented_frame_count
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> RendererCoreDiagnostics {
+        let registered_passes = match u16::try_from(self.passes.len()) {
+            Ok(value) => value,
+            Err(_) => u16::MAX,
+        };
+        RendererCoreDiagnostics {
+            runtime_backend: self.settings.runtime_backend,
+            backend: self.settings.backend,
+            capabilities: self.capabilities(),
+            registered_passes,
+            allocation_count: self.allocations,
+            instance_count: self.instance_count(),
+            presented_frame_count: self.presented_frame_count,
+            lifecycle: RendererCoreLifecycle::Initialized,
+        }
+    }
+
+    #[must_use]
+    pub fn shutdown(self) -> RendererCoreShutdownReport {
+        RendererCoreShutdownReport {
+            runtime_backend: self.settings.runtime_backend,
+            backend: self.settings.backend,
+            released_scene_instances: self.instances.len() as u32,
+            presented_frame_count: self.presented_frame_count,
+            clean_shutdown: true,
+        }
     }
 }
 
@@ -415,20 +540,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiled_feature_toggles_expose_pass_one_flags() {
+    fn compiled_feature_toggles_expose_canonical_boundary_flags() {
         let toggles = RendererFeatureToggles::compiled();
 
-        assert_eq!(toggles.new_core, cfg!(feature = "fun_renderer_new_core"));
-        assert_eq!(toggles.dx12, cfg!(feature = "fun_renderer_dx12"));
-        assert_eq!(
-            toggles.cef_gpu_only,
-            cfg!(feature = "fun_renderer_cef_gpu_only")
-        );
-        assert_eq!(toggles.dlss, cfg!(feature = "fun_renderer_dlss"));
-        assert_eq!(
-            toggles.frame_generation,
-            cfg!(feature = "fun_renderer_frame_generation")
-        );
+        assert_eq!(toggles.new_core, cfg!(feature = "fun_renderer_core"));
+        assert_eq!(toggles.dx12, cfg!(feature = "dx12_native_interop"));
+        assert_eq!(toggles.cef_gpu_only, cfg!(feature = "cef_gpu_only"));
+        assert_eq!(toggles.dlss, cfg!(feature = "dlss"));
+        assert_eq!(toggles.frame_generation, cfg!(feature = "frame_generation"));
     }
 
     #[test]
@@ -446,6 +565,14 @@ mod tests {
         assert!(result.submitted);
         assert_eq!(result.frame_index, 1);
         assert_eq!(renderer.presented_frame_count(), 1);
+
+        let diagnostics = renderer.diagnostics();
+        assert_eq!(diagnostics.lifecycle, RendererCoreLifecycle::Initialized);
+        assert_eq!(diagnostics.registered_passes, 2);
+
+        let shutdown = renderer.shutdown();
+        assert!(shutdown.clean_shutdown);
+        assert_eq!(shutdown.presented_frame_count, 1);
     }
 
     #[test]
@@ -468,5 +595,30 @@ mod tests {
         assert_eq!(renderer.instance_count(), 1);
         assert!(renderer.remove_instance(instance));
         assert_eq!(renderer.instance_count(), 0);
+    }
+
+    #[test]
+    fn core_boundary_exposes_required_noop_interfaces() {
+        let map = core::hint::black_box(RENDERER_CORE_INTERFACE_MAP);
+
+        assert!(map.settings);
+        assert!(map.backend_capability_model);
+        assert!(map.frame_graph_shell);
+        assert!(map.gpu_scene_database_shell);
+        assert!(map.resource_allocator_shell);
+        assert!(map.upload_arena_ownership_seam);
+        assert!(map.cef_compositor_interface);
+        assert!(map.upscaler_frame_generation_interface);
+        assert!(map.pass_diagnostics);
+
+        assert_eq!(
+            RENDERER_UPLOAD_ARENA_SEAM.owner_crate,
+            crate::FUN_RENDERER_CRATE_NAME
+        );
+        assert!(RENDERER_UPLOAD_ARENA_SEAM.legacy_bridge_borrow_allowed);
+        assert!(RENDERER_CEF_COMPOSITOR_INTERFACE.gpu_shared_texture_required);
+        assert!(!RENDERER_CEF_COMPOSITOR_INTERFACE.cpu_runtime_upload_fallback_allowed);
+        assert!(RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE.scene_color_ui_color_separate);
+        assert!(RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE.hudless_scene_color_required);
     }
 }

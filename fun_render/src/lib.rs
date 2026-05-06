@@ -42,9 +42,10 @@ pub mod world_stream;
 
 pub use bridge::{
     BRIDGE_HOOKS, BridgeFeatureToggles, BridgeHookDescriptor, BridgeHookKind,
-    FUN_RENDER_BRIDGE_API_SCHEMA_VERSION, RendererBridgeHooks, RendererBridgeSettings,
-    install_renderer_bridge_api, renderer_bridge_benchmark_noop,
+    FUN_RENDER_BRIDGE_API_SCHEMA_VERSION, RendererBridgeHooks, RendererBridgeRuntimeState,
+    RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_benchmark_noop,
     renderer_bridge_debug_overlay_noop, renderer_bridge_extract_noop,
+    renderer_bridge_initialize_runtime,
 };
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 pub use catalog::catalog_ref_summary;
@@ -149,7 +150,8 @@ pub use fun_renderer::heuristics::*;
 pub use fun_renderer::{
     BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
     FUN_RENDERER_AI_INTERFACE_DESCRIPTORS, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
-    FUN_RENDERER_BACKEND_DESCRIPTORS, FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME,
+    FUN_RENDERER_BACKEND_DESCRIPTORS, FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION,
+    FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME, FUN_RENDERER_CURRENT_AUTO_RESOLUTION,
     FUN_RENDERER_DYNAMIC_SCENE_TARGET, FUN_RENDERER_FRAME_GENERATION_CONTRACT,
     FUN_RENDERER_LIGHTING_SCALE_POLICY, FUN_RENDERER_PACKAGE_NAME,
     FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS, FUN_RENDERER_PRODUCT_TOPOLOGY,
@@ -157,16 +159,20 @@ pub use fun_renderer::{
     FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME, FUN_RENDERER_SCHEMA_VERSION,
     FUN_RENDERER_SUBSYSTEM_DESCRIPTORS, FUN_RENDERER_UI_RUNTIME_POLICY, FrameGraphInterface,
     FunRendererAiInterfaceDescriptor, FunRendererAiInterfaceKind, FunRendererAiOwnedSurface,
-    FunRendererBackend, FunRendererBackendDescriptor, FunRendererBevyRole,
-    FunRendererCefRuntimePolicy, FunRendererDynamicSceneTarget, FunRendererFrameGenerationContract,
-    FunRendererFrameGraphStage, FunRendererLightingScalePolicy, FunRendererOwner,
-    FunRendererPresentationFeature, FunRendererPresentationFeatureDescriptor,
-    FunRendererProductTopology, FunRendererRuntimeBackend, FunRendererSubsystem,
-    FunRendererSubsystemDescriptor, FunRendererUiRuntimePolicy, NoopRendererCore, PassDescriptor,
-    PassHandle, PassKind, PassRegistry, PresentResult, Presentation,
-    RENDERER_CORE_API_SCHEMA_VERSION, RendererCoreBootReport, RendererCoreSettings,
-    RendererFeatureToggles, ResourceAllocator, ResourceHandle, ResourceKind, ResourceRequest,
-    SceneDatabase, SceneInstanceId, SceneInstanceRecord, owner_for_subsystem,
+    FunRendererBackend, FunRendererBackendDescriptor, FunRendererBackendSelection,
+    FunRendererBackendSelectionReason, FunRendererBevyRole, FunRendererCefRuntimePolicy,
+    FunRendererDynamicSceneTarget, FunRendererFrameGenerationContract, FunRendererFrameGraphStage,
+    FunRendererLightingScalePolicy, FunRendererOwner, FunRendererPresentationFeature,
+    FunRendererPresentationFeatureDescriptor, FunRendererProductTopology,
+    FunRendererRuntimeBackend, FunRendererSubsystem, FunRendererSubsystemDescriptor,
+    FunRendererUiRuntimePolicy, NoopRendererCore, PassDescriptor, PassHandle, PassKind,
+    PassRegistry, PresentResult, Presentation, RENDERER_CEF_COMPOSITOR_INTERFACE,
+    RENDERER_CORE_API_SCHEMA_VERSION, RENDERER_CORE_INTERFACE_MAP, RENDERER_UPLOAD_ARENA_SEAM,
+    RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE, RendererCoreBootReport, RendererCoreDiagnostics,
+    RendererCoreInterfaceMap, RendererCoreLifecycle, RendererCoreSettings,
+    RendererCoreShutdownReport, RendererFeatureToggles, ResourceAllocator, ResourceHandle,
+    ResourceKind, ResourceRequest, SceneDatabase, SceneInstanceId, SceneInstanceRecord,
+    owner_for_subsystem,
 };
 pub use gpu_visibility::{
     FUN_GPU_VISIBILITY_SCHEMA_VERSION, GPU_VIS_OBJECT_CEF_UI, GPU_VIS_OBJECT_DEBUG,

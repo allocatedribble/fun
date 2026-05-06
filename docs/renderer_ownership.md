@@ -336,36 +336,59 @@ logic directly.
 `fun-renderer` is the product default renderer even while the first visual
 output is simple.
 
-- `FUN_RENDERER_BACKEND=fun`: long-term default.
+- `FUN_RENDERER_BACKEND=fun`: initializes the new no-op renderer core through
+  `fun_render` and is the long-term default.
+- `FUN_RENDERER_BACKEND=auto`: current transition default; resolves to the
+  legacy Bevy/wgpu product path with a loud diagnostic.
 - `FUN_RENDERER_BACKEND=legacy`: temporary transition path for one migration
   cycle.
 - Long-term legacy path: removed.
 
-## Pass 1 Crate And Feature Skeleton
+The future default flip is owned by
+`fun_render::bridge::RendererBridgeSettings::from_env`.
 
-Pass 1 establishes buildable ownership seams without adding heavyweight render
-behavior. The feature flags are intentionally named after the long-term product
-boundaries so later passes can move behavior behind the same switches instead of
-inventing local aliases.
+## Pass 1/2 Crate And Feature Skeleton
+
+Pass 1 established buildable ownership seams without adding heavyweight render
+behavior. Pass 2 makes the ownership-oriented names canonical and keeps the
+older Pass 1 names only as transition aliases.
 
 Renderer bridge flags in `fun_render` forward into `fun-renderer`:
 
-- `fun_renderer_legacy`
-- `fun_renderer_new_core`
-- `fun_renderer_dx12`
-- `fun_renderer_vulkan`
-- `fun_renderer_cef_gpu_only`
-- `fun_renderer_upscale`
-- `fun_renderer_dlss`
-- `fun_renderer_fsr`
-- `fun_renderer_frame_generation`
-- `fun_renderer_experimental_ml`
+- `legacy_renderer`
+- `fun_renderer_core`
+- `dx12_native_interop`
+- `vulkan_backend`
+- `cef_gpu_only`
+- `upscaling`
+- `dlss`
+- `fsr`
+- `frame_generation`
+- `experimental_renderer_ml`
 
-Lighting flags forward through `fun-renderer` into `fun-lux`:
+Renderer/lux capability flags forward through `fun-renderer` into `fun-lux`
+where applicable:
 
-- `fun_lux_many_light`
-- `fun_lux_virtual_shadows`
-- `fun_lux_hybrid_gi`
+- `many_light`
+- `virtual_geometry`
+- `virtual_shadows`
+- `hybrid_gi`
+
+Compatibility aliases retained for one transition cycle:
+
+- `fun_renderer_legacy` -> `legacy_renderer`
+- `fun_renderer_new_core` -> `fun_renderer_core`
+- `fun_renderer_dx12` -> `dx12_native_interop` in `fun-renderer`
+- `fun_renderer_vulkan` -> `vulkan_backend`
+- `fun_renderer_cef_gpu_only` -> `cef_gpu_only`
+- `fun_renderer_upscale` -> `upscaling`
+- `fun_renderer_dlss` -> `dlss`
+- `fun_renderer_fsr` -> `fsr`
+- `fun_renderer_frame_generation` -> `frame_generation`
+- `fun_renderer_experimental_ml` -> `experimental_renderer_ml`
+- `fun_lux_many_light` -> `many_light`
+- `fun_lux_virtual_shadows` -> `virtual_shadows`
+- `fun_lux_hybrid_gi` -> `hybrid_gi`
 
 The compile-only API seams are:
 
@@ -378,18 +401,27 @@ The compile-only API seams are:
 - `fun_renderer::PassRegistry`
 - `fun_renderer::Presentation`
 - `fun_renderer::NoopRendererCore`
+- `fun_renderer::FunRendererBackendSelection`
+- `fun_renderer::RENDERER_CORE_INTERFACE_MAP`
+- `fun_renderer::RENDERER_UPLOAD_ARENA_SEAM`
+- `fun_renderer::RENDERER_CEF_COMPOSITOR_INTERFACE`
+- `fun_renderer::RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE`
 - `fun_lux::LuxSettings`
 - `fun_lux::LuxFeatureToggles`
 - `fun_lux::LightDatabase`
 - `fun_lux::LuxRendererHooks`
 - `fun_lux::NoopLuxCore`
 - `fun_render::RendererBridgeSettings`
+- `fun_render::RendererBridgeRuntimeState`
 - `fun_render::BridgeFeatureToggles`
 - `fun_render::RendererBridgeHooks`
 - `fun_render::install_renderer_bridge_api`
 
 `NoopRendererCore` can boot a clear-color frame and submit it through the
-compile-only `Presentation` interface. It is not wired to the product swapchain
+compile-only `Presentation` interface. When `FUN_RENDERER_BACKEND=fun` is
+selected, `fun_render` starts that no-op core, records backend capabilities,
+produces a clear-color frame, calls `fun_lux::NoopLuxCore`, emits diagnostics,
+and shuts the no-op path down cleanly. It is not wired to the product swapchain
 yet, so the product legacy Bevy renderer remains the only fully visible runtime
 presentation path until a later pass connects backend resources and window
 presentation.

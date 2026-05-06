@@ -4117,6 +4117,7 @@ fn cef_ui_texture_upload_byte_count(
     })
 }
 
+#[cfg(test)]
 fn cef_dirty_rect_byte_len(size: UVec2, rect: CefDirtyRect) -> Option<usize> {
     let (_, _, width, height) = cef_dirty_rect_bounds(size, rect)?;
     usize::try_from(width)
