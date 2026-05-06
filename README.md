@@ -200,6 +200,13 @@ behind capability, backend-truth, present-lifetime, UI-readability, and
 frame-pacing gates. FG is off by default for docked editor viewports and only
 eligible for game runtime, play-in-editor, immersive editor viewports, or
 cinematic preview when explicitly enabled and valid.
+The renderer-facing model scaffold is represented by `fun_renderer::ml` behind
+`experimental_renderer_ml`. The first narrow feature is a shadow-page priority
+prior: `fun-renderer` owns tensor/resource request metadata, GPU handle
+references, validation, and deterministic heuristic fallback, while `fun-ai`
+owns the model manifest, hook schema, backend selection, inference queues, trust
+policy, and offline eval comparison across heuristic-only, model-assisted, and
+model-disabled lanes.
 The renderer-owned GPU scene database is represented by `GpuSceneDatabase`.
 It stores generation-checked view, instance, mesh, material, light, and page
 metadata records, derives records from `fun-scene` declarations, retains

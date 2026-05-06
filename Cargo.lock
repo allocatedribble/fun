@@ -3138,6 +3138,7 @@ dependencies = [
  "bevy_transform",
  "fun-lux",
  "fun-scene",
+ "fun_ai_core",
  "serde",
  "serde_json",
 ]

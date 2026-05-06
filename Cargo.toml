@@ -55,6 +55,7 @@ bevy_transform = { path = "../bevy/crates/bevy_transform" }
 compactly = "0.1.6"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 fun_lux = { package = "fun-lux", path = "fun-lux" }
+fun_ai_core = { path = "../fun-ai/crates/fun_ai_core" }
 fun_renderer = { package = "fun-renderer", path = "fun-renderer" }
 fun_scene = { package = "fun-scene", path = "fun-scene" }
 fun_scene_macros = { package = "fun-scene-macros", path = "fun-scene-macros" }

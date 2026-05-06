@@ -8,6 +8,8 @@ pub mod frame_generation;
 pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
+#[cfg(feature = "experimental_renderer_ml")]
+pub mod ml;
 pub mod page;
 pub mod parity;
 pub mod pipeline;
@@ -790,6 +792,8 @@ pub use ecs::*;
 pub use frame_graph::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
+#[cfg(feature = "experimental_renderer_ml")]
+pub use ml::*;
 pub use page::*;
 pub use pipeline::*;
 pub use resource::*;
