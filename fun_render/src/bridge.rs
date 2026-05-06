@@ -9,6 +9,8 @@ use fun_renderer::{
 };
 use tracing::{info, warn};
 
+use crate::renderer_settings_ui_model_from_bridge;
+
 pub const FUN_RENDER_BRIDGE_API_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +277,7 @@ pub struct RendererBridgeFrameGraphReport {
 
 pub fn install_renderer_bridge_api(app: &mut App, settings: RendererBridgeSettings) {
     app.insert_resource(settings)
+        .insert_resource(renderer_settings_ui_model_from_bridge(settings))
         .insert_resource(RendererBridgeRuntimeState::from_settings(settings))
         .init_resource::<RendererBridgeFrameGraphReport>()
         .init_resource::<RendererBridgeHooks>();

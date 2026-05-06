@@ -1,5 +1,7 @@
 use std::{fmt::Write as _, io, path::Path};
 
+use serde::{Deserialize, Serialize};
+
 use crate::frame_graph::{
     FrameGraphPassRole, FrameGraphResourceType, RendererFrameDescription, RendererFrameGraph,
 };
@@ -114,7 +116,7 @@ impl UpscalerVendor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UpscalerCapabilities {
     pub native: bool,
     pub dlss_sr: bool,

@@ -28,6 +28,7 @@ pub mod material_pipeline;
 pub mod offscreen;
 mod pipeline_warmup;
 pub mod residency;
+pub mod settings_bridge;
 mod signature;
 pub mod sky;
 pub mod solari;
@@ -165,6 +166,7 @@ pub use fun_renderer::heuristics::*;
 pub use fun_renderer::parity::*;
 pub use fun_renderer::resource::*;
 pub use fun_renderer::scene::*;
+pub use fun_renderer::settings::*;
 pub use fun_renderer::ui::*;
 pub use fun_renderer::{
     BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
@@ -275,6 +277,12 @@ pub use residency::{
     MaterialEntryId, MaterialResidencyManager, MaterialResidencyUpdate, TexturePageId,
     TexturePageUploadRequest, TextureResidencyManager, TextureResidencyPage, plan_residency_frame,
     residency_budget_for_lane, residency_upload_urgency,
+};
+pub use settings_bridge::{
+    RENDERER_SETTINGS_UI_BRIDGE_SCHEMA, RendererSettingsBenchmarkReproLabel,
+    RendererSettingsUiDisabledReason, RendererSettingsUiModel, RendererSettingsUiOption,
+    RendererSettingsUiOptionReason, RendererSettingsUiSelection,
+    renderer_settings_ui_model_from_bridge, virtual_geometry_budget_to_ui_label,
 };
 pub use signature::{
     FunGeometryClass, FunMaterialClass, FunRenderDistanceBand, FunRenderPath, FunRenderPathArbiter,

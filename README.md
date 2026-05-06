@@ -249,6 +249,18 @@ reflection ray budgets, texture residency, shading-rate decisions, and optional
 ML inference density consume the same score and emit comparable budget
 recommendations, heatmaps, high-priority miss counters, stability scores, and
 p95/p99 frame-impact artifacts.
+Renderer quality and settings are represented by `fun_renderer::settings`.
+The quality ladder is Baseline, Hybrid, High, RT-assisted, Vendor-enhanced, and
+Experimental. User-facing settings cover runtime/backend selection, quality
+preset, upscaler, frame generation, shadow/GI/reflection quality, virtual
+geometry and texture budgets, and diagnostics visibility. Internal settings
+cover page pools, shadow/light/GI budgets, pipeline warmup, runtime pipeline
+creation policy, and fallback strictness. The capability-aware selector uses
+actual backend facts, vendor/VRAM/display/runtime mode, CEF GPU transport, SR/FG
+support, RT/VRS/work-graph support, and compiled feature gates to choose safe
+defaults or reject unsupported requests with explicit reasons. `fun_render`
+exports a CEF/Svelte-safe settings UI model derived from the typed selection;
+benchmark artifacts record the full selected settings needed to reproduce a run.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. During the current
 transition, unset or `auto` resolves to the legacy Bevy/wgpu product path with a
 loud diagnostic; the exact future flip point is
