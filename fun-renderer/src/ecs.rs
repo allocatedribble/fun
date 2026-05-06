@@ -6,8 +6,8 @@ use bevy_ecs::{
 };
 use bevy_transform::components::Transform;
 use fun_scene::{
-    CefSurface, Renderable, SuperResolutionMode, UpscalePolicy, ViewportRenderPolicy,
-    VirtualGeometryAuthoring,
+    CefSurface, PagePriorityHint, Renderable, SuperResolutionMode, UpscalePolicy,
+    ViewportRenderPolicy, VirtualGeometryAuthoring, VirtualGeometryMode,
 };
 
 use crate::{
@@ -579,8 +579,14 @@ impl GpuScene {
         self.instances.instance_count = self.instances.instance_count.saturating_sub(1);
         self.instances.removed_instance_count =
             self.instances.removed_instance_count.saturating_add(1);
+        self.pages.released_page_reference_count =
+            self.pages.released_page_reference_count.saturating_add(1);
+        self.pages.shadow_invalidation_count =
+            self.pages.shadow_invalidation_count.saturating_add(1);
+        self.pages.gi_invalidation_count = self.pages.gi_invalidation_count.saturating_add(1);
         self.revisions.scene_revision = self.revisions.scene_revision.saturating_add(1);
         self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
+        self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
     }
 
     pub fn record_material_patch(&mut self) {
@@ -590,16 +596,34 @@ impl GpuScene {
 
     pub fn record_geometry_patch(&mut self) {
         self.geometry.dirty_geometry_count = self.geometry.dirty_geometry_count.saturating_add(1);
+        self.pages.shadow_invalidation_count =
+            self.pages.shadow_invalidation_count.saturating_add(1);
+        self.pages.gi_invalidation_count = self.pages.gi_invalidation_count.saturating_add(1);
         self.revisions.geometry_revision = self.revisions.geometry_revision.saturating_add(1);
+        self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
     }
 
     pub fn record_light_patch(&mut self) {
         self.lights.dirty_light_count = self.lights.dirty_light_count.saturating_add(1);
+        self.pages.shadow_invalidation_count =
+            self.pages.shadow_invalidation_count.saturating_add(1);
         self.revisions.light_revision = self.revisions.light_revision.saturating_add(1);
+        self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
     }
 
-    pub fn record_virtual_geometry_page_request(&mut self) {
+    pub fn record_virtual_geometry_authoring(&mut self, authoring: &VirtualGeometryAuthoring) {
+        if matches!(authoring.mode, VirtualGeometryMode::Disabled) {
+            return;
+        }
         self.pages.requested_page_count = self.pages.requested_page_count.saturating_add(1);
+        self.pages.metadata_request_count = self.pages.metadata_request_count.saturating_add(1);
+        self.pages.meshlet_bake_check_count = self.pages.meshlet_bake_check_count.saturating_add(1);
+        self.pages.bounds_registration_count =
+            self.pages.bounds_registration_count.saturating_add(1);
+        self.pages.highest_priority = self
+            .pages
+            .highest_priority
+            .max(page_priority(authoring.page_priority));
         self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
     }
 
@@ -609,6 +633,8 @@ impl GpuScene {
         self.instances.motion_vector_update_count =
             self.instances.motion_vector_update_count.saturating_add(1);
         self.instances.dirty_instance_count = self.instances.dirty_instance_count.saturating_add(1);
+        self.pages.shadow_invalidation_count =
+            self.pages.shadow_invalidation_count.saturating_add(1);
         self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
     }
 }
@@ -645,6 +671,13 @@ pub struct GpuLightTable {
 pub struct GpuPageTable {
     pub resident_page_count: u32,
     pub requested_page_count: u32,
+    pub metadata_request_count: u32,
+    pub meshlet_bake_check_count: u32,
+    pub bounds_registration_count: u32,
+    pub released_page_reference_count: u32,
+    pub shadow_invalidation_count: u32,
+    pub gi_invalidation_count: u32,
+    pub highest_priority: u8,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1203,8 +1236,8 @@ pub fn update_page_requests(
     mut gpu_scene: ResMut<GpuScene>,
     mut deltas: ResMut<ExtractedSceneDeltas>,
 ) {
-    for _ in query.iter() {
-        gpu_scene.record_virtual_geometry_page_request();
+    for authoring in query.iter() {
+        gpu_scene.record_virtual_geometry_authoring(authoring);
         deltas.record(RendererDeltaKind::VirtualGeometryAdded);
     }
 }
@@ -1274,6 +1307,16 @@ pub fn cull_dynamic_renderables() {}
 pub fn compact_visible_clusters() {}
 
 pub fn emit_visibility_feedback() {}
+
+#[must_use]
+pub const fn page_priority(priority: PagePriorityHint) -> u8 {
+    match priority {
+        PagePriorityHint::Low => 32,
+        PagePriorityHint::Normal => 96,
+        PagePriorityHint::High => 180,
+        PagePriorityHint::Critical | PagePriorityHint::WorldCritical => u8::MAX,
+    }
+}
 
 #[must_use]
 pub const fn default_backend_for_target() -> FunRendererBackend {
@@ -1535,6 +1578,9 @@ mod tests {
         let gpu_scene = world.resource::<GpuScene>();
         assert_eq!(gpu_scene.instances.instance_count, 0);
         assert_eq!(gpu_scene.instances.removed_instance_count, 1);
+        assert_eq!(gpu_scene.pages.released_page_reference_count, 1);
+        assert_eq!(gpu_scene.pages.shadow_invalidation_count, 1);
+        assert_eq!(gpu_scene.pages.gi_invalidation_count, 1);
         assert_eq!(
             world.resource::<ExtractedSceneDeltas>().removed_renderables,
             1
@@ -1625,6 +1671,7 @@ mod tests {
             first_signature
         );
         assert_eq!(gpu_scene.instances.motion_vector_update_count, 2);
+        assert_eq!(gpu_scene.pages.shadow_invalidation_count, 2);
         assert_eq!(
             world.resource::<ExtractedSceneDeltas>().changed_transforms,
             2
@@ -1638,7 +1685,11 @@ mod tests {
         world.insert_resource(FrameGraph::default());
         world.insert_resource(ExtractedSceneDeltas::default());
         world.spawn((
-            VirtualGeometryAuthoring::default(),
+            VirtualGeometryAuthoring {
+                mode: VirtualGeometryMode::StaticClusterPages,
+                page_priority: PagePriorityHint::WorldCritical,
+                dynamic_policy: fun_scene::DynamicGeometryPolicy::StaticOnly,
+            },
             CefSurface::default(),
             UpscalePolicy {
                 sr: SuperResolutionMode::Dlss,
@@ -1661,6 +1712,10 @@ mod tests {
 
         let gpu_scene = world.resource::<GpuScene>();
         assert_eq!(gpu_scene.pages.requested_page_count, 1);
+        assert_eq!(gpu_scene.pages.metadata_request_count, 1);
+        assert_eq!(gpu_scene.pages.meshlet_bake_check_count, 1);
+        assert_eq!(gpu_scene.pages.bounds_registration_count, 1);
+        assert_eq!(gpu_scene.pages.highest_priority, u8::MAX);
         let frame_graph = world.resource::<FrameGraph>();
         assert!(frame_graph.compiled);
         assert_eq!(frame_graph.cef_gpu_import_nodes, 1);

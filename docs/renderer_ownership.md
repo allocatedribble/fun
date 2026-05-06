@@ -37,6 +37,46 @@ The renderer must not pull opaque scene blobs out of gameplay and mutate secret
 render objects. It consumes typed ECS components, archetypes, resources, events,
 observers, and change ticks.
 
+## Scene Authority And Streaming
+
+`fun-scene` owns the generic scene authority model. `game_scene` remains a
+game-specific catalog for default arenas, benchmark scenes, stress scenes, and
+editor starter scenes during the transition.
+
+The shared manifest and stream contract lives in `fun_scene`:
+
+- `SceneManifest`
+- `SceneEntityManifest`
+- `SceneDescriptor`
+- `SceneManifestSignature`
+- `SceneRendererManifest`
+- `SceneLuxManifest`
+- `SceneStreamChunk`
+- `SceneManifestProvider`
+- `chunk_world_specs`
+- `try_chunk_world_specs`
+- `world_stream_manifest_signature`
+- `qtransform`
+
+The pipeline is:
+
+```text
+fun! scene
+  -> resolved ECS entities
+  -> stable identities
+  -> SceneManifest
+  -> SceneStreamChunk list
+  -> server/client/editor consume same chunks
+  -> renderer extracts chunk additions/removals
+  -> virtual page service receives chunk priorities
+```
+
+`SceneManifest::shared_consumer_contract` is the compact machine-checkable
+record for this path. The default game scene now builds its manifest from
+`fun_scene::world_stream_manifest_signature` and `fun_scene::chunk_world_specs`;
+`game_server` uses `fun_scene` directly for live stream signatures, chunking,
+and quantized transforms.
+
 ## ECS Renderer Schedule
 
 The renderer path is split into explicit ECS phases:
@@ -112,6 +152,40 @@ as `SceneStableIdentity`, `SceneRevision`, `SceneChunkId`, `Renderable`,
 `VirtualGeometryAuthoring`, `RendererBounds`, `LuxLight`, `LuxEmissive`,
 `LuxGiParticipant`, `CefSurface`, `ViewportUiTarget`, `UpscalePolicy`, and
 `ViewportRenderPolicy`.
+
+## Virtual Geometry And Shadows
+
+Virtual geometry is a typed ECS authoring component, not a path convention.
+Scenes author it with `fun!` using `Renderable`, `VirtualGeometryAuthoring`,
+`RendererBounds`, and related lighting/shadow components. `GeometryRef` and
+`MaterialRef` are compact handles; large material data, buffers, bake metadata,
+and page residency stay in resources and renderer tables.
+
+Scene-authored virtual geometry uses:
+
+- `VirtualGeometryMode::StaticClusterPages`
+- `PagePriorityHint::WorldCritical`
+- `DynamicGeometryPolicy::StaticOnly`
+- `RenderableFlags::STATIC_WORLD`
+
+`Added<VirtualGeometryAuthoring>` schedules meshlet/cluster bake checks,
+requests geometry page metadata, registers bounds, and raises the page priority
+record in `GpuScene`. `Changed<Transform>` updates instance transforms, motion
+vectors, and shadow invalidation. `RemovedComponents<Renderable>` frees the
+instance record, releases page references, and invalidates shadow/GI caches.
+
+Virtual shadows are also typed scene data:
+
+- `VirtualShadowCaster { policy, invalidation }`
+- `VirtualShadowReceiver { priority, filter_policy }`
+- `ShadowCasterPolicy::VirtualPages`
+- `ShadowInvalidationPolicy::OnTransformOrGeometryChange`
+- `ShadowReceiverPriority::High`
+- `ShadowFilterPolicy::ContactAware`
+
+`fun-lux` consumes those components to update shadow request counts and refresh
+priorities. Light changes invalidate light-specific pages; receiver salience can
+raise or lower page refresh priority through the existing salience path.
 
 Hot-path scene archetypes are created with these typed components instead of
 opaque render objects. Render-world markers and backend resources can still use
@@ -254,6 +328,11 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::SceneStableIdentity`
 - `fun_scene::SceneRevision`
 - `fun_scene::SceneChunkId`
+- `fun_scene::SceneManifest`
+- `fun_scene::SceneEntityManifest`
+- `fun_scene::SceneStreamChunk`
+- `fun_scene::SceneRendererManifest`
+- `fun_scene::SceneLuxManifest`
 - `fun_scene::Renderable`
 - `fun_scene::VirtualGeometryAuthoring`
 - `fun_scene::RendererBounds`
@@ -262,6 +341,10 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::LuxGiParticipant`
 - `fun_scene::VirtualShadowCaster`
 - `fun_scene::VirtualShadowReceiver`
+- `fun_scene::ShadowCasterPolicy`
+- `fun_scene::ShadowInvalidationPolicy`
+- `fun_scene::ShadowReceiverPriority`
+- `fun_scene::ShadowFilterPolicy`
 - `fun_scene::CefSurface`
 - `fun_scene::ViewportUiTarget`
 - `fun_scene::UpscalePolicy`

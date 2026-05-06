@@ -712,12 +712,37 @@ pub const fn importance_page_priority(importance: fun_scene::LuxImportance) -> u
 }
 
 #[must_use]
-pub const fn shadow_page_priority(priority: fun_scene::ShadowPagePriority) -> u8 {
+pub const fn shadow_receiver_priority(priority: fun_scene::ShadowReceiverPriority) -> u8 {
     match priority {
-        fun_scene::ShadowPagePriority::Low => 32,
-        fun_scene::ShadowPagePriority::Normal => 96,
-        fun_scene::ShadowPagePriority::High => 180,
-        fun_scene::ShadowPagePriority::Critical => u8::MAX,
+        fun_scene::ShadowReceiverPriority::Low => 32,
+        fun_scene::ShadowReceiverPriority::Normal => 96,
+        fun_scene::ShadowReceiverPriority::High => 180,
+        fun_scene::ShadowReceiverPriority::Critical => u8::MAX,
+    }
+}
+
+#[must_use]
+pub const fn shadow_caster_priority(
+    policy: fun_scene::ShadowCasterPolicy,
+    invalidation: fun_scene::ShadowInvalidationPolicy,
+) -> u8 {
+    match (policy, invalidation) {
+        (fun_scene::ShadowCasterPolicy::None, _) => 0,
+        (fun_scene::ShadowCasterPolicy::StaticMap, _) => 64,
+        (fun_scene::ShadowCasterPolicy::RayTraced, _) => 128,
+        (
+            fun_scene::ShadowCasterPolicy::VirtualPages,
+            fun_scene::ShadowInvalidationPolicy::Static,
+        ) => 96,
+        (
+            fun_scene::ShadowCasterPolicy::VirtualPages,
+            fun_scene::ShadowInvalidationPolicy::OnTransformChange,
+        ) => 180,
+        (
+            fun_scene::ShadowCasterPolicy::VirtualPages,
+            fun_scene::ShadowInvalidationPolicy::OnTransformOrGeometryChange
+            | fun_scene::ShadowInvalidationPolicy::OnTransformGeometryOrLightChange,
+        ) => u8::MAX,
     }
 }
 
@@ -816,6 +841,9 @@ pub fn update_shadow_invalidation(
     mut world: ResMut<LuxWorld>,
 ) {
     for caster in casters.iter() {
+        if caster.policy == fun_scene::ShadowCasterPolicy::None {
+            continue;
+        }
         world.shadow_requests.caster_count = world.shadow_requests.caster_count.saturating_add(1);
         world.shadow_requests.pending_page_requests = world
             .shadow_requests
@@ -824,7 +852,7 @@ pub fn update_shadow_invalidation(
         world.shadow_requests.refresh_priority = world
             .shadow_requests
             .refresh_priority
-            .max(shadow_page_priority(caster.priority));
+            .max(shadow_caster_priority(caster.policy, caster.invalidation));
     }
     for receiver in receivers.iter() {
         world.shadow_requests.receiver_count =
@@ -836,7 +864,7 @@ pub fn update_shadow_invalidation(
         world.shadow_requests.refresh_priority = world
             .shadow_requests
             .refresh_priority
-            .max(shadow_page_priority(receiver.refresh_priority));
+            .max(shadow_receiver_priority(receiver.priority));
     }
     for salience in selections.iter() {
         if salience.selected {
@@ -905,8 +933,9 @@ mod tests {
     use bevy_ecs::world::World;
     use fun_scene::{
         EmissiveCandidatePolicy, GiBouncePolicy, GiCachePolicy, LuxEmissive as SceneLuxEmissive,
-        LuxGiParticipant as SceneLuxGiParticipant, LuxLight as SceneLuxLight, ShadowPagePriority,
-        VirtualShadowCaster, VirtualShadowReceiver,
+        LuxGiParticipant as SceneLuxGiParticipant, LuxLight as SceneLuxLight, ShadowCasterPolicy,
+        ShadowFilterPolicy, ShadowInvalidationPolicy, ShadowReceiverPriority, VirtualShadowCaster,
+        VirtualShadowReceiver,
     };
 
     use super::*;
@@ -1105,12 +1134,12 @@ mod tests {
                 cache_policy: GiCachePolicy::Probe,
             },
             VirtualShadowCaster {
-                priority: ShadowPagePriority::Critical,
-                dynamic: true,
+                policy: ShadowCasterPolicy::VirtualPages,
+                invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange,
             },
             VirtualShadowReceiver {
-                refresh_priority: ShadowPagePriority::High,
-                receives_directional: true,
+                priority: ShadowReceiverPriority::High,
+                filter_policy: ShadowFilterPolicy::ContactAware,
             },
         ));
 

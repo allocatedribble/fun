@@ -108,6 +108,7 @@ pub const FUN_SCENE_PRODUCT_TOPOLOGY: FunSceneProductTopology = FunSceneProductT
 mod tests {
     use bevy_color::Color;
     use bevy_ecs::world::World;
+    use bevy_transform::components::Transform;
     use thunder::prelude::{NetEntity, WorldLevelId, WorldRevision, WorldStreamChunk};
 
     use super::*;
@@ -204,12 +205,12 @@ mod tests {
                 Renderable::new(
                     GeometryRef::new(5),
                     MaterialRef::new(4),
-                    RenderableFlags::STATIC.union(RenderableFlags::SHADOW_CASTER),
+                    RenderableFlags::STATIC_WORLD,
                 ),
                 VirtualGeometryAuthoring {
-                    mode: VirtualGeometryMode::StaticPages,
-                    page_priority: PagePriorityHint::High,
-                    dynamic_policy: DynamicGeometryPolicy::Static,
+                    mode: VirtualGeometryMode::StaticClusterPages,
+                    page_priority: PagePriorityHint::WorldCritical,
+                    dynamic_policy: DynamicGeometryPolicy::StaticOnly,
                 },
                 RendererBounds {
                     local_bounds: Default::default(),
@@ -225,6 +226,7 @@ mod tests {
         assert!(renderable.material.is_valid());
         assert!(renderable.flags.contains(RenderableFlags::STATIC));
         assert!(renderable.flags.contains(RenderableFlags::SHADOW_CASTER));
+        assert!(renderable.flags.contains(RenderableFlags::SHADOW_RECEIVER));
     }
 
     #[test]
@@ -242,12 +244,12 @@ mod tests {
                     cache_policy: GiCachePolicy::Probe,
                 },
                 VirtualShadowCaster {
-                    priority: ShadowPagePriority::High,
-                    dynamic: true,
+                    policy: ShadowCasterPolicy::VirtualPages,
+                    invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange,
                 },
                 VirtualShadowReceiver {
-                    refresh_priority: ShadowPagePriority::High,
-                    receives_directional: true,
+                    priority: ShadowReceiverPriority::High,
+                    filter_policy: ShadowFilterPolicy::ContactAware,
                 },
                 CefSurface::product(CefRoute::HUD, UiLayer::Hud),
                 ViewportUiTarget {
@@ -272,7 +274,11 @@ mod tests {
         let caster = world
             .get::<VirtualShadowCaster>(entity)
             .expect("virtual shadow caster authoring should be an ECS component");
-        assert!(caster.dynamic);
+        assert_eq!(caster.policy, ShadowCasterPolicy::VirtualPages);
+        assert_eq!(
+            caster.invalidation,
+            ShadowInvalidationPolicy::OnTransformOrGeometryChange
+        );
 
         let cef = world
             .get::<CefSurface>(entity)
@@ -290,6 +296,45 @@ mod tests {
             .get::<UpscalePolicy>(entity)
             .expect("upscale policy should be an ECS component");
         assert!(upscale.hudless_required);
+    }
+
+    #[test]
+    fn fun_macro_authors_virtual_geometry_and_shadow_components() {
+        fn megastructure_wall(
+            id: NetEntity,
+            geometry: GeometryRef,
+            material: MaterialRef,
+        ) -> impl FunScene {
+            fun! {
+                #MegastructureWall
+                fun_value(SceneStableIdentity(id))
+                Renderable {
+                    geometry: {geometry},
+                    material: {material},
+                    flags: RenderableFlags::STATIC_WORLD
+                }
+                VirtualGeometryAuthoring {
+                    mode: VirtualGeometryMode::StaticClusterPages,
+                    page_priority: PagePriorityHint::WorldCritical,
+                    dynamic_policy: DynamicGeometryPolicy::StaticOnly
+                }
+                VirtualShadowCaster {
+                    policy: ShadowCasterPolicy::VirtualPages,
+                    invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange
+                }
+                VirtualShadowReceiver {
+                    priority: ShadowReceiverPriority::High,
+                    filter_policy: ShadowFilterPolicy::ContactAware
+                }
+                LuxGiParticipant {
+                    bounce_policy: GiBouncePolicy::StaticSingleBounce,
+                    cache_policy: GiCachePolicy::Surface
+                }
+                Transform::default()
+            }
+        }
+
+        let _scene = megastructure_wall(NetEntity(500), GeometryRef::new(20), MaterialRef::new(30));
     }
 
     #[test]

@@ -14,5 +14,6 @@ bevy_camera.workspace = true
 bevy_color.workspace = true
 bevy_ecs.workspace = true
 bevy_scene.workspace = true
+bevy_transform.workspace = true
 fun_scene_macros.workspace = true
 thunder.workspace = true

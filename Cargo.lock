@@ -3109,6 +3109,7 @@ dependencies = [
  "bevy_color",
  "bevy_ecs",
  "bevy_scene",
+ "bevy_transform",
  "fun-scene-macros",
  "thunder",
 ]
@@ -3389,6 +3390,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy_quinnet",
+ "fun-scene",
  "fun-warden-protocol",
  "fun-warden-server",
  "fun_ai_core",

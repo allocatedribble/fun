@@ -47,6 +47,8 @@ impl RenderableFlags {
     pub const SHADOW_CASTER: Self = Self(1 << 2);
     pub const SHADOW_RECEIVER: Self = Self(1 << 3);
     pub const PROCEDURAL_SOURCE: Self = Self(1 << 4);
+    pub const STATIC_WORLD: Self =
+        Self(Self::STATIC.0 | Self::SHADOW_CASTER.0 | Self::SHADOW_RECEIVER.0);
 
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {
@@ -81,8 +83,14 @@ impl Renderable {
 pub enum VirtualGeometryMode {
     #[default]
     Disabled,
+    StaticClusterPages,
+    DynamicClusterPages,
+    RuntimeProceduralPages,
+    #[deprecated(note = "use StaticClusterPages")]
     StaticPages,
+    #[deprecated(note = "use DynamicClusterPages")]
     DynamicPages,
+    #[deprecated(note = "use RuntimeProceduralPages")]
     ProceduralPages,
 }
 
@@ -93,15 +101,18 @@ pub enum PagePriorityHint {
     Normal,
     High,
     Critical,
+    WorldCritical,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DynamicGeometryPolicy {
     #[default]
-    Static,
+    StaticOnly,
     TransformOnly,
     RebuildPages,
     RuntimeProcedural,
+    #[deprecated(note = "use StaticOnly")]
+    Static,
 }
 
 #[derive(Debug, Default, Clone, FunFromTemplate, Component)]

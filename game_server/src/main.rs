@@ -465,7 +465,7 @@ impl ServerWorldStream {
         let next_revision = WorldRevision(self.revision.0.saturating_add(1).max(1));
         self.revision = next_revision;
         self.editor_revision = next_revision;
-        self.manifest_signature = game_scene::world_stream_manifest_signature(&[]);
+        self.manifest_signature = fun_scene::world_stream_manifest_signature(&[]);
         self.entity_ids.clear();
         self.chunks.clear();
         true
@@ -1123,7 +1123,7 @@ fn rebuild_world_stream(
                 .unwrap_or_else(|| format!("NetEntity-{}", editor_identity.entity.0)),
             class: editor_identity.replication_class,
             authority: editor_identity.authority,
-            transform: game_scene::qtransform(transform),
+            transform: fun_scene::qtransform(transform),
             catalog: streamed.catalog,
             render: streamed.render,
             collider: streamed.collider,
@@ -1136,14 +1136,14 @@ fn rebuild_world_stream(
         clear_world_stream_if_empty(&mut manifest, &mut pending, _log_config.stream_verbose());
         return;
     }
-    let manifest_signature = game_scene::world_stream_manifest_signature(&specs);
+    let manifest_signature = fun_scene::world_stream_manifest_signature(&specs);
     if manifest_signature == manifest.manifest_signature {
         return;
     }
 
     let next_revision = WorldRevision(manifest.revision.0.saturating_add(1).max(1));
     let entity_ids = specs.iter().map(|spec| spec.entity).collect();
-    let Ok(chunks) = game_scene::try_chunk_world_specs(DEMO_LEVEL_ID, next_revision, specs) else {
+    let Ok(chunks) = fun_scene::try_chunk_world_specs(DEMO_LEVEL_ID, next_revision, specs) else {
         game_shared::fun_diag_warn!(
             target: "fun::server::stream",
             revision = next_revision.0,
@@ -1818,7 +1818,7 @@ fn apply_server_transform_transaction(
         entity: patch.entity,
         class: identity.class,
         authority: authority.mode,
-        transform: Some(game_scene::qtransform(&transform)),
+        transform: Some(fun_scene::qtransform(&transform)),
         body: None,
         components: Vec::new(),
     };
@@ -2631,7 +2631,7 @@ mod tests {
         assert_eq!(manifest.editor_revision, WorldRevision(10));
         assert_eq!(
             manifest.manifest_signature,
-            game_scene::world_stream_manifest_signature(&[])
+            fun_scene::world_stream_manifest_signature(&[])
         );
         assert!(manifest.entity_ids.is_empty());
         assert!(manifest.chunks.is_empty());

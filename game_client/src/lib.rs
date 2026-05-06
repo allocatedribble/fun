@@ -977,10 +977,9 @@ impl StaticPreviewWorldStream {
     }
 
     fn load_scene(&mut self, scene_id: String) -> Result<(), ()> {
-        let manifest =
-            game_scene::scene_render_manifest_by_id(&scene_id, WorldRevision(1)).ok_or(())?;
+        let manifest = game_scene::scene_manifest_by_id(&scene_id, WorldRevision(1)).ok_or(())?;
         self.scene_id = scene_id;
-        self.chunks = manifest.world_stream_chunks;
+        self.chunks = manifest.chunks;
         self.applied = false;
         Ok(())
     }
@@ -4760,7 +4759,7 @@ mod tests {
                 name: "PreviewStaticProbe".to_owned(),
                 class: ReplicationClass::World,
                 authority: AuthorityMode::StaticServer,
-                transform: game_scene::qtransform(&Transform::from_xyz(1.0, 2.0, 3.0)),
+                transform: fun_scene::qtransform(&Transform::from_xyz(1.0, 2.0, 3.0)),
                 catalog: None,
                 render: None,
                 collider: None,

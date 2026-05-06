@@ -94,7 +94,25 @@ pub struct LuxGiParticipant {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ShadowPagePriority {
+pub enum ShadowCasterPolicy {
+    None,
+    StaticMap,
+    #[default]
+    VirtualPages,
+    RayTraced,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShadowInvalidationPolicy {
+    #[default]
+    Static,
+    OnTransformChange,
+    OnTransformOrGeometryChange,
+    OnTransformGeometryOrLightChange,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShadowReceiverPriority {
     Low,
     #[default]
     Normal,
@@ -102,16 +120,24 @@ pub enum ShadowPagePriority {
     Critical,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShadowFilterPolicy {
+    #[default]
+    Basic,
+    ContactAware,
+    Denoised,
+}
+
 #[derive(Debug, Default, Clone, Component)]
 pub struct VirtualShadowCaster {
-    pub priority: ShadowPagePriority,
-    pub dynamic: bool,
+    pub policy: ShadowCasterPolicy,
+    pub invalidation: ShadowInvalidationPolicy,
 }
 
 #[derive(Debug, Default, Clone, Component)]
 pub struct VirtualShadowReceiver {
-    pub refresh_priority: ShadowPagePriority,
-    pub receives_directional: bool,
+    pub priority: ShadowReceiverPriority,
+    pub filter_policy: ShadowFilterPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

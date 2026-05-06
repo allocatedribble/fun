@@ -1,6 +1,8 @@
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 use fun_scene::prelude::*;
+#[allow(deprecated)]
+use fun_scene::{SceneRenderManifest, SceneRenderManifestProvider};
 use game_shared::{
     ASSET_COVER_CUBE, ASSET_FLOOR, ASSET_FLOOR_COLLIDER, ASSET_RAMP, ASSET_WALL,
     COLLIDER_COVER_CUBE, COLLIDER_FLOOR, COLLIDER_RAMP, COLLIDER_WALL, DEMO_LEVEL_ID,
@@ -8,10 +10,10 @@ use game_shared::{
 };
 use thunder::prelude::*;
 
-pub const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
-pub const MAX_WORLD_STREAM_CHUNKS: usize = u16::MAX as usize;
 pub const DEFAULT_SCENE_ID: SceneId = SceneId("arena-blockout");
 const DEFAULT_SCENE_FUNCTION_NAME: &str = "spawn_default_scene";
+const DEFAULT_RENDERABLE_ENTITY_COUNT: u32 = 6;
+const DEFAULT_VIRTUAL_PAGE_PRIORITY: u8 = 180;
 const FLOOR_ENTITY: NetEntity = NetEntity(1);
 const FLOOR_COLLIDER_ENTITY: NetEntity = NetEntity(2);
 const WALL_ENTITY: NetEntity = NetEntity(3);
@@ -20,69 +22,25 @@ const COVER_A_ENTITY: NetEntity = NetEntity(5);
 const COVER_B_ENTITY: NetEntity = NetEntity(6);
 const COVER_C_ENTITY: NetEntity = NetEntity(7);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SceneId(pub &'static str);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SceneManifestSignature(pub u64);
-
-#[derive(Debug, Clone, Copy)]
-pub struct SceneDescriptor {
-    pub id: SceneId,
-    pub display_name: &'static str,
-    pub scene_function_name: &'static str,
-    pub signature: SceneManifestSignature,
-}
-
-#[derive(Debug, Clone)]
-pub struct SceneRenderManifest {
-    pub descriptor: SceneDescriptor,
-    pub entities: Vec<SceneRenderEntity>,
-    pub preview_camera: ScenePreviewCamera,
-    pub lighting: SceneLightingDescriptor,
-    pub world_stream_chunks: Vec<WorldStreamChunk>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SceneRenderEntity {
-    pub stable_identity: NetEntity,
-    pub name: String,
-    pub transform: QuantizedTransform3,
-    pub catalog: Option<WorldCatalogRef>,
-    pub render: Option<WorldPrimitive>,
-    pub material_color: Option<PackedColorRgba8>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ScenePreviewCamera {
-    pub transform: QuantizedTransform3,
-    pub vertical_fov_radians: f32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SceneLightingDescriptor {
-    pub sun_direction: [f32; 3],
-    pub sun_illuminance_lux: f32,
-    pub ambient_rgb: [f32; 3],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamChunkError {
-    TooManyChunks,
-}
-
-pub trait SceneRenderManifestProvider {
-    fn scene_render_manifest(&self, revision: WorldRevision) -> SceneRenderManifest;
-}
-
 #[derive(Debug, Default, Clone, Copy)]
-pub struct DefaultSceneRenderManifestProvider;
+pub struct DefaultSceneManifestProvider;
 
-impl SceneRenderManifestProvider for DefaultSceneRenderManifestProvider {
-    fn scene_render_manifest(&self, revision: WorldRevision) -> SceneRenderManifest {
-        default_scene_render_manifest(revision)
+impl SceneManifestProvider for DefaultSceneManifestProvider {
+    fn scene_manifest(&self, revision: WorldRevision) -> SceneManifest {
+        default_scene_manifest(revision)
     }
 }
+
+#[allow(deprecated)]
+impl SceneRenderManifestProvider for DefaultSceneManifestProvider {
+    fn scene_render_manifest(&self, revision: WorldRevision) -> SceneManifest {
+        default_scene_manifest(revision)
+    }
+}
+
+#[allow(deprecated)]
+#[deprecated(note = "use DefaultSceneManifestProvider")]
+pub type DefaultSceneRenderManifestProvider = DefaultSceneManifestProvider;
 
 #[derive(Debug, Default, Clone, Component)]
 pub struct StreamedWorldEntity {
@@ -129,12 +87,24 @@ pub fn spawn_default_scene(mut commands: Commands) {
             Renderable {
                 geometry: GeometryRef({ASSET_FLOOR.0}),
                 material: MaterialRef({MATERIAL_FLOOR.0}),
-                flags: {static_renderable_flags()}
+                flags: RenderableFlags::STATIC_WORLD
             }
             VirtualGeometryAuthoring {
-                mode: VirtualGeometryMode::StaticPages,
-                page_priority: PagePriorityHint::Normal,
-                dynamic_policy: DynamicGeometryPolicy::Static
+                mode: VirtualGeometryMode::StaticClusterPages,
+                page_priority: PagePriorityHint::WorldCritical,
+                dynamic_policy: DynamicGeometryPolicy::StaticOnly
+            }
+            VirtualShadowCaster {
+                policy: ShadowCasterPolicy::VirtualPages,
+                invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange
+            }
+            VirtualShadowReceiver {
+                priority: ShadowReceiverPriority::High,
+                filter_policy: ShadowFilterPolicy::ContactAware
+            }
+            LuxGiParticipant {
+                bounce_policy: GiBouncePolicy::StaticSingleBounce,
+                cache_policy: GiCachePolicy::Surface
             }
             RendererBounds { streaming_radius: 64.0 }
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
@@ -165,12 +135,24 @@ pub fn spawn_default_scene(mut commands: Commands) {
             Renderable {
                 geometry: GeometryRef({ASSET_WALL.0}),
                 material: MaterialRef({MATERIAL_WALL.0}),
-                flags: {static_renderable_flags()}
+                flags: RenderableFlags::STATIC_WORLD
             }
             VirtualGeometryAuthoring {
-                mode: VirtualGeometryMode::StaticPages,
-                page_priority: PagePriorityHint::Normal,
-                dynamic_policy: DynamicGeometryPolicy::Static
+                mode: VirtualGeometryMode::StaticClusterPages,
+                page_priority: PagePriorityHint::WorldCritical,
+                dynamic_policy: DynamicGeometryPolicy::StaticOnly
+            }
+            VirtualShadowCaster {
+                policy: ShadowCasterPolicy::VirtualPages,
+                invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange
+            }
+            VirtualShadowReceiver {
+                priority: ShadowReceiverPriority::High,
+                filter_policy: ShadowFilterPolicy::ContactAware
+            }
+            LuxGiParticipant {
+                bounce_policy: GiBouncePolicy::StaticSingleBounce,
+                cache_policy: GiCachePolicy::Surface
             }
             RendererBounds { streaming_radius: 24.0 }
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
@@ -189,12 +171,24 @@ pub fn spawn_default_scene(mut commands: Commands) {
             Renderable {
                 geometry: GeometryRef({ASSET_RAMP.0}),
                 material: MaterialRef({MATERIAL_RAMP.0}),
-                flags: {static_renderable_flags()}
+                flags: RenderableFlags::STATIC_WORLD
             }
             VirtualGeometryAuthoring {
-                mode: VirtualGeometryMode::StaticPages,
-                page_priority: PagePriorityHint::Normal,
-                dynamic_policy: DynamicGeometryPolicy::Static
+                mode: VirtualGeometryMode::StaticClusterPages,
+                page_priority: PagePriorityHint::WorldCritical,
+                dynamic_policy: DynamicGeometryPolicy::StaticOnly
+            }
+            VirtualShadowCaster {
+                policy: ShadowCasterPolicy::VirtualPages,
+                invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange
+            }
+            VirtualShadowReceiver {
+                priority: ShadowReceiverPriority::High,
+                filter_policy: ShadowFilterPolicy::ContactAware
+            }
+            LuxGiParticipant {
+                bounce_policy: GiBouncePolicy::StaticSingleBounce,
+                cache_policy: GiCachePolicy::Surface
             }
             RendererBounds { streaming_radius: 24.0 }
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
@@ -220,12 +214,24 @@ fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
         Renderable {
             geometry: GeometryRef({ASSET_COVER_CUBE.0}),
             material: MaterialRef({MATERIAL_COVER.0}),
-            flags: {static_renderable_flags()}
+            flags: RenderableFlags::STATIC_WORLD
         }
         VirtualGeometryAuthoring {
-            mode: VirtualGeometryMode::StaticPages,
-            page_priority: PagePriorityHint::Normal,
-            dynamic_policy: DynamicGeometryPolicy::Static
+            mode: VirtualGeometryMode::StaticClusterPages,
+            page_priority: PagePriorityHint::WorldCritical,
+            dynamic_policy: DynamicGeometryPolicy::StaticOnly
+        }
+        VirtualShadowCaster {
+            policy: ShadowCasterPolicy::VirtualPages,
+            invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange
+        }
+        VirtualShadowReceiver {
+            priority: ShadowReceiverPriority::High,
+            filter_policy: ShadowFilterPolicy::ContactAware
+        }
+        LuxGiParticipant {
+            bounce_policy: GiBouncePolicy::StaticSingleBounce,
+            cache_policy: GiCachePolicy::Surface
         }
         RendererBounds { streaming_radius: 8.0 }
         fun_value(StreamedWorldEntity::catalog(catalog_ref(
@@ -237,12 +243,6 @@ fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
         Collider::cuboid(1.0, 1.0, 1.0)
         fun_value(Transform::from_translation(translation))
     }
-}
-
-const fn static_renderable_flags() -> RenderableFlags {
-    RenderableFlags::STATIC
-        .union(RenderableFlags::SHADOW_CASTER)
-        .union(RenderableFlags::SHADOW_RECEIVER)
 }
 
 pub fn apply_scene_stable_identities(
@@ -265,48 +265,64 @@ pub fn apply_scene_stable_identities(
 }
 
 #[must_use]
-pub fn scene_render_descriptors() -> [SceneDescriptor; 1] {
+pub fn scene_descriptors() -> [SceneDescriptor; 1] {
     [default_scene_descriptor()]
 }
 
 #[must_use]
+pub fn scene_manifest(scene_id: SceneId, revision: WorldRevision) -> Option<SceneManifest> {
+    if scene_id == DEFAULT_SCENE_ID {
+        return Some(default_scene_manifest(revision));
+    }
+    None
+}
+
+#[must_use]
+pub fn scene_manifest_by_id(scene_id: &str, revision: WorldRevision) -> Option<SceneManifest> {
+    if scene_id == DEFAULT_SCENE_ID.0 {
+        return Some(default_scene_manifest(revision));
+    }
+    None
+}
+
+#[allow(deprecated)]
+#[must_use]
+#[deprecated(note = "use scene_descriptors")]
+pub fn scene_render_descriptors() -> [SceneDescriptor; 1] {
+    scene_descriptors()
+}
+
+#[allow(deprecated)]
+#[must_use]
+#[deprecated(note = "use scene_manifest")]
 pub fn scene_render_manifest(
     scene_id: SceneId,
     revision: WorldRevision,
 ) -> Option<SceneRenderManifest> {
-    if scene_id == DEFAULT_SCENE_ID {
-        return Some(default_scene_render_manifest(revision));
-    }
-    None
+    scene_manifest(scene_id, revision)
 }
 
+#[allow(deprecated)]
 #[must_use]
+#[deprecated(note = "use scene_manifest_by_id")]
 pub fn scene_render_manifest_by_id(
     scene_id: &str,
     revision: WorldRevision,
 ) -> Option<SceneRenderManifest> {
-    if scene_id == DEFAULT_SCENE_ID.0 {
-        return Some(default_scene_render_manifest(revision));
-    }
-    None
+    scene_manifest_by_id(scene_id, revision)
 }
 
 #[must_use]
 pub fn default_scene_descriptor() -> SceneDescriptor {
-    SceneDescriptor {
-        id: DEFAULT_SCENE_ID,
-        display_name: "Arena Blockout",
-        scene_function_name: DEFAULT_SCENE_FUNCTION_NAME,
-        signature: default_scene_manifest_signature(),
-    }
+    default_scene_manifest(WorldRevision(0)).descriptor()
 }
 
 #[must_use]
-pub fn default_scene_render_manifest(revision: WorldRevision) -> SceneRenderManifest {
+pub fn default_scene_manifest(revision: WorldRevision) -> SceneManifest {
     let specs = default_scene_world_specs();
     let entities = specs
         .iter()
-        .map(|spec| SceneRenderEntity {
+        .map(|spec| SceneEntityManifest {
             stable_identity: spec.entity,
             name: spec.name.clone(),
             transform: spec.transform,
@@ -315,29 +331,52 @@ pub fn default_scene_render_manifest(revision: WorldRevision) -> SceneRenderMani
             material_color: spec.color,
         })
         .collect::<Vec<_>>();
-    let world_stream_chunks = chunk_world_specs(DEMO_LEVEL_ID, revision, specs);
-    SceneRenderManifest {
-        descriptor: default_scene_descriptor(),
+    let chunks = fun_scene::chunk_world_specs(DEMO_LEVEL_ID, revision, specs);
+    let stream_chunk_count = chunks.len() as u16;
+    SceneManifest {
+        id: DEFAULT_SCENE_ID,
+        display_name: "Arena Blockout",
+        scene_function_name: DEFAULT_SCENE_FUNCTION_NAME,
+        signature: default_scene_manifest_signature(),
         entities,
-        preview_camera: ScenePreviewCamera {
-            transform: qtransform(
-                &Transform::from_xyz(-8.0, 5.0, 10.0)
-                    .looking_at(Vec3::new(1.0, 1.0, -1.0), Vec3::Y),
-            ),
-            vertical_fov_radians: 65.0_f32.to_radians(),
+        chunks,
+        renderer: SceneRendererManifest {
+            render_entity_count: DEFAULT_RENDERABLE_ENTITY_COUNT,
+            virtual_geometry_entity_count: DEFAULT_RENDERABLE_ENTITY_COUNT,
+            stream_chunk_count,
+            virtual_page_priority: DEFAULT_VIRTUAL_PAGE_PRIORITY,
+            preview_camera: Some(ScenePreviewCamera {
+                transform: qtransform(
+                    &Transform::from_xyz(-8.0, 5.0, 10.0)
+                        .looking_at(Vec3::new(1.0, 1.0, -1.0), Vec3::Y),
+                ),
+                vertical_fov_radians: 65.0_f32.to_radians(),
+            }),
         },
-        lighting: SceneLightingDescriptor {
-            sun_direction: [-0.4, -1.0, -0.35],
-            sun_illuminance_lux: 25_000.0,
-            ambient_rgb: [0.03, 0.035, 0.04],
+        lux: SceneLuxManifest {
+            light_count: 1,
+            emissive_candidate_count: 0,
+            gi_participant_count: DEFAULT_RENDERABLE_ENTITY_COUNT,
+            virtual_shadow_participant_count: DEFAULT_RENDERABLE_ENTITY_COUNT,
+            lighting: Some(SceneLightingDescriptor {
+                sun_direction: [-0.4, -1.0, -0.35],
+                sun_illuminance_lux: 25_000.0,
+                ambient_rgb: [0.03, 0.035, 0.04],
+            }),
         },
-        world_stream_chunks,
     }
 }
 
+#[allow(deprecated)]
 #[must_use]
-pub fn default_scene_world_stream_chunks(revision: WorldRevision) -> Vec<WorldStreamChunk> {
-    default_scene_render_manifest(revision).world_stream_chunks
+#[deprecated(note = "use default_scene_manifest")]
+pub fn default_scene_render_manifest(revision: WorldRevision) -> SceneRenderManifest {
+    default_scene_manifest(revision)
+}
+
+#[must_use]
+pub fn default_scene_world_stream_chunks(revision: WorldRevision) -> Vec<SceneStreamChunk> {
+    default_scene_manifest(revision).chunks
 }
 
 #[must_use]
@@ -356,82 +395,6 @@ pub fn default_scene_world_specs() -> Vec<WorldEntitySpec> {
             color: None,
         })
         .collect()
-}
-
-#[must_use]
-pub fn chunk_world_specs(
-    level_id: &str,
-    revision: WorldRevision,
-    specs: Vec<WorldEntitySpec>,
-) -> Vec<WorldStreamChunk> {
-    try_chunk_world_specs(level_id, revision, specs).unwrap_or_default()
-}
-
-pub fn try_chunk_world_specs(
-    level_id: &str,
-    revision: WorldRevision,
-    specs: Vec<WorldEntitySpec>,
-) -> Result<Vec<WorldStreamChunk>, StreamChunkError> {
-    let chunk_count = chunk_count_for_spec_len(specs.len())?;
-    if chunk_count == 0 {
-        return Ok(Vec::new());
-    }
-    let manifest_signature = world_stream_manifest_signature(&specs);
-
-    Ok(specs
-        .chunks(WORLD_STREAM_ENTITIES_PER_CHUNK)
-        .enumerate()
-        .map(|(chunk_index, entities)| WorldStreamChunk {
-            level_id: WorldLevelId(level_id.to_owned()),
-            revision,
-            chunk_index: chunk_index as u16,
-            chunk_count,
-            manifest_signature,
-            entities: entities.to_vec(),
-        })
-        .collect())
-}
-
-fn chunk_count_for_spec_len(spec_len: usize) -> Result<u16, StreamChunkError> {
-    if spec_len == 0 {
-        return Ok(0);
-    }
-    let chunk_count = spec_len.div_ceil(WORLD_STREAM_ENTITIES_PER_CHUNK);
-    if chunk_count > MAX_WORLD_STREAM_CHUNKS {
-        return Err(StreamChunkError::TooManyChunks);
-    }
-    Ok(chunk_count as u16)
-}
-
-#[must_use]
-pub fn world_stream_manifest_signature(specs: &[WorldEntitySpec]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    hash = fnv1a_u64(hash, specs.len() as u64);
-    for spec in specs {
-        hash = fnv1a_u64(hash, spec.entity.0);
-        hash = fnv1a_str(hash, &spec.name);
-        hash = hash_replication_class(hash, spec.class);
-        hash = hash_authority_mode(hash, spec.authority);
-        hash = hash_transform(hash, spec.transform);
-        hash = hash_catalog(hash, spec.catalog);
-        hash = hash_render(hash, spec.render);
-        hash = hash_collider(hash, spec.collider);
-        hash = hash_color(hash, spec.color);
-    }
-    hash
-}
-
-#[must_use]
-pub fn qtransform(transform: &Transform) -> QuantizedTransform3 {
-    QuantizedTransform3 {
-        translation: qvec(transform.translation),
-        rotation: QuantizedQuat::from_f32([
-            transform.rotation.x,
-            transform.rotation.y,
-            transform.rotation.z,
-            transform.rotation.w,
-        ]),
-    }
 }
 
 fn default_scene_entities() -> [SceneEntity; 7] {
@@ -489,18 +452,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
 }
 
 fn default_scene_manifest_signature() -> SceneManifestSignature {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for entity in default_scene_entities() {
-        hash = fnv1a_u64(hash, entity.entity.0);
-        hash = fnv1a(hash, entity.catalog.asset_id);
-        hash = fnv1a(hash, entity.catalog.material_id);
-        hash = fnv1a(hash, entity.catalog.collider_id);
-        for value in entity.translation.to_array() {
-            hash = fnv1a(hash, value.to_bits());
-        }
-        hash = fnv1a(hash, entity.rotation_z_radians.to_bits());
-    }
-    SceneManifestSignature(hash)
+    SceneManifestSignature(world_stream_manifest_signature(&default_scene_world_specs()))
 }
 
 const fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> WorldCatalogRef {
@@ -509,145 +461,6 @@ const fn catalog_ref(asset_id: u32, material_id: u32, collider_id: u32) -> World
         material_id,
         collider_id,
     }
-}
-
-fn qvec(value: Vec3) -> QuantizedVec3 {
-    QuantizedVec3::from_f32(value.to_array(), Quantization::MILLIMETERS)
-}
-
-fn hash_replication_class(mut hash: u64, class: ReplicationClass) -> u64 {
-    match class {
-        ReplicationClass::Pawn => fnv1a(hash, 0),
-        ReplicationClass::Projectile => fnv1a(hash, 1),
-        ReplicationClass::Destructible => fnv1a(hash, 2),
-        ReplicationClass::Vehicle => fnv1a(hash, 3),
-        ReplicationClass::Objective => fnv1a(hash, 4),
-        ReplicationClass::World => fnv1a(hash, 5),
-        ReplicationClass::Custom(value) => {
-            hash = fnv1a(hash, 6);
-            fnv1a_u16(hash, value)
-        }
-    }
-}
-
-fn hash_authority_mode(mut hash: u64, authority: AuthorityMode) -> u64 {
-    match authority {
-        AuthorityMode::ServerOnly => fnv1a(hash, 0),
-        AuthorityMode::ClientPredicted { owner } => {
-            hash = fnv1a(hash, 1);
-            fnv1a_u64(hash, owner.0)
-        }
-        AuthorityMode::StaticServer => fnv1a(hash, 2),
-    }
-}
-
-fn hash_transform(mut hash: u64, transform: QuantizedTransform3) -> u64 {
-    hash = hash_qvec(hash, transform.translation);
-    hash = fnv1a_i16(hash, transform.rotation.x);
-    hash = fnv1a_i16(hash, transform.rotation.y);
-    hash = fnv1a_i16(hash, transform.rotation.z);
-    fnv1a_i16(hash, transform.rotation.w)
-}
-
-fn hash_catalog(mut hash: u64, catalog: Option<WorldCatalogRef>) -> u64 {
-    match catalog {
-        Some(catalog) => {
-            hash = fnv1a_u8(hash, 1);
-            hash = fnv1a(hash, catalog.asset_id);
-            hash = fnv1a(hash, catalog.material_id);
-            fnv1a(hash, catalog.collider_id)
-        }
-        None => fnv1a_u8(hash, 0),
-    }
-}
-
-fn hash_render(mut hash: u64, render: Option<WorldPrimitive>) -> u64 {
-    match render {
-        Some(WorldPrimitive::Plane { size }) => {
-            hash = fnv1a_u8(hash, 1);
-            hash_qvec(hash, size)
-        }
-        Some(WorldPrimitive::Cuboid { size }) => {
-            hash = fnv1a_u8(hash, 2);
-            hash_qvec(hash, size)
-        }
-        None => fnv1a_u8(hash, 0),
-    }
-}
-
-fn hash_collider(mut hash: u64, collider: Option<WorldCollider>) -> u64 {
-    match collider {
-        Some(WorldCollider::Cuboid { size }) => {
-            hash = fnv1a_u8(hash, 1);
-            hash_qvec(hash, size)
-        }
-        None => fnv1a_u8(hash, 0),
-    }
-}
-
-fn hash_color(mut hash: u64, color: Option<PackedColorRgba8>) -> u64 {
-    match color {
-        Some(color) => {
-            hash = fnv1a_u8(hash, 1);
-            hash = fnv1a_u8(hash, color.r);
-            hash = fnv1a_u8(hash, color.g);
-            hash = fnv1a_u8(hash, color.b);
-            fnv1a_u8(hash, color.a)
-        }
-        None => fnv1a_u8(hash, 0),
-    }
-}
-
-fn hash_qvec(mut hash: u64, value: QuantizedVec3) -> u64 {
-    hash = fnv1a_i32(hash, value.x);
-    hash = fnv1a_i32(hash, value.y);
-    fnv1a_i32(hash, value.z)
-}
-
-fn fnv1a(mut hash: u64, value: u32) -> u64 {
-    for byte in value.to_le_bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
-fn fnv1a_u8(mut hash: u64, value: u8) -> u64 {
-    hash ^= u64::from(value);
-    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    hash
-}
-
-fn fnv1a_u16(mut hash: u64, value: u16) -> u64 {
-    for byte in value.to_le_bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
-fn fnv1a_i16(hash: u64, value: i16) -> u64 {
-    fnv1a_u16(hash, value as u16)
-}
-
-fn fnv1a_i32(hash: u64, value: i32) -> u64 {
-    fnv1a(hash, value as u32)
-}
-
-fn fnv1a_u64(mut hash: u64, value: u64) -> u64 {
-    for byte in value.to_le_bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
-fn fnv1a_str(mut hash: u64, value: &str) -> u64 {
-    hash = fnv1a_u64(hash, value.len() as u64);
-    for byte in value.bytes() {
-        hash = fnv1a_u8(hash, byte);
-    }
-    hash
 }
 
 #[cfg(test)]
@@ -669,47 +482,41 @@ mod tests {
     }
 
     #[test]
-    fn empty_world_specs_produce_zero_chunks() {
-        let chunks = try_chunk_world_specs(DEMO_LEVEL_ID, WorldRevision(1), Vec::new())
-            .expect("empty world is valid");
+    fn default_scene_manifest_exposes_stream_contract() {
+        let manifest = default_scene_manifest(WorldRevision(7));
+        let contract = manifest.shared_consumer_contract();
 
-        assert!(chunks.is_empty());
-    }
-
-    #[test]
-    fn huge_world_specs_are_rejected_before_chunk_index_wrap() {
-        let too_many_specs =
-            MAX_WORLD_STREAM_CHUNKS.saturating_mul(WORLD_STREAM_ENTITIES_PER_CHUNK) + 1;
-
-        assert_eq!(
-            chunk_count_for_spec_len(too_many_specs),
-            Err(StreamChunkError::TooManyChunks)
-        );
-    }
-
-    #[test]
-    fn world_stream_signature_changes_when_entity_fields_change() {
-        let mut specs = default_scene_world_specs();
-        let original = world_stream_manifest_signature(&specs);
-
-        specs[0].transform.translation.x += 1;
-
-        assert_ne!(original, world_stream_manifest_signature(&specs));
-    }
-
-    #[test]
-    fn default_scene_manifest_exposes_render_structure() {
-        let manifest = default_scene_render_manifest(WorldRevision(7));
-        assert_eq!(manifest.descriptor.id, DEFAULT_SCENE_ID);
+        assert_eq!(manifest.id, DEFAULT_SCENE_ID);
         assert_eq!(manifest.entities.len(), 7);
-        assert_eq!(manifest.world_stream_chunks.len(), 1);
-        assert_eq!(manifest.world_stream_chunks[0].revision, WorldRevision(7));
+        assert_eq!(manifest.chunks.len(), 1);
+        assert_eq!(manifest.chunks[0].revision, WorldRevision(7));
         assert_eq!(manifest.entities[0].stable_identity, FLOOR_ENTITY);
         assert!(
             manifest
                 .entities
                 .iter()
                 .all(|entity| entity.catalog.is_some())
+        );
+        assert_eq!(manifest.renderer.render_entity_count, 6);
+        assert_eq!(manifest.renderer.virtual_geometry_entity_count, 6);
+        assert!(manifest.renderer.preview_camera.is_some());
+        assert_eq!(manifest.lux.gi_participant_count, 6);
+        assert_eq!(manifest.lux.virtual_shadow_participant_count, 6);
+        assert!(manifest.lux.lighting.is_some());
+        assert!(contract.server_uses_chunks);
+        assert!(contract.client_uses_chunks);
+        assert!(contract.editor_uses_manifest);
+        assert!(contract.renderer_extracts_chunk_deltas);
+        assert!(contract.virtual_page_service_receives_chunk_priorities);
+    }
+
+    #[test]
+    fn default_scene_manifest_signature_uses_fun_scene_stream_signature() {
+        let specs = default_scene_world_specs();
+
+        assert_eq!(
+            default_scene_manifest_signature(),
+            SceneManifestSignature(fun_scene::world_stream_manifest_signature(&specs))
         );
     }
 

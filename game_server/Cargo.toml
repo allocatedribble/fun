@@ -19,6 +19,7 @@ fun-warden-server = { path = "../../fun-warden/crates/fun-warden-server" }
 fun_ai_core = { path = "../../fun-ai/crates/fun_ai_core" }
 fun_ai_inference = { path = "../../fun-ai/crates/fun_ai_inference" }
 fun_ai_tactics = { path = "../../fun-ai/crates/fun_ai_tactics" }
+fun_scene.workspace = true
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
 log.workspace = true
