@@ -132,6 +132,14 @@ failures, pass timing placeholders, resource lifetimes, and debug artifacts.
 `fun-renderer` owns pass order and execution policy. The initial graph keeps
 HUD-less scene color, UI color/alpha, final composition, and present as
 separate resources from day one.
+The renderer-owned GPU scene database is represented by `GpuSceneDatabase`.
+It stores generation-checked view, instance, mesh, material, light, and page
+metadata records, derives records from `fun-scene` declarations, retains
+previous transforms for motion history, tracks dirty ranges and compaction, and
+uploads dirty records through the renderer resource/upload diagnostics. The
+`fun_render` extraction bridge reads Bevy ECS entities/components and submits
+records to this database; Bevy remains orchestration and extraction, not the
+renderer-core storage owner.
 `COMPONENT_GPU_MAPPINGS` keeps ECS authoring components ergonomic while mapping
 them into compact SoA-style GPU tables: instance, transform, material,
 geometry-page, light, and shadow-page tables. Renderer history lives in

@@ -17,6 +17,7 @@ mod dx12_dlss_sr;
 #[cfg(all(target_os = "windows", feature = "dx12_native_interop"))]
 pub mod dx12_native;
 pub mod entity_render_strategy;
+pub mod extraction;
 pub mod gpu_visibility;
 pub mod hiz_occlusion;
 pub mod indirect_draw;
@@ -148,6 +149,12 @@ pub use entity_render_strategy::{
     evaluate_entity_render_strategy_budget, fun_entity_render_strategies,
     strategy_for_entity_render_class,
 };
+pub use extraction::{
+    ExtractedToRendererScene, FUN_RENDER_SCENE_EXTRACTION_SCHEMA_VERSION,
+    FunRenderSceneExtractionBridge, FunRenderSceneExtractionReport,
+    extract_fun_scene_lights_to_renderer_database,
+    extract_fun_scene_renderables_to_renderer_database,
+};
 pub use fun_renderer;
 pub use fun_renderer::ecs::*;
 pub use fun_renderer::frame_graph::*;
@@ -155,6 +162,7 @@ pub use fun_renderer::fun_lux;
 pub use fun_renderer::fun_scene;
 pub use fun_renderer::heuristics::*;
 pub use fun_renderer::resource::*;
+pub use fun_renderer::scene::*;
 pub use fun_renderer::{
     BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
     FUN_RENDERER_AI_INTERFACE_DESCRIPTORS, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,

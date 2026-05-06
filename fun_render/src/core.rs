@@ -27,7 +27,7 @@ use crate::{
     FunRenderPath, FunRenderRtFeatures, FunRendererConfig, FunRendererEcsEvent,
     FunRendererEcsSchedulePolicy, FunRendererPageAllocator, FunRendererUploadArena,
     FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry, GeometryResidencyManager,
-    GiCacheUpdatePriorities, GpuScene, HeuristicDebugOverlay, LuxLightPriorities,
+    GiCacheUpdatePriorities, GpuScene, GpuSceneDatabase, HeuristicDebugOverlay, LuxLightPriorities,
     MaterialResidencyManager, MlInferencePriorities, PagePriorities, RenderHeuristicScheduler,
     RenderPathSignature, RendererFrameGraph, RendererViews, ShadingRatePriorities,
     ShadowPagePriorities, StaticInstanceTable, TextureResidencyManager, VirtualGeometryResidency,
@@ -36,8 +36,9 @@ use crate::{
         RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_initialize_runtime,
     },
     capabilities::emit_renderer_capability_report,
-    dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting, pipeline_warmup,
-    prewarm_primitive_render_cache, prewarm_world_render_catalog,
+    dlss_correctness, dx12_dlss_rr, dx12_dlss_sr,
+    extraction::{FunRenderSceneExtractionBridge, FunRenderSceneExtractionReport},
+    lighting, pipeline_warmup, prewarm_primitive_render_cache, prewarm_world_render_catalog,
     render_path_signature_for_options, score_gi_cache_participants, score_lux_lights,
     score_shadow_receivers, score_virtual_geometry_pages,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
@@ -274,6 +275,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<FunRendererEcsSchedulePolicy>()
         .init_resource::<FunRendererConfig>()
         .init_resource::<GpuScene>()
+        .init_resource::<GpuSceneDatabase>()
         .init_resource::<ExtractedSceneDeltas>()
         .init_resource::<FrameGraph>()
         .init_resource::<RendererFrameGraph>()
@@ -294,6 +296,8 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<crate::fun_lux::LuxWorld>()
         .init_resource::<FunSceneManifestRegistry>()
         .init_resource::<FunViewportRegistry>()
+        .init_resource::<FunRenderSceneExtractionBridge>()
+        .init_resource::<FunRenderSceneExtractionReport>()
         .init_resource::<GeometryResidencyManager>()
         .init_resource::<TextureResidencyManager>()
         .init_resource::<MaterialResidencyManager>()
@@ -398,6 +402,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<FunRendererEcsSchedulePolicy>();
         render_app.init_resource::<FunRendererConfig>();
         render_app.init_resource::<GpuScene>();
+        render_app.init_resource::<GpuSceneDatabase>();
         render_app.init_resource::<ExtractedSceneDeltas>();
         render_app.init_resource::<FrameGraph>();
         render_app.init_resource::<RendererFrameGraph>();
@@ -418,6 +423,8 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<crate::fun_lux::LuxWorld>();
         render_app.init_resource::<FunSceneManifestRegistry>();
         render_app.init_resource::<FunViewportRegistry>();
+        render_app.init_resource::<FunRenderSceneExtractionBridge>();
+        render_app.init_resource::<FunRenderSceneExtractionReport>();
         render_app.add_message::<FunRendererEcsEvent>();
         render_app.add_message::<crate::fun_lux::LuxLightEvent>();
         render_app.init_resource::<FunEntityRenderStrategyRegistry>();

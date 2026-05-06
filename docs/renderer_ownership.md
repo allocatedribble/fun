@@ -557,6 +557,17 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::RendererFrameGraphDiagnostics`
 - `fun_renderer::RendererFrameGraphDebugArtifact`
 - `fun_renderer::FrameGraphSubmission`
+- `fun_renderer::GpuSceneDatabase`
+- `fun_renderer::GpuViewRecord`
+- `fun_renderer::GpuInstanceRecord`
+- `fun_renderer::GpuMeshRecord`
+- `fun_renderer::GpuMaterialRecord`
+- `fun_renderer::GpuLightRecord`
+- `fun_renderer::GpuPageMetadataRecord`
+- `fun_renderer::GpuSceneDirtyRange`
+- `fun_renderer::GpuSceneDatabaseDiagnostics`
+- `fun_render::FunRenderSceneExtractionBridge`
+- `fun_render::FunRenderSceneExtractionReport`
 - `fun_scene::FunSceneSet`
 - `fun_renderer::FunRendererEcsSchedulePolicy`
 - `fun_renderer::FunRendererSet`

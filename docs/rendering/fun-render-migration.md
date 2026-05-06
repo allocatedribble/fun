@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory + pass6-frame-graph
+status: inventory + pass7-gpu-scene-database
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -40,7 +40,7 @@ first-order migration blockers.
 | question | current answer |
 | --- | --- |
 | What does `fun_render` own today? | The Bevy-facing product renderer plugin, Winit presentation, config/env parsing, Solari/cloud/meshlet integration, DX12 native interop gate, CEF texture composition bridge, diagnostics/benchmark counters, upload arena experiments, DLSS correctness/native-SR scaffolding, and the bridge re-export surface for `fun-renderer`, `fun-lux`, and `fun-scene`. |
-| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, GPU scene DB skeleton, resource ownership policy, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
+| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
 | Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
 | Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | Not proven. The experimental D3D11On12 path exists, but the latest strict local status selected `disabled` with `fallback_reason=render_backend_not_dx12`; the latest non-strict live lane selected CPU fallback. Current product CEF composition still uses a Bevy UI `ImageNode` target. |
@@ -53,7 +53,7 @@ first-order migration blockers.
 | crate/module | current owner | intended owner | migration status | current feature flags | validation commands |
 | --- | --- | --- | --- | --- | --- |
 | `fun_render` | Bevy/game renderer bridge, but still the product renderer brain for Winit presentation, Solari, meshlets, clouds, CEF texture composition, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, legacy compatibility during transition. | Runtime selector is installed by `FunRenderCorePlugin`; `FUN_RENDERER_BACKEND=fun` boots the no-op core/lux path; product presentation still here. | `default=[offscreen,volumetric_clouds]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
-| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB skeleton, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, upload/CEF/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. Pass 5 adds resource classes, allocation diagnostics, and the hot upload kill-list as renderer-core policy. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`; `cargo test -p fun-renderer --lib resource`. |
+| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB records, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, upload/CEF/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. Pass 7 adds generation-checked scene DB records and dirty upload diagnostics as renderer-core storage. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`; `cargo test -p fun-renderer --lib scene`; `cargo test -p fun_render --lib extraction`. |
 | `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. | Exists as real crate; now exposes baseline no-op frame and shutdown reports for bridge boot. | `many_light`, `virtual_shadows`, `hybrid_gi`; no default features; old `fun_lux_*` names are aliases. | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib`. |
 | `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `tools/check_fun_scene_migration.ps1`. |
 | `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI can be compiled but uses Bevy UI image composition. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate`. |
@@ -346,12 +346,58 @@ debug artifact, but it does not own pass order or graph execution policy.
 Current debug artifact:
 `target/frame-graph/pass6/renderer_frame_graph_debug.txt`.
 
+## Pass 7 GPU Scene Database
+
+`fun-renderer` now owns `GpuSceneDatabase` in `fun-renderer/src/scene.rs`.
+This is the renderer-facing record store; it is not a private scene authoring
+dialect. It consumes `fun-scene` declaration components such as `Renderable`,
+`GeometryRef`, `MaterialRef`, `VirtualGeometryAuthoring`, `LuxLight`, and
+`SceneStableIdentity`.
+
+Record families:
+
+| record | key/handle | core fields |
+|---|---|---|
+| view | `GpuViewHandle` | camera transform, projection, viewport, jitter, previous/current view-projection, exposure/HDR metadata |
+| instance | `GpuInstanceHandle` | stable instance ID, current/previous transform, mesh handle, material handle, flags, visibility, page metadata |
+| mesh | `GpuMeshHandle` | `fun-scene` geometry ref, classic mesh buffer ref, virtual geometry ref, fallback mesh ref |
+| material | `GpuMaterialHandle` | `fun-scene` material ref, material class, texture table indices, bindless base index, alpha/specular/emissive flags |
+| light | `GpuLightHandle` | stable light ID, type, transform, color/intensity, radius/cone, shadow policy, importance |
+| page metadata | `GpuPageMetadataHandle` | geometry page ID, shadow page ID, texture residency ID, GI cache ID |
+
+Update protocol:
+
+- creates and updates go through upsert APIs;
+- handles carry `index + generation` and stale-generation operations are
+  rejected and counted;
+- instances are looked up by `StableInstanceId`, not transient Bevy `Entity`;
+- transform updates retain `previous_transform` for motion history;
+- removals mark records dirty and invalidate the stale handle;
+- compaction is explicit through `compact_removed_records`;
+- dirty ranges are tracked per record family.
+
+Upload protocol:
+
+- `GpuSceneDatabase::upload_dirty_records` drains dirty ranges into
+  `ResourceFrameAllocationDiagnostics`;
+- upload bytes and uploaded record counts are recorded in
+  `GpuSceneDatabaseDiagnostics`;
+- `fun_render` bridges those upload totals into `FunRendererUploadArena` while
+  the database and allocation policy remain in `fun-renderer`.
+
+`fun_render/src/extraction.rs` adds `FunRenderSceneExtractionBridge` and
+`FunRenderSceneExtractionReport`. The bridge maps Bevy entities to
+`StableInstanceId`, prefers `fun-scene` stable identities when present, creates
+synthetic IDs only as a transition fallback, and extracts renderable/light ECS
+components into `GpuSceneDatabase`. This keeps Bevy as orchestration/extraction
+and leaves renderer-core storage in `fun-renderer`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
 | --- | --- | --- | --- | --- |
 | Product presentation | `game_client/src/lib.rs`, `fun_render/src/winit.rs`, `fun_render/src/core.rs` | `game_client` + `fun_render` | `fun-renderer` core through `fun_render` bridge | Current visible frame path. |
-| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,frame_graph.rs,heuristics.rs,resource.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, resource model, not product swapchain ownership. |
+| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,frame_graph.rs,heuristics.rs,resource.rs,scene.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, GPU scene DB records, resource model, not product swapchain ownership. |
 | Lighting/Lux seams | `fun-lux/src/{lib.rs,api.rs}` | `fun-lux` | `fun-lux` | Buildable substrate and ECS extraction/update hooks. |
 | Scene substrate | `fun-scene/src/*`, `fun-scene-macros/src/*`, `game_scene/src/*` | `fun-scene` + `game_scene` | same split | Active and first-party. |
 | CEF/Svelte product UI | `game_client/ui/main`, `game_client/src/cef_ui.rs`, `fun_ui_cef/src/*`, `fun_host/src/lib.rs` | `game_client`, `fun_ui_cef`, `fun_host` | CEF/Svelte UI with renderer-owned GPU compositor | UI is active, but final composition still uses Bevy UI image node. |
@@ -422,6 +468,8 @@ this pass. `fun_ui_cef` owns browser surfaces, not Bevy UI.
 | Renderer core tests | `cargo test -p fun-renderer --lib` |
 | Renderer frame graph tests | `cargo test -p fun-renderer --lib frame_graph` |
 | Renderer frame graph debug artifact | `$env:FUN_RENDERER_FRAME_GRAPH_DEBUG_ARTIFACT='target\frame-graph\pass6\renderer_frame_graph_debug.txt'; cargo test -p fun-renderer --lib frame_graph_debug_artifact_names_passes_resources_and_markers` |
+| Renderer scene DB tests | `cargo test -p fun-renderer --lib scene` |
+| Bridge extraction tests | `cargo test -p fun_render --lib extraction` |
 | Lux compile/tests | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib` |
 | Bridge compile/tests | `cargo check -p fun_render`; `cargo test -p fun_render --lib` |
 | Client compile | `cargo check -p game_client` |
