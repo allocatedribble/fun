@@ -7,6 +7,6 @@ version.workspace = true
 workspace = true
 
 [dependencies]
-fun_render = { path = "../../fun_render", default-features = false }
+fun_renderer.workspace = true
 serde.workspace = true
 serde_json.workspace = true

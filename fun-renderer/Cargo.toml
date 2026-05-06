@@ -49,3 +49,7 @@ bevy_ecs = { workspace = true, optional = true }
 bevy_transform = { workspace = true, optional = true }
 fun_lux.workspace = true
 fun_scene.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

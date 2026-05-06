@@ -131,6 +131,14 @@ The shared page scheduler is represented by `PageScheduler`, `LogicalPageId`,
 textures, GI/radiance caches, material caches, and future neural cache data use
 the same residency API so page priority, fault storms, uploads, and evictions
 are comparable across systems.
+Static virtual geometry is now represented in `fun-renderer` by
+`StaticVirtualGeometryAsset`, `VirtualGeometryClusterHeader`,
+`VirtualGeometryPage`, `StaticVirtualGeometryExecutionPolicy`, and
+`select_static_virtual_geometry_frame`. The `virtual_geometry_bake` tool emits
+the renderer-owned `.funvg.json` schema deterministically; runtime selection
+uses frustum/HZB culling, hierarchical refinement, shared page-scheduler
+requests, compute-indirect draw packets, an optional mesh-shader fast path, and
+a fallback mesh path for missing root pages.
 The renderer-owned frame graph is represented by `RendererFrameGraph`,
 `RendererFrameDescription`, typed pass/resource declarations, graph validation
 failures, pass timing placeholders, resource lifetimes, and debug artifacts.
