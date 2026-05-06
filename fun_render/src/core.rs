@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 
-#[cfg(debug_assertions)]
-use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::{
@@ -29,9 +27,9 @@ use crate::{
     FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry, GeometryResidencyManager,
     GiCacheUpdatePriorities, GpuScene, GpuSceneDatabase, HeuristicDebugOverlay, LuxLightPriorities,
     MaterialResidencyManager, MlInferencePriorities, PagePriorities, RenderHeuristicScheduler,
-    RenderPathSignature, RendererFrameGraph, RendererViews, ShadingRatePriorities,
-    ShadowPagePriorities, StaticInstanceTable, TextureResidencyManager, VirtualGeometryResidency,
-    begin_heuristic_frame,
+    RenderPathSignature, RendererCefCompositor, RendererFrameGraph, RendererViews,
+    ShadingRatePriorities, ShadowPagePriorities, StaticInstanceTable, TextureResidencyManager,
+    VirtualGeometryResidency, begin_heuristic_frame,
     bridge::{
         RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_initialize_runtime,
     },
@@ -267,9 +265,6 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     let solari_feature_policy: SolariFeaturePolicy =
         render_config.rt_features.solari_feature_policy();
     let rt_features = render_config.rt_features;
-    #[cfg(debug_assertions)]
-    let fps_overlay_enabled = render_config.fps_overlay_enabled;
-
     app.insert_resource(opaque_renderer.method())
         .init_resource::<FunDrawCallCounters>()
         .init_resource::<FunRendererEcsSchedulePolicy>()
@@ -279,6 +274,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<ExtractedSceneDeltas>()
         .init_resource::<FrameGraph>()
         .init_resource::<RendererFrameGraph>()
+        .init_resource::<RendererCefCompositor>()
         .init_resource::<RendererViews>()
         .init_resource::<RenderHeuristicScheduler>()
         .init_resource::<PagePriorities>()
@@ -342,20 +338,6 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
                 .chain(),
         );
 
-    #[cfg(debug_assertions)]
-    if fps_overlay_enabled && !options.is_editor_preview() {
-        app.add_plugins(FpsOverlayPlugin {
-            config: FpsOverlayConfig {
-                refresh_interval: std::time::Duration::from_secs(1),
-                text_config: bevy::text::TextFont {
-                    font_size: bevy::text::FontSize::Px(12.0),
-                    ..default()
-                },
-                ..default()
-            },
-        });
-    }
-
     if solari_enabled {
         app.add_plugins(SolariPlugins);
     }
@@ -406,6 +388,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<ExtractedSceneDeltas>();
         render_app.init_resource::<FrameGraph>();
         render_app.init_resource::<RendererFrameGraph>();
+        render_app.init_resource::<RendererCefCompositor>();
         render_app.init_resource::<RendererViews>();
         render_app.init_resource::<RenderHeuristicScheduler>();
         render_app.init_resource::<PagePriorities>();

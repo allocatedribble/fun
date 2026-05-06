@@ -485,6 +485,18 @@ lanes must not silently fall back to CPU `OnPaint` uploads. Temporary CPU
 golden-image fixtures may exist only when clearly test-only and not compiled
 into runtime/product lanes.
 
+The Pass 8 runtime seam is `fun_renderer::RendererCefCompositor`. CEF callback
+handles are copied/imported immediately into the DX12 ring owned by the CEF
+transport bridge; renderer-facing records contain only stable frame IDs, owned
+texture IDs, extents, alpha mode, dirty-rect metadata, copied bytes, and timing
+facts. `game_client` converts `Dx12CefReadyFrameToken` into
+`RendererCefImportedFrame` and never stores callback-lifetime handles.
+
+The frame graph imports this layer through `FrameGraphPassRole::CefGpuImport`
+and `FrameGraphResourceType::UiColorAlpha`, then composes UI after scene
+rendering/upscaling. Product UI policy is executable through
+`tools/check_product_ui_policy.ps1`.
+
 ## UI Boundary
 
 CEF/Svelte is the only product UI surface. Runtime/product lanes must not use
@@ -533,6 +545,10 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::FunRendererRuntimeBackend`
 - `fun_renderer::FUN_RENDERER_UI_RUNTIME_POLICY`
 - `fun_renderer::FUN_RENDERER_CEF_RUNTIME_POLICY`
+- `fun_renderer::RendererCefCompositor`
+- `fun_renderer::RendererCefCompositorDiagnostics`
+- `fun_renderer::RendererCefImportedFrame`
+- `fun_renderer::RendererCefUiLayer`
 - `fun_renderer::FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS`
 - `fun_renderer::FUN_RENDERER_FRAME_GENERATION_CONTRACT`
 - `fun_renderer::FUN_RENDERER_LIGHTING_SCALE_POLICY`

@@ -163,6 +163,7 @@ pub use fun_renderer::fun_scene;
 pub use fun_renderer::heuristics::*;
 pub use fun_renderer::resource::*;
 pub use fun_renderer::scene::*;
+pub use fun_renderer::ui::*;
 pub use fun_renderer::{
     BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
     FUN_RENDERER_AI_INTERFACE_DESCRIPTORS, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,

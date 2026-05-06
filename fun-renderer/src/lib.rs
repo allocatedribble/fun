@@ -9,6 +9,7 @@ pub mod heuristics;
 pub mod pipeline;
 pub mod resource;
 pub mod scene;
+pub mod ui;
 
 pub use fun_lux;
 pub use fun_scene;
@@ -783,6 +784,7 @@ pub use heuristics::*;
 pub use pipeline::*;
 pub use resource::*;
 pub use scene::*;
+pub use ui::*;
 
 #[must_use]
 pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRendererOwner {

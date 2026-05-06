@@ -1,12 +1,8 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-use crate::cef_ui_dx12::{
-    Dx12CefBevyImageState, Dx12CefInterop, Dx12CefInteropError, Dx12CefReadyFrameToken,
-    MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
-};
+use crate::cef_ui_dx12::{Dx12CefInterop, Dx12CefInteropError, Dx12CefReadyFrameToken};
 use bevy::{
-    asset::{AssetId, RenderAssetUsages},
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::system::SystemParam,
     input::{
@@ -18,24 +14,31 @@ use bevy::{
     render::{
         Render, RenderApp, RenderSystems,
         extract_resource::{ExtractResource, ExtractResourcePlugin},
-        render_asset::RenderAssets,
-        render_resource::{
-            Extent3d, Origin3d, TexelCopyBufferLayout, TextureDimension, TextureFormat,
-        },
         renderer::{RenderDevice, RenderQueue},
-        texture::GpuImage,
     },
     window::{CursorMoved, PrimaryWindow},
 };
 use fun_host::{
     FunClientHostState, FunHostCommandRequest, FunHostCommandResponse, FunHostCommandStatus,
-    FunHostMode, FunInputOwner, FunViewportRect,
+    FunInputOwner,
+};
+#[cfg(test)]
+use fun_render::{
+    FunUploadBudget, FunUploadBudgetTracker, TextureDirtyRect, TextureUploadPath,
+    TextureUploadPlan, TextureUploadPolicy, plan_cef_cpu_dirty_rect_upload,
 };
 use fun_render::{
-    FUN_RENDER_CEF_UI_Z_INDEX, FUN_RENDER_DEBUG_OVERLAY_Z_INDEX, FunUploadBudget,
-    FunUploadBudgetTracker, RenderWorldContext, RenderWorldStatus, TextureDirtyRect,
-    TextureUploadPath, TextureUploadPlan, TextureUploadPolicy, plan_cef_cpu_dirty_rect_upload,
+    RenderWorldContext, RenderWorldStatus, RendererCefCompositor, RendererCefFailClosedReason,
 };
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+use fun_render::{
+    RendererCefAlphaMode, RendererCefDirtyRect, RendererCefExtent, RendererCefFrameId,
+    RendererCefImportedFrame, RendererCefSurfaceDescriptor, RendererCefTransportMode,
+};
+#[cfg(test)]
+use fun_ui_cef::CefUiCompositorFrame;
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+use fun_ui_cef::CefUiDirtyRectMetadata;
 use fun_ui_cef::bridge::{BrowserUiMenuCommand, UiLifecycleState};
 use fun_ui_cef::diagnostics::{
     CefUiDiagnosticKind, CefUiDiagnosticSeverity, CefUiTransportCounterSnapshot,
@@ -48,10 +51,10 @@ use fun_ui_cef::{
     BrowserUiHitRegionMode, BrowserUiProtocolValidationContext, BrowserUiProtocolValidationError,
     BrowserUiRequestId, BrowserUiRouteState, BrowserUiSequence, CefBrowserKeyEvent,
     CefBrowserKeyEventKind, CefBrowserMouseButton, CefBrowserMouseEvent, CefMessageLoopStrategy,
-    CefUiBrowser, CefUiBrowserHandle, CefUiDirtyRectMetadata, CefUiFallbackReason,
-    CefUiFullUploadReason, CefUiModel, CefUiPaintTransport, CefUiPaintTransportFallbackReason,
-    CefUiRequestedPaintTransport, CefUiSecurityPolicy, FunUiNavigationBlockReason, GameUiChannel,
-    GameUiFieldKey, HostCommandError, HostCommandId, HostCommandRejection,
+    CefUiBrowser, CefUiBrowserHandle, CefUiFallbackReason, CefUiFullUploadReason, CefUiModel,
+    CefUiPaintTransport, CefUiPaintTransportFallbackReason, CefUiRequestedPaintTransport,
+    CefUiSecurityPolicy, FunUiNavigationBlockReason, GameUiChannel, GameUiFieldKey,
+    HostCommandError, HostCommandId, HostCommandRejection,
     HostCommandRequest as CefHostCommandRequest, HostCommandResponse as CefHostCommandResponse,
     HostDiagnostic, SharedBrowserBridgeQueues, SharedCefUiCompositor, UiControlPayload, UiEnvelope,
     UiEnvelopeKind, UiEnvelopePayload, UiPatchBackpressureQueue, UiPatchBatch, UiPatchValue,
@@ -59,7 +62,7 @@ use fun_ui_cef::{
 };
 #[cfg(target_os = "windows")]
 use fun_ui_cef::{CefAcceleratedPaintFrame, CefAcceleratedPaintOutcome, CefAcceleratedPaintSink};
-use fun_ui_cef::{CefDirtyRect, CefPaintElement, CefUiCompositorFrame};
+use fun_ui_cef::{CefDirtyRect, CefPaintElement};
 use game_shared::{
     GameUiMenuTarget, GameUiProtocolValidationContext, GameUiRequestEnvelope, GameUiRequestId,
     GameUiRequestPayload, GameUiRequestRejectionReason, GameUiSequence, GameUiSettingKey,
@@ -70,11 +73,6 @@ pub const MAX_CEF_UI_HIT_REGIONS: usize = 64;
 const MAX_JS_MESSAGES_PER_FRAME: usize = 64;
 const CEF_UI_RENDER_RATE_HZ: u64 = fun_ui_cef::CEF_UI_WINDOWLESS_FRAME_RATE_HZ as u64;
 const CEF_UI_NANOS_PER_SECOND: u64 = 1_000_000_000;
-const FUN_CLIENT_FPS_COUNTER_Z_INDEX: i32 = FUN_RENDER_DEBUG_OVERLAY_Z_INDEX;
-const FUN_CLIENT_FPS_COUNTER_REFRESH: Duration = Duration::from_millis(250);
-const FUN_CLIENT_FPS_COUNTER_WIDTH: f32 = 88.0;
-const FUN_CLIENT_FPS_COUNTER_HEIGHT: f32 = 24.0;
-const FUN_CLIENT_FPS_COUNTER_MARGIN: f32 = 12.0;
 const CEF_UI_TRANSPORT_COUNTER_REFRESH: Duration = Duration::from_secs(1);
 const CEF_UI_GPU_BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_millis(750);
 const CEF_UI_TRANSPORT_STATUS_PATH_ENV: &str = "FUN_CEF_UI_TRANSPORT_STATUS_PATH";
@@ -99,23 +97,14 @@ impl Plugin for GameCefUiPlugin {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
         app.add_plugins((
-            ExtractResourcePlugin::<CefUiTextureUploads>::default(),
             ExtractResourcePlugin::<SharedDx12CefInteropSlot>::default(),
             ExtractResourcePlugin::<CefUiTransportCountersResource>::default(),
         ));
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app
-                .init_resource::<CefUiGpuUploadState>()
-                .add_systems(
-                    Render,
-                    (
-                        initialize_dx12_cef_interop_slot,
-                        upload_cef_ui_texture_to_gpu,
-                        copy_latest_cef_gpu_frame_to_bevy_image,
-                    )
-                        .chain()
-                        .in_set(RenderSystems::PrepareResources),
-                );
+            render_app.add_systems(
+                Render,
+                initialize_dx12_cef_interop_slot.in_set(RenderSystems::PrepareResources),
+            );
         }
 
         app.init_resource::<CefUiStatus>()
@@ -134,12 +123,10 @@ impl Plugin for GameCefUiPlugin {
             .init_resource::<SharedDx12CefInteropSlot>()
             .init_resource::<CefUiMessageLoopPump>()
             .init_resource::<CefUiFrameBudgetThrottle>()
-            .init_resource::<CefUiRenderTexture>()
-            .init_resource::<CefUiTextureUploads>()
             .init_resource::<CefUiModelCache>()
             .init_resource::<CefUiDiagnosticsState>()
             .init_resource::<CefUiHostStateEventCache>()
-            .init_resource::<FunClientFpsCounterState>()
+            .init_resource::<RendererCefCompositor>()
             .add_message::<CefUiIntent>()
             .add_message::<CefUiRequest>()
             .add_message::<CefUiRouteChanged>()
@@ -219,12 +206,7 @@ impl Plugin for GameCefUiPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (
-                    upload_cef_ui_frame_to_fun_texture,
-                    update_fun_client_fps_counter,
-                )
-                    .chain()
-                    .after(GameCefUiSet::FlushBridge),
+                publish_cef_ui_frame_to_renderer_compositor.after(GameCefUiSet::FlushBridge),
             )
             .add_systems(
                 Last,
@@ -900,6 +882,7 @@ pub struct CefUiFrameStats {
     pub navigation_blocked_count: u64,
 }
 
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
 fn record_cef_dirty_rect_metadata(stats: &mut CefUiFrameStats, metadata: CefUiDirtyRectMetadata) {
     stats.dirty_rect_count = stats
         .dirty_rect_count
@@ -1049,112 +1032,6 @@ impl Default for CefUiFrameBudgetThrottle {
             last_cef_on_paint_count: 0,
         }
     }
-}
-
-#[derive(Debug, Resource)]
-struct CefUiRenderTexture {
-    image: Option<Handle<Image>>,
-    root_entity: Option<Entity>,
-    last_generation: Option<UiSurfaceGeneration>,
-    size: Option<UVec2>,
-    upload_timer: Timer,
-}
-
-impl Default for CefUiRenderTexture {
-    fn default() -> Self {
-        Self {
-            image: None,
-            root_entity: None,
-            last_generation: None,
-            size: None,
-            upload_timer: Timer::new(cef_ui_render_interval(), TimerMode::Repeating),
-        }
-    }
-}
-
-impl CefUiRenderTexture {
-    fn set_upload_interval(&mut self, interval: Duration) {
-        if self.upload_timer.duration() == interval {
-            return;
-        }
-        self.upload_timer = Timer::new(interval, TimerMode::Repeating);
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, Component)]
-struct CefUiRenderTextureRoot;
-
-#[derive(Debug, Clone, Default, Resource)]
-struct CefUiTextureUploads {
-    latest: Option<CefUiTextureUpload>,
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    latest_gpu: Option<CefUiGpuTextureUpload>,
-}
-
-impl ExtractResource for CefUiTextureUploads {
-    type Source = Self;
-
-    fn extract_resource(source: &Self::Source) -> Self {
-        source.clone()
-    }
-}
-
-#[derive(Debug, Clone)]
-struct CefUiTextureUpload {
-    image: Handle<Image>,
-    generation: UiSurfaceGeneration,
-    size: UVec2,
-    pixels: Vec<u8>,
-    dirty_rects: Vec<CefDirtyRect>,
-    force_full_upload: bool,
-}
-
-#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-#[derive(Debug, Clone)]
-struct CefUiGpuTextureUpload {
-    image: Handle<Image>,
-    token: Dx12CefReadyFrameToken,
-}
-
-#[derive(Debug, Default, Resource)]
-struct CefUiGpuUploadState {
-    image_id: Option<AssetId<Image>>,
-    last_generation: Option<UiSurfaceGeneration>,
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    gpu_copy_failure_logged: bool,
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    gpu_copy_failure_count: u32,
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    stale_gpu_frame_count_for_current_token: u32,
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    stale_gpu_frame_token: Option<UiSurfaceGeneration>,
-}
-
-#[derive(Debug, Default, Clone, Copy, Component)]
-struct FunClientFpsCounterRoot;
-
-#[derive(Debug, Default, Clone, Copy, Component)]
-struct FunClientFpsCounterText;
-
-#[derive(Debug, Resource)]
-struct FunClientFpsCounterState {
-    update_timer: Timer,
-    last_label: String,
-}
-
-impl Default for FunClientFpsCounterState {
-    fn default() -> Self {
-        Self {
-            update_timer: Timer::new(FUN_CLIENT_FPS_COUNTER_REFRESH, TimerMode::Repeating),
-            last_label: "FPS --".to_owned(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct FunClientFpsCounterLayout {
-    left: f32,
-    top: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
@@ -1438,10 +1315,28 @@ fn cef_ui_startup_next_config(
                     );
                     None
                 }
-                CefUiRequestedPaintTransport::CpuPaint => Some(cef_ui_cpu_start_config(
-                    startup_config,
-                    CefUiPaintTransportFallbackReason::None,
-                )),
+                CefUiRequestedPaintTransport::CpuPaint => {
+                    state.kind = CefUiStartupStateKind::Failed;
+                    log_cef_ui_transport_decision(
+                        &startup_config
+                            .browser_config
+                            .clone()
+                            .with_paint_transport_decision(
+                                CefUiPaintTransport::Disabled,
+                                CefUiPaintTransportFallbackReason::None,
+                            ),
+                        false,
+                    );
+                    tracing::error!(
+                        target: FUN_UI_DIAGNOSTICS_TARGET,
+                        requested_transport = startup_config
+                            .browser_config
+                            .requested_paint_transport
+                            .as_wire_str(),
+                        "CEF UI CPU OnPaint transport rejected by GPU-only product policy"
+                    );
+                    None
+                }
                 CefUiRequestedPaintTransport::Auto
                 | CefUiRequestedPaintTransport::D3d11On12Accelerated => {
                     if !cfg!(target_os = "windows") {
@@ -1550,31 +1445,24 @@ fn cef_ui_accelerated_fallback_or_strict_failure(
         );
         return None;
     }
-    Some(cef_ui_cpu_start_config(startup_config, reason))
-}
-
-fn cef_ui_cpu_start_config(
-    startup_config: &CefUiStartupConfig,
-    reason: CefUiPaintTransportFallbackReason,
-) -> BrowserUiConfig {
-    let reason = if reason == CefUiPaintTransportFallbackReason::None {
-        CefUiPaintTransportFallbackReason::None
-    } else {
-        tracing::warn!(
-            target: FUN_UI_DIAGNOSTICS_TARGET,
-            fallback_reason = reason.as_wire_str(),
-            requested_transport = startup_config
-                .browser_config
-                .requested_paint_transport
-                .as_wire_str(),
-            "CEF UI starting CPU paint fallback"
-        );
-        reason
-    };
-    startup_config
-        .browser_config
-        .clone()
-        .with_paint_transport_decision(CefUiPaintTransport::CpuPaint, reason)
+    state.kind = CefUiStartupStateKind::Failed;
+    log_cef_ui_transport_decision(
+        &startup_config
+            .browser_config
+            .clone()
+            .with_paint_transport_decision(CefUiPaintTransport::Disabled, reason),
+        false,
+    );
+    tracing::error!(
+        target: FUN_UI_DIAGNOSTICS_TARGET,
+        fallback_reason = reason.as_wire_str(),
+        requested_transport = startup_config
+            .browser_config
+            .requested_paint_transport
+            .as_wire_str(),
+        "CEF UI CPU fallback rejected by GPU-only product policy"
+    );
+    None
 }
 
 fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready: bool) {
@@ -1665,14 +1553,31 @@ fn start_cef_ui_browser(
     startup_config: CefUiStartupConfig,
     browser_config: BrowserUiConfig,
 ) {
+    if browser_config.paint_transport == CefUiPaintTransport::CpuPaint {
+        if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
+            state.kind = CefUiStartupStateKind::Failed;
+            state.running_transport = Some(CefUiPaintTransport::Disabled);
+        }
+        log_cef_ui_transport_decision(
+            &browser_config.clone().with_paint_transport_decision(
+                CefUiPaintTransport::Disabled,
+                browser_config.paint_transport_fallback_reason,
+            ),
+            false,
+        );
+        tracing::error!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            "CEF UI CPU OnPaint browser start rejected by GPU-only product policy"
+        );
+        return;
+    }
+
     if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
         state.kind = match browser_config.paint_transport {
             CefUiPaintTransport::Disabled | CefUiPaintTransport::Auto => {
                 CefUiStartupStateKind::Running
             }
-            CefUiPaintTransport::CpuPaint => CefUiStartupStateKind::StartingCpuFallback {
-                reason: browser_config.paint_transport_fallback_reason,
-            },
+            CefUiPaintTransport::CpuPaint => CefUiStartupStateKind::Failed,
             CefUiPaintTransport::D3d11On12Accelerated => CefUiStartupStateKind::StartingAccelerated,
         };
         state.running_transport = None;
@@ -1803,27 +1708,8 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
     };
     let _old_browser = world.remove_non_send::<CefUiBrowserOwner>();
     let _old_control = world.remove_non_send::<CefUiBrowserControl>();
-    if startup_config.browser_config.accelerated_strict
-        || !startup_config.browser_config.cpu_fallback_allowed
-    {
-        if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
-            state.kind = CefUiStartupStateKind::Failed;
-            state.running_transport = None;
-            state.accelerated_observe_elapsed = Duration::ZERO;
-        }
-        tracing::error!(
-            target: FUN_UI_DIAGNOSTICS_TARGET,
-            fallback_reason = fallback_reason.as_wire_str(),
-            cpu_fallback_allowed = startup_config.browser_config.cpu_fallback_allowed,
-            strict = startup_config.browser_config.accelerated_strict,
-            "CEF UI accelerated path stopped by GPU-only policy"
-        );
-        return;
-    }
     if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
-        state.kind = CefUiStartupStateKind::StartingCpuFallback {
-            reason: fallback_reason,
-        };
+        state.kind = CefUiStartupStateKind::Failed;
         state.running_transport = None;
         state.accelerated_observe_elapsed = Duration::ZERO;
     }
@@ -1838,13 +1724,8 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
         cef_on_paint_count = snapshot.cef_on_paint_count,
         cef_on_accelerated_paint_count = snapshot.cef_on_accelerated_paint_count,
         fallback_reason = fallback_reason.as_wire_str(),
-        "CEF UI accelerated path requested CPU browser recreation"
+        "CEF UI accelerated path failed closed without CPU browser recreation"
     );
-    let browser_config = startup_config
-        .browser_config
-        .clone()
-        .with_paint_transport_decision(CefUiPaintTransport::CpuPaint, fallback_reason);
-    start_cef_ui_browser(world, startup_config, browser_config);
 }
 
 fn initialize_dx12_cef_interop_slot(
@@ -1940,11 +1821,7 @@ const fn dx12_cef_interop_fallback_reason(
         | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11DeviceMissing
         | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11ImmediateContextMissing
         | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11On12QueryFailed
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::FenceCreateFailed
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::CopyCommandAllocatorCreateFailed
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::CopyCommandListCreateFailed
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::CopyCommandListCloseFailed
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::CopyCommandListResetFailed => {
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::FenceCreateFailed => {
             CefUiPaintTransportFallbackReason::D3d11On12BridgeUnavailable
         }
         crate::cef_ui_dx12::Dx12CefInteropFailure::SharedTextureHandleMissing => {
@@ -1957,9 +1834,6 @@ const fn dx12_cef_interop_fallback_reason(
         }
         crate::cef_ui_dx12::Dx12CefInteropFailure::DestinationTextureCreateFailed
         | crate::cef_ui_dx12::Dx12CefInteropFailure::DestinationTextureWrapFailed
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::BevyTargetTextureHalUnavailable
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::BevyTargetTextureUnsupported
-        | crate::cef_ui_dx12::Dx12CefInteropFailure::BevyTextureCopyFailed
         | crate::cef_ui_dx12::Dx12CefInteropFailure::FenceSignalFailed
         | crate::cef_ui_dx12::Dx12CefInteropFailure::OutputTextureRingUnavailable => {
             CefUiPaintTransportFallbackReason::OutputTextureAllocationUnavailable
@@ -2935,8 +2809,8 @@ fn flush_cef_ui_host_envelopes_to_browser(
     stats.js_message_count = stats.js_message_count.saturating_add(flushed as u64);
 }
 
+#[cfg(test)]
 const CEF_UI_TEXTURE_BYTES_PER_PIXEL: usize = 4;
-const CEF_UI_TEXTURE_Z_INDEX: i32 = FUN_RENDER_CEF_UI_Z_INDEX;
 
 fn cef_ui_render_interval() -> Duration {
     cef_ui_render_interval_for_rate(CEF_UI_RENDER_RATE_HZ)
@@ -2962,7 +2836,6 @@ fn update_cef_ui_frame_budget_throttle(
     counters: Res<CefUiTransportCountersResource>,
     browser_control: Option<NonSend<CefUiBrowserControl>>,
     mut pump: ResMut<CefUiMessageLoopPump>,
-    mut render_texture: ResMut<CefUiRenderTexture>,
     mut throttle: ResMut<CefUiFrameBudgetThrottle>,
 ) {
     let snapshot = counters.snapshot();
@@ -2979,7 +2852,6 @@ fn update_cef_ui_frame_budget_throttle(
     let interval = cef_ui_render_interval_for_rate(max_paint_rate_hz);
 
     pump.set_interval(interval);
-    render_texture.set_upload_interval(interval);
     if let Some(browser_control) = browser_control.as_ref()
         && max_paint_rate_hz != throttle.max_paint_rate_hz
     {
@@ -3029,564 +2901,94 @@ const fn cef_ui_max_paint_rate_hz(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Bevy UI systems need independent access to host, diagnostics, and spawned UI nodes"
-)]
-fn update_fun_client_fps_counter(
-    mut commands: Commands,
-    time: Res<Time>,
-    host: Option<Res<FunClientHostState>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    diagnostics: Res<DiagnosticsStore>,
-    mut counter: ResMut<FunClientFpsCounterState>,
-    mut roots: Query<(&mut Node, &mut Visibility), With<FunClientFpsCounterRoot>>,
-    mut texts: Query<&mut Text, With<FunClientFpsCounterText>>,
-) {
-    let host = host.as_deref();
-    let mode = host.map_or(FunHostMode::Game, |host| host.state.mode);
-    let preview_rect = host.and_then(|host| host.state.game.viewport_layout.rect);
-    let window_size = windows.single().ok().map(window_logical_size);
-    let layout = fun_client_fps_counter_layout(mode, preview_rect, window_size);
-
-    let Some(layout) = layout else {
-        for (_, mut visibility) in &mut roots {
-            *visibility = Visibility::Hidden;
-        }
-        return;
-    };
-
-    counter.update_timer.tick(time.delta());
-    if counter.update_timer.just_finished() || counter.last_label == "FPS --" {
-        counter.last_label = fun_client_fps_label(&diagnostics);
-    }
-
-    let mut positioned_root = false;
-    for (mut node, mut visibility) in &mut roots {
-        if positioned_root {
-            *visibility = Visibility::Hidden;
-            continue;
-        }
-        node.left = px(layout.left);
-        node.top = px(layout.top);
-        *visibility = Visibility::Visible;
-        positioned_root = true;
-    }
-
-    if !positioned_root {
-        spawn_fun_client_fps_counter(&mut commands, layout, &counter.last_label);
-    }
-
-    for mut text in &mut texts {
-        text.0.clone_from(&counter.last_label);
-    }
-}
-
-fn spawn_fun_client_fps_counter(
-    commands: &mut Commands,
-    layout: FunClientFpsCounterLayout,
-    label: &str,
-) {
-    commands
-        .spawn((
-            Name::new("Fun Client FPS Counter"),
-            FunClientFpsCounterRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(layout.left),
-                top: px(layout.top),
-                width: px(FUN_CLIENT_FPS_COUNTER_WIDTH),
-                height: px(FUN_CLIENT_FPS_COUNTER_HEIGHT),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba_u8(5, 9, 13, 184)),
-            GlobalZIndex(FUN_CLIENT_FPS_COUNTER_Z_INDEX),
-        ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(Color::srgba_u8(218, 235, 248, 255)),
-            FunClientFpsCounterText,
-        ));
-}
-
-fn window_logical_size(window: &Window) -> UVec2 {
-    UVec2::new(
-        window.resolution.width().max(0.0).round() as u32,
-        window.resolution.height().max(0.0).round() as u32,
-    )
-}
-
-fn fun_client_fps_label(diagnostics: &DiagnosticsStore) -> String {
-    diagnostics
-        .get(&FrameTimeDiagnosticsPlugin::FPS)
-        .and_then(|diagnostic| diagnostic.smoothed())
-        .map_or_else(|| "FPS --".to_owned(), |fps| format!("{fps:>3.0} FPS"))
-}
-
-fn fun_client_fps_counter_layout(
-    mode: FunHostMode,
-    preview_rect: Option<FunViewportRect>,
-    window_size: Option<UVec2>,
-) -> Option<FunClientFpsCounterLayout> {
-    match mode {
-        FunHostMode::Game => {
-            let window_size = window_size?;
-            if window_size.x == 0 || window_size.y == 0 {
-                return None;
-            }
-            Some(FunClientFpsCounterLayout {
-                left: fps_counter_axis_position(
-                    0.0,
-                    window_size.x as f32,
-                    FUN_CLIENT_FPS_COUNTER_WIDTH,
-                ),
-                top: fps_counter_axis_position(
-                    0.0,
-                    window_size.y as f32,
-                    FUN_CLIENT_FPS_COUNTER_HEIGHT,
-                ),
-            })
-        }
-        FunHostMode::Editor | FunHostMode::EditorOverlay => {
-            let rect = preview_rect?;
-            if rect.width == 0 || rect.height == 0 {
-                return None;
-            }
-            let left = fps_counter_axis_position(
-                rect.x.max(0) as f32,
-                rect.width as f32,
-                FUN_CLIENT_FPS_COUNTER_WIDTH,
-            );
-            let top = fps_counter_axis_position(
-                rect.y.max(0) as f32,
-                rect.height as f32,
-                FUN_CLIENT_FPS_COUNTER_HEIGHT,
-            );
-            Some(FunClientFpsCounterLayout { left, top })
-        }
-        FunHostMode::Boot
-        | FunHostMode::Launcher
-        | FunHostMode::Loading
-        | FunHostMode::Shutdown => None,
-    }
-}
-
-fn fps_counter_axis_position(origin: f32, extent: f32, counter_extent: f32) -> f32 {
-    if extent > counter_extent + FUN_CLIENT_FPS_COUNTER_MARGIN.mul_add(2.0, 0.0) {
-        origin + FUN_CLIENT_FPS_COUNTER_MARGIN
-    } else {
-        origin
-    }
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Bevy system parameters expose each texture upload resource directly to scheduler ordering"
-)]
-fn upload_cef_ui_frame_to_fun_texture(
-    mut commands: Commands,
+fn publish_cef_ui_frame_to_renderer_compositor(
     render_compositor: Option<Res<CefUiRenderCompositor>>,
     dx12_slot: Option<Res<SharedDx12CefInteropSlot>>,
-    time: Res<Time>,
-    mut render_texture: ResMut<CefUiRenderTexture>,
-    mut texture_uploads: ResMut<CefUiTextureUploads>,
-    mut images: ResMut<Assets<Image>>,
-    mut image_nodes: Query<&mut ImageNode, With<CefUiRenderTextureRoot>>,
+    mut renderer_compositor: ResMut<RendererCefCompositor>,
     mut status: ResMut<CefUiStatus>,
     mut stats: ResMut<CefUiFrameStats>,
 ) {
-    if !render_texture
-        .upload_timer
-        .tick(time.delta())
-        .just_finished()
-    {
-        return;
-    }
-
     #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
     let _ = dx12_slot;
 
     #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
     if let Some(token) = latest_cef_gpu_frame_token(dx12_slot.as_deref()) {
-        if render_texture.last_generation == Some(token.generation) {
+        if status.last_frame_generation == Some(token.generation) {
             return;
         }
-        let size = UVec2::new(token.width, token.height);
-        if size.x == 0 || size.y == 0 || token.format != windows_dxgi_bgra8_unorm() {
+        if token.width == 0 || token.height == 0 || token.format != windows_dxgi_bgra8_unorm() {
+            renderer_compositor.record_fail_closed(RendererCefFailClosedReason::InvalidFrameExtent);
             return;
         }
-        let image_handle = if render_texture.image.is_none() || render_texture.size != Some(size) {
-            let image = new_cef_ui_texture_image_uninit(size);
-            let image_handle = images.add(image);
-            render_texture.image = Some(image_handle.clone());
-            render_texture.size = Some(size);
-            tracing::info!(
-                target: FUN_UI_DIAGNOSTICS_TARGET,
-                width = size.x,
-                height = size.y,
-                render_rate_hz = CEF_UI_RENDER_RATE_HZ,
-                "CEF UI texture attached to Fun render"
-            );
-            sync_cef_ui_image_node(
-                &mut commands,
-                &mut render_texture,
-                &mut image_nodes,
-                image_handle.clone(),
-            );
-            image_handle
-        } else {
-            let Some(image_handle) = render_texture.image.as_ref() else {
-                return;
-            };
-            image_handle.clone()
-        };
-        texture_uploads.latest = None;
-        texture_uploads.latest_gpu = Some(CefUiGpuTextureUpload {
-            image: image_handle,
-            token,
-        });
-        render_texture.last_generation = Some(token.generation);
-        status.browser_loaded = true;
-        status.compositor_visible = true;
-        status.last_frame_generation = Some(token.generation);
-        stats.paint_count = stats.paint_count.saturating_add(1);
-        record_cef_dirty_rect_metadata(&mut stats, token.dirty_rect_metadata);
-        stats.cef_published_generation = token.generation.0;
-        stats.cef_sampled_generation = token.generation.0;
-        return;
-    }
-
-    let Some(render_compositor) = render_compositor else {
-        return;
-    };
-    let Some(frame) = render_compositor
-        .compositor()
-        .with_compositor(|compositor| compositor.consume_ready().cloned())
-        .flatten()
-    else {
-        return;
-    };
-    if frame.element != CefPaintElement::View
-        || render_texture.last_generation == Some(frame.metadata.generation)
-    {
-        return;
-    }
-    let Some(size) = cef_ui_frame_texture_size(&frame) else {
-        return;
-    };
-    let Some(expected_byte_len) = cef_ui_texture_byte_len(size) else {
-        return;
-    };
-    if frame.pixels().len() != expected_byte_len {
-        return;
-    }
-    let requires_generation_resync = cef_ui_frame_requires_full_texture_upload(
-        render_texture.last_generation,
-        frame.metadata.generation,
-    );
-    if requires_generation_resync && let Some(previous_generation) = render_texture.last_generation
-    {
-        tracing::debug!(
-            target: FUN_UI_DIAGNOSTICS_TARGET,
-            previous_generation = previous_generation.0,
-            next_generation = frame.metadata.generation.0,
-            "CEF UI full texture resync after skipped paint generation"
-        );
-    }
-    let force_full_upload = requires_generation_resync
-        || frame
-            .metadata
-            .dirty_rects
-            .iter()
-            .any(|rect| cef_dirty_rect_bounds(size, *rect).is_none());
-
-    let texture_resized = render_texture.image.is_none() || render_texture.size != Some(size);
-    let (image_handle, uploaded_bytes) = if texture_resized {
-        let image = new_cef_ui_texture_image_uninit(size);
-        let image_handle = images.add(image);
-        let upload_handle = image_handle.clone();
-        render_texture.image = Some(image_handle.clone());
-        render_texture.size = Some(size);
-        tracing::info!(
-            target: FUN_UI_DIAGNOSTICS_TARGET,
-            width = size.x,
-            height = size.y,
-            render_rate_hz = CEF_UI_RENDER_RATE_HZ,
-            "CEF UI texture attached to Fun render"
-        );
-        sync_cef_ui_image_node(
-            &mut commands,
-            &mut render_texture,
-            &mut image_nodes,
-            image_handle,
-        );
-        let uploaded_bytes = cef_ui_cpu_upload_plan(
-            size,
-            &frame.metadata.dirty_rects,
-            true,
-            true,
-            cef_ui_cpu_upload_budget(size, true),
-        )
-        .bytes
-        .try_into()
-        .unwrap_or(0);
-        (upload_handle, uploaded_bytes)
-    } else {
-        let Some(image_handle) = render_texture.image.as_ref() else {
-            return;
-        };
-        let uploaded_bytes = cef_ui_cpu_upload_plan(
-            size,
-            &frame.metadata.dirty_rects,
-            false,
-            true,
-            cef_ui_cpu_upload_budget(size, false),
-        )
-        .bytes
-        .try_into()
-        .unwrap_or(0);
-        (image_handle.clone(), uploaded_bytes)
-    };
-    texture_uploads.latest = Some(CefUiTextureUpload {
-        image: image_handle,
-        generation: frame.metadata.generation,
-        size,
-        pixels: frame.pixels().to_vec(),
-        dirty_rects: frame.metadata.dirty_rects.clone(),
-        force_full_upload,
-    });
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    {
-        texture_uploads.latest_gpu = None;
-    }
-
-    render_texture.last_generation = Some(frame.metadata.generation);
-    status.browser_loaded = true;
-    status.compositor_visible = true;
-    status.last_frame_generation = Some(frame.metadata.generation);
-    stats.paint_count = stats.paint_count.saturating_add(1);
-    record_cef_dirty_rect_metadata(&mut stats, frame.dirty_rect_metadata);
-    stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(uploaded_bytes as u64);
-    stats.cef_published_generation = frame.metadata.generation.0;
-    stats.cef_sampled_generation = frame.metadata.generation.0;
-}
-
-fn upload_cef_ui_texture_to_gpu(
-    uploads: Option<Res<CefUiTextureUploads>>,
-    gpu_images: Res<RenderAssets<GpuImage>>,
-    render_queue: Res<RenderQueue>,
-    mut upload_state: ResMut<CefUiGpuUploadState>,
-) {
-    let Some(uploads) = uploads else {
-        return;
-    };
-    let Some(upload) = uploads.latest.as_ref() else {
-        return;
-    };
-    let image_id = upload.image.id();
-    if upload_state.image_id == Some(image_id)
-        && upload_state.last_generation == Some(upload.generation)
-    {
-        return;
-    }
-    let force_full_upload = upload.force_full_upload
-        || upload_state.image_id != Some(image_id)
-        || cef_ui_frame_requires_full_texture_upload(
-            upload_state.last_generation,
-            upload.generation,
-        );
-    let texture_resized = upload_state.image_id != Some(image_id);
-    let Some(gpu_image) = gpu_images.get(&upload.image) else {
-        return;
-    };
-    let Some(uploaded_bytes) = write_cef_ui_upload_to_gpu(
-        &render_queue,
-        gpu_image,
-        upload,
-        force_full_upload,
-        texture_resized,
-    ) else {
-        return;
-    };
-    upload_state.image_id = Some(image_id);
-    upload_state.last_generation = Some(upload.generation);
-    tracing::trace!(
-        target: FUN_UI_DIAGNOSTICS_TARGET,
-        generation = upload.generation.0,
-        uploaded_bytes,
-        force_full_upload,
-        dirty_rect_count = upload.dirty_rects.len(),
-        "CEF UI texture uploaded to Bevy GPU image"
-    );
-}
-
-fn copy_latest_cef_gpu_frame_to_bevy_image(
-    uploads: Option<Res<CefUiTextureUploads>>,
-    gpu_images: Res<RenderAssets<GpuImage>>,
-    dx12_slot: Option<Res<SharedDx12CefInteropSlot>>,
-    counters: Option<Res<CefUiTransportCountersResource>>,
-    mut upload_state: ResMut<CefUiGpuUploadState>,
-) {
-    #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-    {
-        let Some(uploads) = uploads else {
-            return;
-        };
-        let Some(upload) = uploads.latest_gpu.as_ref() else {
-            return;
-        };
-        let image_id = upload.image.id();
-        if upload_state.image_id == Some(image_id)
-            && upload_state.last_generation == Some(upload.token.generation)
+        let frame = renderer_cef_imported_frame_from_token(token);
+        match renderer_compositor
+            .import_accelerated_frame(RendererCefSurfaceDescriptor::default(), frame)
         {
-            return;
-        }
-        let Some(gpu_image) = gpu_images.get(&upload.image) else {
-            return;
-        };
-        let Some(interop) = dx12_slot.as_ref().and_then(|slot| slot.interop()) else {
-            return;
-        };
-        let target_state_before = if upload_state.image_id == Some(image_id) {
-            Dx12CefBevyImageState::PixelShaderResource
-        } else {
-            Dx12CefBevyImageState::Common
-        };
-        match interop.copy_ready_frame_to_bevy_image(upload.token, gpu_image, target_state_before) {
-            Ok(Some(result)) => {
-                if let Some(counters) = counters.as_ref() {
-                    counters.counters.record_gpu_frame_ready();
-                }
-                upload_state.image_id = Some(image_id);
-                upload_state.last_generation = Some(result.generation);
-                upload_state.gpu_copy_failure_logged = false;
-                upload_state.gpu_copy_failure_count = 0;
-                upload_state.stale_gpu_frame_count_for_current_token = 0;
-                upload_state.stale_gpu_frame_token = None;
-                tracing::trace!(
-                    target: FUN_UI_DIAGNOSTICS_TARGET,
-                    generation = result.generation.0,
-                    width = result.width,
-                    height = result.height,
-                    fence_value = result.fence_value,
-                    target_format = ?result.target_format,
-                    "CEF UI GPU frame sampled by Bevy image"
-                );
-            }
-            Ok(None) => {
-                if let Some(counters) = counters.as_ref() {
-                    counters.counters.record_gpu_frame_not_ready();
-                    counters.counters.record_gpu_frame_reused();
-                }
-                let stale_count =
-                    record_cef_gpu_frame_stall(&mut upload_state, upload.token.generation);
-                let blocking_waits_this_frame = 0_u64;
-                debug_assert_eq!(
-                    blocking_waits_this_frame, 0,
-                    "CEF GPU path must not block on frame fences"
-                );
-                if cef_ui_accelerated_fail_closed_enabled()
-                    && stale_count == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK
-                {
-                    if let Some(counters) = counters.as_ref() {
-                        counters.counters.record_stale_gpu_frame();
-                        counters.counters.record_transport_fallback();
-                    }
-                    if let Some(slot) = dx12_slot.as_ref() {
-                        slot.request_fallback(
-                            CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout,
-                        );
-                    }
-                    if !upload_state.gpu_copy_failure_logged {
-                        upload_state.gpu_copy_failure_logged = true;
-                        tracing::warn!(
-                            target: FUN_UI_DIAGNOSTICS_TARGET,
-                            generation = upload.token.generation.0,
-                            stale_frame_count = stale_count,
-                            fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
-                            fallback_reason = CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout.as_wire_str(),
-                            "CEF UI GPU frame copy stalled before Bevy image sampling"
-                        );
-                    }
-                }
+            Ok(layer) => {
+                status.browser_loaded = true;
+                status.compositor_visible = true;
+                status.last_frame_generation = Some(token.generation);
+                stats.paint_count = stats.paint_count.saturating_add(1);
+                record_cef_dirty_rect_metadata(&mut stats, token.dirty_rect_metadata);
+                stats.cef_published_generation = token.generation.0;
+                stats.cef_sampled_generation = layer.frame_id.0;
+                stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(token.copied_bytes);
             }
             Err(error) => {
-                if let Some(counters) = counters.as_ref() {
-                    counters.counters.record_gpu_copy_failure();
-                }
-                upload_state.gpu_copy_failure_count =
-                    upload_state.gpu_copy_failure_count.saturating_add(1);
-                if let Some(slot) = dx12_slot.as_ref() {
-                    if upload_state.gpu_copy_failure_count
-                        == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK
-                    {
-                        if let Some(counters) = counters.as_ref() {
-                            counters.counters.record_transport_fallback();
-                        }
-                        slot.request_fallback(dx12_cef_interop_fallback_reason(error));
-                    }
-                }
-                if !upload_state.gpu_copy_failure_logged {
-                    upload_state.gpu_copy_failure_logged = true;
-                    tracing::warn!(
-                        target: FUN_UI_DIAGNOSTICS_TARGET,
-                        generation = upload.token.generation.0,
-                        failure = error.failure.as_str(),
-                        detail = error.detail,
-                        hresult = error.hresult,
-                        consecutive_failures = upload_state.gpu_copy_failure_count,
-                        fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
-                        "CEF UI GPU frame copy to Bevy image failed"
-                    );
-                }
+                tracing::error!(
+                    target: FUN_UI_DIAGNOSTICS_TARGET,
+                    error = error.as_str(),
+                    generation = token.generation.0,
+                    "CEF UI renderer compositor import failed closed"
+                );
             }
         }
         return;
     }
 
-    #[cfg(not(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint")))]
+    if let Some(frame) = render_compositor
+        .and_then(|compositor| {
+            compositor
+                .compositor()
+                .with_compositor(|compositor| compositor.consume_ready().cloned())
+        })
+        .flatten()
+        && frame.element == CefPaintElement::View
     {
-        let _ = (uploads, gpu_images, dx12_slot, counters);
-        let _ = &mut upload_state;
+        let _ = renderer_compositor
+            .record_cpu_fallback_attempt(RendererCefFailClosedReason::CpuOnPaintRuntimeFallback);
+        status.compositor_visible = false;
+        stats.cpu_fallback_count = stats.cpu_fallback_count.saturating_add(1);
+        tracing::error!(
+            target: FUN_UI_DIAGNOSTICS_TARGET,
+            generation = frame.metadata.generation.0,
+            "CEF UI CPU OnPaint frame rejected by renderer GPU-only compositor"
+        );
     }
 }
 
 #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-fn record_cef_gpu_frame_stall(
-    upload_state: &mut CefUiGpuUploadState,
-    generation: UiSurfaceGeneration,
-) -> u32 {
-    if upload_state.stale_gpu_frame_token == Some(generation) {
-        upload_state.stale_gpu_frame_count_for_current_token = upload_state
-            .stale_gpu_frame_count_for_current_token
-            .saturating_add(1);
-    } else {
-        upload_state.stale_gpu_frame_token = Some(generation);
-        upload_state.stale_gpu_frame_count_for_current_token = 1;
+fn renderer_cef_imported_frame_from_token(
+    token: Dx12CefReadyFrameToken,
+) -> RendererCefImportedFrame {
+    RendererCefImportedFrame {
+        frame_id: RendererCefFrameId(token.generation.0),
+        extent: RendererCefExtent::new(token.width, token.height),
+        transport: RendererCefTransportMode::D3d11On12SharedTexture,
+        alpha_mode: RendererCefAlphaMode::Premultiplied,
+        dirty_rect_count: token
+            .dirty_rect_metadata
+            .dirty_rect_count
+            .min(u32::MAX as usize) as u32,
+        dirty_rect_union: token
+            .dirty_rect_metadata
+            .dirty_rect_union
+            .map(|rect| RendererCefDirtyRect::new(rect.x, rect.y, rect.width, rect.height)),
+        callback_timestamp_ns: token.callback_timestamp_ns.0,
+        import_begin_timestamp_ns: token.import_begin_timestamp_ns,
+        import_complete_timestamp_ns: token.import_complete_timestamp_ns,
+        copied_bytes: token.copied_bytes,
     }
-    upload_state.stale_gpu_frame_count_for_current_token
-}
-
-#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-fn cef_ui_accelerated_fail_closed_enabled() -> bool {
-    env_flag_enabled("FUN_CEF_UI_ACCELERATED_STRICT")
-        || !env_flag_enabled("FUN_CEF_UI_ALLOW_CPU_FALLBACK")
-}
-
-#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-fn env_flag_enabled(name: &str) -> bool {
-    std::env::var(name).ok().is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "on"
-        )
-    })
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]
@@ -3865,173 +3267,7 @@ fn sample_cef_ui_transport_counters(
     sampler.last_snapshot = Some(snapshot);
 }
 
-fn write_cef_ui_upload_to_gpu(
-    render_queue: &RenderQueue,
-    gpu_image: &GpuImage,
-    upload: &CefUiTextureUpload,
-    force_full_upload: bool,
-    texture_resized: bool,
-) -> Option<usize> {
-    let expected_byte_len = cef_ui_texture_byte_len(upload.size)?;
-    if upload.pixels.len() != expected_byte_len
-        || gpu_image.texture_descriptor.size.width != upload.size.x
-        || gpu_image.texture_descriptor.size.height != upload.size.y
-        || gpu_image.texture_descriptor.format != TextureFormat::Bgra8UnormSrgb
-    {
-        return None;
-    }
-    let upload_plan = cef_ui_cpu_upload_plan(
-        upload.size,
-        &upload.dirty_rects,
-        texture_resized,
-        true,
-        cef_ui_cpu_upload_budget(upload.size, texture_resized),
-    );
-    if matches!(
-        upload_plan.path,
-        TextureUploadPath::NoopUnchanged
-            | TextureUploadPath::Defer
-            | TextureUploadPath::RejectFullFrame
-    ) {
-        return Some(0);
-    }
-    if texture_resized && matches!(upload_plan.path, TextureUploadPath::FullFrameOnResize) {
-        write_cef_full_texture_to_gpu(render_queue, gpu_image, upload);
-        return Some(expected_byte_len);
-    }
-
-    let mut uploaded_bytes = 0usize;
-    for rect in &upload_plan.uploaded_rects {
-        uploaded_bytes = uploaded_bytes.checked_add(write_texture_dirty_rect_to_gpu(
-            render_queue,
-            gpu_image,
-            upload,
-            *rect,
-        )?)?;
-    }
-    if uploaded_bytes == 0 && texture_resized && force_full_upload {
-        write_cef_full_texture_to_gpu(render_queue, gpu_image, upload);
-        return Some(expected_byte_len);
-    }
-    Some(uploaded_bytes)
-}
-
-fn write_cef_full_texture_to_gpu(
-    render_queue: &RenderQueue,
-    gpu_image: &GpuImage,
-    upload: &CefUiTextureUpload,
-) {
-    render_queue.tracked_write_texture(
-        "cef_ui.cpu_paint.full_frame",
-        gpu_image.texture.as_image_copy(),
-        &upload.pixels,
-        TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(upload.size.x * CEF_UI_TEXTURE_BYTES_PER_PIXEL as u32),
-            rows_per_image: Some(upload.size.y),
-        },
-        Extent3d {
-            width: upload.size.x,
-            height: upload.size.y,
-            depth_or_array_layers: 1,
-        },
-        cef_ui_texture_byte_len(upload.size).unwrap_or(upload.pixels.len()) as u64,
-    );
-}
-
-fn write_texture_dirty_rect_to_gpu(
-    render_queue: &RenderQueue,
-    gpu_image: &GpuImage,
-    upload: &CefUiTextureUpload,
-    rect: TextureDirtyRect,
-) -> Option<usize> {
-    let (x, y, width, height) = texture_dirty_rect_bounds(upload.size, rect)?;
-    write_cef_texture_region_to_gpu(render_queue, gpu_image, upload, x, y, width, height)
-}
-
-fn write_cef_texture_region_to_gpu(
-    render_queue: &RenderQueue,
-    gpu_image: &GpuImage,
-    upload: &CefUiTextureUpload,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-) -> Option<usize> {
-    let offset = cef_dirty_rect_offset_bytes(upload.size, x, y)?;
-    let mut texture_copy = gpu_image.texture.as_image_copy();
-    texture_copy.origin = Origin3d { x, y, z: 0 };
-    let uploaded_bytes = texture_region_byte_len(width, height)?;
-    render_queue.tracked_write_texture(
-        "cef_ui.cpu_paint.dirty_rect",
-        texture_copy,
-        &upload.pixels,
-        TexelCopyBufferLayout {
-            offset,
-            bytes_per_row: Some(upload.size.x * CEF_UI_TEXTURE_BYTES_PER_PIXEL as u32),
-            rows_per_image: Some(upload.size.y),
-        },
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        uploaded_bytes as u64,
-    );
-    Some(uploaded_bytes)
-}
-
-fn sync_cef_ui_image_node(
-    commands: &mut Commands,
-    render_texture: &mut CefUiRenderTexture,
-    image_nodes: &mut Query<&mut ImageNode, With<CefUiRenderTextureRoot>>,
-    image_handle: Handle<Image>,
-) {
-    if let Some(root_entity) = render_texture.root_entity {
-        if let Ok(mut image_node) = image_nodes.get_mut(root_entity) {
-            image_node.image = image_handle;
-            image_node.image_mode = NodeImageMode::Stretch;
-            return;
-        }
-        render_texture.root_entity = None;
-    }
-
-    let root_entity = commands
-        .spawn((
-            Name::new("CEF UI Render Texture"),
-            CefUiRenderTextureRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0),
-                top: px(0),
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            },
-            ImageNode {
-                image: image_handle,
-                image_mode: NodeImageMode::Stretch,
-                ..default()
-            },
-            GlobalZIndex(CEF_UI_TEXTURE_Z_INDEX),
-        ))
-        .id();
-    render_texture.root_entity = Some(root_entity);
-}
-
-fn new_cef_ui_texture_image_uninit(size: UVec2) -> Image {
-    Image::new_uninit(
-        Extent3d {
-            width: size.x,
-            height: size.y,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        TextureFormat::Bgra8UnormSrgb,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    )
-}
-
+#[cfg(test)]
 fn cef_ui_frame_requires_full_texture_upload(
     last_generation: Option<UiSurfaceGeneration>,
     next_generation: UiSurfaceGeneration,
@@ -4042,6 +3278,7 @@ fn cef_ui_frame_requires_full_texture_upload(
     }
 }
 
+#[cfg(test)]
 fn cef_ui_frame_texture_size(frame: &CefUiCompositorFrame) -> Option<UVec2> {
     if frame.metadata.width <= 0 || frame.metadata.height <= 0 {
         return None;
@@ -4052,6 +3289,7 @@ fn cef_ui_frame_texture_size(frame: &CefUiCompositorFrame) -> Option<UVec2> {
     ))
 }
 
+#[cfg(test)]
 fn cef_ui_texture_byte_len(size: UVec2) -> Option<usize> {
     usize::try_from(size.x)
         .ok()?
@@ -4059,6 +3297,7 @@ fn cef_ui_texture_byte_len(size: UVec2) -> Option<usize> {
         .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
 }
 
+#[cfg(test)]
 fn cef_ui_cpu_upload_plan(
     size: UVec2,
     dirty_rects: &[CefDirtyRect],
@@ -4082,6 +3321,7 @@ fn cef_ui_cpu_upload_plan(
     )
 }
 
+#[cfg(test)]
 fn cef_ui_cpu_upload_budget(size: UVec2, resized: bool) -> FunUploadBudget {
     let mut budget = FunUploadBudget::default();
     if resized && let Some(full_frame_bytes) = cef_ui_texture_byte_len(size) {
@@ -4090,6 +3330,7 @@ fn cef_ui_cpu_upload_budget(size: UVec2, resized: bool) -> FunUploadBudget {
     budget
 }
 
+#[cfg(test)]
 fn cef_dirty_rect_to_texture_dirty_rect(
     size: UVec2,
     rect: CefDirtyRect,
@@ -4098,6 +3339,7 @@ fn cef_dirty_rect_to_texture_dirty_rect(
     Some(TextureDirtyRect::new(x, y, width, height))
 }
 
+#[cfg(test)]
 fn texture_dirty_rect_bounds(size: UVec2, rect: TextureDirtyRect) -> Option<(u32, u32, u32, u32)> {
     if rect.width == 0 || rect.height == 0 {
         return None;
@@ -4108,6 +3350,7 @@ fn texture_dirty_rect_bounds(size: UVec2, rect: TextureDirtyRect) -> Option<(u32
     Some((rect.x, rect.y, rect.width, rect.height))
 }
 
+#[cfg(test)]
 fn texture_region_byte_len(width: u32, height: u32) -> Option<usize> {
     usize::try_from(width)
         .ok()?
@@ -4138,6 +3381,7 @@ fn cef_dirty_rect_byte_len(size: UVec2, rect: CefDirtyRect) -> Option<usize> {
         .checked_mul(CEF_UI_TEXTURE_BYTES_PER_PIXEL)
 }
 
+#[cfg(test)]
 fn cef_dirty_rect_offset_bytes(size: UVec2, x: u32, y: u32) -> Option<u64> {
     if x >= size.x || y >= size.y {
         return None;
@@ -4171,6 +3415,7 @@ fn cef_dirty_rect_bytes(src: &[u8], size: UVec2, rect: CefDirtyRect) -> Option<V
     Some(bytes)
 }
 
+#[cfg(test)]
 fn cef_dirty_rect_bounds(size: UVec2, rect: CefDirtyRect) -> Option<(u32, u32, u32, u32)> {
     if rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 {
         return None;
@@ -4701,60 +3946,15 @@ mod tests {
     }
 
     #[test]
-    fn fps_counter_layout_hides_launcher_and_editor_without_preview() {
-        assert_eq!(
-            fun_client_fps_counter_layout(FunHostMode::Launcher, None, Some(UVec2::new(1280, 720))),
-            None
-        );
-        assert_eq!(
-            fun_client_fps_counter_layout(FunHostMode::Editor, None, Some(UVec2::new(1280, 720))),
-            None
-        );
-    }
-
-    #[test]
-    fn fps_counter_layout_targets_game_or_editor_preview_only() {
-        assert_eq!(
-            fun_client_fps_counter_layout(FunHostMode::Game, None, Some(UVec2::new(1280, 720))),
-            Some(FunClientFpsCounterLayout {
-                left: 12.0,
-                top: 12.0,
-            })
-        );
-        assert_eq!(
-            fun_client_fps_counter_layout(
-                FunHostMode::Editor,
-                Some(FunViewportRect {
-                    x: 320,
-                    y: 120,
-                    width: 640,
-                    height: 360,
-                    scale_factor_milli: 1000,
-                }),
-                Some(UVec2::new(1280, 720))
-            ),
-            Some(FunClientFpsCounterLayout {
-                left: 332.0,
-                top: 132.0,
-            })
-        );
-    }
-
-    #[test]
-    fn cef_render_texture_upload_timer_matches_windowless_frame_rate() {
-        let render_texture = CefUiRenderTexture::default();
+    fn cef_external_pump_matches_windowless_frame_rate() {
         let message_loop_pump = CefUiMessageLoopPump::external_pump_at_render_rate();
 
         assert_eq!(CEF_UI_RENDER_RATE_HZ, 60);
         assert_eq!(
-            render_texture.upload_timer.duration(),
+            message_loop_pump.interval(),
             Duration::from_nanos(16_666_667)
         );
         assert!(message_loop_pump.enabled());
-        assert_eq!(
-            message_loop_pump.interval(),
-            render_texture.upload_timer.duration()
-        );
     }
 
     #[test]

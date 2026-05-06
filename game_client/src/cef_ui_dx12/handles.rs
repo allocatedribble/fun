@@ -1,10 +1,9 @@
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use fun_render::dx12_native::{
     Dx12NativeInteropError, Dx12NativeInteropFailure, with_dx12_device_queue_checked,
-    with_dx12_texture_checked,
 };
 use windows::{
-    Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device, ID3D12Resource},
+    Win32::Graphics::Direct3D12::{ID3D12CommandQueue, ID3D12Device},
     core::Interface as _,
 };
 
@@ -61,24 +60,6 @@ pub unsafe fn extract_wgpu_dx12_handles(
     })
 }
 
-pub fn clone_dx12_resource_from_wgpu_texture(
-    texture: &wgpu::Texture,
-) -> Result<ID3D12Resource, Dx12CefInteropError> {
-    let handle = unsafe { with_dx12_texture_checked(texture, |handle| handle) }
-        .map_err(map_native_error_for_texture)?;
-    unsafe {
-        ID3D12Resource::from_raw_borrowed(&handle.resource)
-            .cloned()
-            .ok_or_else(|| {
-                Dx12CefInteropError::new(
-                    Dx12CefInteropFailure::BevyTargetTextureHalUnavailable,
-                    "DX12 native boundary returned no ID3D12Resource pointer",
-                    None,
-                )
-            })
-    }
-}
-
 fn map_native_error_for_device_queue(error: Dx12NativeInteropError) -> Dx12CefInteropError {
     let failure = match error.failure {
         Dx12NativeInteropFailure::WrongBackend => Dx12CefInteropFailure::WrongBackend,
@@ -95,29 +76,6 @@ fn map_native_error_for_device_queue(error: Dx12NativeInteropError) -> Dx12CefIn
         | Dx12NativeInteropFailure::ObjectNameUnavailable
         | Dx12NativeInteropFailure::ObjectNameFailed => {
             Dx12CefInteropFailure::D3d11On12CreateDeviceFailed
-        }
-    };
-    Dx12CefInteropError::new(failure, error.detail, None)
-}
-
-fn map_native_error_for_texture(error: Dx12NativeInteropError) -> Dx12CefInteropError {
-    let failure = match error.failure {
-        Dx12NativeInteropFailure::WrongBackend => Dx12CefInteropFailure::WrongBackend,
-        Dx12NativeInteropFailure::TextureHalUnavailable => {
-            Dx12CefInteropFailure::BevyTargetTextureHalUnavailable
-        }
-        Dx12NativeInteropFailure::InvalidTextureDimensions
-        | Dx12NativeInteropFailure::UnsupportedTextureFormat
-        | Dx12NativeInteropFailure::UnsupportedTextureShape => {
-            Dx12CefInteropFailure::BevyTargetTextureUnsupported
-        }
-        Dx12NativeInteropFailure::DeviceHalUnavailable
-        | Dx12NativeInteropFailure::QueueHalUnavailable
-        | Dx12NativeInteropFailure::CommandEncoderHalUnavailable
-        | Dx12NativeInteropFailure::CommandListUnavailable
-        | Dx12NativeInteropFailure::ObjectNameUnavailable
-        | Dx12NativeInteropFailure::ObjectNameFailed => {
-            Dx12CefInteropFailure::BevyTextureCopyFailed
         }
     };
     Dx12CefInteropError::new(failure, error.detail, None)

@@ -1,6 +1,7 @@
 use fun_ui_cef::{
     CefDirtyRect, CefUiDirtyRectMetadata, cef_ui_gpu_ring_depth_from_env,
-    clamp_cef_ui_gpu_ring_depth, render_handler::CefUiFrameGeneration,
+    clamp_cef_ui_gpu_ring_depth,
+    render_handler::{CefUiFrameGeneration, CefUiFrameTimestampNs},
 };
 use windows::Win32::Graphics::{
     Direct3D11::ID3D11Resource,
@@ -31,6 +32,10 @@ pub enum Dx12CefSlotState {
 
 pub struct Dx12CefTextureSlot {
     pub generation: CefUiFrameGeneration,
+    pub callback_timestamp_ns: CefUiFrameTimestampNs,
+    pub import_begin_timestamp_ns: u64,
+    pub import_complete_timestamp_ns: u64,
+    pub copied_bytes: u64,
     pub width: u32,
     pub height: u32,
     pub format: DxgiFormat,

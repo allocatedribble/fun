@@ -11,8 +11,8 @@ pub mod handles;
 pub mod ring;
 
 pub use bridge::{
-    Dx12CefBevyImageState, Dx12CefInterop, Dx12CefInteropError, Dx12CefInteropFailure,
-    Dx12CefReadyFrameToken, MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
+    Dx12CefInterop, Dx12CefInteropError, Dx12CefInteropFailure, Dx12CefReadyFrameToken,
+    MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
 };
 pub use diagnostics::{Dx12CefInteropDiagnosticSnapshot, Dx12CefInteropDiagnostics};
 pub use handles::{Dx12CefNativeHandles, extract_wgpu_dx12_handles};

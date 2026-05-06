@@ -234,17 +234,15 @@ declarative; dynamic Rust expressions remain macro-only.
 CEF owns browser lifetime, page loading, JavaScript bridge messages, offscreen
 paint callbacks, dirty rects, transparent UI buffers, and UI compositor state.
 Bevy ECS owns game state and exchanges typed UI packets with the browser bridge.
-`game_client` presents the latest CEF offscreen paint frame as a Bevy texture
-rendered by the normal Fun render stack, so the browser UI is visible in the
-game window without a native browser child window or an operating-system overlay
-window. The first presentation path uses a fullscreen transparent Bevy UI image
-node backed by the CEF compositor buffer; future optimization can replace the
-asset update path with lower-level dirty-rect GPU uploads while preserving the
-same typed browser/ECS boundary.
+`game_client` publishes accelerated CEF ready-frame tokens into
+`fun_renderer::RendererCefCompositor`; the renderer owns the UI texture record
+and late `cef_gpu_import` frame-graph input. Product CEF UI is GPU-only and
+fail-closed: CPU `OnPaint` frames are rejected instead of uploaded into Bevy
+images, and Bevy UI is not a product presentation surface.
 
 CEF composition is a HUD/UI layer, not a world-image layer. Render ordering is
 world render, depth/motion vectors, Solari/lighting, DLSS SR/RR if active,
-post-processing, CEF UI composition, debug overlays/FPS counters, and present.
+post-processing, CEF UI composition, renderer/CEF diagnostics, and present.
 CEF UI must not feed DLSS input color, depth, motion vectors, or Ray
 Reconstruction guide buffers; browser pixels have no world-space motion-vector
 contract and must not contaminate temporal reconstruction.

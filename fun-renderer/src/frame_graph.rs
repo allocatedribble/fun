@@ -63,6 +63,7 @@ pub enum FrameGraphPassRole {
     Clear,
     StaticScenePlaceholder,
     VirtualResourceFeedback,
+    CefGpuImport,
     UiImportPlaceholder,
     UpscaleBoundary,
     FrameGenerationBoundary,
@@ -78,6 +79,7 @@ impl FrameGraphPassRole {
             Self::Clear => "clear",
             Self::StaticScenePlaceholder => "static_scene_placeholder",
             Self::VirtualResourceFeedback => "virtual_resource_feedback",
+            Self::CefGpuImport => "cef_gpu_import",
             Self::UiImportPlaceholder => "ui_import_placeholder",
             Self::UpscaleBoundary => "upscale_boundary",
             Self::FrameGenerationBoundary => "frame_generation_boundary",
@@ -523,13 +525,13 @@ impl RendererFrameGraph {
 
         if description.include_ui_placeholder {
             let ui_import = graph.register_pass(FrameGraphPassDescriptor::new(
-                "fun_renderer.pass.ui_import_placeholder",
+                "fun_renderer.pass.cef_gpu_import",
                 FrameGraphPassType::CopyImport,
-                FrameGraphPassRole::UiImportPlaceholder,
-                "ui_import_placeholder",
+                FrameGraphPassRole::CefGpuImport,
+                "cef_gpu_import",
                 FrameGraphDiagnosticCategory::Ui,
                 Some(FrameGraphBenchmarkCategory::UiImport),
-                "fun_renderer::frame_graph::ui_import_placeholder",
+                "fun_renderer::frame_graph::cef_gpu_import",
             ));
             graph.add_pass_write(ui_import, ui);
         }
@@ -922,7 +924,8 @@ impl RendererFrameGraph {
             let role = pass.descriptor.role;
             let allowed = matches!(
                 role,
-                FrameGraphPassRole::UiImportPlaceholder
+                FrameGraphPassRole::CefGpuImport
+                    | FrameGraphPassRole::UiImportPlaceholder
                     | FrameGraphPassRole::FrameGenerationBoundary
                     | FrameGraphPassRole::Compose
             );
@@ -1062,7 +1065,7 @@ mod tests {
             [
                 FrameGraphPassRole::Clear,
                 FrameGraphPassRole::StaticScenePlaceholder,
-                FrameGraphPassRole::UiImportPlaceholder,
+                FrameGraphPassRole::CefGpuImport,
                 FrameGraphPassRole::Compose,
                 FrameGraphPassRole::Present,
             ]
