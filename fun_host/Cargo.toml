@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 bevy.workspace = true
 fun_editor_core = { path = "../fun_editor_core" }
+fun_scene = { package = "fun-scene", path = "../fun-scene" }
 reqwest.workspace = true
 secrecy.workspace = true
 serde.workspace = true

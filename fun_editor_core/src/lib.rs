@@ -16,6 +16,7 @@ pub const MATERIAL_SHADER_LIST: &str = "material.shader.list";
 pub const MATERIAL_SHADER_LOAD: &str = "material.shader.load";
 pub const MATERIAL_SHADER_SAVE: &str = "material.shader.save";
 pub const RUNTIME_DIAGNOSTICS_LIST: &str = "runtime.diagnostics.list";
+pub const SCENE_OPERATION_APPLY: &str = "scene.operation.apply";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,6 +48,7 @@ impl FunEditorCoreService {
 pub enum FunEditorCommandCategory {
     Project,
     Entity,
+    Scene,
     Preview,
     Material,
     RuntimeDiagnostics,
@@ -58,6 +60,7 @@ impl FunEditorCommandCategory {
         match self {
             Self::Project => "project",
             Self::Entity => "entity",
+            Self::Scene => "scene",
             Self::Preview => "preview",
             Self::Material => "material",
             Self::RuntimeDiagnostics => "runtime_diagnostics",
@@ -103,6 +106,12 @@ pub const FUN_EDITOR_COMMANDS: &[FunEditorCommandDescriptor] = &[
         category: FunEditorCommandCategory::Entity,
         service: FunEditorCoreService::EntityStream,
         summary: "Creates a bounded live-runtime entity stream cursor.",
+    },
+    FunEditorCommandDescriptor {
+        id: SCENE_OPERATION_APPLY,
+        category: FunEditorCommandCategory::Scene,
+        service: FunEditorCoreService::FunSceneIndex,
+        summary: "Applies validated typed scene operations through fun-scene and Bevy ECS.",
     },
     FunEditorCommandDescriptor {
         id: PREVIEW_RENDERER_ENSURE,
@@ -176,7 +185,7 @@ pub const FUN_EDITOR_SERVICES: &[FunEditorServiceDescriptor] = &[
     FunEditorServiceDescriptor {
         service: FunEditorCoreService::FunSceneIndex,
         rust_owner: "fun_editor_core",
-        command_ids: &[PROJECT_OPEN],
+        command_ids: &[PROJECT_OPEN, SCENE_OPERATION_APPLY],
     },
     FunEditorServiceDescriptor {
         service: FunEditorCoreService::MaterialShader,
@@ -237,6 +246,7 @@ mod tests {
             PROJECT_EDIT_OPEN,
             PROJECT_OPEN,
             ENTITY_STREAM_OPEN,
+            SCENE_OPERATION_APPLY,
             PREVIEW_RENDERER_ENSURE,
             RUNTIME_DIAGNOSTICS_LIST,
         ] {

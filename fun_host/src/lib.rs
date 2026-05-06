@@ -42,6 +42,7 @@ pub const MATERIAL_SHADER_LOAD: &str = fun_editor_core::MATERIAL_SHADER_LOAD;
 pub const MATERIAL_SHADER_SAVE: &str = fun_editor_core::MATERIAL_SHADER_SAVE;
 pub const ENTITY_STREAM_OPEN: &str = fun_editor_core::ENTITY_STREAM_OPEN;
 pub const RUNTIME_DIAGNOSTICS_LIST: &str = fun_editor_core::RUNTIME_DIAGNOSTICS_LIST;
+pub const SCENE_OPERATION_APPLY: &str = fun_editor_core::SCENE_OPERATION_APPLY;
 pub const ACCOUNT_LOGIN: &str = "account.login";
 pub const ACCOUNT_REGISTER: &str = "account.register";
 pub const ACCOUNT_LOGOUT: &str = "account.logout";
@@ -57,6 +58,7 @@ pub struct FunClientHostPlugin;
 impl Plugin for FunClientHostPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FunClientHostState>()
+            .init_resource::<fun_scene::EditorOperationQueue>()
             .add_message::<FunHostCommandRequest>()
             .add_message::<FunHostCommandResponse>()
             .add_systems(Update, route_fun_host_commands);
@@ -703,6 +705,9 @@ impl FunClientHostState {
             FunHostCommand::MaterialShaderSave => {
                 self.material_shader_save_response(request, sequence)
             }
+            FunHostCommand::SceneOperationApply => {
+                self.scene_operation_queue_unavailable_response(request, sequence)
+            }
             FunHostCommand::RuntimeServerLaunch => {
                 self.launch_server_runtime_from_request(request);
                 self.runtime_server_launch_response(request, sequence)
@@ -799,6 +804,52 @@ impl FunClientHostState {
             )],
         };
         self.payload_response(request, sequence, &result)
+    }
+
+    fn scene_operation_apply_response(
+        &mut self,
+        request: &FunHostCommandRequest,
+        sequence: u64,
+        queue: &mut fun_scene::EditorOperationQueue,
+    ) -> FunHostCommandResponse {
+        let result = match parse_scene_operation_envelope(&request.payload_json) {
+            Ok(envelope) => match envelope.validate_product() {
+                Ok(()) => {
+                    let accepted_operation_count = envelope.operation_count();
+                    queue.extend(envelope.into_operations());
+                    let _ = self.transition_to(FunHostMode::Editor);
+                    self.mark_changed();
+                    account::CommandResult {
+                        ok: true,
+                        value: Some(SceneOperationReceipt {
+                            schema_version: fun_scene::EDITOR_OPERATION_SCHEMA_VERSION,
+                            accepted_operation_count,
+                            queued_for_fun_scene: true,
+                            host_applies_through_fun_scene: true,
+                            dynamic_rust_expressions_allowed: false,
+                        }),
+                        diagnostics: Vec::new(),
+                    }
+                }
+                Err(error) => scene_operation_rejection(error.as_str()),
+            },
+            Err(_) => scene_operation_rejection("invalid_scene_operation_payload"),
+        };
+        self.payload_response(request, sequence, &result)
+    }
+
+    fn scene_operation_queue_unavailable_response(
+        &self,
+        request: &FunHostCommandRequest,
+        sequence: u64,
+    ) -> FunHostCommandResponse {
+        self.payload_response(
+            request,
+            sequence,
+            &scene_operation_rejection::<SceneOperationReceipt>(
+                "scene_operation_queue_unavailable",
+            ),
+        )
     }
 
     fn snapshot_response(
@@ -1199,6 +1250,7 @@ pub enum FunHostCommand {
     MaterialShaderLoad,
     MaterialShaderSave,
     EntityStreamOpen,
+    SceneOperationApply,
     RuntimeDiagnosticsList,
     AccountLogin,
     AccountRegister,
@@ -1245,6 +1297,7 @@ impl FunHostCommand {
             Self::MaterialShaderLoad => MATERIAL_SHADER_LOAD,
             Self::MaterialShaderSave => MATERIAL_SHADER_SAVE,
             Self::EntityStreamOpen => ENTITY_STREAM_OPEN,
+            Self::SceneOperationApply => SCENE_OPERATION_APPLY,
             Self::RuntimeDiagnosticsList => RUNTIME_DIAGNOSTICS_LIST,
             Self::AccountLogin => ACCOUNT_LOGIN,
             Self::AccountRegister => ACCOUNT_REGISTER,
@@ -1291,6 +1344,7 @@ impl FunHostCommand {
             MATERIAL_SHADER_LOAD => Some(Self::MaterialShaderLoad),
             MATERIAL_SHADER_SAVE => Some(Self::MaterialShaderSave),
             ENTITY_STREAM_OPEN => Some(Self::EntityStreamOpen),
+            SCENE_OPERATION_APPLY => Some(Self::SceneOperationApply),
             RUNTIME_DIAGNOSTICS_LIST => Some(Self::RuntimeDiagnosticsList),
             ACCOUNT_LOGIN => Some(Self::AccountLogin),
             ACCOUNT_REGISTER => Some(Self::AccountRegister),
@@ -1499,6 +1553,11 @@ pub const FUN_HOST_COMMANDS: &[FunHostCommandDescriptor] = &[
         summary: "Opens a bounded editor entity stream.",
     },
     FunHostCommandDescriptor {
+        id: SCENE_OPERATION_APPLY,
+        category: FunHostCommandCategory::Editor,
+        summary: "Queues validated typed scene operations for fun-scene to apply to Bevy ECS.",
+    },
+    FunHostCommandDescriptor {
         id: RUNTIME_DIAGNOSTICS_LIST,
         category: FunHostCommandCategory::Runtime,
         summary: "Lists editor-visible runtime diagnostics.",
@@ -1587,6 +1646,7 @@ fn command_title(id: &str) -> &'static str {
         MATERIAL_SHADER_LOAD => "Load Material Shader",
         MATERIAL_SHADER_SAVE => "Save Material Shader",
         ENTITY_STREAM_OPEN => "Open Entity Stream",
+        SCENE_OPERATION_APPLY => "Apply Scene Operation",
         RUNTIME_DIAGNOSTICS_LIST => "List Runtime Diagnostics",
         ACCOUNT_LOGIN => "Account Login",
         ACCOUNT_REGISTER => "Account Register",
@@ -1628,6 +1688,7 @@ fn command_input_description(id: &str) -> &'static str {
         MATERIAL_SHADER_LOAD => "MaterialShaderLoadRequest.",
         MATERIAL_SHADER_SAVE => "MaterialShaderSaveRequest.",
         ENTITY_STREAM_OPEN => "EntityStreamOpenRequest.",
+        SCENE_OPERATION_APPLY => "fun_scene::EditorOperationEnvelope or one EditorOperation.",
         ACCOUNT_LOGIN | ACCOUNT_REGISTER => "BackendAccountTicketLoginRequest.",
         AUTH_TICKET_REQUEST => "BackendAuthTicketRequest.",
         _ => "JSON payload.",
@@ -1646,6 +1707,7 @@ fn command_output_description(id: &str) -> &'static str {
         RUNTIME_SERVER_LAUNCH => "CommandResult<RuntimeInstanceSummary>.",
         MATERIAL_SHADER_LIST => "CommandResult<MaterialShaderCatalog>.",
         MATERIAL_SHADER_LOAD | MATERIAL_SHADER_SAVE => "CommandResult<MaterialShaderDocument>.",
+        SCENE_OPERATION_APPLY => "CommandResult<SceneOperationReceipt>.",
         _ => "FunClientHostSnapshot.",
     }
 }
@@ -1667,6 +1729,7 @@ fn command_payload_schema_id(id: &str) -> &'static str {
         MATERIAL_SHADER_LIST => "fun.material.shader.list.v1",
         MATERIAL_SHADER_LOAD => "fun.material.shader.load.v1",
         MATERIAL_SHADER_SAVE => "fun.material.shader.save.v1",
+        SCENE_OPERATION_APPLY => "fun.scene.editor.operation.v1",
         _ => "fun.host.command.payload.v1",
     }
 }
@@ -1681,6 +1744,7 @@ fn command_required_capability(id: &str) -> &'static str {
         | EDITOR_OVERLAY_TOGGLE => "EditProject",
         PROJECTS_AUTHORIZED_LIST => "OpenProject",
         ENTITY_STREAM_OPEN => "ReadEntities",
+        SCENE_OPERATION_APPLY => "EditProject",
         RUNTIME_DIAGNOSTICS_LIST => "ReadDiagnostics",
         MATERIAL_SHADER_LIST | MATERIAL_SHADER_LOAD => "MaterialShaderRead",
         MATERIAL_SHADER_SAVE => "MaterialShaderWrite",
@@ -1723,6 +1787,7 @@ fn command_risk(id: &str) -> FunHostCommandRiskMetadata {
         | PREVIEW_RENDERER_ENSURE
         | PREVIEW_RENDERER_RESIZE
         | PREVIEW_RENDERER_SCENE_SET
+        | SCENE_OPERATION_APPLY
         | HOST_COMMANDBAR_EXECUTE => FunHostCommandRiskLevel::RuntimeMutation,
         LAUNCHER_SHOW
         | LAUNCHER_HIDE
@@ -1987,6 +2052,15 @@ struct MaterialShaderDocument {
     diagnostics: Vec<account::Diagnostic>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SceneOperationReceipt {
+    schema_version: u16,
+    accepted_operation_count: usize,
+    queued_for_fun_scene: bool,
+    host_applies_through_fun_scene: bool,
+    dynamic_rust_expressions_allowed: bool,
+}
+
 fn encode_payload<T: Serialize>(payload: &T) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(payload)
 }
@@ -2001,6 +2075,20 @@ fn commandbar_rejection<T>(code: &str, message: &str) -> account::CommandResult<
             message: message.to_owned(),
             target_path: None,
             hosted_instance_id: Some(HOST_COMMANDBAR_EXECUTE.to_owned()),
+        }],
+    }
+}
+
+fn scene_operation_rejection<T>(code: &str) -> account::CommandResult<T> {
+    account::CommandResult {
+        ok: false,
+        value: None,
+        diagnostics: vec![account::Diagnostic {
+            code: code.to_owned(),
+            level: account::EventLevel::Warning,
+            message: String::from("Scene operation payload did not match the fun-scene contract."),
+            target_path: None,
+            hosted_instance_id: Some(SCENE_OPERATION_APPLY.to_owned()),
         }],
     }
 }
@@ -2086,6 +2174,18 @@ where
         .map(|envelope| envelope.request)
         .or_else(|| serde_json::from_slice::<T>(payload_json).ok())
         .unwrap_or_default()
+}
+
+fn parse_scene_operation_envelope(
+    payload_json: &[u8],
+) -> Result<fun_scene::EditorOperationEnvelope, serde_json::Error> {
+    serde_json::from_slice::<RequestEnvelope<fun_scene::EditorOperationEnvelope>>(payload_json)
+        .map(|envelope| envelope.request)
+        .or_else(|_| serde_json::from_slice::<fun_scene::EditorOperationEnvelope>(payload_json))
+        .or_else(|_| {
+            serde_json::from_slice::<fun_scene::EditorOperation>(payload_json)
+                .map(fun_scene::EditorOperationEnvelope::single)
+        })
 }
 
 fn material_shader_catalog(
@@ -2185,11 +2285,27 @@ fn scale_factor_milli(value: f64) -> u32 {
 
 fn route_fun_host_commands(
     mut host: ResMut<FunClientHostState>,
+    mut scene_operations: ResMut<fun_scene::EditorOperationQueue>,
     mut requests: MessageReader<FunHostCommandRequest>,
     mut responses: MessageWriter<FunHostCommandResponse>,
 ) {
     for request in requests.read() {
-        let response = host.handle_command(request);
+        let response = if FunHostCommand::from_wire_id(&request.command_id)
+            == Some(FunHostCommand::SceneOperationApply)
+        {
+            let sequence = host.next_sequence();
+            if request.payload_json.len() > MAX_HOST_COMMAND_PAYLOAD_BYTES {
+                FunHostCommandResponse::error(
+                    request,
+                    sequence,
+                    FunHostCommandErrorCode::OversizePayload,
+                )
+            } else {
+                host.scene_operation_apply_response(request, sequence, &mut scene_operations)
+            }
+        } else {
+            host.handle_command(request)
+        };
         responses.write(response);
     }
 }
@@ -2236,6 +2352,7 @@ mod tests {
             MATERIAL_SHADER_LOAD,
             MATERIAL_SHADER_SAVE,
             ENTITY_STREAM_OPEN,
+            SCENE_OPERATION_APPLY,
             RUNTIME_DIAGNOSTICS_LIST,
             ACCOUNT_LOGIN,
             ACCOUNT_REGISTER,
@@ -2271,6 +2388,34 @@ mod tests {
         );
         assert_eq!(commandbar["required_capability"], "ControlRuntime");
         assert_eq!(commandbar["risk"]["mutates_state"], true);
+    }
+
+    #[test]
+    fn scene_operation_command_queues_validated_fun_scene_operations() {
+        let mut host = FunClientHostState::default();
+        let mut queue = fun_scene::EditorOperationQueue::default();
+        let payload = br#"{
+            "operation": {
+                "op": "patch_component",
+                "entity": { "uri": "scene://arena-blockout/Sun" },
+                "component": "LuxLight",
+                "field": "intensity_lux",
+                "value": 65000.0
+            }
+        }"#
+        .to_vec();
+        let request = FunHostCommandRequest::new(9, String::from(SCENE_OPERATION_APPLY), payload);
+        let sequence = host.next_sequence();
+        let response = host.scene_operation_apply_response(&request, sequence, &mut queue);
+
+        assert_eq!(response.status, FunHostCommandStatus::Ok);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(host.state.mode, FunHostMode::Editor);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&response.payload_json).expect("response decodes");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["value"]["accepted_operation_count"], 1);
+        assert_eq!(payload["value"]["queued_for_fun_scene"], true);
     }
 
     #[test]

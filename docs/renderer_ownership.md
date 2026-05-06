@@ -240,6 +240,52 @@ instability all remain visible to Bevy scheduling and tests.
 page, shadow, light, GI cache, shading-rate, or ML fallback priority without
 adding a runtime Bevy UI overlay.
 
+## Editor Scene Operations
+
+The editor authoring path is typed and ECS-first. CEF/Svelte edits typed scene
+data and sends `scene.operation.apply` to the Rust host. The host validates a
+`fun_scene::EditorOperationEnvelope`, queues accepted operations into
+`EditorOperationQueue`, and the `fun-scene` operation systems apply supported
+operations to Bevy ECS through normal component/resource mutation.
+
+The first operation contract is:
+
+- `spawn_scene_component`
+- `patch_component`
+- `delete_entity`
+- `duplicate_entity`
+- `attach_child_scene`
+- `adjust_light`
+- `adjust_render_policy`
+- `mark_selection_salience`
+
+Component names are not product-prefixed. The canonical editor component names
+include `LuxLight`, `Renderable`, `ViewportRenderPolicy`, `GameplaySalient`,
+`EditorSelection`, `StreamingPriority`, and `TemporalInstability`.
+
+Canonical patch example:
+
+```json
+{
+  "op": "patch_component",
+  "entity": { "uri": "scene://arena-blockout/Floor" },
+  "component": "LuxLight",
+  "field": "intensity_lux",
+  "value": 65000.0
+}
+```
+
+`.fun` assets are declarative. Asset files may reference typed values and scene
+assets, but dynamic Rust expressions remain macro-only. Editor viewport panels
+remain CEF/Svelte. Editor overlays are renderer debug primitives or CEF UI
+composited late; runtime Bevy UI is not a product/editor panel path.
+
+Observers are for local scene/editor behavior: selection changed, gizmo dragged,
+light changed, prefab instantiated, and trigger volume edited. They produce
+ordinary ECS component/resource changes consumed by renderer systems. They must
+not run renderer hot-path priority, culling, page, lighting, or frame-graph
+logic directly.
+
 ## Default Renderer
 
 `fun-renderer` is the product default renderer even while the first visual
@@ -394,6 +440,17 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::EditorSelection`
 - `fun_scene::StreamingPriority`
 - `fun_scene::TemporalInstability`
+- `fun_scene::EditorIntegrationPolicy`
+- `fun_scene::EditorOperationKind`
+- `fun_scene::EditorOperation`
+- `fun_scene::EditorOperationEnvelope`
+- `fun_scene::EditorOperationQueue`
+- `fun_scene::EditorSceneEntityIndex`
+- `fun_scene::EditorOperationOutcomes`
+- `fun_scene::EditorOverlaySurface`
+- `fun_scene::EditorObserverTriggerKind`
+- `fun_scene::EDITOR_OPERATION_DESCRIPTORS`
+- `fun_scene::EDITOR_OBSERVER_DESCRIPTORS`
 - `fun_lux::FUN_LUX_ECS_SCHEMA_VERSION`
 - `fun_lux::LuxLight`
 - `fun_lux::LuxLightDatabase`

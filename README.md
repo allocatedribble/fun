@@ -174,6 +174,16 @@ to CEF capture and `GameplayInputGate`. CEF/Svelte requests the initial snapshot
 with `host.snapshot.get` and then receives host state patches; command polling
 is only a browser-preview fallback.
 
+Editor scene edits are typed operations, not browser-authored runtime truth.
+CEF/Svelte sends `scene.operation.apply` payloads using the
+`fun_scene::EditorOperation` schema. `fun_host` validates the operation envelope
+and queues it into `fun_scene::EditorOperationQueue`; `fun-scene` applies
+supported operations to Bevy ECS through normal component/resource mutation.
+Current operations cover spawning scene components, patching component fields,
+deleting and duplicating entities, attaching child scenes, adjusting lights and
+render policies, and marking selection/salience. `.fun` asset references are
+declarative; dynamic Rust expressions remain macro-only.
+
 CEF owns browser lifetime, page loading, JavaScript bridge messages, offscreen
 paint callbacks, dirty rects, transparent UI buffers, and UI compositor state.
 Bevy ECS owns game state and exchanges typed UI packets with the browser bridge.
@@ -238,6 +248,10 @@ back through `host.commandbar.execute` or the target host command so Rust
 validates capabilities, payload shape, and mutation risk before any runtime
 effect. Tool-call stubs remain gated; browser text, model output, and MCP/tool
 payloads are data until Rust accepts a typed command.
+Editor observer logic is allowed for local scene/editor behavior such as
+selection changes, gizmo drags, light changes, prefab instantiation, and trigger
+volume edits. Observers must produce normal ECS component/resource changes; they
+must not become renderer hot-path logic.
 The Vite production build writes hashed assets to `game_client/ui/main/dist`,
 and `fun_ui_cef` embeds only those generated assets through the `fun-ui://`
 scheme.

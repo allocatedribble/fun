@@ -16,4 +16,8 @@ bevy_ecs.workspace = true
 bevy_scene.workspace = true
 bevy_transform.workspace = true
 fun_scene_macros.workspace = true
+serde.workspace = true
 thunder.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
