@@ -148,6 +148,14 @@ geometry rebuild. `fun-scene` declares `GeometryDeclaration`,
 supports classic mesh draw packets, optional dynamic cluster packets for
 selected classes, procedural chunk invalidation by revision, destruction
 fragment stress accounting, and compact upload/dirty-record diagnostics.
+Virtual shadows are now represented by renderer-owned page storage, not a
+monolithic atlas. `VirtualShadowStorage` owns directional clipmap pages,
+local-light pages, physical shadow page pools, page-table records,
+invalidation state, refresh budgets, cache hit/miss counters, per-light page
+budget diagnostics, and pressure metrics. `fun-lux::shadow::ShadowPolicyEngine`
+decides which lights should cast shadows, soft-shadow/reconstruction mode,
+quality tier, and directional/local budgets; it does not allocate pages or
+own invalidation storage.
 The renderer-owned frame graph is represented by `RendererFrameGraph`,
 `RendererFrameDescription`, typed pass/resource declarations, graph validation
 failures, pass timing placeholders, resource lifetimes, and debug artifacts.

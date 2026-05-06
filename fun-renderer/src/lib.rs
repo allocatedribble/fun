@@ -14,6 +14,7 @@ pub mod resource;
 pub mod scene;
 pub mod ui;
 pub mod virtual_geometry;
+pub mod virtual_shadow;
 
 pub use fun_lux;
 pub use fun_scene;
@@ -793,6 +794,7 @@ pub use resource::*;
 pub use scene::*;
 pub use ui::*;
 pub use virtual_geometry::*;
+pub use virtual_shadow::*;
 
 #[must_use]
 pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRendererOwner {

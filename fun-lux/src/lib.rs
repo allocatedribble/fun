@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod shadow;
 
 use bevy_ecs::{
     entity::Entity,
@@ -11,6 +12,7 @@ use bevy_ecs::{
 };
 
 pub use api::*;
+pub use shadow::*;
 
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
 pub const FUN_LUX_PACKAGE_NAME: &str = "fun-lux";
