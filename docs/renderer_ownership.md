@@ -65,11 +65,17 @@ to material tables, geometry changes to page residency, light changes to
 `fun-lux` candidate tables plus shadow invalidation, and scene patches to
 manifest signatures.
 
-Hot-path archetypes are created with marker components instead of opaque render
-objects: `FunStaticRenderable`, `FunDynamicRenderable`, `FunVirtualGeometry`,
-`FunSkinnedRenderable`, `FunProceduralRenderable`, `FunShadowCaster`,
-`FunShadowReceiver`, `FunLuxLight`, `FunLuxEmissive`, `FunLuxGiParticipant`,
-`FunEditorSelectable`, and `FunGameplaySalient`.
+Scene authoring component names do not repeat the product prefix. The crate path
+already supplies context, so the first-party component taxonomy uses names such
+as `SceneStableIdentity`, `SceneRevision`, `SceneChunkId`, `Renderable`,
+`VirtualGeometryAuthoring`, `RendererBounds`, `LuxLight`, `LuxEmissive`,
+`LuxGiParticipant`, `CefSurface`, `ViewportUiTarget`, `UpscalePolicy`, and
+`ViewportRenderPolicy`.
+
+Hot-path scene archetypes are created with these typed components instead of
+opaque render objects. Render-world markers and backend resources can still use
+renderer-local implementation names, but scene-authored data should stay short
+and domain-specific.
 
 Renderer entities carry compact identities and handles. Large material data,
 GPU buffers, residency tables, pipeline state, page allocation, light tables,
@@ -187,10 +193,23 @@ The first executable contract is compile-checked in Rust:
 - `fun_renderer::FunRendererGpuSceneObject`
 - `fun_renderer::FunRendererFrameGraphNode`
 - `fun_renderer::FunRendererEcsEvent`
+- `fun_scene::SceneStableIdentity`
+- `fun_scene::SceneRevision`
+- `fun_scene::SceneChunkId`
+- `fun_scene::Renderable`
+- `fun_scene::VirtualGeometryAuthoring`
+- `fun_scene::RendererBounds`
+- `fun_scene::LuxLight`
+- `fun_scene::LuxEmissive`
+- `fun_scene::LuxGiParticipant`
+- `fun_scene::CefSurface`
+- `fun_scene::ViewportUiTarget`
+- `fun_scene::UpscalePolicy`
+- `fun_scene::ViewportRenderPolicy`
 - `fun_lux::FUN_LUX_ECS_SCHEMA_VERSION`
-- `fun_lux::FunLuxLight`
-- `fun_lux::FunLuxLightDatabase`
-- `fun_lux::FunLuxLightEvent`
+- `fun_lux::LuxLight`
+- `fun_lux::LuxLightDatabase`
+- `fun_lux::LuxLightEvent`
 
 These tables use stable labels and typed owners so future migration work can be
 audited without parsing prose.

@@ -12,6 +12,7 @@ pub mod observers;
 pub mod patch;
 pub mod plugin;
 pub mod prelude;
+pub mod presentation_components;
 pub mod renderer_components;
 pub mod resolved;
 pub mod scene;
@@ -22,6 +23,7 @@ pub mod stable_identity;
 pub mod streaming;
 pub mod template;
 pub mod template_value;
+pub mod ui_components;
 pub mod validation;
 
 pub use bevy_scene;
@@ -40,6 +42,7 @@ pub use manifest::*;
 pub use observers::*;
 pub use patch::*;
 pub use plugin::*;
+pub use presentation_components::*;
 pub use renderer_components::*;
 pub use resolved::*;
 pub use scene::*;
@@ -50,6 +53,7 @@ pub use stable_identity::*;
 pub use streaming::*;
 pub use template::*;
 pub use template_value::*;
+pub use ui_components::*;
 pub use validation::*;
 
 pub const FUN_SCENE_SCHEMA_VERSION: u16 = 1;
@@ -103,6 +107,7 @@ pub const FUN_SCENE_PRODUCT_TOPOLOGY: FunSceneProductTopology = FunSceneProductT
 #[cfg(test)]
 mod tests {
     use bevy_ecs::world::World;
+    use thunder::prelude::{NetEntity, WorldLevelId, WorldRevision, WorldStreamChunk};
 
     use super::*;
 
@@ -166,6 +171,111 @@ mod tests {
             lighting.kind.as_str(),
             FunSceneLightingDeclarationKind::DirectLight.as_str()
         );
+    }
+
+    #[test]
+    fn stable_identity_taxonomy_uses_thunder_world_ids() {
+        let identity = SceneStableIdentity::new(NetEntity(99));
+        assert!(identity.is_valid());
+
+        let revision = SceneRevision::new(WorldRevision(7));
+        assert_eq!(revision.0, WorldRevision(7));
+
+        let chunk = WorldStreamChunk {
+            level_id: WorldLevelId("arena/blockout".to_owned()),
+            revision: WorldRevision(11),
+            chunk_index: 3,
+            chunk_count: 4,
+            manifest_signature: 123,
+            entities: Vec::new(),
+        };
+        let chunk_id = SceneChunkId::from_world_stream_chunk(&chunk);
+        assert_eq!(chunk_id.level, chunk.level_id);
+        assert_eq!(chunk_id.chunk_index, 3);
+        assert_eq!(chunk_id.revision, WorldRevision(11));
+    }
+
+    #[test]
+    fn renderer_taxonomy_keeps_authoring_data_in_ecs_components() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                Renderable::new(
+                    GeometryRef::new(5),
+                    MaterialRef::new(4),
+                    RenderableFlags::STATIC.union(RenderableFlags::SHADOW_CASTER),
+                ),
+                VirtualGeometryAuthoring {
+                    mode: VirtualGeometryMode::StaticPages,
+                    page_priority: PagePriorityHint::High,
+                    dynamic_policy: DynamicGeometryPolicy::Static,
+                },
+                RendererBounds {
+                    local_bounds: Default::default(),
+                    streaming_radius: 32.0,
+                },
+            ))
+            .id();
+
+        let renderable = world
+            .get::<Renderable>(entity)
+            .expect("renderable authoring should be an ECS component");
+        assert!(renderable.geometry.is_valid());
+        assert!(renderable.material.is_valid());
+        assert!(renderable.flags.contains(RenderableFlags::STATIC));
+        assert!(renderable.flags.contains(RenderableFlags::SHADOW_CASTER));
+    }
+
+    #[test]
+    fn lux_ui_and_upscale_taxonomy_encode_product_rules() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                LuxLight::directional(110_000.0),
+                LuxEmissive {
+                    luminance: 2500.0,
+                    candidate_policy: EmissiveCandidatePolicy::AutoPromote,
+                },
+                LuxGiParticipant {
+                    bounce_policy: GiBouncePolicy::DynamicBudgeted,
+                    cache_policy: GiCachePolicy::Probe,
+                },
+                CefSurface::product(CefRoute::HUD, UiLayer::Hud),
+                ViewportUiTarget {
+                    viewport: ViewportId::PRIMARY,
+                    scale_policy: UiScalePolicy::DpiAware,
+                },
+                UpscalePolicy::default(),
+                ViewportRenderPolicy {
+                    quality: RendererQuality::Quality,
+                    latency: LatencyPolicy::LowLatency,
+                    editor_mode: EditorViewportMode::EditorDocked,
+                },
+            ))
+            .id();
+
+        let light = world
+            .get::<LuxLight>(entity)
+            .expect("lux light authoring should be an ECS component");
+        assert_eq!(light.kind, LuxLightKind::Directional);
+        assert_eq!(light.shadow_policy, LuxShadowPolicy::VirtualDemandPaged);
+
+        let cef = world
+            .get::<CefSurface>(entity)
+            .expect("CEF surface authoring should be an ECS component");
+        assert!(product_scene_accepts_cef_surface(cef));
+
+        let mut invalid_cef = cef.clone();
+        invalid_cef.gpu_only = false;
+        assert_eq!(
+            invalid_cef.validate_product(),
+            Err(CefSurfaceValidationError::ProductRequiresGpuOnly)
+        );
+
+        let upscale = world
+            .get::<UpscalePolicy>(entity)
+            .expect("upscale policy should be an ECS component");
+        assert!(upscale.hudless_required);
     }
 
     #[test]

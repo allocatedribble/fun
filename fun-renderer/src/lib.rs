@@ -117,7 +117,7 @@ impl FunRendererSubsystem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunRendererOwner {
     FunRenderer,
-    FunLux,
+    Lux,
     FunAi,
     FunRenderBridge,
     BevyLowLevel,
@@ -128,7 +128,7 @@ impl FunRendererOwner {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::FunRenderer => FUN_RENDERER_CRATE_NAME,
-            Self::FunLux => fun_lux::FUN_LUX_CRATE_NAME,
+            Self::Lux => fun_lux::FUN_LUX_CRATE_NAME,
             Self::FunAi => FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
             Self::FunRenderBridge => FUN_RENDER_BRIDGE_PACKAGE_NAME,
             Self::BevyLowLevel => "bevy_low_level",
@@ -242,7 +242,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
     FunRendererSubsystemDescriptor {
         stable_id: "fun_renderer.subsystem.lighting",
         subsystem: FunRendererSubsystem::Lighting,
-        owner: FunRendererOwner::FunLux,
+        owner: FunRendererOwner::Lux,
         bevy_role: FunRendererBevyRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
@@ -623,7 +623,7 @@ pub use ecs::*;
 #[must_use]
 pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRendererOwner {
     match subsystem {
-        FunRendererSubsystem::Lighting => FunRendererOwner::FunLux,
+        FunRendererSubsystem::Lighting => FunRendererOwner::Lux,
         FunRendererSubsystem::RendererCore
         | FunRendererSubsystem::VirtualGeometry
         | FunRendererSubsystem::VirtualShadows
@@ -756,7 +756,7 @@ mod tests {
 
         assert_eq!(
             owner_for_subsystem(FunRendererSubsystem::Lighting),
-            FunRendererOwner::FunLux
+            FunRendererOwner::Lux
         );
         assert_eq!(
             owner_for_subsystem(FunRendererSubsystem::CefCompositor),

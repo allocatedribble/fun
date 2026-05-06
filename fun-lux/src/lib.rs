@@ -8,7 +8,7 @@ pub const FUN_LUX_CRATE_NAME: &str = "fun_lux";
 pub const FUN_LUX_ECS_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunLuxSubsystem {
+pub enum LuxSubsystem {
     DirectLighting,
     ManyLightSampling,
     VirtualShadowPolicy,
@@ -20,7 +20,7 @@ pub enum FunLuxSubsystem {
     ProbeCache,
 }
 
-impl FunLuxSubsystem {
+impl LuxSubsystem {
     pub const ALL: [Self; 9] = [
         Self::DirectLighting,
         Self::ManyLightSampling,
@@ -50,7 +50,7 @@ impl FunLuxSubsystem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunLuxPolicyKind {
+pub enum LuxPolicyKind {
     DirectLighting,
     ManyLightSampling,
     VirtualShadows,
@@ -59,7 +59,7 @@ pub enum FunLuxPolicyKind {
     DenoisingReconstruction,
 }
 
-impl FunLuxPolicyKind {
+impl LuxPolicyKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -74,13 +74,13 @@ impl FunLuxPolicyKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunLuxCacheKind {
+pub enum LuxCacheKind {
     Radiance,
     Surface,
     Probe,
 }
 
-impl FunLuxCacheKind {
+impl LuxCacheKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -92,7 +92,7 @@ impl FunLuxCacheKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunLuxDenoiseReconstructionPath {
+pub enum LuxDenoiseReconstructionPath {
     BalancedFast,
     BalancedQuality,
     DlssRayReconstruction,
@@ -100,7 +100,7 @@ pub enum FunLuxDenoiseReconstructionPath {
     HeuristicFallback,
 }
 
-impl FunLuxDenoiseReconstructionPath {
+impl LuxDenoiseReconstructionPath {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -119,97 +119,97 @@ impl FunLuxDenoiseReconstructionPath {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunLuxPolicyDescriptor {
+pub struct LuxPolicyDescriptor {
     pub stable_id: &'static str,
-    pub subsystem: FunLuxSubsystem,
-    pub policy_kind: FunLuxPolicyKind,
+    pub subsystem: LuxSubsystem,
+    pub policy_kind: LuxPolicyKind,
     pub default_path: &'static str,
     pub owner_crate: &'static str,
     pub accepts_identifiable_data: bool,
 }
 
-pub const FUN_LUX_POLICY_DESCRIPTORS: [FunLuxPolicyDescriptor; 6] = [
-    FunLuxPolicyDescriptor {
+pub const FUN_LUX_POLICY_DESCRIPTORS: [LuxPolicyDescriptor; 6] = [
+    LuxPolicyDescriptor {
         stable_id: "fun_lux.policy.direct_lighting",
-        subsystem: FunLuxSubsystem::DirectLighting,
-        policy_kind: FunLuxPolicyKind::DirectLighting,
+        subsystem: LuxSubsystem::DirectLighting,
+        policy_kind: LuxPolicyKind::DirectLighting,
         default_path: "many_light_reuse",
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },
-    FunLuxPolicyDescriptor {
+    LuxPolicyDescriptor {
         stable_id: "fun_lux.policy.many_light_sampling",
-        subsystem: FunLuxSubsystem::ManyLightSampling,
-        policy_kind: FunLuxPolicyKind::ManyLightSampling,
+        subsystem: LuxSubsystem::ManyLightSampling,
+        policy_kind: LuxPolicyKind::ManyLightSampling,
         default_path: "reservoir_sampling",
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },
-    FunLuxPolicyDescriptor {
+    LuxPolicyDescriptor {
         stable_id: "fun_lux.policy.virtual_shadows",
-        subsystem: FunLuxSubsystem::VirtualShadowPolicy,
-        policy_kind: FunLuxPolicyKind::VirtualShadows,
+        subsystem: LuxSubsystem::VirtualShadowPolicy,
+        policy_kind: LuxPolicyKind::VirtualShadows,
         default_path: "virtual_shadow_pages",
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },
-    FunLuxPolicyDescriptor {
+    LuxPolicyDescriptor {
         stable_id: "fun_lux.policy.global_illumination",
-        subsystem: FunLuxSubsystem::GlobalIllumination,
-        policy_kind: FunLuxPolicyKind::GlobalIllumination,
+        subsystem: LuxSubsystem::GlobalIllumination,
+        policy_kind: LuxPolicyKind::GlobalIllumination,
         default_path: "radiance_cache",
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },
-    FunLuxPolicyDescriptor {
+    LuxPolicyDescriptor {
         stable_id: "fun_lux.policy.reflections",
-        subsystem: FunLuxSubsystem::Reflections,
-        policy_kind: FunLuxPolicyKind::Reflections,
+        subsystem: LuxSubsystem::Reflections,
+        policy_kind: LuxPolicyKind::Reflections,
         default_path: "surface_cache",
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },
-    FunLuxPolicyDescriptor {
+    LuxPolicyDescriptor {
         stable_id: "fun_lux.policy.denoising_reconstruction",
-        subsystem: FunLuxSubsystem::DenoisingReconstruction,
-        policy_kind: FunLuxPolicyKind::DenoisingReconstruction,
-        default_path: FunLuxDenoiseReconstructionPath::BalancedFast.as_str(),
+        subsystem: LuxSubsystem::DenoisingReconstruction,
+        policy_kind: LuxPolicyKind::DenoisingReconstruction,
+        default_path: LuxDenoiseReconstructionPath::BalancedFast.as_str(),
         owner_crate: FUN_LUX_CRATE_NAME,
         accepts_identifiable_data: false,
     },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunLuxCacheDescriptor {
+pub struct LuxCacheDescriptor {
     pub stable_id: &'static str,
-    pub kind: FunLuxCacheKind,
-    pub subsystem: FunLuxSubsystem,
+    pub kind: LuxCacheKind,
+    pub subsystem: LuxSubsystem,
     pub owner_crate: &'static str,
     pub frame_local_default: bool,
     pub accepts_identifiable_data: bool,
 }
 
-pub const FUN_LUX_CACHE_DESCRIPTORS: [FunLuxCacheDescriptor; 3] = [
-    FunLuxCacheDescriptor {
+pub const FUN_LUX_CACHE_DESCRIPTORS: [LuxCacheDescriptor; 3] = [
+    LuxCacheDescriptor {
         stable_id: "fun_lux.cache.radiance",
-        kind: FunLuxCacheKind::Radiance,
-        subsystem: FunLuxSubsystem::RadianceCache,
+        kind: LuxCacheKind::Radiance,
+        subsystem: LuxSubsystem::RadianceCache,
         owner_crate: FUN_LUX_CRATE_NAME,
         frame_local_default: true,
         accepts_identifiable_data: false,
     },
-    FunLuxCacheDescriptor {
+    LuxCacheDescriptor {
         stable_id: "fun_lux.cache.surface",
-        kind: FunLuxCacheKind::Surface,
-        subsystem: FunLuxSubsystem::SurfaceCache,
+        kind: LuxCacheKind::Surface,
+        subsystem: LuxSubsystem::SurfaceCache,
         owner_crate: FUN_LUX_CRATE_NAME,
         frame_local_default: true,
         accepts_identifiable_data: false,
     },
-    FunLuxCacheDescriptor {
+    LuxCacheDescriptor {
         stable_id: "fun_lux.cache.probe",
-        kind: FunLuxCacheKind::Probe,
-        subsystem: FunLuxSubsystem::ProbeCache,
+        kind: LuxCacheKind::Probe,
+        subsystem: LuxSubsystem::ProbeCache,
         owner_crate: FUN_LUX_CRATE_NAME,
         frame_local_default: true,
         accepts_identifiable_data: false,
@@ -217,7 +217,7 @@ pub const FUN_LUX_CACHE_DESCRIPTORS: [FunLuxCacheDescriptor; 3] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunLuxFeatureSet {
+pub struct LuxFeatureSet {
     pub direct_lighting: bool,
     pub many_light_sampling: bool,
     pub virtual_shadows: bool,
@@ -230,9 +230,9 @@ pub struct FunLuxFeatureSet {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FunLuxLightId(pub u64);
+pub struct LuxLightId(pub u64);
 
-impl FunLuxLightId {
+impl LuxLightId {
     pub const INVALID: Self = Self(0);
 
     #[must_use]
@@ -247,7 +247,7 @@ impl FunLuxLightId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunLuxLightKind {
+pub enum LuxLightKind {
     Directional,
     Punctual,
     Area,
@@ -255,7 +255,7 @@ pub enum FunLuxLightKind {
     Probe,
 }
 
-impl FunLuxLightKind {
+impl LuxLightKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -269,18 +269,18 @@ impl FunLuxLightKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
-pub struct FunLuxLight {
-    pub light_id: FunLuxLightId,
-    pub kind: FunLuxLightKind,
+pub struct LuxLight {
+    pub light_id: LuxLightId,
+    pub kind: LuxLightKind,
     pub intensity_lux: f32,
     pub casts_virtual_shadow: bool,
 }
 
-impl FunLuxLight {
+impl LuxLight {
     #[must_use]
     pub const fn new(
-        light_id: FunLuxLightId,
-        kind: FunLuxLightKind,
+        light_id: LuxLightId,
+        kind: LuxLightKind,
         intensity_lux: f32,
         casts_virtual_shadow: bool,
     ) -> Self {
@@ -294,25 +294,25 @@ impl FunLuxLight {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
-pub struct FunLuxEmissive {
-    pub light_id: FunLuxLightId,
+pub struct LuxEmissive {
+    pub light_id: LuxLightId,
     pub candidate_weight: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct FunLuxGiParticipant {
-    pub cache_kind: FunLuxCacheKind,
+pub struct LuxGiParticipant {
+    pub cache_kind: LuxCacheKind,
     pub dynamic: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct FunLuxProbeCacheParticipant {
+pub struct LuxProbeCacheParticipant {
     pub probe_id: u32,
     pub participates_in_relighting: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
-pub struct FunLuxLightDatabase {
+pub struct LuxLightDatabase {
     pub revision: u64,
     pub direct_light_count: u32,
     pub emissive_candidate_count: u32,
@@ -320,7 +320,7 @@ pub struct FunLuxLightDatabase {
     pub virtual_shadow_caster_count: u32,
 }
 
-impl FunLuxLightDatabase {
+impl LuxLightDatabase {
     pub const EMPTY: Self = Self {
         revision: 0,
         direct_light_count: 0,
@@ -339,7 +339,7 @@ impl FunLuxLightDatabase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunLuxLightEventKind {
+pub enum LuxLightEventKind {
     LightChanged,
     EmissiveCandidatePromoted,
     ShadowInvalidated,
@@ -347,7 +347,7 @@ pub enum FunLuxLightEventKind {
     ProbeCacheInvalidated,
 }
 
-impl FunLuxLightEventKind {
+impl LuxLightEventKind {
     pub const ALL: [Self; 5] = [
         Self::LightChanged,
         Self::EmissiveCandidatePromoted,
@@ -369,15 +369,15 @@ impl FunLuxLightEventKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Message)]
-pub struct FunLuxLightEvent {
-    pub kind: FunLuxLightEventKind,
-    pub light_id: FunLuxLightId,
+pub struct LuxLightEvent {
+    pub kind: LuxLightEventKind,
+    pub light_id: LuxLightId,
     pub revision: u64,
 }
 
-impl FunLuxLightEvent {
+impl LuxLightEvent {
     #[must_use]
-    pub const fn new(kind: FunLuxLightEventKind, light_id: FunLuxLightId, revision: u64) -> Self {
+    pub const fn new(kind: LuxLightEventKind, light_id: LuxLightId, revision: u64) -> Self {
         Self {
             kind,
             light_id,
@@ -386,7 +386,7 @@ impl FunLuxLightEvent {
     }
 }
 
-impl FunLuxFeatureSet {
+impl LuxFeatureSet {
     pub const DEFAULT_REALTIME: Self = Self {
         direct_lighting: true,
         many_light_sampling: true,
@@ -412,11 +412,11 @@ impl FunLuxFeatureSet {
     };
 
     #[must_use]
-    pub const fn uses_cache(self, kind: FunLuxCacheKind) -> bool {
+    pub const fn uses_cache(self, kind: LuxCacheKind) -> bool {
         match kind {
-            FunLuxCacheKind::Radiance => self.radiance_cache,
-            FunLuxCacheKind::Surface => self.surface_cache,
-            FunLuxCacheKind::Probe => self.probe_cache,
+            LuxCacheKind::Radiance => self.radiance_cache,
+            LuxCacheKind::Surface => self.surface_cache,
+            LuxCacheKind::Probe => self.probe_cache,
         }
     }
 }
@@ -427,13 +427,13 @@ mod tests {
 
     #[test]
     fn subsystem_labels_are_stable() {
-        assert_eq!(FunLuxSubsystem::ALL.len(), 9);
-        assert_eq!(FunLuxSubsystem::DirectLighting.as_str(), "direct_lighting");
+        assert_eq!(LuxSubsystem::ALL.len(), 9);
+        assert_eq!(LuxSubsystem::DirectLighting.as_str(), "direct_lighting");
         assert_eq!(
-            FunLuxSubsystem::DenoisingReconstruction.as_str(),
+            LuxSubsystem::DenoisingReconstruction.as_str(),
             "denoising_reconstruction"
         );
-        assert_eq!(FunLuxSubsystem::ProbeCache.as_str(), "probe_cache");
+        assert_eq!(LuxSubsystem::ProbeCache.as_str(), "probe_cache");
     }
 
     #[test]
@@ -452,52 +452,47 @@ mod tests {
 
     #[test]
     fn model_assisted_reconstruction_declares_fun_ai_runtime_dependency() {
-        assert!(FunLuxDenoiseReconstructionPath::ModelAssisted.requires_fun_ai_runtime());
-        assert!(!FunLuxDenoiseReconstructionPath::BalancedFast.requires_fun_ai_runtime());
-        assert!(!FunLuxDenoiseReconstructionPath::DlssRayReconstruction.requires_fun_ai_runtime());
+        assert!(LuxDenoiseReconstructionPath::ModelAssisted.requires_fun_ai_runtime());
+        assert!(!LuxDenoiseReconstructionPath::BalancedFast.requires_fun_ai_runtime());
+        assert!(!LuxDenoiseReconstructionPath::DlssRayReconstruction.requires_fun_ai_runtime());
     }
 
     #[test]
     fn fallback_feature_set_remains_local_and_direct() {
-        let features = FunLuxFeatureSet::HEURISTIC_FALLBACK;
+        let features = LuxFeatureSet::HEURISTIC_FALLBACK;
 
         assert!(features.direct_lighting);
         assert!(features.denoising_reconstruction);
         assert!(!features.many_light_sampling);
-        assert!(!features.uses_cache(FunLuxCacheKind::Radiance));
-        assert!(!features.uses_cache(FunLuxCacheKind::Surface));
-        assert!(!features.uses_cache(FunLuxCacheKind::Probe));
+        assert!(!features.uses_cache(LuxCacheKind::Radiance));
+        assert!(!features.uses_cache(LuxCacheKind::Surface));
+        assert!(!features.uses_cache(LuxCacheKind::Probe));
     }
 
     #[test]
     fn lux_light_components_are_ecs_authored_and_database_backed() {
-        let light = FunLuxLight::new(
-            FunLuxLightId::new(12),
-            FunLuxLightKind::Punctual,
-            1200.0,
-            true,
-        );
+        let light = LuxLight::new(LuxLightId::new(12), LuxLightKind::Punctual, 1200.0, true);
         assert!(light.light_id.is_valid());
         assert_eq!(light.kind.as_str(), "punctual");
         assert!(light.casts_virtual_shadow);
 
-        let database = FunLuxLightDatabase::with_revision(9);
+        let database = LuxLightDatabase::with_revision(9);
         assert_eq!(database.revision, 9);
         assert_eq!(database.direct_light_count, 0);
     }
 
     #[test]
     fn lux_light_events_cover_shadow_and_gi_invalidation() {
-        assert_eq!(FunLuxLightEventKind::ALL.len(), 5);
+        assert_eq!(LuxLightEventKind::ALL.len(), 5);
         assert!(
-            FunLuxLightEventKind::ALL
+            LuxLightEventKind::ALL
                 .iter()
-                .any(|kind| *kind == FunLuxLightEventKind::ShadowInvalidated)
+                .any(|kind| *kind == LuxLightEventKind::ShadowInvalidated)
         );
         assert!(
-            FunLuxLightEventKind::ALL
+            LuxLightEventKind::ALL
                 .iter()
-                .any(|kind| *kind == FunLuxLightEventKind::GiCacheInvalidated)
+                .any(|kind| *kind == LuxLightEventKind::GiCacheInvalidated)
         );
     }
 }

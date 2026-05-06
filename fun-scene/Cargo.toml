@@ -10,6 +10,9 @@ name = "fun_scene"
 workspace = true
 
 [dependencies]
+bevy_camera.workspace = true
+bevy_color.workspace = true
 bevy_ecs.workspace = true
 bevy_scene.workspace = true
 fun_scene_macros.workspace = true
+thunder.workspace = true

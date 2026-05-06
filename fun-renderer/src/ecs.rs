@@ -28,9 +28,9 @@ impl FunRendererGpuObjectId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
-pub struct FunRenderableIdentity(pub u64);
+pub struct RenderableIdentity(pub u64);
 
-impl FunRenderableIdentity {
+impl RenderableIdentity {
     pub const INVALID: Self = Self(0);
 
     #[must_use]
@@ -45,13 +45,13 @@ impl FunRenderableIdentity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
-pub struct FunGeometryHandle(pub u32);
+pub struct GeometryHandle(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
-pub struct FunMaterialHandle(pub u32);
+pub struct MaterialHandle(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FunViewportId(pub u32);
+pub struct ViewportId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct FunRendererGpuSceneObject {
@@ -147,7 +147,7 @@ pub struct FunCefUiLayer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct FunUpscalerViewport {
-    pub viewport_id: FunViewportId,
+    pub viewport_id: ViewportId,
     pub super_resolution_capable: bool,
     pub frame_generation_capable: bool,
 }
@@ -542,7 +542,7 @@ impl FunRendererEcsEventKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Message)]
 pub struct FunRendererEcsEvent {
     pub kind: FunRendererEcsEventKind,
-    pub entity: Option<FunRenderableIdentity>,
+    pub entity: Option<RenderableIdentity>,
     pub revision: u64,
 }
 
@@ -550,7 +550,7 @@ impl FunRendererEcsEvent {
     #[must_use]
     pub const fn new(
         kind: FunRendererEcsEventKind,
-        entity: Option<FunRenderableIdentity>,
+        entity: Option<RenderableIdentity>,
         revision: u64,
     ) -> Self {
         Self {
@@ -626,7 +626,7 @@ pub const fn default_backend_for_target() -> FunRendererBackend {
 mod tests {
     use bevy_ecs::message::Messages;
     use bevy_ecs::world::World;
-    use fun_lux::{FunLuxLight, FunLuxLightDatabase, FunLuxLightId, FunLuxLightKind};
+    use fun_lux::{LuxLight, LuxLightDatabase, LuxLightId, LuxLightKind};
 
     use super::*;
 
@@ -636,13 +636,13 @@ mod tests {
         world.insert_resource(FunRendererEcsSchedulePolicy::DEFAULT);
         world.insert_resource(FunGpuSceneDatabase::default());
         world.insert_resource(FunFrameGraph::default());
-        world.insert_resource(FunLuxLightDatabase::default());
+        world.insert_resource(LuxLightDatabase::default());
 
         let entity = world
             .spawn((
-                FunRenderableIdentity::new(42),
-                FunGeometryHandle(3),
-                FunMaterialHandle(9),
+                RenderableIdentity::new(42),
+                GeometryHandle(3),
+                MaterialHandle(9),
                 FunStaticRenderable,
                 FunShadowCaster,
                 FunRendererGpuSceneObject::new(
@@ -687,7 +687,7 @@ mod tests {
             .resource_mut::<Messages<FunRendererEcsEvent>>()
             .write(FunRendererEcsEvent::new(
                 FunRendererEcsEventKind::TransformChanged,
-                Some(FunRenderableIdentity::new(11)),
+                Some(RenderableIdentity::new(11)),
                 4,
             ));
 
@@ -727,12 +727,12 @@ mod tests {
     #[test]
     fn render_world_can_host_lux_components_without_renderer_owning_lighting() {
         let mut world = World::new();
-        world.insert_resource(FunLuxLightDatabase::with_revision(5));
+        world.insert_resource(LuxLightDatabase::with_revision(5));
         let entity = world
             .spawn((
-                FunLuxLight::new(
-                    FunLuxLightId::new(9),
-                    FunLuxLightKind::EmissiveCandidate,
+                LuxLight::new(
+                    LuxLightId::new(9),
+                    LuxLightKind::EmissiveCandidate,
                     400.0,
                     true,
                 ),
@@ -741,10 +741,10 @@ mod tests {
             .id();
 
         let light = world
-            .get::<FunLuxLight>(entity)
+            .get::<LuxLight>(entity)
             .expect("lux light should be an ECS component");
-        assert_eq!(light.kind, FunLuxLightKind::EmissiveCandidate);
-        assert!(world.resource::<FunLuxLightDatabase>().revision == 5);
+        assert_eq!(light.kind, LuxLightKind::EmissiveCandidate);
+        assert!(world.resource::<LuxLightDatabase>().revision == 5);
     }
 
     #[test]

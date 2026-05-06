@@ -3103,9 +3103,12 @@ dependencies = [
 name = "fun-scene"
 version = "0.1.0"
 dependencies = [
+ "bevy_camera",
+ "bevy_color",
  "bevy_ecs",
  "bevy_scene",
  "fun-scene-macros",
+ "thunder",
 ]
 
 [[package]]

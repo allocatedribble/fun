@@ -267,7 +267,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<FunRendererUploadArena>()
         .init_resource::<FunRenderCapabilityMatrix>()
         .init_resource::<FunPipelineRegistry>()
-        .init_resource::<crate::fun_lux::FunLuxLightDatabase>()
+        .init_resource::<crate::fun_lux::LuxLightDatabase>()
         .init_resource::<FunSceneManifestRegistry>()
         .init_resource::<FunViewportRegistry>()
         .init_resource::<GeometryResidencyManager>()
@@ -286,7 +286,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .insert_resource(solari_runtime_params)
         .insert_resource(solari_feature_policy)
         .add_message::<FunRendererEcsEvent>()
-        .add_message::<crate::fun_lux::FunLuxLightEvent>()
+        .add_message::<crate::fun_lux::LuxLightEvent>()
         .add_message::<bevy::solari::prelude::SolariResetEvent>()
         .add_plugins(ExtractResourcePlugin::<FunRenderRtFeatures>::default())
         .add_plugins(MeshletPlugin {
@@ -367,11 +367,11 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<FunRendererUploadArena>();
         render_app.init_resource::<FunRenderCapabilityMatrix>();
         render_app.init_resource::<FunPipelineRegistry>();
-        render_app.init_resource::<crate::fun_lux::FunLuxLightDatabase>();
+        render_app.init_resource::<crate::fun_lux::LuxLightDatabase>();
         render_app.init_resource::<FunSceneManifestRegistry>();
         render_app.init_resource::<FunViewportRegistry>();
         render_app.add_message::<FunRendererEcsEvent>();
-        render_app.add_message::<crate::fun_lux::FunLuxLightEvent>();
+        render_app.add_message::<crate::fun_lux::LuxLightEvent>();
         render_app.init_resource::<FunEntityRenderStrategyRegistry>();
         render_app.insert_resource(rt_features);
         render_app.add_systems(

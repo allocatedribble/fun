@@ -125,7 +125,18 @@ pub fn spawn_default_scene(mut commands: Commands) {
         (
             #Floor
             fun_value(Networked::world())
-            fun_value(FunSceneStableIdentity(FLOOR_ENTITY))
+            fun_value(SceneStableIdentity(FLOOR_ENTITY))
+            Renderable {
+                geometry: GeometryRef({ASSET_FLOOR.0}),
+                material: MaterialRef({MATERIAL_FLOOR.0}),
+                flags: {static_renderable_flags()}
+            }
+            VirtualGeometryAuthoring {
+                mode: VirtualGeometryMode::StaticPages,
+                page_priority: PagePriorityHint::Normal,
+                dynamic_policy: DynamicGeometryPolicy::Static
+            }
+            RendererBounds { streaming_radius: 64.0 }
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_FLOOR.0,
                 MATERIAL_FLOOR.0,
@@ -137,7 +148,7 @@ pub fn spawn_default_scene(mut commands: Commands) {
             #FloorCollider
             Name::new("FloorCollider")
             fun_value(Networked::world())
-            fun_value(FunSceneStableIdentity(FLOOR_COLLIDER_ENTITY))
+            fun_value(SceneStableIdentity(FLOOR_COLLIDER_ENTITY))
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_FLOOR_COLLIDER.0,
                 MATERIAL_FLOOR.0,
@@ -150,7 +161,18 @@ pub fn spawn_default_scene(mut commands: Commands) {
         (
             #Wall
             fun_value(Networked::world())
-            fun_value(FunSceneStableIdentity(WALL_ENTITY))
+            fun_value(SceneStableIdentity(WALL_ENTITY))
+            Renderable {
+                geometry: GeometryRef({ASSET_WALL.0}),
+                material: MaterialRef({MATERIAL_WALL.0}),
+                flags: {static_renderable_flags()}
+            }
+            VirtualGeometryAuthoring {
+                mode: VirtualGeometryMode::StaticPages,
+                page_priority: PagePriorityHint::Normal,
+                dynamic_policy: DynamicGeometryPolicy::Static
+            }
+            RendererBounds { streaming_radius: 24.0 }
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_WALL.0,
                 MATERIAL_WALL.0,
@@ -163,7 +185,18 @@ pub fn spawn_default_scene(mut commands: Commands) {
         (
             #Ramp
             fun_value(Networked::world())
-            fun_value(FunSceneStableIdentity(RAMP_ENTITY))
+            fun_value(SceneStableIdentity(RAMP_ENTITY))
+            Renderable {
+                geometry: GeometryRef({ASSET_RAMP.0}),
+                material: MaterialRef({MATERIAL_RAMP.0}),
+                flags: {static_renderable_flags()}
+            }
+            VirtualGeometryAuthoring {
+                mode: VirtualGeometryMode::StaticPages,
+                page_priority: PagePriorityHint::Normal,
+                dynamic_policy: DynamicGeometryPolicy::Static
+            }
+            RendererBounds { streaming_radius: 24.0 }
             fun_value(StreamedWorldEntity::catalog(catalog_ref(
                 ASSET_RAMP.0,
                 MATERIAL_RAMP.0,
@@ -183,7 +216,18 @@ pub fn spawn_default_scene(mut commands: Commands) {
 fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
     fun! {
         fun_value(Networked::world())
-        fun_value(FunSceneStableIdentity(entity))
+        fun_value(SceneStableIdentity(entity))
+        Renderable {
+            geometry: GeometryRef({ASSET_COVER_CUBE.0}),
+            material: MaterialRef({MATERIAL_COVER.0}),
+            flags: {static_renderable_flags()}
+        }
+        VirtualGeometryAuthoring {
+            mode: VirtualGeometryMode::StaticPages,
+            page_priority: PagePriorityHint::Normal,
+            dynamic_policy: DynamicGeometryPolicy::Static
+        }
+        RendererBounds { streaming_radius: 8.0 }
         fun_value(StreamedWorldEntity::catalog(catalog_ref(
             ASSET_COVER_CUBE.0,
             MATERIAL_COVER.0,
@@ -195,12 +239,15 @@ fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
     }
 }
 
+const fn static_renderable_flags() -> RenderableFlags {
+    RenderableFlags::STATIC
+        .union(RenderableFlags::SHADOW_CASTER)
+        .union(RenderableFlags::SHADOW_RECEIVER)
+}
+
 pub fn apply_scene_stable_identities(
     mut commands: Commands,
-    query: Query<
-        (Entity, &FunSceneStableIdentity<NetEntity>, &Networked),
-        Without<NetworkIdentity>,
-    >,
+    query: Query<(Entity, &SceneStableIdentity, &Networked), Without<NetworkIdentity>>,
 ) {
     for (entity, stable_identity, networked) in &query {
         commands.entity(entity).insert((
