@@ -3258,6 +3258,7 @@ dependencies = [
  "fun_dx12_dlss",
  "game_shared",
  "serde",
+ "serde_json",
  "thunder",
  "tracing",
  "wgpu",

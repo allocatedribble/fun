@@ -34,6 +34,7 @@ use crate::{
     bridge::{
         RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_initialize_runtime,
     },
+    capabilities::emit_renderer_capability_report,
     dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting, pipeline_warmup,
     prewarm_primitive_render_cache, prewarm_world_render_catalog,
     render_path_signature_for_options, score_gi_cache_participants, score_lux_lights,
@@ -245,7 +246,8 @@ impl Plugin for FunRenderCorePlugin {
 }
 
 pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
-    install_renderer_bridge_api(app, RendererBridgeSettings::from_env());
+    let renderer_bridge_settings = RendererBridgeSettings::from_env();
+    install_renderer_bridge_api(app, renderer_bridge_settings);
 
     let (render_config, solari_settings, solari_runtime_params) = render_path_config_from_env();
     log_fun_render_path(&render_config, &solari_settings, &solari_runtime_params);
@@ -417,9 +419,11 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.add_message::<crate::fun_lux::LuxLightEvent>();
         render_app.init_resource::<FunEntityRenderStrategyRegistry>();
         render_app.insert_resource(rt_features);
+        render_app.insert_resource(renderer_bridge_settings);
         render_app.add_systems(
             RenderStartup,
-            log_rt_backend_fallbacks
+            (log_rt_backend_fallbacks, emit_renderer_capability_report)
+                .chain()
                 .after(init_gpu_resource::<RenderBackendCapabilities>)
                 .ambiguous_with_all(),
         );

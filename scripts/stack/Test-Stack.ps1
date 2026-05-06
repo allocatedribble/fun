@@ -66,9 +66,11 @@ function Restore-TestEnv {
 
 $envNames = @(
     "FUN_START_MODE",
+    "FUN_RENDERER_CAPABILITY_REPORT_PATH",
     "FUN_CEF_UI_TRANSPORT_STATUS_PATH",
     "FUN_CEF_UI_PAINT_TRANSPORT",
     "FUN_CEF_UI_ACCELERATED_PAINT",
+    "FUN_CEF_UI_ALLOW_CPU_FALLBACK",
     "FUN_DISABLE_FPS_OVERLAY",
     "FUN_RENDER_UPLOAD_COUNTERS",
     "BEVY_RENDER_SHADER_DIAGNOSTICS",
@@ -91,15 +93,20 @@ try {
     Assert-StackEqual -Actual $defaultRequest.PresentMode -Expected "immediate" -Message "default profile present mode"
     $results += "default_profile_dx12_immediate"
 
-    $paths = [pscustomobject]@{ cef_transport_status_file = Join-Path $stackRoot "..\..\target\run-stack\cef-ui-transport.test.json" }
+    $paths = [pscustomobject]@{
+        cef_transport_status_file = Join-Path $stackRoot "..\..\target\run-stack\cef-ui-transport.test.json"
+        renderer_capability_report_file = Join-Path $stackRoot "..\..\target\run-stack\renderer-capabilities.test.json"
+    }
     $env:FUN_START_MODE = "game"
+    $env:FUN_RENDERER_CAPABILITY_REPORT_PATH = "stale"
     $env:FUN_CEF_UI_TRANSPORT_STATUS_PATH = "stale"
     $noClientRequest = New-TestRequest -Bound @{ NoClient = $true; CefUi = $true }
     Resolve-StackCefRequest -Request $noClientRequest -Paths $paths | Out-Null
     Set-StackRuntimeEnv -Request $noClientRequest
     Set-StackCefEnv -Request $noClientRequest -Paths $paths
-    Set-StackRenderEnv -Request $noClientRequest
+    Set-StackRenderEnv -Request $noClientRequest -Paths $paths
     Assert-StackTest -Condition ([string]::IsNullOrWhiteSpace($env:FUN_START_MODE)) -Message "NoClient should remove FUN_START_MODE"
+    Assert-StackTest -Condition ([string]::IsNullOrWhiteSpace($env:FUN_RENDERER_CAPABILITY_REPORT_PATH)) -Message "NoClient should remove renderer capability env"
     Assert-StackTest -Condition ([string]::IsNullOrWhiteSpace($env:FUN_CEF_UI_TRANSPORT_STATUS_PATH)) -Message "NoClient should remove CEF status env"
     Assert-StackTest -Condition ([string]::IsNullOrWhiteSpace($env:FUN_DISABLE_FPS_OVERLAY)) -Message "NoClient ignored CEF UI should not set overlay env"
     $results += "no_client_removes_client_env"

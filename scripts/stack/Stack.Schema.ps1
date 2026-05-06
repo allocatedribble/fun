@@ -404,6 +404,7 @@ function Write-StackSessionMetadata {
             pid_file = $Paths.pid_file
             session_file = $Paths.session_file
             cef_transport_status_file = $Paths.cef_transport_status_file
+            renderer_capability_report_file = $Paths.renderer_capability_report_file
         }
         events = $Events
     }

@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory + pass2-boundary-stabilized
+status: inventory + pass3-diagnostics-facts
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -106,6 +106,66 @@ Compatibility aliases retained for one transition cycle:
 `fun_renderer_dlss`, `fun_renderer_fsr`, `fun_renderer_frame_generation`,
 `fun_renderer_experimental_ml`, `fun_lux_many_light`,
 `fun_lux_virtual_shadows`, and `fun_lux_hybrid_gi`.
+
+## Pass 3 Renderer Facts
+
+`fun_render` now emits a startup capability report with schema
+`fun.renderer.capability_report.v1`. The report is a render-world resource and
+can also be written to JSON by setting
+`FUN_RENDERER_CAPABILITY_REPORT_PATH`. `scripts/run_stack.ps1` wires this to
+`target/run-stack/renderer-capabilities.json` for client runs, and
+`scripts/benchmark_client.ps1` embeds the report under
+`renderer_capability_report` in benchmark summaries.
+
+The report records:
+
+- selected and actual renderer lane;
+- selected and actual graphics backend plus mismatch reason;
+- adapter vendor/device/type with adapter and driver names hashed;
+- Bevy backend capability hash and capability matrix;
+- DX12 native handle support, Vulkan support, D3D11On12 fallback state, CEF
+  shared-texture support, bindless/descriptor-indexing support, mesh shader,
+  ray tracing, HDR/swapchain placeholders, DLSS, FSR, frame-generation, and
+  pipeline warmup state;
+- active bridge feature flags and non-empty renderer/CEF/DLSS environment
+  overrides.
+
+CEF product transport now fails closed by default. Accelerated `auto` or
+`d3d11on12` requests select `disabled` when the GPU transport prerequisites are
+not ready. CPU fallback is only re-enabled by the explicit diagnostic/test
+override `FUN_CEF_UI_ALLOW_CPU_FALLBACK=1`; stack scripts clear that override by
+default. This keeps product lanes from silently treating CPU `OnPaint` uploads
+as a working accelerated UI path.
+
+`tools/dx12_parity_report.py` reads the embedded capability report and adds a
+`Renderer Capability Report` table to the dashboard. Accelerated CEF lanes now
+fail if the capability report says CPU runtime fallback is allowed, if CPU
+upload bytes are nonzero, or if the transport health decision is `disabled` or
+`fallback`. Backend summaries prefer explicit selected/actual backend facts
+from the capability report, so a report cannot claim DX12 while the runtime
+adapter says Vulkan.
+
+### Pass 3 Runtime Evidence
+
+Validation produced a current Vulkan startup capability artifact at
+`target/run-stack/renderer-capabilities.json` with
+`selected_graphics_backend=vulkan`, `actual_graphics_backend=vulkan`,
+`d3d11on12_fallback_state=cpu_fallback_forbidden`, and
+`cef_accelerated_shared_texture_support=fallback_reason=render_backend_not_dx12`.
+
+Fresh DX12/Vulkan benchmark matrix artifacts could not be completed in the
+current local repo state:
+
+- the Vulkan runtime smoke repeatedly hit existing compute-culling pipeline
+  validation failures for `fun_compute_culling_*` pipelines before benchmark
+  samples were produced;
+- the strict DX12 CEF stack launch was blocked during build by the dirty sibling
+  `fun-warden` checkout: `WardenDateBucket` is missing `Hash`, and
+  `WardenAccountVariantRoot` is now a record struct while one call still uses
+  tuple-struct construction.
+
+These blockers match the migration doctrine that runtime pipeline creation and
+CEF transport readiness are first-order constraints, not distant cleanup.
 
 ## Renderer Module Inventory
 

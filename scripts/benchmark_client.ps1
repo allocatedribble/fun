@@ -146,6 +146,35 @@ function Get-RepoGitLines {
     }
 }
 
+function Get-RendererCapabilityReport {
+    param([string]$RepoRoot)
+
+    $path = [System.Environment]::GetEnvironmentVariable("FUN_RENDERER_CAPABILITY_REPORT_PATH", "Process")
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        $path = Join-Path $RepoRoot "target\run-stack\renderer-capabilities.json"
+    }
+    if (-not (Test-Path -LiteralPath $path)) {
+        return [ordered]@{
+            status = "not_found"
+            path = $path
+        }
+    }
+
+    try {
+        $report = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $report | Add-Member -NotePropertyName "status" -NotePropertyValue "found" -Force
+        $report | Add-Member -NotePropertyName "path" -NotePropertyValue $path -Force
+        return $report
+    }
+    catch {
+        return [ordered]@{
+            status = "parse_error"
+            path = $path
+            error = [string]$_
+        }
+    }
+}
+
 function Stop-StackProcesses {
     param([string]$PidFile)
 
@@ -482,6 +511,7 @@ try {
     }
 
     $renderCapabilities = Parse-RenderCapabilitiesLog -Lines $allLines
+    $rendererCapabilityReport = Get-RendererCapabilityReport -RepoRoot $repoRoot
     $dx12BackendDiagnostics = Parse-Dx12BackendDiagnosticsLog -Lines $allLines
     $rtFeatureGates = Parse-RenderFeatureGatesLog -Lines $allLines
     $renderPresentation = Parse-RenderPresentationLog -Lines $allLines
@@ -592,6 +622,7 @@ try {
         comparison = $comparison
         rr_acceptance = $rrAcceptance
         render_capabilities = $renderCapabilities
+        renderer_capability_report = $rendererCapabilityReport
         dx12_backend_diagnostics = $dx12BackendDiagnostics
         rt_feature_gates = $rtFeatureGates
         render_presentation = $renderPresentation

@@ -55,6 +55,7 @@ function New-StackPaths {
         pid_file = Join-Path $runRoot "processes.json"
         session_file = Join-Path $runRoot "session.json"
         cef_transport_status_file = Join-Path $runRoot "cef-ui-transport.json"
+        renderer_capability_report_file = Join-Path $runRoot "renderer-capabilities.json"
         rust_sysroot = $rustSysroot
         rust_toolchain_bin = Join-Path $rustSysroot "bin"
         rust_target_lib_dir = $rustTargetLibDir

@@ -58,6 +58,7 @@ function Set-StackCefEnv {
     }
 
     Set-StackFlagEnv -Name "FUN_CEF_UI_ACCELERATED_STRICT" -Enabled $Request.CefAcceleratedStrict
+    Clear-StackEnvValue -Name "FUN_CEF_UI_ALLOW_CPU_FALLBACK"
     $env:FUN_CEF_UI_GPU_RING_DEPTH = [string]$Request.CefGpuRingDepth
     Set-StackFlagEnv -Name "FUN_CEF_UI_COPY_DIRTY_RECTS" -Enabled $Request.CefCopyDirtyRects
     Set-StackFlagEnv -Name "FUN_CEF_UI_DEBUG_TIMINGS" -Enabled $Request.CefDebugTimings

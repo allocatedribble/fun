@@ -109,7 +109,7 @@ Set-StackRuntimeEnv -Request $request
 Set-StackProfileEnv -Request $request
 Set-StackDiagnosticsEnv -Request $request -Diagnostics $diagnostics
 Set-StackCefEnv -Request $request -Paths $paths
-Set-StackRenderEnv -Request $request
+Set-StackRenderEnv -Request $request -Paths $paths
 $events += Set-StackDevelopmentTokens -Request $request
 Set-StackPathEnv -Paths $paths
 

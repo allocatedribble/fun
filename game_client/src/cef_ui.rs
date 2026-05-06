@@ -1526,7 +1526,9 @@ fn cef_ui_accelerated_fallback_or_strict_failure(
     state: &mut CefUiStartupState,
     reason: CefUiPaintTransportFallbackReason,
 ) -> Option<BrowserUiConfig> {
-    if startup_config.browser_config.accelerated_strict {
+    if startup_config.browser_config.accelerated_strict
+        || !startup_config.browser_config.cpu_fallback_allowed
+    {
         state.kind = CefUiStartupStateKind::Failed;
         log_cef_ui_transport_decision(
             &startup_config
@@ -1542,7 +1544,9 @@ fn cef_ui_accelerated_fallback_or_strict_failure(
                 .requested_paint_transport
                 .as_wire_str(),
             fallback_reason = reason.as_wire_str(),
-            "CEF UI accelerated transport failed in strict mode"
+            cpu_fallback_allowed = startup_config.browser_config.cpu_fallback_allowed,
+            strict = startup_config.browser_config.accelerated_strict,
+            "CEF UI accelerated transport failed by GPU-only policy"
         );
         return None;
     }
@@ -1581,7 +1585,7 @@ fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready:
         selected = browser_config.paint_transport.as_wire_str(),
         backend = browser_config.render_backend_hint.as_wire_str(),
         bridge_ready,
-        cpu_fallback_enabled = !browser_config.accelerated_strict,
+        cpu_fallback_enabled = browser_config.cpu_fallback_allowed,
         ring_depth = browser_config.gpu_ring_depth,
         copy_mode = browser_config.gpu_copy_mode.as_wire_str(),
         strict = browser_config.accelerated_strict,
@@ -1595,7 +1599,7 @@ fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready:
         browser_config.paint_transport.as_wire_str(),
         browser_config.render_backend_hint.as_wire_str(),
         bridge_ready,
-        !browser_config.accelerated_strict,
+        browser_config.cpu_fallback_allowed,
         browser_config.gpu_ring_depth,
         browser_config.gpu_copy_mode.as_wire_str(),
         browser_config.accelerated_strict,
@@ -1640,7 +1644,7 @@ fn write_cef_ui_transport_status(browser_config: &BrowserUiConfig, bridge_ready:
         browser_config.paint_transport.as_wire_str(),
         browser_config.render_backend_hint.as_wire_str(),
         bridge_ready,
-        !browser_config.accelerated_strict,
+        browser_config.cpu_fallback_allowed,
         browser_config.gpu_ring_depth,
         browser_config.gpu_copy_mode.as_wire_str(),
         browser_config.accelerated_strict,
@@ -1799,7 +1803,9 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
     };
     let _old_browser = world.remove_non_send::<CefUiBrowserOwner>();
     let _old_control = world.remove_non_send::<CefUiBrowserControl>();
-    if startup_config.browser_config.accelerated_strict {
+    if startup_config.browser_config.accelerated_strict
+        || !startup_config.browser_config.cpu_fallback_allowed
+    {
         if let Some(mut state) = world.get_resource_mut::<CefUiStartupState>() {
             state.kind = CefUiStartupStateKind::Failed;
             state.running_transport = None;
@@ -1808,7 +1814,9 @@ fn monitor_cef_ui_accelerated_paint_observation(world: &mut World) {
         tracing::error!(
             target: FUN_UI_DIAGNOSTICS_TARGET,
             fallback_reason = fallback_reason.as_wire_str(),
-            "CEF UI accelerated path stopped in strict mode"
+            cpu_fallback_allowed = startup_config.browser_config.cpu_fallback_allowed,
+            strict = startup_config.browser_config.accelerated_strict,
+            "CEF UI accelerated path stopped by GPU-only policy"
         );
         return;
     }
@@ -3483,7 +3491,7 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                     blocking_waits_this_frame, 0,
                     "CEF GPU path must not block on frame fences"
                 );
-                if cef_ui_accelerated_strict_enabled()
+                if cef_ui_accelerated_fail_closed_enabled()
                     && stale_count == MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK
                 {
                     if let Some(counters) = counters.as_ref() {
@@ -3503,7 +3511,7 @@ fn copy_latest_cef_gpu_frame_to_bevy_image(
                             stale_frame_count = stale_count,
                             fallback_after = MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK,
                             fallback_reason = CefUiPaintTransportFallbackReason::GpuCopyFenceTimeout.as_wire_str(),
-                            "CEF UI GPU frame copy stalled in strict mode before Bevy image sampling"
+                            "CEF UI GPU frame copy stalled before Bevy image sampling"
                         );
                     }
                 }
@@ -3566,15 +3574,19 @@ fn record_cef_gpu_frame_stall(
 }
 
 #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-fn cef_ui_accelerated_strict_enabled() -> bool {
-    std::env::var("FUN_CEF_UI_ACCELERATED_STRICT")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "on"
-            )
-        })
+fn cef_ui_accelerated_fail_closed_enabled() -> bool {
+    env_flag_enabled("FUN_CEF_UI_ACCELERATED_STRICT")
+        || !env_flag_enabled("FUN_CEF_UI_ALLOW_CPU_FALLBACK")
+}
+
+#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on"
+        )
+    })
 }
 
 #[cfg(all(feature = "diagnostics", debug_assertions))]

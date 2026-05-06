@@ -1,7 +1,18 @@
 function Set-StackRenderEnv {
-    param([pscustomobject]$Request)
+    param(
+        [pscustomobject]$Request,
+        [pscustomobject]$Paths = $null
+    )
 
     Set-StackFlagEnv -Name "FUN_WINDOW_MAXIMIZED" -Enabled $Request.Maximized
+    if ($null -ne $Paths -and -not $Request.NoClient) {
+        Remove-Item -LiteralPath $Paths.renderer_capability_report_file -ErrorAction SilentlyContinue
+        $env:FUN_RENDERER_CAPABILITY_REPORT_PATH = $Paths.renderer_capability_report_file
+    }
+    else {
+        Clear-StackEnvValue -Name "FUN_RENDERER_CAPABILITY_REPORT_PATH"
+    }
+
     if ($Request.DisableFpsOverlay -or ($Request.CefUi -and -not $Request.NoClient -and -not $Request.EnableFpsOverlay)) {
         $env:FUN_DISABLE_FPS_OVERLAY = "1"
         Clear-StackEnvValue -Name "FUN_ENABLE_FPS_OVERLAY"

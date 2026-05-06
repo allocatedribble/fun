@@ -4,6 +4,7 @@ compile_error!("fun_render/dx12_dlss_native is a Windows-only experimental featu
 compile_error!("fun_render/dx12_native_interop is a Windows-only experimental feature");
 
 pub mod bridge;
+pub mod capabilities;
 mod catalog;
 mod compiled_world;
 mod composition;
@@ -46,6 +47,10 @@ pub use bridge::{
     RendererBridgeSettings, install_renderer_bridge_api, renderer_bridge_benchmark_noop,
     renderer_bridge_debug_overlay_noop, renderer_bridge_extract_noop,
     renderer_bridge_initialize_runtime,
+};
+pub use capabilities::{
+    BevyBackendCapabilityReport, BridgeFeatureFlagReport, RENDERER_CAPABILITY_REPORT_PATH_ENV,
+    RENDERER_CAPABILITY_REPORT_SCHEMA, RendererCapabilityReport, emit_renderer_capability_report,
 };
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 pub use catalog::catalog_ref_summary;

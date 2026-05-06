@@ -39,9 +39,11 @@ function Restore-PesterStackEnv {
 
 $stackEnvNames = @(
     "FUN_START_MODE",
+    "FUN_RENDERER_CAPABILITY_REPORT_PATH",
     "FUN_CEF_UI_TRANSPORT_STATUS_PATH",
     "FUN_CEF_UI_PAINT_TRANSPORT",
     "FUN_CEF_UI_ACCELERATED_PAINT",
+    "FUN_CEF_UI_ALLOW_CPU_FALLBACK",
     "FUN_DISABLE_FPS_OVERLAY",
     "FUN_RENDER_UPLOAD_COUNTERS",
     "BEVY_RENDER_SHADER_DIAGNOSTICS",
@@ -69,15 +71,20 @@ Describe "Stack environment policy" {
         $snapshot = Save-PesterStackEnv -Names $stackEnvNames
         try {
             $env:FUN_START_MODE = "game"
+            $env:FUN_RENDERER_CAPABILITY_REPORT_PATH = "stale"
             $env:FUN_CEF_UI_TRANSPORT_STATUS_PATH = "stale"
-            $paths = [pscustomobject]@{ cef_transport_status_file = Join-Path $stackRoot "..\..\target\run-stack\cef-ui-transport.test.json" }
+            $paths = [pscustomobject]@{
+                cef_transport_status_file = Join-Path $stackRoot "..\..\target\run-stack\cef-ui-transport.test.json"
+                renderer_capability_report_file = Join-Path $stackRoot "..\..\target\run-stack\renderer-capabilities.test.json"
+            }
             $request = New-PesterStackRequest -Bound @{ NoClient = $true; CefUi = $true }
             Resolve-StackCefRequest -Request $request -Paths $paths | Out-Null
             Set-StackRuntimeEnv -Request $request
             Set-StackCefEnv -Request $request -Paths $paths
-            Set-StackRenderEnv -Request $request
+            Set-StackRenderEnv -Request $request -Paths $paths
 
             $env:FUN_START_MODE | Should BeNullOrEmpty
+            $env:FUN_RENDERER_CAPABILITY_REPORT_PATH | Should BeNullOrEmpty
             $env:FUN_CEF_UI_TRANSPORT_STATUS_PATH | Should BeNullOrEmpty
             $env:FUN_DISABLE_FPS_OVERLAY | Should BeNullOrEmpty
         }
@@ -87,7 +94,10 @@ Describe "Stack environment policy" {
     }
 
     It "CEF d3d11on12 implies CEF UI" {
-        $paths = [pscustomobject]@{ cef_transport_status_file = Join-Path $stackRoot "..\..\target\run-stack\cef-ui-transport.test.json" }
+        $paths = [pscustomobject]@{
+            cef_transport_status_file = Join-Path $stackRoot "..\..\target\run-stack\cef-ui-transport.test.json"
+            renderer_capability_report_file = Join-Path $stackRoot "..\..\target\run-stack\renderer-capabilities.test.json"
+        }
         $request = New-PesterStackRequest -Bound @{ CefPaintTransport = "d3d11on12" }
         Resolve-StackCefRequest -Request $request -Paths $paths | Out-Null
         $request.CefUi | Should Be $true
