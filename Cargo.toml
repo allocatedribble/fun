@@ -51,6 +51,7 @@ bevy_color = { path = "../bevy/crates/bevy_color" }
 bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
 bevy_quinnet = { path = "../bevy_quinnet" }
 bevy_scene = { path = "../bevy/crates/bevy_scene" }
+bevy_transform = { path = "../bevy/crates/bevy_transform" }
 compactly = "0.1.6"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 fun_lux = { package = "fun-lux", path = "fun-lux" }

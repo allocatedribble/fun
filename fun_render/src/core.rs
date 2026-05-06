@@ -21,13 +21,13 @@ use tracing::info;
 use tracing::warn;
 
 use crate::{
-    ClientOpaqueRenderer, ClientRenderConfig, DynamicInstanceTable,
-    FunEntityRenderStrategyRegistry, FunFrameGraph, FunGeometryClass, FunGpuSceneDatabase,
-    FunHiZOcclusionAdaptiveState, FunMaterialClass, FunPipelineRegistry, FunRenderAppOptions,
-    FunRenderCapabilityMatrix, FunRenderPath, FunRenderRtFeatures, FunRendererConfig,
-    FunRendererEcsEvent, FunRendererEcsSchedulePolicy, FunRendererPageAllocator,
-    FunRendererUploadArena, FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry,
-    GeometryResidencyManager, MaterialResidencyManager, RenderPathSignature, StaticInstanceTable,
+    ClientOpaqueRenderer, ClientRenderConfig, DynamicInstanceTable, ExtractedSceneDeltas,
+    FrameGraph, FunEntityRenderStrategyRegistry, FunGeometryClass, FunHiZOcclusionAdaptiveState,
+    FunMaterialClass, FunPipelineRegistry, FunRenderAppOptions, FunRenderCapabilityMatrix,
+    FunRenderPath, FunRenderRtFeatures, FunRendererConfig, FunRendererEcsEvent,
+    FunRendererEcsSchedulePolicy, FunRendererPageAllocator, FunRendererUploadArena,
+    FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry, GeometryResidencyManager,
+    GpuScene, MaterialResidencyManager, RenderPathSignature, StaticInstanceTable,
     TextureResidencyManager, VirtualGeometryResidency, dlss_correctness, dx12_dlss_rr,
     dx12_dlss_sr, lighting, pipeline_warmup, prewarm_primitive_render_cache,
     prewarm_world_render_catalog, render_path_signature_for_options,
@@ -261,8 +261,9 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<FunDrawCallCounters>()
         .init_resource::<FunRendererEcsSchedulePolicy>()
         .init_resource::<FunRendererConfig>()
-        .init_resource::<FunGpuSceneDatabase>()
-        .init_resource::<FunFrameGraph>()
+        .init_resource::<GpuScene>()
+        .init_resource::<ExtractedSceneDeltas>()
+        .init_resource::<FrameGraph>()
         .init_resource::<FunRendererPageAllocator>()
         .init_resource::<FunRendererUploadArena>()
         .init_resource::<FunRenderCapabilityMatrix>()
@@ -361,8 +362,9 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<FunDrawCallCounters>();
         render_app.init_resource::<FunRendererEcsSchedulePolicy>();
         render_app.init_resource::<FunRendererConfig>();
-        render_app.init_resource::<FunGpuSceneDatabase>();
-        render_app.init_resource::<FunFrameGraph>();
+        render_app.init_resource::<GpuScene>();
+        render_app.init_resource::<ExtractedSceneDeltas>();
+        render_app.init_resource::<FrameGraph>();
         render_app.init_resource::<FunRendererPageAllocator>();
         render_app.init_resource::<FunRendererUploadArena>();
         render_app.init_resource::<FunRenderCapabilityMatrix>();

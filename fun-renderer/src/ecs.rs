@@ -1,6 +1,13 @@
 use bevy_ecs::{
-    prelude::{Component, Message, Resource},
+    lifecycle::RemovedComponents,
+    prelude::{Added, Changed, Component, Message, Resource},
     schedule::SystemSet,
+    system::{Query, ResMut},
+};
+use bevy_transform::components::Transform;
+use fun_scene::{
+    CefSurface, Renderable, SuperResolutionMode, UpscalePolicy, ViewportRenderPolicy,
+    VirtualGeometryAuthoring,
 };
 
 use crate::{
@@ -366,6 +373,166 @@ impl FunRendererSet {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub enum RendererExtractSet {
+    ExtractSceneEntities,
+    ExtractRendererComponents,
+    ExtractLuxComponents,
+    ExtractViewports,
+    ExtractCefSurfaces,
+}
+
+impl RendererExtractSet {
+    pub const ORDER: [Self; 5] = [
+        Self::ExtractSceneEntities,
+        Self::ExtractRendererComponents,
+        Self::ExtractLuxComponents,
+        Self::ExtractViewports,
+        Self::ExtractCefSurfaces,
+    ];
+
+    #[must_use]
+    pub const fn order_key(self) -> u16 {
+        match self {
+            Self::ExtractSceneEntities => 10,
+            Self::ExtractRendererComponents => 20,
+            Self::ExtractLuxComponents => 30,
+            Self::ExtractViewports => 40,
+            Self::ExtractCefSurfaces => 50,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExtractSceneEntities => "extract_scene_entities",
+            Self::ExtractRendererComponents => "extract_renderer_components",
+            Self::ExtractLuxComponents => "extract_lux_components",
+            Self::ExtractViewports => "extract_viewports",
+            Self::ExtractCefSurfaces => "extract_cef_surfaces",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub enum RendererPrepareSet {
+    ApplySceneDeltasToGpuScene,
+    UpdateInstanceTables,
+    UpdateMaterialTables,
+    UpdateLightTables,
+    UpdatePageRequests,
+    UpdateMotionVectors,
+}
+
+impl RendererPrepareSet {
+    pub const ORDER: [Self; 6] = [
+        Self::ApplySceneDeltasToGpuScene,
+        Self::UpdateInstanceTables,
+        Self::UpdateMaterialTables,
+        Self::UpdateLightTables,
+        Self::UpdatePageRequests,
+        Self::UpdateMotionVectors,
+    ];
+
+    #[must_use]
+    pub const fn order_key(self) -> u16 {
+        match self {
+            Self::ApplySceneDeltasToGpuScene => 10,
+            Self::UpdateInstanceTables => 20,
+            Self::UpdateMaterialTables => 30,
+            Self::UpdateLightTables => 40,
+            Self::UpdatePageRequests => 50,
+            Self::UpdateMotionVectors => 60,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ApplySceneDeltasToGpuScene => "apply_scene_deltas_to_gpu_scene",
+            Self::UpdateInstanceTables => "update_instance_tables",
+            Self::UpdateMaterialTables => "update_material_tables",
+            Self::UpdateLightTables => "update_light_tables",
+            Self::UpdatePageRequests => "update_page_requests",
+            Self::UpdateMotionVectors => "update_motion_vectors",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub enum RendererVisibilitySet {
+    BuildHzb,
+    CullStaticVirtualGeometry,
+    CullDynamicRenderables,
+    CompactVisibleClusters,
+    EmitVisibilityFeedback,
+}
+
+impl RendererVisibilitySet {
+    pub const ORDER: [Self; 5] = [
+        Self::BuildHzb,
+        Self::CullStaticVirtualGeometry,
+        Self::CullDynamicRenderables,
+        Self::CompactVisibleClusters,
+        Self::EmitVisibilityFeedback,
+    ];
+
+    #[must_use]
+    pub const fn order_key(self) -> u16 {
+        match self {
+            Self::BuildHzb => 10,
+            Self::CullStaticVirtualGeometry => 20,
+            Self::CullDynamicRenderables => 30,
+            Self::CompactVisibleClusters => 40,
+            Self::EmitVisibilityFeedback => 50,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BuildHzb => "build_hzb",
+            Self::CullStaticVirtualGeometry => "cull_static_virtual_geometry",
+            Self::CullDynamicRenderables => "cull_dynamic_renderables",
+            Self::CompactVisibleClusters => "compact_visible_clusters",
+            Self::EmitVisibilityFeedback => "emit_visibility_feedback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub enum RendererFrameSet {
+    BuildFrameGraph,
+    ExecuteFrameGraph,
+    CollectDiagnostics,
+}
+
+impl RendererFrameSet {
+    pub const ORDER: [Self; 3] = [
+        Self::BuildFrameGraph,
+        Self::ExecuteFrameGraph,
+        Self::CollectDiagnostics,
+    ];
+
+    #[must_use]
+    pub const fn order_key(self) -> u16 {
+        match self {
+            Self::BuildFrameGraph => 10,
+            Self::ExecuteFrameGraph => 20,
+            Self::CollectDiagnostics => 30,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BuildFrameGraph => "build_frame_graph",
+            Self::ExecuteFrameGraph => "execute_frame_graph",
+            Self::CollectDiagnostics => "collect_diagnostics",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct FunRendererConfig {
     pub runtime_backend: FunRendererRuntimeBackend,
@@ -384,17 +551,336 @@ impl Default for FunRendererConfig {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
-pub struct FunGpuSceneDatabase {
-    pub revision: u64,
-    pub object_count: u32,
-    pub dirty_object_count: u32,
+pub struct GpuScene {
+    pub instances: GpuInstanceTable,
+    pub materials: GpuMaterialTable,
+    pub geometry: GpuGeometryTable,
+    pub lights: GpuLightTable,
+    pub pages: GpuPageTable,
+    pub revisions: GpuSceneRevisionTable,
+}
+
+impl GpuScene {
+    pub fn record_static_renderable(&mut self, renderable: &Renderable, transform: &Transform) {
+        self.instances.instance_count = self.instances.instance_count.saturating_add(1);
+        self.instances.dirty_instance_count = self.instances.dirty_instance_count.saturating_add(1);
+        if renderable.material.is_valid() {
+            self.materials.material_count = self.materials.material_count.saturating_add(1);
+        }
+        if renderable.geometry.is_valid() {
+            self.geometry.geometry_count = self.geometry.geometry_count.saturating_add(1);
+        }
+        self.revisions.scene_revision = self.revisions.scene_revision.saturating_add(1);
+        self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
+        self.instances.current_transform_signature = transform_signature(transform);
+    }
+
+    pub fn record_removed_renderable(&mut self) {
+        self.instances.instance_count = self.instances.instance_count.saturating_sub(1);
+        self.instances.removed_instance_count =
+            self.instances.removed_instance_count.saturating_add(1);
+        self.revisions.scene_revision = self.revisions.scene_revision.saturating_add(1);
+        self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
+    }
+
+    pub fn record_material_patch(&mut self) {
+        self.materials.dirty_material_count = self.materials.dirty_material_count.saturating_add(1);
+        self.revisions.material_revision = self.revisions.material_revision.saturating_add(1);
+    }
+
+    pub fn record_geometry_patch(&mut self) {
+        self.geometry.dirty_geometry_count = self.geometry.dirty_geometry_count.saturating_add(1);
+        self.revisions.geometry_revision = self.revisions.geometry_revision.saturating_add(1);
+    }
+
+    pub fn record_light_patch(&mut self) {
+        self.lights.dirty_light_count = self.lights.dirty_light_count.saturating_add(1);
+        self.revisions.light_revision = self.revisions.light_revision.saturating_add(1);
+    }
+
+    pub fn record_virtual_geometry_page_request(&mut self) {
+        self.pages.requested_page_count = self.pages.requested_page_count.saturating_add(1);
+        self.revisions.page_revision = self.revisions.page_revision.saturating_add(1);
+    }
+
+    pub fn record_transform_change(&mut self, transform: &Transform) {
+        self.instances.previous_transform_signature = self.instances.current_transform_signature;
+        self.instances.current_transform_signature = transform_signature(transform);
+        self.instances.motion_vector_update_count =
+            self.instances.motion_vector_update_count.saturating_add(1);
+        self.instances.dirty_instance_count = self.instances.dirty_instance_count.saturating_add(1);
+        self.revisions.instance_revision = self.revisions.instance_revision.saturating_add(1);
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuInstanceTable {
+    pub instance_count: u32,
+    pub dirty_instance_count: u32,
+    pub removed_instance_count: u32,
+    pub motion_vector_update_count: u32,
+    pub previous_transform_signature: u64,
+    pub current_transform_signature: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuMaterialTable {
+    pub material_count: u32,
+    pub dirty_material_count: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuGeometryTable {
+    pub geometry_count: u32,
+    pub dirty_geometry_count: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuLightTable {
+    pub light_count: u32,
+    pub dirty_light_count: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuPageTable {
+    pub resident_page_count: u32,
+    pub requested_page_count: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GpuSceneRevisionTable {
+    pub scene_revision: u64,
+    pub instance_revision: u64,
+    pub material_revision: u64,
+    pub geometry_revision: u64,
+    pub light_revision: u64,
+    pub page_revision: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
-pub struct FunFrameGraph {
+pub struct FrameGraph {
     pub revision: u64,
     pub node_count: u16,
+    pub cef_gpu_import_nodes: u16,
+    pub ui_composite_nodes: u16,
+    pub super_resolution_nodes: u16,
+    pub gi_nodes: u16,
+    pub virtual_geometry_nodes: u16,
     pub compiled: bool,
+}
+
+impl FrameGraph {
+    pub fn compile_from_rule(&mut self, node: FrameGraphNodeKind) {
+        self.revision = self.revision.saturating_add(1);
+        self.node_count = self.node_count.saturating_add(1);
+        self.compiled = true;
+        match node {
+            FrameGraphNodeKind::CefGpuImport => {
+                self.cef_gpu_import_nodes = self.cef_gpu_import_nodes.saturating_add(1);
+            }
+            FrameGraphNodeKind::UiComposite => {
+                self.ui_composite_nodes = self.ui_composite_nodes.saturating_add(1);
+            }
+            FrameGraphNodeKind::DlssSuperResolution | FrameGraphNodeKind::FsrSuperResolution => {
+                self.super_resolution_nodes = self.super_resolution_nodes.saturating_add(1);
+            }
+            FrameGraphNodeKind::HybridGi => {
+                self.gi_nodes = self.gi_nodes.saturating_add(1);
+            }
+            FrameGraphNodeKind::VirtualGeometry => {
+                self.virtual_geometry_nodes = self.virtual_geometry_nodes.saturating_add(1);
+            }
+            FrameGraphNodeKind::Present => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RendererDeltaKind {
+    TransformChanged,
+    VisibilityFlagsChanged,
+    GeometryRefChanged,
+    MaterialRefChanged,
+    LightRefChanged,
+    SceneChunkLoaded,
+    SceneChunkUnloaded,
+    EditorSalienceChanged,
+    VirtualGeometryAdded,
+    RenderableRemoved,
+    CefSurfaceChanged,
+    ViewportChanged,
+    UpscalePolicyChanged,
+}
+
+impl RendererDeltaKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TransformChanged => "transform_changed",
+            Self::VisibilityFlagsChanged => "visibility_flags_changed",
+            Self::GeometryRefChanged => "geometry_ref_changed",
+            Self::MaterialRefChanged => "material_ref_changed",
+            Self::LightRefChanged => "light_ref_changed",
+            Self::SceneChunkLoaded => "scene_chunk_loaded",
+            Self::SceneChunkUnloaded => "scene_chunk_unloaded",
+            Self::EditorSalienceChanged => "editor_salience_changed",
+            Self::VirtualGeometryAdded => "virtual_geometry_added",
+            Self::RenderableRemoved => "renderable_removed",
+            Self::CefSurfaceChanged => "cef_surface_changed",
+            Self::ViewportChanged => "viewport_changed",
+            Self::UpscalePolicyChanged => "upscale_policy_changed",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct ExtractedSceneDeltas {
+    pub changed_transforms: u32,
+    pub changed_visibility_flags: u32,
+    pub changed_geometry_refs: u32,
+    pub changed_material_refs: u32,
+    pub changed_light_refs: u32,
+    pub loaded_chunks: u32,
+    pub unloaded_chunks: u32,
+    pub changed_editor_salience: u32,
+    pub added_virtual_geometry: u32,
+    pub removed_renderables: u32,
+    pub changed_cef_surfaces: u32,
+    pub changed_viewports: u32,
+    pub changed_upscale_policies: u32,
+    pub full_scene_graph_clone_count: u32,
+}
+
+impl ExtractedSceneDeltas {
+    pub fn record(&mut self, kind: RendererDeltaKind) {
+        match kind {
+            RendererDeltaKind::TransformChanged => {
+                self.changed_transforms = self.changed_transforms.saturating_add(1);
+            }
+            RendererDeltaKind::VisibilityFlagsChanged => {
+                self.changed_visibility_flags = self.changed_visibility_flags.saturating_add(1);
+            }
+            RendererDeltaKind::GeometryRefChanged => {
+                self.changed_geometry_refs = self.changed_geometry_refs.saturating_add(1);
+            }
+            RendererDeltaKind::MaterialRefChanged => {
+                self.changed_material_refs = self.changed_material_refs.saturating_add(1);
+            }
+            RendererDeltaKind::LightRefChanged => {
+                self.changed_light_refs = self.changed_light_refs.saturating_add(1);
+            }
+            RendererDeltaKind::SceneChunkLoaded => {
+                self.loaded_chunks = self.loaded_chunks.saturating_add(1);
+            }
+            RendererDeltaKind::SceneChunkUnloaded => {
+                self.unloaded_chunks = self.unloaded_chunks.saturating_add(1);
+            }
+            RendererDeltaKind::EditorSalienceChanged => {
+                self.changed_editor_salience = self.changed_editor_salience.saturating_add(1);
+            }
+            RendererDeltaKind::VirtualGeometryAdded => {
+                self.added_virtual_geometry = self.added_virtual_geometry.saturating_add(1);
+            }
+            RendererDeltaKind::RenderableRemoved => {
+                self.removed_renderables = self.removed_renderables.saturating_add(1);
+            }
+            RendererDeltaKind::CefSurfaceChanged => {
+                self.changed_cef_surfaces = self.changed_cef_surfaces.saturating_add(1);
+            }
+            RendererDeltaKind::ViewportChanged => {
+                self.changed_viewports = self.changed_viewports.saturating_add(1);
+            }
+            RendererDeltaKind::UpscalePolicyChanged => {
+                self.changed_upscale_policies = self.changed_upscale_policies.saturating_add(1);
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn uses_full_scene_graph_clones(self) -> bool {
+        self.full_scene_graph_clone_count != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameGraphComponentTrigger {
+    CefSurface,
+    UpscalePolicyDlss,
+    UpscalePolicyFsr,
+    LuxGiModeHybrid,
+    VirtualGeometryAuthoring,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameGraphNodeKind {
+    CefGpuImport,
+    UiComposite,
+    DlssSuperResolution,
+    FsrSuperResolution,
+    HybridGi,
+    VirtualGeometry,
+    Present,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameGraphComponentRule {
+    pub trigger: FrameGraphComponentTrigger,
+    pub node: FrameGraphNodeKind,
+}
+
+pub const FRAME_GRAPH_COMPONENT_RULES: [FrameGraphComponentRule; 6] = [
+    FrameGraphComponentRule {
+        trigger: FrameGraphComponentTrigger::CefSurface,
+        node: FrameGraphNodeKind::CefGpuImport,
+    },
+    FrameGraphComponentRule {
+        trigger: FrameGraphComponentTrigger::CefSurface,
+        node: FrameGraphNodeKind::UiComposite,
+    },
+    FrameGraphComponentRule {
+        trigger: FrameGraphComponentTrigger::UpscalePolicyDlss,
+        node: FrameGraphNodeKind::DlssSuperResolution,
+    },
+    FrameGraphComponentRule {
+        trigger: FrameGraphComponentTrigger::UpscalePolicyFsr,
+        node: FrameGraphNodeKind::FsrSuperResolution,
+    },
+    FrameGraphComponentRule {
+        trigger: FrameGraphComponentTrigger::LuxGiModeHybrid,
+        node: FrameGraphNodeKind::HybridGi,
+    },
+    FrameGraphComponentRule {
+        trigger: FrameGraphComponentTrigger::VirtualGeometryAuthoring,
+        node: FrameGraphNodeKind::VirtualGeometry,
+    },
+];
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Component)]
+pub enum LuxGiMode {
+    Off,
+    ProbeOnly,
+    #[default]
+    Hybrid,
+}
+
+fn transform_signature(transform: &Transform) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for bits in [
+        transform.translation.x.to_bits(),
+        transform.translation.y.to_bits(),
+        transform.translation.z.to_bits(),
+        transform.rotation.x.to_bits(),
+        transform.rotation.y.to_bits(),
+        transform.rotation.z.to_bits(),
+        transform.rotation.w.to_bits(),
+        transform.scale.x.to_bits(),
+        transform.scale.y.to_bits(),
+        transform.scale.z.to_bits(),
+    ] {
+        hash ^= u64::from(bits);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
@@ -613,6 +1099,182 @@ pub const FUN_RENDERER_CHANGE_DETECTION_RULES: [FunRendererChangeDetectionRule; 
     },
 ];
 
+pub fn extract_scene_entities(
+    query: Query<(), Added<Renderable>>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for _ in query.iter() {
+        deltas.record(RendererDeltaKind::SceneChunkLoaded);
+    }
+}
+
+pub fn extract_renderer_components(
+    query: Query<&Renderable, Changed<Renderable>>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for renderable in query.iter() {
+        if renderable.geometry.is_valid() {
+            deltas.record(RendererDeltaKind::GeometryRefChanged);
+        }
+        if renderable.material.is_valid() {
+            deltas.record(RendererDeltaKind::MaterialRefChanged);
+        }
+    }
+}
+
+pub fn extract_lux_components(
+    query: Query<&fun_scene::LuxLight, Changed<fun_scene::LuxLight>>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for _ in query.iter() {
+        deltas.record(RendererDeltaKind::LightRefChanged);
+    }
+}
+
+pub fn extract_viewports(
+    query: Query<&ViewportRenderPolicy, Changed<ViewportRenderPolicy>>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for _ in query.iter() {
+        deltas.record(RendererDeltaKind::ViewportChanged);
+    }
+}
+
+pub fn extract_cef_surfaces(
+    query: Query<&CefSurface, Changed<CefSurface>>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for _ in query.iter() {
+        deltas.record(RendererDeltaKind::CefSurfaceChanged);
+    }
+}
+
+pub fn apply_scene_deltas_to_gpu_scene(
+    added: Query<(&Renderable, &Transform), Added<Renderable>>,
+    mut removed: RemovedComponents<Renderable>,
+    mut gpu_scene: ResMut<GpuScene>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for (renderable, transform) in added.iter() {
+        gpu_scene.record_static_renderable(renderable, transform);
+    }
+    for _ in removed.read() {
+        gpu_scene.record_removed_renderable();
+        deltas.record(RendererDeltaKind::RenderableRemoved);
+    }
+}
+
+pub fn update_instance_tables(
+    query: Query<(), Changed<RenderableIdentity>>,
+    mut gpu_scene: ResMut<GpuScene>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for _ in query.iter() {
+        gpu_scene.instances.dirty_instance_count =
+            gpu_scene.instances.dirty_instance_count.saturating_add(1);
+        gpu_scene.revisions.instance_revision =
+            gpu_scene.revisions.instance_revision.saturating_add(1);
+        deltas.record(RendererDeltaKind::VisibilityFlagsChanged);
+    }
+}
+
+pub fn update_material_tables(
+    query: Query<&Renderable, Changed<Renderable>>,
+    mut gpu_scene: ResMut<GpuScene>,
+) {
+    for renderable in query.iter() {
+        if renderable.material.is_valid() {
+            gpu_scene.record_material_patch();
+        }
+    }
+}
+
+pub fn update_light_tables(
+    query: Query<&fun_scene::LuxLight, Changed<fun_scene::LuxLight>>,
+    mut gpu_scene: ResMut<GpuScene>,
+) {
+    for _ in query.iter() {
+        gpu_scene.record_light_patch();
+    }
+}
+
+pub fn update_page_requests(
+    query: Query<&VirtualGeometryAuthoring, Added<VirtualGeometryAuthoring>>,
+    mut gpu_scene: ResMut<GpuScene>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for _ in query.iter() {
+        gpu_scene.record_virtual_geometry_page_request();
+        deltas.record(RendererDeltaKind::VirtualGeometryAdded);
+    }
+}
+
+pub fn update_motion_vectors(
+    query: Query<&Transform, Changed<Transform>>,
+    mut gpu_scene: ResMut<GpuScene>,
+    mut deltas: ResMut<ExtractedSceneDeltas>,
+) {
+    for transform in query.iter() {
+        gpu_scene.record_transform_change(transform);
+        deltas.record(RendererDeltaKind::TransformChanged);
+    }
+}
+
+pub fn build_frame_graph(
+    cef_surfaces: Query<&CefSurface>,
+    upscale_policies: Query<&UpscalePolicy>,
+    gi_modes: Query<&LuxGiMode>,
+    virtual_geometry: Query<&VirtualGeometryAuthoring>,
+    mut frame_graph: ResMut<FrameGraph>,
+) {
+    *frame_graph = FrameGraph::default();
+
+    if !cef_surfaces.is_empty() {
+        frame_graph.compile_from_rule(FrameGraphNodeKind::CefGpuImport);
+        frame_graph.compile_from_rule(FrameGraphNodeKind::UiComposite);
+    }
+
+    if upscale_policies
+        .iter()
+        .any(|policy| policy.sr == SuperResolutionMode::Dlss)
+    {
+        frame_graph.compile_from_rule(FrameGraphNodeKind::DlssSuperResolution);
+    }
+
+    if upscale_policies
+        .iter()
+        .any(|policy| policy.sr == SuperResolutionMode::Fsr)
+    {
+        frame_graph.compile_from_rule(FrameGraphNodeKind::FsrSuperResolution);
+    }
+
+    if gi_modes.iter().any(|mode| *mode == LuxGiMode::Hybrid) {
+        frame_graph.compile_from_rule(FrameGraphNodeKind::HybridGi);
+    }
+
+    if !virtual_geometry.is_empty() {
+        frame_graph.compile_from_rule(FrameGraphNodeKind::VirtualGeometry);
+    }
+
+    frame_graph.compile_from_rule(FrameGraphNodeKind::Present);
+}
+
+pub fn execute_frame_graph(mut frame_graph: ResMut<FrameGraph>) {
+    frame_graph.compiled = true;
+}
+
+pub fn collect_diagnostics() {}
+
+pub fn build_hzb() {}
+
+pub fn cull_static_virtual_geometry() {}
+
+pub fn cull_dynamic_renderables() {}
+
+pub fn compact_visible_clusters() {}
+
+pub fn emit_visibility_feedback() {}
+
 #[must_use]
 pub const fn default_backend_for_target() -> FunRendererBackend {
     if cfg!(target_os = "windows") {
@@ -625,8 +1287,10 @@ pub const fn default_backend_for_target() -> FunRendererBackend {
 #[cfg(test)]
 mod tests {
     use bevy_ecs::message::Messages;
+    use bevy_ecs::schedule::{IntoScheduleConfigs, Schedule};
     use bevy_ecs::world::World;
     use fun_lux::{LuxLight, LuxLightDatabase, LuxLightId, LuxLightKind};
+    use fun_scene::{GeometryRef, MaterialRef, RenderableFlags};
 
     use super::*;
 
@@ -634,8 +1298,8 @@ mod tests {
     fn renderer_core_has_working_bevy_ecs_surface() {
         let mut world = World::new();
         world.insert_resource(FunRendererEcsSchedulePolicy::DEFAULT);
-        world.insert_resource(FunGpuSceneDatabase::default());
-        world.insert_resource(FunFrameGraph::default());
+        world.insert_resource(GpuScene::default());
+        world.insert_resource(FrameGraph::default());
         world.insert_resource(LuxLightDatabase::default());
 
         let entity = world
@@ -712,6 +1376,43 @@ mod tests {
     }
 
     #[test]
+    fn render_world_system_sets_cover_section_six_lanes() {
+        assert_ordered(
+            RendererExtractSet::ORDER
+                .iter()
+                .map(|set| (set.order_key(), set.as_str())),
+        );
+        assert_ordered(
+            RendererPrepareSet::ORDER
+                .iter()
+                .map(|set| (set.order_key(), set.as_str())),
+        );
+        assert_ordered(
+            RendererVisibilitySet::ORDER
+                .iter()
+                .map(|set| (set.order_key(), set.as_str())),
+        );
+        assert_ordered(
+            RendererFrameSet::ORDER
+                .iter()
+                .map(|set| (set.order_key(), set.as_str())),
+        );
+
+        assert_eq!(
+            RendererExtractSet::ExtractRendererComponents.as_str(),
+            "extract_renderer_components"
+        );
+        assert_eq!(
+            RendererPrepareSet::UpdateMotionVectors.as_str(),
+            "update_motion_vectors"
+        );
+        assert_eq!(
+            RendererFrameSet::BuildFrameGraph.as_str(),
+            "build_frame_graph"
+        );
+    }
+
+    #[test]
     fn archetype_policy_keeps_heavy_data_out_of_entity_tables() {
         let policy = core::hint::black_box(FUN_RENDERER_DATA_PLACEMENT_POLICY);
 
@@ -768,5 +1469,212 @@ mod tests {
                 .any(|rule| rule.source == FunRendererChangeSource::ScenePatch
                     && rule.target == FunRendererChangeTarget::ManifestSignatures)
         );
+    }
+
+    #[test]
+    fn static_scene_spawned_with_fun_macro_components_updates_gpu_scene() {
+        let mut world = World::new();
+        world.insert_resource(GpuScene::default());
+        world.insert_resource(ExtractedSceneDeltas::default());
+        world.spawn((
+            Renderable::new(
+                GeometryRef::new(3),
+                MaterialRef::new(9),
+                RenderableFlags::STATIC,
+            ),
+            Transform::from_xyz(1.0, 2.0, 3.0),
+        ));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(
+            (
+                extract_scene_entities,
+                extract_renderer_components,
+                apply_scene_deltas_to_gpu_scene,
+            )
+                .chain(),
+        );
+        schedule.run(&mut world);
+
+        let gpu_scene = world.resource::<GpuScene>();
+        assert_eq!(gpu_scene.instances.instance_count, 1);
+        assert_eq!(gpu_scene.materials.material_count, 1);
+        assert_eq!(gpu_scene.geometry.geometry_count, 1);
+        assert_ne!(gpu_scene.instances.current_transform_signature, 0);
+        assert!(
+            !world
+                .resource::<ExtractedSceneDeltas>()
+                .uses_full_scene_graph_clones()
+        );
+    }
+
+    #[test]
+    fn removed_scene_entity_removes_gpu_instance_entry() {
+        let mut world = World::new();
+        world.insert_resource(GpuScene::default());
+        world.insert_resource(ExtractedSceneDeltas::default());
+        let entity = world
+            .spawn((
+                Renderable::new(
+                    GeometryRef::new(1),
+                    MaterialRef::new(1),
+                    RenderableFlags::STATIC,
+                ),
+                Transform::IDENTITY,
+            ))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(apply_scene_deltas_to_gpu_scene);
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<GpuScene>().instances.instance_count, 1);
+
+        let _ = world.despawn(entity);
+        schedule.run(&mut world);
+
+        let gpu_scene = world.resource::<GpuScene>();
+        assert_eq!(gpu_scene.instances.instance_count, 0);
+        assert_eq!(gpu_scene.instances.removed_instance_count, 1);
+        assert_eq!(
+            world.resource::<ExtractedSceneDeltas>().removed_renderables,
+            1
+        );
+    }
+
+    #[test]
+    fn material_patch_updates_material_table_only() {
+        let mut world = World::new();
+        world.insert_resource(GpuScene {
+            instances: GpuInstanceTable {
+                instance_count: 1,
+                dirty_instance_count: 0,
+                removed_instance_count: 0,
+                motion_vector_update_count: 0,
+                previous_transform_signature: 0,
+                current_transform_signature: 0,
+            },
+            revisions: GpuSceneRevisionTable {
+                instance_revision: 7,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let entity = world
+            .spawn(Renderable::new(
+                GeometryRef::new(1),
+                MaterialRef::new(1),
+                RenderableFlags::STATIC,
+            ))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_material_tables);
+        schedule.run(&mut world);
+        {
+            let mut gpu_scene = world.resource_mut::<GpuScene>();
+            gpu_scene.materials.dirty_material_count = 0;
+            gpu_scene.revisions.material_revision = 0;
+            gpu_scene.revisions.instance_revision = 7;
+        }
+
+        world
+            .entity_mut(entity)
+            .get_mut::<Renderable>()
+            .expect("renderable should exist")
+            .material = MaterialRef::new(4);
+        schedule.run(&mut world);
+
+        let gpu_scene = world.resource::<GpuScene>();
+        assert_eq!(gpu_scene.instances.instance_count, 1);
+        assert_eq!(gpu_scene.revisions.instance_revision, 7);
+        assert_eq!(gpu_scene.revisions.geometry_revision, 0);
+        assert_eq!(gpu_scene.materials.dirty_material_count, 1);
+        assert_eq!(gpu_scene.revisions.material_revision, 1);
+    }
+
+    #[test]
+    fn moving_entity_updates_previous_current_transform_for_motion_vectors() {
+        let mut world = World::new();
+        world.insert_resource(GpuScene::default());
+        world.insert_resource(ExtractedSceneDeltas::default());
+        let entity = world.spawn(Transform::from_xyz(0.0, 0.0, 0.0)).id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_motion_vectors);
+        schedule.run(&mut world);
+        let first_signature = world
+            .resource::<GpuScene>()
+            .instances
+            .current_transform_signature;
+
+        world
+            .entity_mut(entity)
+            .get_mut::<Transform>()
+            .expect("transform should exist")
+            .translation
+            .x = 12.0;
+        schedule.run(&mut world);
+
+        let gpu_scene = world.resource::<GpuScene>();
+        assert_eq!(
+            gpu_scene.instances.previous_transform_signature,
+            first_signature
+        );
+        assert_ne!(
+            gpu_scene.instances.current_transform_signature,
+            first_signature
+        );
+        assert_eq!(gpu_scene.instances.motion_vector_update_count, 2);
+        assert_eq!(
+            world.resource::<ExtractedSceneDeltas>().changed_transforms,
+            2
+        );
+    }
+
+    #[test]
+    fn virtual_geometry_lights_ui_and_upscale_compile_frame_graph_from_ecs() {
+        let mut world = World::new();
+        world.insert_resource(GpuScene::default());
+        world.insert_resource(FrameGraph::default());
+        world.insert_resource(ExtractedSceneDeltas::default());
+        world.spawn((
+            VirtualGeometryAuthoring::default(),
+            CefSurface::default(),
+            UpscalePolicy {
+                sr: SuperResolutionMode::Dlss,
+                ..Default::default()
+            },
+            LuxGiMode::Hybrid,
+        ));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(
+            (
+                update_page_requests,
+                extract_cef_surfaces,
+                build_frame_graph,
+                execute_frame_graph,
+            )
+                .chain(),
+        );
+        schedule.run(&mut world);
+
+        let gpu_scene = world.resource::<GpuScene>();
+        assert_eq!(gpu_scene.pages.requested_page_count, 1);
+        let frame_graph = world.resource::<FrameGraph>();
+        assert!(frame_graph.compiled);
+        assert_eq!(frame_graph.cef_gpu_import_nodes, 1);
+        assert_eq!(frame_graph.ui_composite_nodes, 1);
+        assert_eq!(frame_graph.super_resolution_nodes, 1);
+        assert_eq!(frame_graph.gi_nodes, 1);
+        assert_eq!(frame_graph.virtual_geometry_nodes, 1);
+    }
+
+    fn assert_ordered<'a>(items: impl Iterator<Item = (u16, &'a str)>) {
+        let mut previous = 0;
+        for (order_key, label) in items {
+            assert!(order_key > previous, "{label}");
+            previous = order_key;
+        }
     }
 }

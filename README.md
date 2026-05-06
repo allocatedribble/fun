@@ -91,8 +91,10 @@ sanctioned native handle or command-list access, diagnostics, and unavoidable
 low-level scheduling primitives. The detailed contract lives in
 [`docs/renderer_ownership.md`](docs/renderer_ownership.md).
 The renderer ECS contract is already represented by `FunSceneSet`,
-`FunRendererSet`, renderer/lux marker components, compact handle components,
-resource-backed GPU scene tables, and typed renderer/lux message lanes.
+`FunRendererSet`, unprefixed render-world sets such as `RendererExtractSet` and
+`RendererPrepareSet`, renderer/lux marker components, compact handle
+components, the `GpuScene` resource with table-level renderer deltas,
+`ExtractedSceneDeltas`, `FrameGraph`, and typed renderer/lux message lanes.
 Scene-authored component taxonomy names intentionally skip the redundant product
 prefix inside `fun_scene`: `SceneStableIdentity`, `Renderable`, `LuxLight`,
 `CefSurface`, and `UpscalePolicy` are the canonical forms.

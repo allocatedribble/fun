@@ -50,11 +50,38 @@ The renderer path is split into explicit ECS phases:
   composition boundary, and backend execution.
 
 `FunSceneSet` orders scene work as `Resolve`, `Validate`, `Spawn`, and `Patch`.
-`FunRendererSet` orders render work as `Extract`, `PrepareScene`,
+`FunRendererSet` orders the broad render lane as `Extract`, `PrepareScene`,
 `PrepareResources`, `Visibility`, `VirtualGeometry`, `VirtualShadows`, `Lux`,
-`Upscale`, `UiComposite`, and `Present`. `fun_render` registers the first
-renderer/lux resources and message queues in both the app world and RenderApp
-when the bridge is installed.
+`Upscale`, `UiComposite`, and `Present`. Section-specific render-world systems
+use unprefixed names: `RendererExtractSet`, `RendererPrepareSet`,
+`RendererVisibilitySet`, and `RendererFrameSet`. `fun_render` registers the
+first renderer/lux resources and message queues in both the app world and
+RenderApp when the bridge is installed.
+
+The GPU scene database is the render-world ECS resource `GpuScene`. It owns
+compact renderer tables instead of an opaque scene clone:
+
+- `GpuInstanceTable`
+- `GpuMaterialTable`
+- `GpuGeometryTable`
+- `GpuLightTable`
+- `GpuPageTable`
+- `GpuSceneRevisionTable`
+
+Extraction copies only compact deltas into `ExtractedSceneDeltas`: changed
+transforms, visibility flags, geometry refs, material refs, light refs, chunk
+load/unload, editor salience, added virtual geometry, removed renderables, CEF
+surfaces, viewport policies, and upscale policies. Runtime extraction must use
+Bevy change detection such as `Changed<Transform>`, `Changed<Renderable>`,
+`Changed<LuxLight>`, `Added<VirtualGeometryAuthoring>`, and
+`RemovedComponents<Renderable>`; full scene graph clones are not a product
+path.
+
+`FrameGraph` remains a renderer-owned resource, but ECS compiles it from active
+components and policies. `CefSurface` adds CEF GPU import and UI composite
+nodes, DLSS/FSR `UpscalePolicy` adds the corresponding super-resolution node,
+hybrid GI mode adds GI passes, and `VirtualGeometryAuthoring` adds virtual
+geometry passes.
 
 The first renderer ECS lane covers these stable events: scene spawned, scene
 patched, chunk loaded/unloaded, geometry changed, material changed, light
@@ -187,9 +214,17 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::FunSceneSet`
 - `fun_renderer::FunRendererEcsSchedulePolicy`
 - `fun_renderer::FunRendererSet`
+- `fun_renderer::RendererExtractSet`
+- `fun_renderer::RendererPrepareSet`
+- `fun_renderer::RendererVisibilitySet`
+- `fun_renderer::RendererFrameSet`
 - `fun_renderer::FUN_RENDERER_ECS_PHASE_DESCRIPTORS`
 - `fun_renderer::FUN_RENDERER_DATA_PLACEMENT_POLICY`
 - `fun_renderer::FUN_RENDERER_CHANGE_DETECTION_RULES`
+- `fun_renderer::GpuScene`
+- `fun_renderer::ExtractedSceneDeltas`
+- `fun_renderer::FrameGraph`
+- `fun_renderer::FRAME_GRAPH_COMPONENT_RULES`
 - `fun_renderer::FunRendererGpuSceneObject`
 - `fun_renderer::FunRendererFrameGraphNode`
 - `fun_renderer::FunRendererEcsEvent`
