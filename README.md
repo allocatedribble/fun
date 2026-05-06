@@ -84,6 +84,15 @@ shadow policy, GI, reflections, denoising/reconstruction policy, and
 radiance/surface/probe caches. `fun-renderer` depends on `fun-lux`, so the
 product/API shape still treats Fun Lux as housed inside the renderer while the
 lighting code stays maintainable as its own crate.
+Many-light direct illumination is now represented by `fun_lux::many_light`.
+`GpuLightDatabase` stores stable light IDs, type, view transform,
+color/intensity, shape, shadow policy, update stamp, importance hints, and
+emissive-source references. `ClusteredCandidateSet` partitions view space into
+bounded clustered/Forward+ candidate lists; `ReservoirStorage` tracks selected
+lights, temporal/spatial reuse, validity, rejection reasons, and shadowed
+candidate counts. Important emissive geometry can be promoted into candidates,
+and selected shadow-casting lights emit budgeted shadow request intents for the
+renderer-owned virtual shadow storage.
 
 `fun_render` remains the shared Bevy-facing bridge for the game client and the
 editor during migration. It owns extraction, app/plugin integration, feature

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod many_light;
 pub mod shadow;
 
 use bevy_ecs::{
@@ -12,6 +13,7 @@ use bevy_ecs::{
 };
 
 pub use api::*;
+pub use many_light::*;
 pub use shadow::*;
 
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
@@ -1005,16 +1007,8 @@ mod tests {
     #[test]
     fn lux_light_events_cover_shadow_and_gi_invalidation() {
         assert_eq!(LuxLightEventKind::ALL.len(), 5);
-        assert!(
-            LuxLightEventKind::ALL
-                .iter()
-                .any(|kind| *kind == LuxLightEventKind::ShadowInvalidated)
-        );
-        assert!(
-            LuxLightEventKind::ALL
-                .iter()
-                .any(|kind| *kind == LuxLightEventKind::GiCacheInvalidated)
-        );
+        assert!(LuxLightEventKind::ALL.contains(&LuxLightEventKind::ShadowInvalidated));
+        assert!(LuxLightEventKind::ALL.contains(&LuxLightEventKind::GiCacheInvalidated));
     }
 
     #[test]
