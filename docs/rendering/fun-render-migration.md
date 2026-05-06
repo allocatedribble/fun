@@ -1,6 +1,6 @@
 # fun_render Migration Inventory
 
-status: inventory + pass11-static-virtual-geometry
+status: inventory + pass12-dynamic-geometry
 owner_repo: fun
 captured_on: 2026-05-06
 scope: fun_render, fun-renderer, fun-lux, fun-scene, game_client, fun_host, fun_ui_cef
@@ -40,7 +40,7 @@ first-order migration blockers.
 | question | current answer |
 | --- | --- |
 | What does `fun_render` own today? | The Bevy-facing product renderer plugin, Winit presentation, config/env parsing, Solari/cloud/meshlet integration, DX12 native interop gate, CEF texture composition bridge, diagnostics/benchmark counters, upload arena experiments, DLSS correctness/native-SR scaffolding, and the bridge re-export surface for `fun-renderer`, `fun-lux`, and `fun-scene`. |
-| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, shared page scheduler, static virtual geometry asset/runtime substrate, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
+| What does `fun-renderer` own today? | Real crate and compile-checked ownership contracts, ECS data/layout policy, render-world resources, no-op renderer-core API, no-op clear-color presentation interface, renderer-owned frame graph with pass/resource declarations and validation, renderer-owned GPU scene database records with generation-checked handles and dirty uploads, resource ownership policy, shared page scheduler, static virtual geometry asset/runtime substrate, dynamic geometry/procedural submission substrate, and heuristic scheduler. It does not yet own the product swapchain or visible frame execution. |
 | Does `fun-renderer` exist as code? | Yes. It is `fun/fun-renderer` with crate name `fun_renderer`; default features are now `bevy_ecs` and `fun_renderer_core`. DX12 native interop is an explicit boundary flag, not an implied default shipping capability. |
 | Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | The product code path is now GPU-only/fail-closed: CEF CPU `OnPaint` frames are rejected, Bevy UI image composition has been removed from `game_client`, and `fun-renderer::RendererCefCompositor` owns the late UI layer contract. Runtime proof is still blocked until the strict D3D11On12 lane reports `bridge_ready=true` with nonzero GPU copy bytes. |
@@ -53,7 +53,7 @@ first-order migration blockers.
 | crate/module | current owner | intended owner | migration status | current feature flags | validation commands |
 | --- | --- | --- | --- | --- | --- |
 | `fun_render` | Bevy/game renderer bridge, but still the product renderer brain for Winit presentation, Solari, meshlets, clouds, CEF texture composition, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, legacy compatibility during transition. | Runtime selector is installed by `FunRenderCorePlugin`; `FUN_RENDERER_BACKEND=fun` boots the no-op core/lux path; product presentation still here. | `default=[offscreen,volumetric_clouds]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
-| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB records, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, shared page scheduler, static virtual geometry format/runtime, renderer-owned CEF compositor, upload/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, page scheduler, CEF compositor, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. Pass 11 adds `StaticVirtualGeometryAsset`, deterministic bake output, hierarchical static cluster selection, shared scheduler page requests, compute-indirect packets, optional mesh-shader packets, and fallback mesh behavior. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`; `cargo test -p fun-renderer --lib scene`; `cargo test -p fun-renderer --lib virtual_geometry`; `cargo test -p fun-renderer --lib cef`; `cargo test -p fun_render --lib extraction`. |
+| `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB records, frame graph skeleton, heuristic scheduler, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural submission substrate, renderer-owned CEF compositor, upload/upscale seams. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, dynamic/procedural geometry submission, page scheduler, CEF compositor, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. | Exists as real crate; product swapchain and visible backend execution not wired. Pass 11 adds static virtual geometry format/runtime. Pass 12 adds `DynamicGeometrySubmission`, `DynamicGeometryDatabase`, classic mesh packets, optional dynamic cluster packets for selected classes, procedural chunk revision invalidation, destruction-fragment stress accounting, and upload/dirty-record diagnostics. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`; old names are aliases. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib`; `cargo test -p fun-renderer --lib scene`; `cargo test -p fun-renderer --lib virtual_geometry`; `cargo test -p fun-renderer --lib dynamic_geometry`; `cargo test -p fun-renderer --lib cef`; `cargo test -p fun_render --lib extraction`. |
 | `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. | Exists as real crate; now exposes baseline no-op frame and shutdown reports for bridge boot. | `many_light`, `virtual_shadows`, `hybrid_gi`; no default features; old `fun_lux_*` names are aliases. | `cargo check -p fun-lux`; `cargo test -p fun-lux --lib`. |
 | `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `tools/check_fun_scene_migration.ps1`. |
 | `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI now publishes accelerated ready-frame tokens into `RendererCefCompositor` and rejects CPU `OnPaint` product fallback. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `tools/check_product_ui_policy.ps1`; `scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate`. |
@@ -588,12 +588,57 @@ bytes streamed, HZB timing placeholder, and mesh-shader timing placeholder. The
 large-scene page-fault artifact is controlled by
 `FUN_RENDERER_STATIC_VIRTUAL_GEOMETRY_BENCHMARK_ARTIFACT`.
 
+## Pass 12 Dynamic Geometry And Procedural Bridge
+
+`fun-scene/src/renderer_components.rs` now declares dynamic geometry semantics
+with domain names, not product-prefixed component names:
+
+- `SceneGeometryKind` separates static, streamable, dynamic, and procedural
+  chunk declarations;
+- `DynamicGeometryClass` classifies skinned players, NPCs, vehicles, weapons,
+  destruction fragments, procedural terrain chunks, temporary FX geometry,
+  editor gizmos/debug shapes, and generic dynamic actors;
+- `DynamicGeometryLifetime` separates persistent actors, streamed chunks,
+  destruction debris, transient frames, editor-only geometry, and normal
+  runtime dynamic records;
+- `DynamicGeometryUpdateHint` records transform, skinning, vertex/index,
+  material, procedural chunk, destruction, lifetime, editor gizmo, and unknown
+  update reasons;
+- `ProceduralChunkOwner` carries chunk ID and revision;
+- `GeometryDeclaration` and `DynamicGeometryAuthoring` make this scene-authored
+  ECS data instead of private renderer folklore.
+
+`fun-renderer/src/dynamic_geometry.rs` now owns the renderer-core substrate for
+dynamic submissions. `DynamicGeometrySubmission` accepts the scene-authored mesh
+and material handles, dynamic payload sizes, bounds, current and previous
+transforms, update reason, lifetime class, priority hint, procedural owner, and
+dynamic cluster mode. `DynamicGeometryDatabase` tracks live records, dirty
+flags, generation increments, upload bytes, CPU/GPU update cost placeholders,
+skinning cost, procedural invalidation cost, draw counts, dispatch counts, and
+class counts.
+
+The execution path is intentionally split from static virtual geometry:
+
+- classic mesh draw packets are the default dynamic path;
+- optional dynamic cluster packets are allowed for selected classes such as
+  destruction fragments, procedural chunks, and vehicles when payloads provide a
+  dynamic cluster budget;
+- procedural chunk edits call `apply_procedural_update` to update matching
+  chunk revisions and dirty only the affected dynamic records;
+- the procedural update report keeps `full_static_virtual_geometry_rebuilds=0`
+  so minor procedural edits do not imply a whole `.funvg` rebuild.
+
+Synthetic tests cover a skinned dynamic actor scene, procedural invalidation
+scene, destruction-fragment stress artifact, coexistence with static virtual
+geometry, and fun-scene declaration-to-submission conversion. The upload/dirty
+artifact is controlled by `FUN_RENDERER_DYNAMIC_GEOMETRY_BENCHMARK_ARTIFACT`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
 | --- | --- | --- | --- | --- |
 | Product presentation | `game_client/src/lib.rs`, `fun_render/src/winit.rs`, `fun_render/src/core.rs` | `game_client` + `fun_render` | `fun-renderer` core through `fun_render` bridge | Current visible frame path. |
-| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,ecs.rs,frame_graph.rs,heuristics.rs,page.rs,resource.rs,scene.rs,ui/cef.rs,virtual_geometry.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, GPU scene DB records, shared page scheduler, static virtual geometry format/runtime, resource model, renderer-owned CEF compositor, not product swapchain ownership. |
+| Renderer-core seams | `fun-renderer/src/{lib.rs,api.rs,dynamic_geometry.rs,ecs.rs,frame_graph.rs,heuristics.rs,page.rs,resource.rs,scene.rs,ui/cef.rs,virtual_geometry.rs}` | `fun-renderer` | `fun-renderer` | Buildable substrate, frame-graph skeleton, GPU scene DB records, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural bridge, resource model, renderer-owned CEF compositor, not product swapchain ownership. |
 | Renderer asset tooling | `tools/virtual_geometry_bake/src/*` | `fun-renderer` API through `virtual_geometry_bake` tool | `fun-renderer` + tooling front-end | Deterministic `.funvg.json` emitter uses renderer-owned static virtual geometry format and scheduler-compatible page IDs. |
 | Lighting/Lux seams | `fun-lux/src/{lib.rs,api.rs}` | `fun-lux` | `fun-lux` | Buildable substrate and ECS extraction/update hooks. |
 | Scene substrate | `fun-scene/src/*`, `fun-scene-macros/src/*`, `game_scene/src/*` | `fun-scene` + `game_scene` | same split | Active and first-party. |
@@ -670,6 +715,8 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | Static virtual geometry tests | `cargo test -p fun-renderer --lib virtual_geometry` |
 | Static virtual geometry bake tool | `cargo test -p virtual_geometry_bake` |
 | Static virtual geometry page-fault artifact | `$env:FUN_RENDERER_STATIC_VIRTUAL_GEOMETRY_BENCHMARK_ARTIFACT='target\virtual-geometry\pass11-static-vg-page-faults.txt'; cargo test -p fun-renderer --lib virtual_geometry::tests::large_static_scene_benchmark_artifact_records_page_faults -- --exact --nocapture` |
+| Dynamic geometry tests | `cargo test -p fun-renderer --lib dynamic_geometry` |
+| Dynamic geometry upload/dirty artifact | `$env:FUN_RENDERER_DYNAMIC_GEOMETRY_BENCHMARK_ARTIFACT='target\dynamic-geometry\pass12-upload-dirty-records.txt'; cargo test -p fun-renderer --lib dynamic_geometry::tests::destruction_fragment_stress_test_writes_upload_artifact -- --exact --nocapture` |
 | Renderer frame graph tests | `cargo test -p fun-renderer --lib frame_graph` |
 | Renderer frame graph debug artifact | `$env:FUN_RENDERER_FRAME_GRAPH_DEBUG_ARTIFACT='target\frame-graph\pass6\renderer_frame_graph_debug.txt'; cargo test -p fun-renderer --lib frame_graph_debug_artifact_names_passes_resources_and_markers` |
 | Renderer scene DB tests | `cargo test -p fun-renderer --lib scene` |
@@ -734,3 +781,7 @@ For future behavior passes, the first rollback path remains:
 - Build future static geometry GPU execution from `StaticVirtualGeometryAsset`
   and `select_static_virtual_geometry_frame` instead of extending the older
   `fun_render` virtual-geometry prototype.
+- Keep dynamic gameplay geometry on the dynamic submission path. Skinned
+  players, vehicles, weapons, destruction fragments, procedural chunks, FX
+  geometry, and editor debug shapes should submit `DynamicGeometrySubmission`
+  records instead of forcing whole static virtual geometry asset rebuilds.

@@ -139,6 +139,15 @@ the renderer-owned `.funvg.json` schema deterministically; runtime selection
 uses frustum/HZB culling, hierarchical refinement, shared page-scheduler
 requests, compute-indirect draw packets, an optional mesh-shader fast path, and
 a fallback mesh path for missing root pages.
+Dynamic geometry is a separate first-class path, not a forced static virtual
+geometry rebuild. `fun-scene` declares `GeometryDeclaration`,
+`DynamicGeometryAuthoring`, `SceneGeometryKind`, `DynamicGeometryClass`,
+`DynamicGeometryLifetime`, `DynamicGeometryUpdateHint`, and
+`ProceduralChunkOwner`; `fun-renderer` consumes those declarations through
+`DynamicGeometrySubmission` and `DynamicGeometryDatabase`. The current substrate
+supports classic mesh draw packets, optional dynamic cluster packets for
+selected classes, procedural chunk invalidation by revision, destruction
+fragment stress accounting, and compact upload/dirty-record diagnostics.
 The renderer-owned frame graph is represented by `RendererFrameGraph`,
 `RendererFrameDescription`, typed pass/resource declarations, graph validation
 failures, pass timing placeholders, resource lifetimes, and debug artifacts.

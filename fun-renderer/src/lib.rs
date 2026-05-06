@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
 pub mod frame_graph;
@@ -780,6 +781,7 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 };
 
 pub use api::*;
+pub use dynamic_geometry::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
 pub use frame_graph::*;
