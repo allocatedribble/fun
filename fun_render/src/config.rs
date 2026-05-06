@@ -850,24 +850,88 @@ pub(crate) fn render_plugin(render_backend: Backends) -> RenderPlugin {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderBackendSelectionFacts {
+    pub requested_label: &'static str,
+    pub selected_backends: Backends,
+    pub selection_reason: &'static str,
+}
+
+impl RenderBackendSelectionFacts {
+    #[must_use]
+    pub fn from_env() -> Self {
+        let value = std::env::var("FUN_RENDER_BACKEND").ok();
+        Self::from_env_value(value.as_deref())
+    }
+
+    #[must_use]
+    pub fn from_env_value(value: Option<&str>) -> Self {
+        let Some(value) = value else {
+            return Self {
+                requested_label: default_render_backend_label(),
+                selected_backends: default_render_backend(),
+                selection_reason: "env_missing_default",
+            };
+        };
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Self {
+                requested_label: default_render_backend_label(),
+                selected_backends: default_render_backend(),
+                selection_reason: "empty_env_default",
+            };
+        }
+        if trimmed.eq_ignore_ascii_case("dx12")
+            || trimmed.eq_ignore_ascii_case("d3d12")
+            || trimmed.eq_ignore_ascii_case("directx12")
+        {
+            return Self {
+                requested_label: "dx12",
+                selected_backends: Backends::DX12,
+                selection_reason: "explicit_dx12",
+            };
+        }
+        if trimmed.eq_ignore_ascii_case("vulkan") || trimmed.eq_ignore_ascii_case("vk") {
+            return Self {
+                requested_label: "vulkan",
+                selected_backends: Backends::VULKAN,
+                selection_reason: "explicit_vulkan",
+            };
+        }
+        if trimmed.eq_ignore_ascii_case("auto") {
+            return Self {
+                requested_label: "auto",
+                selected_backends: Backends::VULKAN | Backends::DX12,
+                selection_reason: "explicit_auto",
+            };
+        }
+        Self {
+            requested_label: "invalid",
+            selected_backends: default_render_backend(),
+            selection_reason: "invalid_env_defaulted",
+        }
+    }
+}
+
 pub fn selected_render_backend() -> Backends {
     match std::env::var("FUN_RENDER_BACKEND") {
-        Ok(value) => match render_backend_from_env_value(Some(&value)) {
-            Some(backend) => backend,
-            None => {
+        Ok(value) => {
+            let facts = RenderBackendSelectionFacts::from_env_value(Some(&value));
+            if facts.selection_reason == "invalid_env_defaulted" {
                 info!(
                     target: "fun::render",
                     render_backend = value,
                     fallback = default_render_backend_label(),
                     "unknown FUN_RENDER_BACKEND; using platform default"
                 );
-                default_render_backend()
             }
-        },
-        Err(_) => default_render_backend(),
+            facts.selected_backends
+        }
+        Err(_) => RenderBackendSelectionFacts::from_env_value(None).selected_backends,
     }
 }
 
+#[cfg(test)]
 fn render_backend_from_env_value(value: Option<&str>) -> Option<Backends> {
     let Some(value) = value else {
         return Some(default_render_backend());
@@ -1165,10 +1229,10 @@ fn hash_byte(hash: &mut u64, byte: u8) {
 mod tests {
     use super::{
         DEFAULT_DESIRED_MAXIMUM_FRAME_LATENCY, FunRenderRtFeatures, NativeDlssConfig,
-        NativeDlssMode, RenderGeometryClass, RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode,
-        RtOpacityMaskMode, RtVendorEmulation, default_render_backend, present_mode_from_env_value,
-        render_backend_from_env_value, selected_max_frame_latency_from_env_reader,
-        selected_present_mode_from_env_reader,
+        NativeDlssMode, RenderBackendSelectionFacts, RenderGeometryClass, RenderGeometryPolicy,
+        RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
+        default_render_backend, present_mode_from_env_value, render_backend_from_env_value,
+        selected_max_frame_latency_from_env_reader, selected_present_mode_from_env_reader,
     };
     use bevy::render::settings::Backends;
     use bevy::solari::prelude::{SolariGeometryMode, SolariHairMode, SolariOpacityMode};
@@ -1324,6 +1388,22 @@ mod tests {
             Some(Backends::VULKAN | Backends::DX12)
         );
         assert_eq!(render_backend_from_env_value(Some("bad")), None);
+    }
+
+    #[test]
+    fn backend_selection_facts_keep_requested_and_selected_separate() {
+        let invalid = RenderBackendSelectionFacts::from_env_value(Some("definitely"));
+        assert_eq!(invalid.requested_label, "invalid");
+        assert_eq!(invalid.selected_backends, default_render_backend());
+        assert_eq!(invalid.selection_reason, "invalid_env_defaulted");
+
+        let automatic = RenderBackendSelectionFacts::from_env_value(Some("auto"));
+        assert_eq!(automatic.requested_label, "auto");
+        assert_eq!(
+            automatic.selected_backends,
+            Backends::VULKAN | Backends::DX12
+        );
+        assert_eq!(automatic.selection_reason, "explicit_auto");
     }
 
     #[test]

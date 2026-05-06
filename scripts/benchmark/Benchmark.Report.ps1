@@ -126,6 +126,9 @@ function Write-MarkdownReport {
         $lines.Add("- Matrix lane: $($Summary.config.benchmark_matrix_lane)") | Out-Null
     }
     $lines.Add("- Backend: $($Summary.config.render_backend)") | Out-Null
+    if ($null -ne $Summary.renderer_capability_report -and $Summary.renderer_capability_report.status -eq "found") {
+        $lines.Add("- Backend truth: requested=$($Summary.renderer_capability_report.requested_graphics_backend) selected=$($Summary.renderer_capability_report.selected_graphics_backend) actual=$($Summary.renderer_capability_report.actual_graphics_backend) fallback=$($Summary.renderer_capability_report.fallback_graphics_backend) reason=$($Summary.renderer_capability_report.graphics_backend_fallback_reason)") | Out-Null
+    }
     $lines.Add("- Present mode: $($Summary.config.present_mode)") | Out-Null
     $startupLatency = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.desired_maximum_frame_latency } else { "n/a" }
     $surfacePresent = if ($null -ne $Summary.render_presentation) { $Summary.render_presentation.surface_selected_present_mode } else { "n/a" }

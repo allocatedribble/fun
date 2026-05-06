@@ -50,6 +50,7 @@ fun_ai_core = { path = "../../fun-ai/crates/fun_ai_core" }
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
 log.workspace = true
+serde_json.workspace = true
 thunder.workspace = true
 tracing.workspace = true
 wgpu = { version = "29.0.3", default-features = false, features = ["dx12"], optional = true }
@@ -66,7 +67,6 @@ windows = { version = "0.62", optional = true, features = [
 
 [dev-dependencies]
 criterion.workspace = true
-serde_json.workspace = true
 
 [[bench]]
 name = "client_costs"

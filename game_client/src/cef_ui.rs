@@ -28,7 +28,8 @@ use fun_render::{
     TextureUploadPlan, TextureUploadPolicy, plan_cef_cpu_dirty_rect_upload,
 };
 use fun_render::{
-    RenderWorldContext, RenderWorldStatus, RendererCefCompositor, RendererCefFailClosedReason,
+    RENDERER_CAPABILITY_REPORT_PATH_ENV, RenderWorldContext, RenderWorldStatus,
+    RendererCefCompositor, RendererCefFailClosedReason,
 };
 #[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
 use fun_render::{
@@ -1466,12 +1467,25 @@ fn cef_ui_accelerated_fallback_or_strict_failure(
 }
 
 fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready: bool) {
-    write_cef_ui_transport_status(browser_config, bridge_ready);
+    let backend_truth = CefBackendTruthSnapshot::from_capability_report_or_hint(browser_config);
+    let interop_support = cef_interop_support(browser_config, bridge_ready);
+    write_cef_ui_transport_status(
+        browser_config,
+        bridge_ready,
+        &backend_truth,
+        interop_support,
+    );
     game_shared::fun_diag_info!(
         target: "fun::perf::cef_ui_transport",
         requested = browser_config.requested_paint_transport.as_wire_str(),
         selected = browser_config.paint_transport.as_wire_str(),
         backend = browser_config.render_backend_hint.as_wire_str(),
+        requested_backend = backend_truth.requested_backend.as_str(),
+        selected_backend = backend_truth.selected_backend.as_str(),
+        actual_backend = backend_truth.actual_backend.as_str(),
+        fallback_backend = backend_truth.fallback_backend.as_str(),
+        backend_truth_state = backend_truth.backend_truth_state.as_str(),
+        interop_support,
         bridge_ready,
         cpu_fallback_enabled = browser_config.cpu_fallback_allowed,
         ring_depth = browser_config.gpu_ring_depth,
@@ -1482,10 +1496,16 @@ fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready:
         "CEF UI transport selected"
     );
     game_shared::fun_diag_info!(
-        "[client perf] cef_ui transport selected: requested={} selected={} backend={} bridge_ready={} cpu_fallback_enabled={} ring_depth={} copy_mode={} strict={} debug_timings={} fallback_reason={}",
+        "[client perf] cef_ui transport selected: requested={} selected={} backend={} requested_backend={} selected_backend={} actual_backend={} fallback_backend={} backend_truth_state={} interop_support={} bridge_ready={} cpu_fallback_enabled={} ring_depth={} copy_mode={} strict={} debug_timings={} fallback_reason={}",
         browser_config.requested_paint_transport.as_wire_str(),
         browser_config.paint_transport.as_wire_str(),
         browser_config.render_backend_hint.as_wire_str(),
+        backend_truth.requested_backend.as_str(),
+        backend_truth.selected_backend.as_str(),
+        backend_truth.actual_backend.as_str(),
+        backend_truth.fallback_backend.as_str(),
+        backend_truth.backend_truth_state.as_str(),
+        interop_support,
         bridge_ready,
         browser_config.cpu_fallback_allowed,
         browser_config.gpu_ring_depth,
@@ -1496,7 +1516,88 @@ fn log_cef_ui_transport_decision(browser_config: &BrowserUiConfig, bridge_ready:
     );
 }
 
-fn write_cef_ui_transport_status(browser_config: &BrowserUiConfig, bridge_ready: bool) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CefBackendTruthSnapshot {
+    requested_backend: String,
+    selected_backend: String,
+    actual_backend: String,
+    fallback_backend: String,
+    fallback_reason: String,
+    backend_selection_reason: String,
+    backend_truth_state: String,
+    premium_rendering_gate: String,
+    capability_report_status: String,
+}
+
+impl CefBackendTruthSnapshot {
+    fn from_capability_report_or_hint(browser_config: &BrowserUiConfig) -> Self {
+        if let Some(snapshot) = Self::from_capability_report_path() {
+            return snapshot;
+        }
+        let backend_hint = browser_config.render_backend_hint.as_wire_str().to_owned();
+        Self {
+            requested_backend: backend_hint.clone(),
+            selected_backend: backend_hint,
+            actual_backend: "not_reported".to_owned(),
+            fallback_backend: "not_reported".to_owned(),
+            fallback_reason: "not_reported".to_owned(),
+            backend_selection_reason: "startup_hint_only".to_owned(),
+            backend_truth_state: "capability_report_not_found".to_owned(),
+            premium_rendering_gate: "not_reported".to_owned(),
+            capability_report_status: "not_found".to_owned(),
+        }
+    }
+
+    fn from_capability_report_path() -> Option<Self> {
+        let path = std::env::var_os(RENDERER_CAPABILITY_REPORT_PATH_ENV).map(PathBuf::from)?;
+        if path.as_os_str().is_empty() || !path.exists() {
+            return None;
+        }
+        let payload = std::fs::read_to_string(path).ok()?;
+        Self::from_capability_report_json(&payload).ok()
+    }
+
+    fn from_capability_report_json(payload: &str) -> Result<Self, serde_json::Error> {
+        let value: serde_json::Value = serde_json::from_str(payload)?;
+        Ok(Self {
+            requested_backend: json_string_field(&value, "requested_graphics_backend"),
+            selected_backend: json_string_field(&value, "selected_graphics_backend"),
+            actual_backend: json_string_field(&value, "actual_graphics_backend"),
+            fallback_backend: json_string_field(&value, "fallback_graphics_backend"),
+            fallback_reason: json_string_field(&value, "graphics_backend_fallback_reason"),
+            backend_selection_reason: json_string_field(
+                &value,
+                "graphics_backend_selection_reason",
+            ),
+            backend_truth_state: json_string_field(&value, "graphics_backend_truth_state"),
+            premium_rendering_gate: json_string_field(&value, "premium_rendering_gate"),
+            capability_report_status: "found".to_owned(),
+        })
+    }
+}
+
+fn json_string_field(value: &serde_json::Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("not_reported")
+        .to_owned()
+}
+
+fn cef_interop_support(browser_config: &BrowserUiConfig, bridge_ready: bool) -> &'static str {
+    if bridge_ready {
+        "ready"
+    } else {
+        browser_config.paint_transport_fallback_reason.as_wire_str()
+    }
+}
+
+fn write_cef_ui_transport_status(
+    browser_config: &BrowserUiConfig,
+    bridge_ready: bool,
+    backend_truth: &CefBackendTruthSnapshot,
+    interop_support: &'static str,
+) {
     let Some(path) = std::env::var_os(CEF_UI_TRANSPORT_STATUS_PATH_ENV).map(PathBuf::from) else {
         return;
     };
@@ -1513,32 +1614,39 @@ fn write_cef_ui_transport_status(browser_config: &BrowserUiConfig, bridge_ready:
             return;
         }
     }
-    let payload = format!(
-        concat!(
-            "{{\n",
-            "  \"requested\": \"{}\",\n",
-            "  \"selected\": \"{}\",\n",
-            "  \"backend\": \"{}\",\n",
-            "  \"bridge_ready\": {},\n",
-            "  \"cpu_fallback_enabled\": {},\n",
-            "  \"ring_depth\": {},\n",
-            "  \"copy_mode\": \"{}\",\n",
-            "  \"strict\": {},\n",
-            "  \"debug_timings\": {},\n",
-            "  \"fallback_reason\": \"{}\"\n",
-            "}}\n"
-        ),
-        browser_config.requested_paint_transport.as_wire_str(),
-        browser_config.paint_transport.as_wire_str(),
-        browser_config.render_backend_hint.as_wire_str(),
-        bridge_ready,
-        browser_config.cpu_fallback_allowed,
-        browser_config.gpu_ring_depth,
-        browser_config.gpu_copy_mode.as_wire_str(),
-        browser_config.accelerated_strict,
-        browser_config.gpu_debug_timings,
-        browser_config.paint_transport_fallback_reason.as_wire_str(),
-    );
+    let payload = serde_json::json!({
+        "requested": browser_config.requested_paint_transport.as_wire_str(),
+        "selected": browser_config.paint_transport.as_wire_str(),
+        "backend": browser_config.render_backend_hint.as_wire_str(),
+        "requested_backend": backend_truth.requested_backend.as_str(),
+        "selected_backend": backend_truth.selected_backend.as_str(),
+        "actual_backend": backend_truth.actual_backend.as_str(),
+        "fallback_backend": backend_truth.fallback_backend.as_str(),
+        "backend_fallback_reason": backend_truth.fallback_reason.as_str(),
+        "backend_selection_reason": backend_truth.backend_selection_reason.as_str(),
+        "backend_truth_state": backend_truth.backend_truth_state.as_str(),
+        "premium_rendering_gate": backend_truth.premium_rendering_gate.as_str(),
+        "capability_report_status": backend_truth.capability_report_status.as_str(),
+        "interop_support": interop_support,
+        "bridge_ready": bridge_ready,
+        "cpu_fallback_enabled": browser_config.cpu_fallback_allowed,
+        "ring_depth": browser_config.gpu_ring_depth,
+        "copy_mode": browser_config.gpu_copy_mode.as_wire_str(),
+        "strict": browser_config.accelerated_strict,
+        "debug_timings": browser_config.gpu_debug_timings,
+        "fallback_reason": browser_config.paint_transport_fallback_reason.as_wire_str(),
+    });
+    let payload = match serde_json::to_string_pretty(&payload) {
+        Ok(payload) => format!("{payload}\n"),
+        Err(error) => {
+            tracing::warn!(
+                target: FUN_UI_DIAGNOSTICS_TARGET,
+                ?error,
+                "could not serialize CEF UI transport status"
+            );
+            return;
+        }
+    };
     if let Err(error) = std::fs::write(path, payload) {
         tracing::warn!(
             target: FUN_UI_DIAGNOSTICS_TARGET,
@@ -3955,6 +4063,31 @@ mod tests {
             Duration::from_nanos(16_666_667)
         );
         assert!(message_loop_pump.enabled());
+    }
+
+    #[test]
+    fn cef_backend_truth_snapshot_uses_renderer_capability_report() {
+        let snapshot = CefBackendTruthSnapshot::from_capability_report_json(
+            r#"{
+                "requested_graphics_backend": "dx12",
+                "selected_graphics_backend": "dx12",
+                "actual_graphics_backend": "vulkan",
+                "fallback_graphics_backend": "vulkan",
+                "graphics_backend_fallback_reason": "actual_backend_mismatch",
+                "graphics_backend_selection_reason": "explicit_dx12",
+                "graphics_backend_truth_state": "actual_backend_mismatch",
+                "premium_rendering_gate": "blocked_backend_mismatch"
+            }"#,
+        )
+        .expect("valid capability report");
+
+        assert_eq!(snapshot.requested_backend, "dx12");
+        assert_eq!(snapshot.selected_backend, "dx12");
+        assert_eq!(snapshot.actual_backend, "vulkan");
+        assert_eq!(snapshot.fallback_backend, "vulkan");
+        assert_eq!(snapshot.backend_truth_state, "actual_backend_mismatch");
+        assert_eq!(snapshot.premium_rendering_gate, "blocked_backend_mismatch");
+        assert_eq!(snapshot.capability_report_status, "found");
     }
 
     #[test]

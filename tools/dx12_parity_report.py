@@ -607,14 +607,19 @@ def renderer_capability_markdown_rows(vulkan: dict[str, Any], dx12: dict[str, An
         ("selected_renderer_lane", "selected renderer lane"),
         ("actual_renderer_lane", "actual renderer lane"),
         ("renderer_lane_selection_reason", "renderer lane reason"),
+        ("requested_graphics_backend", "requested graphics backend"),
         ("selected_graphics_backend", "selected graphics backend"),
         ("actual_graphics_backend", "actual graphics backend"),
+        ("fallback_graphics_backend", "fallback graphics backend"),
         ("graphics_backend_fallback_reason", "graphics fallback reason"),
+        ("graphics_backend_selection_reason", "graphics selection reason"),
+        ("graphics_backend_truth_state", "graphics truth state"),
         ("adapter_vendor", "adapter vendor"),
         ("adapter_vendor_id", "adapter vendor id"),
         ("adapter_type", "adapter type"),
         ("feature_level", "feature level"),
         ("dx12_native_handle_support", "DX12/native handles"),
+        ("dx12_native_interop_support", "DX12 interop support"),
         ("vulkan_backend_support", "Vulkan backend"),
         ("d3d11on12_fallback_state", "D3D11On12 fallback state"),
         ("cef_accelerated_shared_texture_support", "CEF shared texture"),
@@ -630,6 +635,7 @@ def renderer_capability_markdown_rows(vulkan: dict[str, Any], dx12: dict[str, An
         ("dlss_availability", "DLSS"),
         ("fsr_availability", "FSR"),
         ("frame_generation_eligibility", "frame generation"),
+        ("premium_rendering_gate", "premium rendering gate"),
         ("pipeline_warmup_status", "pipeline warmup"),
         ("ui_transport_mode", "UI transport mode"),
     )
@@ -1520,12 +1526,15 @@ def lane_failure_messages(dx12: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     cef_cpu_upload = metric_value(dx12, "cef_cpu_upload_bytes", "mean") or 0.0
     capability = renderer_capability_report(dx12)
+    requested_backend = str(capability.get("requested_graphics_backend") or get_path(dx12, "config", "render_backend") or "").lower()
     selected_backend = str(capability.get("selected_graphics_backend") or get_path(dx12, "config", "render_backend") or "").lower()
     actual_backend = str(capability.get("actual_graphics_backend") or "").lower()
-    if selected_backend == "dx12" and actual_backend and actual_backend != "dx12":
+    fallback_backend = str(capability.get("fallback_graphics_backend") or "").lower()
+    if requested_backend == "dx12" and actual_backend and actual_backend != "dx12":
         failures.append(
-            "renderer backend mismatch: selected_graphics_backend=dx12 "
-            f"actual_graphics_backend={actual_backend}"
+            "renderer backend mismatch: requested_graphics_backend=dx12 "
+            f"selected_graphics_backend={selected_backend} actual_graphics_backend={actual_backend} "
+            f"fallback_graphics_backend={fallback_backend or 'not_reported'}"
         )
     if (
         str(capability.get("cef_cpu_runtime_upload_fallback_allowed")).lower() == "true"
@@ -1969,14 +1978,19 @@ def write_sample_summary(
             "selected_renderer_lane": "legacy",
             "actual_renderer_lane": "legacy",
             "renderer_lane_selection_reason": "explicit_legacy",
+            "requested_graphics_backend": backend,
             "selected_graphics_backend": backend,
             "actual_graphics_backend": backend,
+            "fallback_graphics_backend": "none",
             "graphics_backend_fallback_reason": "none",
+            "graphics_backend_selection_reason": f"explicit_{backend}",
+            "graphics_backend_truth_state": f"trusted_{backend}",
             "adapter_vendor": "nvidia" if "nvidia" in gpu_name.lower() else "unknown",
             "adapter_vendor_id": 4318 if "nvidia" in gpu_name.lower() else 0,
             "adapter_type": "discrete_gpu",
             "feature_level": "not_exposed_by_wgpu",
             "dx12_native_handle_support": backend == "dx12",
+            "dx12_native_interop_support": "supported" if backend == "dx12" else "fallback_reason=render_backend_not_dx12",
             "vulkan_backend_support": backend == "vulkan",
             "d3d11on12_fallback_state": "cpu_fallback_forbidden",
             "cef_accelerated_shared_texture_support": "renderer_prerequisites_supported" if backend == "dx12" else "fallback_reason=render_backend_not_dx12",
@@ -1992,6 +2006,16 @@ def write_sample_summary(
             "dlss_availability": "compiled_runtime_disabled" if backend == "dx12" else "fallback_reason=render_backend_not_dx12",
             "fsr_availability": "not_compiled",
             "frame_generation_eligibility": "not_compiled",
+            "premium_rendering_gate": "dx12_foundation_eligible" if backend == "dx12" else "blocked_backend_not_dx12",
+            "backend_parity_scene_ids": [
+                "backend_parity.clear_present",
+                "backend_parity.static_mesh",
+                "backend_parity.material",
+                "backend_parity.depth_motion_vector",
+                "backend_parity.cef_ui_composite",
+                "backend_parity.post_upscale_placeholder",
+                "backend_parity.benchmark_capture",
+            ],
             "pipeline_warmup_status": "disabled",
             "pipeline_warmup_mode": "off",
             "ui_transport_mode": "d3d11on12" if backend == "dx12" else "cpu",

@@ -6,6 +6,7 @@ pub mod ecs;
 pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
+pub mod parity;
 pub mod pipeline;
 pub mod resource;
 pub mod scene;
@@ -13,6 +14,7 @@ pub mod ui;
 
 pub use fun_lux;
 pub use fun_scene;
+pub use parity::*;
 
 pub const FUN_RENDERER_SCHEMA_VERSION: u16 = 1;
 pub const FUN_RENDERER_PACKAGE_NAME: &str = "fun-renderer";

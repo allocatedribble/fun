@@ -600,6 +600,14 @@ function Parse-CefUiTransportSelectionLog {
         requested = $null
         selected = $null
         backend = $null
+        requested_backend = $null
+        selected_backend = $null
+        actual_backend = $null
+        fallback_backend = $null
+        backend_truth_state = $null
+        interop_support = $null
+        premium_rendering_gate = $null
+        backend_fallback_reason = $null
         bridge_ready = $null
         cpu_fallback_enabled = $null
         ring_depth = $null
@@ -608,6 +616,39 @@ function Parse-CefUiTransportSelectionLog {
         debug_timings = $null
         fallback_reason = $null
     }
+}
+
+function Merge-RendererBackendTruthIntoCefSelection {
+    param(
+        [System.Collections.IDictionary]$Selection,
+        $CapabilityReport
+    )
+
+    if ($null -eq $Selection) {
+        return $Selection
+    }
+    if ($null -eq $CapabilityReport -or $CapabilityReport.status -ne "found") {
+        return $Selection
+    }
+
+    foreach ($entry in @(
+            @{ source = "requested_graphics_backend"; target = "requested_backend" },
+            @{ source = "selected_graphics_backend"; target = "selected_backend" },
+            @{ source = "actual_graphics_backend"; target = "actual_backend" },
+            @{ source = "fallback_graphics_backend"; target = "fallback_backend" },
+            @{ source = "graphics_backend_truth_state"; target = "backend_truth_state" },
+            @{ source = "dx12_native_interop_support"; target = "interop_support" },
+            @{ source = "premium_rendering_gate"; target = "premium_rendering_gate" }
+        )) {
+        $value = $CapabilityReport.($entry.source)
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $Selection[$entry.target] = [string]$value
+        }
+    }
+    if ($null -ne $CapabilityReport.graphics_backend_fallback_reason) {
+        $Selection["backend_fallback_reason"] = [string]$CapabilityReport.graphics_backend_fallback_reason
+    }
+    return $Selection
 }
 
 function Parse-CefUiTransportHealthLog {

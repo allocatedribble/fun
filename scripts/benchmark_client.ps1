@@ -524,6 +524,7 @@ try {
     $transientDescriptorCreates = @(Parse-TransientDescriptorCreateLog -Lines $sampleLines)
     $transientDescriptorLabelVariants = @(Parse-TransientDescriptorLabelVariantLog -Lines $sampleLines)
     $cefUiTransportSelection = Parse-CefUiTransportSelectionLog -Lines $allLines
+    $cefUiTransportSelection = Merge-RendererBackendTruthIntoCefSelection -Selection $cefUiTransportSelection -CapabilityReport $rendererCapabilityReport
     $cefUiTransportHealth = Parse-CefUiTransportHealthLog -Lines $sampleLines
     $stats = Get-SummaryStats -Samples $samples
     $comparison = New-Comparison -CurrentStats $stats -BaselinePath $baselinePath

@@ -45,7 +45,7 @@ first-order migration blockers.
 | Which path presents frames today? | `game_client` builds `FunRenderWinitPresentationPlugin` plus `FunRenderCorePlugin`. `FunRenderWinitPresentationPlugin` installs Bevy `DefaultPlugins`, `WindowPlugin`, selected DX12/Vulkan `RenderPlugin`, Winit, and render recovery. Product-visible presentation is still Bevy/wgpu through `fun_render`; `FUN_RENDERER_BACKEND=fun` initializes the no-op `fun-renderer`/`fun-lux` path but does not own the swapchain yet. |
 | Can product UI run GPU-only today? | The product code path is now GPU-only/fail-closed: CEF CPU `OnPaint` frames are rejected, Bevy UI image composition has been removed from `game_client`, and `fun-renderer::RendererCefCompositor` owns the late UI layer contract. Runtime proof is still blocked until the strict D3D11On12 lane reports `bridge_ready=true` with nonzero GPU copy bytes. |
 | Which runtime pipeline gates still fail? | The older local pipeline cardinality report records runtime creation p95 maxima: render pipeline `22`, compute pipeline `82`, shader pipeline `104`. Pass 4 adds a `fun-renderer` pipeline registry plus a bridge warmup plan, fixes the compute-culling read-only storage binding mismatch, and records a new selected-DX12/actual-Vulkan smoke artifact with render, compute, and shader pipeline creation p95 all `0` after warmup. A true DX12 artifact is still required because capability diagnostics report `actual_backend=vulkan`. |
-| Is DX12 real DX12 or fallback? | The Bevy/wgpu renderer can select DX12 through the stack profiles and `RenderPlugin`, and diagnostics report the requested backend. The CEF accelerated bridge is not ready: both local CEF artifacts report `backend=dx12` but `bridge_ready=false` and `fallback_reason=render_backend_not_dx12`. |
+| Is DX12 real DX12 or fallback? | Pass 9 makes this a runtime truth contract instead of a requested-backend guess. The latest local smoke requested and selected DX12, but the renderer capability report says `actual_graphics_backend=vulkan`, `fallback_graphics_backend=vulkan`, and `graphics_backend_truth_state=actual_backend_mismatch`. This blocks CEF GPU transport and all premium rendering gates. |
 | What must migrate before DLSS/FSR/FG? | CEF GPU-only health, hot upload cleanup, runtime PSO/shader creation, PIX/barrier evidence, presentation matrix evidence, and renderer-owned scene/UI/upscale separation. `docs/dx12_dlss_boundary_gate.md` still says `DX12 baseline ready for DLSS SR bring-up: no`. |
 
 ## Crate Ownership Inventory
@@ -435,6 +435,58 @@ checker is `tools/check_product_ui_policy.ps1`; it rejects Bevy UI product
 components, CEF CPU upload/write paths, and the removed CEF-to-Bevy-image copy
 bridge.
 
+## Pass 9 Backend Truth Gate
+
+Pass 9 turns backend selection into a testable contract. The renderer
+capability report now records:
+
+- requested, selected, actual, and fallback graphics backend;
+- graphics backend selection reason and truth state;
+- DX12 native interop support;
+- premium rendering gate status;
+- backend parity scene IDs.
+
+The required backend parity scene catalog now lives in
+`fun-renderer/src/parity.rs` and covers:
+
+| scene ID | purpose |
+| --- | --- |
+| `backend_parity.clear_present` | clear/present sanity lane |
+| `backend_parity.static_mesh` | static mesh parity lane |
+| `backend_parity.material` | material parity lane |
+| `backend_parity.depth_motion_vector` | depth and motion-vector parity lane |
+| `backend_parity.cef_ui_composite` | CEF UI composite parity lane |
+| `backend_parity.post_upscale_placeholder` | post/upscale placeholder lane |
+| `backend_parity.benchmark_capture` | benchmark capture lane |
+
+`game_client` now reads the renderer capability report before writing
+`target/run-stack/cef-ui-transport.json`, and CEF transport logs/status include
+the same backend truth fields. `scripts/benchmark_client.ps1` merges renderer
+backend truth into `cef_ui_transport_selection`, and
+`tools/dx12_parity_report.py` fails a DX12 lane when the report says the actual
+backend is not DX12.
+
+Current local evidence:
+
+| artifact | status | key result |
+| --- | --- | --- |
+| `target/run-stack/renderer-capabilities.json` | measured | requested DX12, actual Vulkan |
+| `target/benchmarks/client/20260506-032407-482/summary.json` | measured | `requested_graphics_backend=dx12`, `selected_graphics_backend=dx12`, `actual_graphics_backend=vulkan`, `fallback_graphics_backend=vulkan`, `graphics_backend_truth_state=actual_backend_mismatch`, `premium_rendering_gate=blocked_backend_mismatch` |
+| `target/dx12-parity/current/dx12_parity_report.md` | measured_fail | dashboard now names the requested/selected/actual/fallback mismatch |
+| `target/benchmarks/dx12_parity/20260506-025401-303/matrix.json` | planned | CEF transport parity plan generated |
+
+The short live smoke reached runtime and produced capability/log artifacts, but
+the benchmark wrapper timed out before a normal sample-window closeout. The log
+was harvested through the parser-only path, which is enough for the Pass 9
+backend-truth finding. The finding is implementation/configuration, not
+hardware absence: the NVIDIA adapter is visible, but the Bevy/wgpu actual
+backend is Vulkan when the lane asks for DX12.
+
+Current premium-rendering rule: do not attempt DLSS, FSR, frame generation, or
+CEF GPU transport product claims until `graphics_backend_truth_state` is
+`trusted_dx12` or `auto_resolved_dx12` and `dx12_native_interop_support` is
+`supported`.
+
 ## Renderer Module Inventory
 
 | area | current files/tools | current owner | intended owner | status |
@@ -455,6 +507,7 @@ bridge.
 
 | blocker | current evidence | owner now | migration impact | next proof |
 | --- | --- | --- | --- | --- |
+| DX12 backend truth mismatch | Pass 9 smoke artifact `target/benchmarks/client/20260506-032407-482/summary.json` records `requested_graphics_backend=dx12`, `selected_graphics_backend=dx12`, `actual_graphics_backend=vulkan`, `fallback_graphics_backend=vulkan`, and `graphics_backend_truth_state=actual_backend_mismatch`. | `fun_render` startup/backend selection over Bevy/wgpu | Blocks CEF GPU transport, DX12 native interop, DLSS, FSR, frame generation, and renderer-owned presentation claims. | A live artifact with actual DX12, no fallback backend, `dx12_native_interop_support=supported`, and matching CEF bridge readiness. |
 | `FunUploadArena` boundary | `fun_render::FunUploadArena` wraps `wgpu::util::StagingBelt` and tracks/budgets aligned buffer writes. `FUN_UPLOAD_ARENA_RESOURCE_SHIM` records it as a bridge compatibility shim for `fun_renderer::resource` staging-buffer pages. `docs/dx12_upload_audit.md` says not to force Bevy prepare-stage `RenderQueue` helpers through ad hoc encoders. | policy in `fun-renderer`, shim in `fun_render` | Foundation for moving measured small-buffer owners into renderer resource ownership without increasing submit pressure. | Top semantic owners for `DynamicUniformBuffer`/`RawBufferVec` rows, then measured before/after with no submit regression. |
 | DX12 upload kill-list | Current parity dashboard lists top offenders under Bevy generic rows, including `uniform_buffer.rs:311`, `buffer_vec.rs:183`, `gpu_image.rs:84`, and Solari constant rows. | Bevy + `fun_render` diagnostics | Prevents speculative upload rewrites. | Label split or owning-system attribution for top rows. |
 | CEF accelerated lane classified `cef_transport_bound` | Root ledger and CEF docs record the failed accelerated lane; `target/benchmarks/client/20260504-005500-247/summary.json` selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, zero GPU copy bytes, and zero accelerated paint FPS. | `game_client` CEF DX12 bridge over `fun_render::dx12_native` | Blocks GPU-only product UI and DLSS/upscale boundary proof. | Strict D3D11On12 lane with `selected=d3d11on12`, `bridge_ready=true`, `cef_cpu_upload_bytes=0`, nonzero `cef_gpu_copy_bytes`, no normal-frame blocking waits. |
@@ -496,11 +549,11 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 
 | item | DX12 current status | Vulkan current status |
 | --- | --- | --- |
-| Backend selection | Stack profiles and scripts default to `dx12`/`immediate`; `fun_render/src/winit.rs` selects Bevy render plugin backend from env/profile. | Supported by parity scripts and `default.vulkan.immediate.json`. |
+| Backend selection | Stack profiles and scripts can request `dx12`/`immediate`, but Pass 9 evidence currently reports requested/selected DX12 with actual Vulkan and fallback Vulkan. DX12 success now requires the actual backend to be DX12, not just the requested lane. | Supported by parity scripts and `default.vulkan.immediate.json`; Vulkan is also the observed actual backend in the latest requested-DX12 smoke. |
 | Product visible renderer | Bevy/wgpu through `fun_render`, not `fun-renderer` backend abstraction. | Same product path, different backend. |
-| Native interop | Centralized in `fun_render::dx12_native`; CEF/DLSS use this gate. | No equivalent native feature gate in this pass. |
-| CEF accelerated transport | Blocked: bridge readiness currently fails with `render_backend_not_dx12` even when the run requests DX12. | Not applicable; accelerated path is Windows/D3D11On12/DX12-specific. |
-| Parity evidence | Selected local matrix exists; current JSON recommendation is `runtime_pipeline_creation_bound` with high confidence. | Used as control lane in parity matrix. |
+| Native interop | Centralized in `fun_render::dx12_native`; CEF/DLSS use this gate. Current truth state blocks it because actual backend is Vulkan. | No equivalent native feature gate in this pass. |
+| CEF accelerated transport | Blocked: bridge readiness fails with `render_backend_not_dx12`; Pass 9 shows the deeper foundation issue is actual Vulkan under a requested DX12 lane. | Not applicable; accelerated path is Windows/D3D11On12/DX12-specific. |
+| Parity evidence | Selected local matrix exists; Pass 9 dashboard now fails a requested-DX12 lane when capability JSON reports actual Vulkan. | Used as control lane in parity matrix. |
 | Present decision | Do not change defaults until full present matrix and latency evidence are complete. | Control lane required before changing DX12 defaults. |
 | Barrier evidence | Blocked on PIX CSV/capture rows. | Not the target of PIX DX12 barrier audit. |
 
@@ -524,6 +577,8 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | Scene migration check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1 -SelfTest`; then without `-SelfTest` |
 | Product UI policy check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_product_ui_policy.ps1 -SelfTest`; then `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_product_ui_policy.ps1 -EmitArtifact target\cef-parity\pass8-product-ui-policy.json` |
 | DX12 doctrine check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dx12_doctrine.ps1 -SelfTest`; then without `-SelfTest` |
+| Renderer backend truth smoke | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -BenchmarkLane presentation_floor -BenchmarkProfile pass9_backend_truth -BenchmarkScenario dx12_truth_smoke -BenchmarkMatrixLane dx12_backend_truth_smoke -RenderBackend dx12 -PresentMode immediate -WarmupSeconds 1 -SampleSeconds 2 -DisableClouds -DisableSolari -DisableMeshlets -DisableFpsOverlay -WindowWidth 320 -WindowHeight 180` |
+| Renderer backend truth parse-only artifact | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -InputLog target\run-stack\logs\game_client.err.log -BenchmarkProfile pass9_backend_truth -BenchmarkScenario dx12_truth_smoke -BenchmarkMatrixLane dx12_backend_truth_smoke -RenderBackend dx12 -PresentMode immediate -WarmupSeconds 0 -SampleSeconds 0 -DisableClouds -DisableSolari -DisableMeshlets -DisableFpsOverlay -WindowWidth 320 -WindowHeight 180` |
 | DX12 perf gate parser | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dx12_perf_regression.ps1 -SelfTest` |
 | DX12 parity plan | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_dx12_parity.ps1 -PlanOnly` |
 | CEF transport plan | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_dx12_parity.ps1 -MatrixSize cef_transport -PlanOnly` |

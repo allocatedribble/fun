@@ -84,9 +84,10 @@ pub use compute_culling::{
 pub use config::{
     ClientOpaqueRenderer, ClientRenderConfig, ClientRenderProfile, ClientWindowConfig,
     FunRenderAppOptions, FunRenderPresentation, FunRenderRtFeatures, NativeDlssConfig,
-    NativeDlssMode, RenderGeometryClass, RenderGeometryPolicy, RtHairMode, RtMegaGeometryMode,
-    RtOpacityMaskMode, RtVendorEmulation, log_native_dlss_startup_diagnostics,
-    selected_max_frame_latency, selected_present_mode, selected_render_backend,
+    NativeDlssMode, RenderBackendSelectionFacts, RenderGeometryClass, RenderGeometryPolicy,
+    RtHairMode, RtMegaGeometryMode, RtOpacityMaskMode, RtVendorEmulation,
+    log_native_dlss_startup_diagnostics, selected_max_frame_latency, selected_present_mode,
+    selected_render_backend,
 };
 pub use core::{
     FunDrawCallCounters, FunDrawCallRecord, FunDrawSubmissionKind, FunRenderCorePlugin,
@@ -161,6 +162,7 @@ pub use fun_renderer::frame_graph::*;
 pub use fun_renderer::fun_lux;
 pub use fun_renderer::fun_scene;
 pub use fun_renderer::heuristics::*;
+pub use fun_renderer::parity::*;
 pub use fun_renderer::resource::*;
 pub use fun_renderer::scene::*;
 pub use fun_renderer::ui::*;
