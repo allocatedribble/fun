@@ -138,6 +138,7 @@ pub use fun_renderer;
 pub use fun_renderer::ecs::*;
 pub use fun_renderer::fun_lux;
 pub use fun_renderer::fun_scene;
+pub use fun_renderer::heuristics::*;
 pub use fun_renderer::{
     FUN_RENDER_BRIDGE_PACKAGE_NAME, FUN_RENDERER_AI_INTERFACE_DESCRIPTORS,
     FUN_RENDERER_AI_OWNER_PACKAGE_NAME, FUN_RENDERER_BACKEND_DESCRIPTORS,

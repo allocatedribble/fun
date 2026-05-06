@@ -6,6 +6,7 @@ pub mod asset;
 pub mod authoring;
 pub mod diagnostics;
 pub mod format;
+pub mod heuristic_components;
 pub mod lux_components;
 pub mod manifest;
 pub mod observers;
@@ -37,6 +38,7 @@ pub use asset::*;
 pub use authoring::*;
 pub use diagnostics::*;
 pub use format::*;
+pub use heuristic_components::*;
 pub use lux_components::*;
 pub use manifest::*;
 pub use observers::*;
@@ -335,6 +337,29 @@ mod tests {
         }
 
         let _scene = megastructure_wall(NetEntity(500), GeometryRef::new(20), MaterialRef::new(30));
+    }
+
+    #[test]
+    fn fun_macro_authors_scheduler_input_components() {
+        fn selected_dynamic_cover(id: NetEntity) -> impl FunScene {
+            fun! {
+                #SelectedDynamicCover
+                fun_value(SceneStableIdentity(id))
+                GameplaySalient { score: 220 }
+                EditorSelection {
+                    rank: 0,
+                    salience: 255
+                }
+                StreamingPriority { score: 240 }
+                TemporalInstability {
+                    motion: 192,
+                    topology: 64
+                }
+            }
+        }
+
+        let _scene = selected_dynamic_cover(NetEntity(600));
+        assert_eq!(TemporalInstability::DESTRUCTIBLE.score(), u8::MAX);
     }
 
     #[test]

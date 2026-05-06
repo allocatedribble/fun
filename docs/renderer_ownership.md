@@ -199,6 +199,47 @@ tables, not on every ECS entity. Sparse components are reserved for editor-only
 metadata, debug-only declarations, optional GI/probe participation, and rare
 special effects.
 
+## Heuristic Scheduler
+
+The renderer heuristic scheduler is an ECS system graph, not a black-box
+renderer loop. It consumes authored and extracted components directly:
+`Transform`, `GlobalTransform`, `Visibility`, `ViewVisibility`, `Renderable`,
+`VirtualGeometryAuthoring`, `LuxLight`, `LuxEmissive`,
+`VirtualShadowReceiver`, `GameplaySalient`, `EditorSelection`, `SceneChunkId`,
+`StreamingPriority`, and `TemporalInstability`.
+
+`RenderHeuristicScheduler` is the resource that carries the active
+`RenderBudgetMode`, `RenderHeuristicWeights`, and `RenderFrameBudget`.
+`RendererViews` supplies viewport context. The scheduler publishes compact
+priority components and resources:
+
+- `PagePriority`
+- `ShadowPagePriority`
+- `LuxLightPriority`
+- `GiCacheUpdatePriority`
+- `ShadingRatePriority`
+- `MlInferencePriority`
+- `PagePriorities`
+- `ShadowPagePriorities`
+- `LuxLightPriorities`
+- `GiCacheUpdatePriorities`
+- `ShadingRatePriorities`
+- `MlInferencePriorities`
+
+The first system graph is `begin_heuristic_frame`,
+`score_virtual_geometry_pages`, `score_shadow_receivers`, `score_lux_lights`,
+and `score_gi_cache_participants`. These systems are intentionally explicit
+about their ECS query tuples because the tuple is the scheduler contract:
+screen area, visibility, view visibility, renderability, virtual-geometry page
+hints, light importance, emissive importance, receiver risk, gameplay salience,
+editor selection, streaming priority, scene chunk membership, and temporal
+instability all remain visible to Bevy scheduling and tests.
+
+`HeuristicDebugOverlay` stores `HeuristicPriorityRecord` values with a
+`HeuristicCauseSet`. CEF/Svelte diagnostics can render which ECS inputs caused
+page, shadow, light, GI cache, shading-rate, or ML fallback priority without
+adding a runtime Bevy UI overlay.
+
 ## Default Renderer
 
 `fun-renderer` is the product default renderer even while the first visual
@@ -349,10 +390,33 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::ViewportUiTarget`
 - `fun_scene::UpscalePolicy`
 - `fun_scene::ViewportRenderPolicy`
+- `fun_scene::GameplaySalient`
+- `fun_scene::EditorSelection`
+- `fun_scene::StreamingPriority`
+- `fun_scene::TemporalInstability`
 - `fun_lux::FUN_LUX_ECS_SCHEMA_VERSION`
 - `fun_lux::LuxLight`
 - `fun_lux::LuxLightDatabase`
 - `fun_lux::LuxLightEvent`
+- `fun_renderer::RenderHeuristicSet`
+- `fun_renderer::RenderHeuristicScheduler`
+- `fun_renderer::RenderHeuristicWeights`
+- `fun_renderer::RenderFrameBudget`
+- `fun_renderer::RendererViews`
+- `fun_renderer::PagePriority`
+- `fun_renderer::ShadowPagePriority`
+- `fun_renderer::LuxLightPriority`
+- `fun_renderer::GiCacheUpdatePriority`
+- `fun_renderer::ShadingRatePriority`
+- `fun_renderer::MlInferencePriority`
+- `fun_renderer::PagePriorities`
+- `fun_renderer::ShadowPagePriorities`
+- `fun_renderer::LuxLightPriorities`
+- `fun_renderer::GiCacheUpdatePriorities`
+- `fun_renderer::ShadingRatePriorities`
+- `fun_renderer::MlInferencePriorities`
+- `fun_renderer::HeuristicDebugOverlay`
+- `fun_renderer::HeuristicCauseSet`
 
 These tables use stable labels and typed owners so future migration work can be
 audited without parsing prose.

@@ -2,6 +2,8 @@
 
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
+#[cfg(feature = "bevy_ecs")]
+pub mod heuristics;
 
 pub use fun_lux;
 pub use fun_scene;
@@ -619,6 +621,8 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
+#[cfg(feature = "bevy_ecs")]
+pub use heuristics::*;
 
 #[must_use]
 pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRendererOwner {

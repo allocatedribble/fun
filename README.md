@@ -112,6 +112,15 @@ asset paths. `fun!` emits `Renderable`, `VirtualGeometryAuthoring`,
 systems react through Bevy change detection to request page metadata and bake
 checks, register bounds, update motion vectors, release page references, and
 invalidate shadow/GI caches.
+The heuristic scheduler is also an ECS system graph. `RenderHeuristicScheduler`
+uses authored inputs such as `Renderable`, `VirtualGeometryAuthoring`,
+`LuxLight`, `LuxEmissive`, `VirtualShadowReceiver`, `GameplaySalient`,
+`EditorSelection`, `SceneChunkId`, `StreamingPriority`, and
+`TemporalInstability` to publish `PagePriority`, `ShadowPagePriority`,
+`LuxLightPriority`, `GiCacheUpdatePriority`, `ShadingRatePriority`, and
+`MlInferencePriority`. `HeuristicDebugOverlay` records the component causes for
+each priority so CEF/Svelte diagnostics can explain page, light, and cache
+decisions without a Bevy UI runtime surface.
 `FUN_RENDERER_BACKEND=fun` is the long-term default. `legacy` is a temporary
 transition backend only and should be removed after one migration cycle.
 

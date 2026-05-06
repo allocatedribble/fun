@@ -27,10 +27,14 @@ use crate::{
     FunRenderPath, FunRenderRtFeatures, FunRendererConfig, FunRendererEcsEvent,
     FunRendererEcsSchedulePolicy, FunRendererPageAllocator, FunRendererUploadArena,
     FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry, GeometryResidencyManager,
-    GpuScene, MaterialResidencyManager, RenderPathSignature, StaticInstanceTable,
-    TextureResidencyManager, VirtualGeometryResidency, dlss_correctness, dx12_dlss_rr,
-    dx12_dlss_sr, lighting, pipeline_warmup, prewarm_primitive_render_cache,
-    prewarm_world_render_catalog, render_path_signature_for_options,
+    GiCacheUpdatePriorities, GpuScene, HeuristicDebugOverlay, LuxLightPriorities,
+    MaterialResidencyManager, MlInferencePriorities, PagePriorities, RenderHeuristicScheduler,
+    RenderPathSignature, RendererViews, ShadingRatePriorities, ShadowPagePriorities,
+    StaticInstanceTable, TextureResidencyManager, VirtualGeometryResidency, begin_heuristic_frame,
+    dlss_correctness, dx12_dlss_rr, dx12_dlss_sr, lighting, pipeline_warmup,
+    prewarm_primitive_render_cache, prewarm_world_render_catalog,
+    render_path_signature_for_options, score_gi_cache_participants, score_lux_lights,
+    score_shadow_receivers, score_virtual_geometry_pages,
     solari::{solari_runtime_params_from_env, solari_settings_from_env},
 };
 
@@ -264,6 +268,15 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<GpuScene>()
         .init_resource::<ExtractedSceneDeltas>()
         .init_resource::<FrameGraph>()
+        .init_resource::<RendererViews>()
+        .init_resource::<RenderHeuristicScheduler>()
+        .init_resource::<PagePriorities>()
+        .init_resource::<ShadowPagePriorities>()
+        .init_resource::<LuxLightPriorities>()
+        .init_resource::<GiCacheUpdatePriorities>()
+        .init_resource::<ShadingRatePriorities>()
+        .init_resource::<MlInferencePriorities>()
+        .init_resource::<HeuristicDebugOverlay>()
         .init_resource::<FunRendererPageAllocator>()
         .init_resource::<FunRendererUploadArena>()
         .init_resource::<FunRenderCapabilityMatrix>()
@@ -300,6 +313,17 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
                 lighting::setup_lighting,
                 prewarm_world_render_catalog,
                 prewarm_primitive_render_cache,
+            )
+                .chain(),
+        )
+        .add_systems(
+            Update,
+            (
+                begin_heuristic_frame,
+                score_virtual_geometry_pages,
+                score_shadow_receivers,
+                score_lux_lights,
+                score_gi_cache_participants,
             )
                 .chain(),
         );
@@ -366,6 +390,15 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<GpuScene>();
         render_app.init_resource::<ExtractedSceneDeltas>();
         render_app.init_resource::<FrameGraph>();
+        render_app.init_resource::<RendererViews>();
+        render_app.init_resource::<RenderHeuristicScheduler>();
+        render_app.init_resource::<PagePriorities>();
+        render_app.init_resource::<ShadowPagePriorities>();
+        render_app.init_resource::<LuxLightPriorities>();
+        render_app.init_resource::<GiCacheUpdatePriorities>();
+        render_app.init_resource::<ShadingRatePriorities>();
+        render_app.init_resource::<MlInferencePriorities>();
+        render_app.init_resource::<HeuristicDebugOverlay>();
         render_app.init_resource::<FunRendererPageAllocator>();
         render_app.init_resource::<FunRendererUploadArena>();
         render_app.init_resource::<FunRenderCapabilityMatrix>();

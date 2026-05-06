@@ -11,9 +11,10 @@ workspace = true
 
 [features]
 default = ["bevy_ecs"]
-bevy_ecs = ["dep:bevy_ecs", "dep:bevy_transform"]
+bevy_ecs = ["dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
 
 [dependencies]
+bevy_camera = { workspace = true, optional = true }
 bevy_ecs = { workspace = true, optional = true }
 bevy_transform = { workspace = true, optional = true }
 fun_lux.workspace = true
