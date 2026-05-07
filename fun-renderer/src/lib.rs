@@ -9,6 +9,8 @@ pub mod default_flip;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
+#[cfg(feature = "bevy_ecs")]
+pub mod extraction;
 pub mod frame_generation;
 pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
@@ -812,6 +814,8 @@ pub use component_api::*;
 pub use dynamic_geometry::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
+#[cfg(feature = "bevy_ecs")]
+pub use extraction::*;
 pub use frame_graph::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;

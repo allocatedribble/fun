@@ -523,6 +523,27 @@ contract and that descriptor names do not leak backend handle terminology. Any
 future wgpu upgrade or direct DX12/Vulkan/Metal backend must preserve this
 public ECS/asset API and adapt below it.
 
+Pass 4 adds `fun_renderer::extraction`, the renderer-owned bridge from Main
+World ECS data into compact Render World tables. It consumes the Pass 3 public
+components and assets, allocates generation-checked render IDs, tracks Bevy
+entity removals, rejects stale object handles, and writes dense backend-neutral
+tables for objects, transforms, bounds, materials, mesh instances, lights,
+views, UI surfaces, CEF surfaces, and post-process volumes.
+
+Extraction is incremental by default. Systems use Bevy changed-component
+filters, removed-component readers, asset-event queues, and explicit full
+rebuild control state. No `wgpu`, `wgpu-core`, `wgpu-hal`, Naga, native device,
+queue, texture, descriptor heap, or command-list object is needed during
+extraction. The `RendererExtract` plugin phase installs and runs these systems
+before prepare/queue/graph phases.
+
+`RenderWorldExtractionDiagnostics` is a compact in-memory counter record for
+queried entities, changed entities, extracted object/material/light/view/UI/CEF
+records, removals, full rebuild reason, extraction CPU nanoseconds, stale
+reference rejections, and Render World memory growth. If those diagnostics are
+persisted or sent across a process/backend boundary later, `fun-data`
+compressed protobuf bundles remain the canonical telemetry format.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

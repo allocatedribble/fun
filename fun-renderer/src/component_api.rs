@@ -58,6 +58,89 @@ pub type RenderTextureAssetId = RenderAssetId;
 pub type RenderSamplerAssetId = RenderAssetId;
 pub type RenderShaderAssetId = RenderAssetId;
 
+macro_rules! render_generation_id {
+    ($name:ident) => {
+        impl $name {
+            pub const INVALID: Self = Self {
+                slot: u32::MAX,
+                generation: 0,
+            };
+
+            #[must_use]
+            pub const fn new(slot: u32, generation: u32) -> Self {
+                Self { slot, generation }
+            }
+
+            #[must_use]
+            pub const fn first(slot: u32) -> Self {
+                Self {
+                    slot,
+                    generation: 1,
+                }
+            }
+
+            #[must_use]
+            pub const fn is_valid(self) -> bool {
+                self.slot != u32::MAX && self.generation != 0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::INVALID
+            }
+        }
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
+pub struct RenderObjectId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+render_generation_id!(RenderObjectId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderMeshId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+render_generation_id!(RenderMeshId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderMaterialId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+render_generation_id!(RenderMaterialId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderTextureId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+render_generation_id!(RenderTextureId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderViewId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+render_generation_id!(RenderViewId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderLightId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+render_generation_id!(RenderLightId);
+
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct RenderVec2 {
     pub x: f32,
@@ -299,9 +382,6 @@ impl Default for RenderVisibility {
         }
     }
 }
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Component)]
-pub struct RenderObjectId(pub RenderStableId);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Component)]
 pub struct RenderStatic;

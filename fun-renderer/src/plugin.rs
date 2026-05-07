@@ -14,6 +14,13 @@ use crate::{
         BackendTiming, DefaultProductionBackendSelection, DynamicRendererBackend, NativeBackend,
         RendererBackend, StaticBackendSelection, WgpuDx12Bridge, WgpuMetalBridge, WgpuVulkanBridge,
     },
+    extraction::{
+        begin_render_world_extraction_frame, extract_renderer_asset_events,
+        extract_renderer_cef_surfaces, extract_renderer_lights,
+        extract_renderer_post_process_volumes, extract_renderer_renderables,
+        extract_renderer_ui_surfaces, extract_renderer_views,
+        install_render_world_extraction_resources,
+    },
     settings::{GraphicsBackendSetting, RendererQualityTier},
 };
 
@@ -528,6 +535,7 @@ impl Plugin for DynamicFunRendererPlugin {
             backend: self.backend,
             dispatch_mode: BackendDispatchMode::DynamicTooling,
         });
+        install_render_world_extraction_resources(app);
         install_renderer_phase_systems_dynamic(app);
     }
 }
@@ -588,6 +596,7 @@ where
         })
         .init_resource::<RendererDiagnostics>()
         .init_resource::<RendererFailureState>();
+    install_render_world_extraction_resources(app);
 }
 
 pub fn install_renderer_phase_systems<B>(app: &mut App)
@@ -617,7 +626,19 @@ where
         Update,
         (
             renderer_backend_init::<B>.in_set(RendererBackendInit),
-            renderer_extract_phase.in_set(RendererExtract),
+            (
+                renderer_extract_phase,
+                begin_render_world_extraction_frame,
+                extract_renderer_asset_events,
+                extract_renderer_renderables,
+                extract_renderer_views,
+                extract_renderer_lights,
+                extract_renderer_ui_surfaces,
+                extract_renderer_cef_surfaces,
+                extract_renderer_post_process_volumes,
+            )
+                .chain()
+                .in_set(RendererExtract),
             renderer_prepare_assets_phase.in_set(RendererPrepareAssets),
             renderer_prepare_scene_phase.in_set(RendererPrepareScene),
             renderer_visibility_phase.in_set(RendererVisibility),
@@ -657,7 +678,19 @@ fn install_renderer_phase_systems_dynamic(app: &mut App) {
         Update,
         (
             dynamic_renderer_backend_init.in_set(RendererBackendInit),
-            renderer_extract_phase.in_set(RendererExtract),
+            (
+                renderer_extract_phase,
+                begin_render_world_extraction_frame,
+                extract_renderer_asset_events,
+                extract_renderer_renderables,
+                extract_renderer_views,
+                extract_renderer_lights,
+                extract_renderer_ui_surfaces,
+                extract_renderer_cef_surfaces,
+                extract_renderer_post_process_volumes,
+            )
+                .chain()
+                .in_set(RendererExtract),
             renderer_prepare_assets_phase.in_set(RendererPrepareAssets),
             renderer_prepare_scene_phase.in_set(RendererPrepareScene),
             renderer_visibility_phase.in_set(RendererVisibility),
@@ -853,7 +886,12 @@ impl<B: RendererBackend> Default for BackendPipelineCache<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{WgpuDx12Backend, WgpuVulkanBackend};
+    use crate::{
+        backend::{WgpuDx12Backend, WgpuVulkanBackend},
+        extraction::{
+            RenderStableIdAllocator, RenderWorldExtractionDiagnostics, RenderWorldTables,
+        },
+    };
 
     #[test]
     fn fun_renderer_plugin_installs_static_dx12_spine_resources() {
@@ -869,6 +907,12 @@ mod tests {
         assert!(app.world().contains_resource::<RendererQualitySettings>());
         assert!(app.world().contains_resource::<RendererDiagnostics>());
         assert!(app.world().contains_resource::<RendererFailureState>());
+        assert!(app.world().contains_resource::<RenderStableIdAllocator>());
+        assert!(app.world().contains_resource::<RenderWorldTables>());
+        assert!(
+            app.world()
+                .contains_resource::<RenderWorldExtractionDiagnostics>()
+        );
         assert!(
             app.world()
                 .contains_resource::<WgpuBridgeDevice<WgpuDx12Backend>>()
@@ -953,6 +997,7 @@ mod tests {
                 .production_static_dispatch,
             false
         );
+        assert!(app.world().contains_resource::<RenderWorldTables>());
 
         app.update();
 
