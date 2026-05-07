@@ -9,7 +9,7 @@ scope: fun-renderer, fun-lux, fun_render, fun-ai, bevy
 | package | crate | folder | owner | purpose |
 | --- | --- | --- | --- | --- |
 | `fun-scene` | `fun_scene` | `fun/fun-scene` | scene authoring | FUN-owned `fun!`/`fun_list!` scene macros, deterministic scene manifests, runtime scene spawning, editor scene authoring, server scene authority, streaming declarations, renderer-facing scene components, lighting/GI authoring components |
-| `fun-renderer` | `fun_renderer` | `fun/fun-renderer` | renderer core | default renderer core, virtual geometry, virtual shadows, GPU scene database, frame graph, page scheduler, renderer-owned CEF compositor, upscaling/frame-generation orchestration, DX12/Vulkan backend abstraction, `bevy_ecs` extraction/scheduling/GPU-scene integration |
+| `fun-renderer` | `fun_renderer` | `fun/fun-renderer` | renderer core | default renderer core, virtual geometry, virtual shadows, GPU scene database, frame graph, page scheduler, renderer-owned CEF compositor, upscaling/frame-generation orchestration, DX12/Vulkan/Metal backend abstraction, `bevy_ecs` extraction/scheduling/GPU-scene integration |
 | `fun-lux` | `fun_lux` | `fun/fun-lux` | lighting | direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction policy, radiance/surface/probe caches |
 | `fun_render` | `fun_render` | `fun/fun_render` | Bevy/game bridge | extraction, app/plugin integration, feature flags, legacy compatibility, diagnostics, benchmark integration |
 
@@ -380,6 +380,7 @@ Renderer bridge flags in `fun_render` forward into `fun-renderer`:
 - `fun_renderer_core`
 - `dx12_native_interop`
 - `vulkan_backend`
+- `metal_backend`
 - `cef_gpu_only`
 - `upscaling`
 - `dlss`
@@ -401,6 +402,7 @@ Compatibility aliases retained for one transition cycle:
 - `fun_renderer_new_core` -> `fun_renderer_core`
 - `fun_renderer_dx12` -> `dx12_native_interop` in `fun-renderer`
 - `fun_renderer_vulkan` -> `vulkan_backend`
+- `fun_renderer_metal` -> `metal_backend`
 - `fun_renderer_cef_gpu_only` -> `cef_gpu_only`
 - `fun_renderer_upscale` -> `upscaling`
 - `fun_renderer_dlss` -> `dlss`
@@ -422,6 +424,22 @@ The compile-only API seams are:
 - `fun_renderer::PassRegistry`
 - `fun_renderer::Presentation`
 - `fun_renderer::NoopRendererCore`
+- `fun_renderer::backend::RendererBackend`
+- `fun_renderer::backend::BackendDevice`
+- `fun_renderer::backend::BackendSurface`
+- `fun_renderer::backend::BackendQueue`
+- `fun_renderer::backend::BackendResource`
+- `fun_renderer::backend::BackendCommandEncoder`
+- `fun_renderer::backend::BackendPipeline`
+- `fun_renderer::backend::BackendShader`
+- `fun_renderer::backend::BackendTiming`
+- `fun_renderer::backend::BackendDiagnostics`
+- `fun_renderer::backend::BackendNativeInterop`
+- `fun_renderer::backend::BackendCapabilityReport`
+- `fun_renderer::backend::DynamicRendererBackend`
+- `fun_renderer::backend::BufferId<TUsage>`
+- `fun_renderer::backend::TextureId<TUsage>`
+- `fun_renderer::backend::PipelineId<TPhase>`
 - `fun_renderer::FunRendererBackendSelection`
 - `fun_renderer::RENDERER_CORE_INTERFACE_MAP`
 - `fun_renderer::RENDERER_UPLOAD_ARENA_SEAM`
@@ -446,6 +464,18 @@ and shuts the no-op path down cleanly. It is not wired to the product swapchain
 yet, so the product legacy Bevy renderer remains the only fully visible runtime
 presentation path until a later pass connects backend resources and window
 presentation.
+
+The V4 backend contract lives in `fun_renderer::backend`. Production renderer
+selection is static through `Renderer<B: RendererBackend>` and
+`StaticBackendSelection`; tooling may use `DynamicRendererBackend`, but only at
+coarse phase boundaries and never as production performance evidence. Backend
+reports distinguish bridge type, actual native backend, wgpu adapter truth,
+wgpu-core validation, wgpu-hal native-handle support, Naga shader translation,
+native command-encoder availability, and feature gaps with named reasons.
+High-level renderer data uses generation-checked typed handles such as
+`BufferId<TUsage>`, `TextureId<TUsage>`, `PipelineId<TPhase>`,
+`BindTableId<TLayout>`, and `GraphResourceId<TKind>` instead of boxed backend
+objects or string keys.
 
 ## Ownership Rules
 

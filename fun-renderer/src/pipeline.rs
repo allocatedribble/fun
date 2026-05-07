@@ -69,8 +69,9 @@ impl PipelineBackendMask {
     pub const NONE: Self = Self { bits: 0 };
     pub const DX12: Self = Self { bits: 1 << 0 };
     pub const VULKAN: Self = Self { bits: 1 << 1 };
+    pub const METAL: Self = Self { bits: 1 << 2 };
     pub const ALL: Self = Self {
-        bits: Self::DX12.bits | Self::VULKAN.bits,
+        bits: Self::DX12.bits | Self::VULKAN.bits | Self::METAL.bits,
     };
 
     #[must_use]
@@ -78,6 +79,7 @@ impl PipelineBackendMask {
         match backend {
             FunRendererBackend::Dx12 => self.bits & Self::DX12.bits != 0,
             FunRendererBackend::Vulkan => self.bits & Self::VULKAN.bits != 0,
+            FunRendererBackend::Metal => self.bits & Self::METAL.bits != 0,
         }
     }
 }
@@ -1205,6 +1207,9 @@ mod tests {
         let init_vulkan = registry.warmup_plan(PipelineWarmupRequest::renderer_initialization(
             FunRendererBackend::Vulkan,
         ));
+        let init_metal = registry.warmup_plan(PipelineWarmupRequest::renderer_initialization(
+            FunRendererBackend::Metal,
+        ));
         let scene_load = registry.warmup_plan(PipelineWarmupRequest {
             boundary: PipelineWarmupBoundary::SceneLoad,
             backend: FunRendererBackend::Dx12,
@@ -1223,6 +1228,10 @@ mod tests {
 
         assert!(init_dx12.eligible_pipeline_count >= 10);
         assert!(init_dx12.eligible_pipeline_count > init_vulkan.eligible_pipeline_count);
+        assert_eq!(
+            init_vulkan.eligible_pipeline_count,
+            init_metal.eligible_pipeline_count
+        );
         assert_eq!(
             init_dx12.first_pipeline_label,
             Some("fun_compute_culling_reset_pipeline")

@@ -140,6 +140,7 @@ pub fn renderer_settings_ui_model_from_bridge(
     let graphics_backend = match settings.preferred_backend {
         fun_renderer::FunRendererBackend::Dx12 => GraphicsBackendSetting::Dx12,
         fun_renderer::FunRendererBackend::Vulkan => GraphicsBackendSetting::Vulkan,
+        fun_renderer::FunRendererBackend::Metal => GraphicsBackendSetting::Metal,
     };
     let capabilities = RendererCapabilityFacts::from_renderer_features(
         settings.features.renderer_core_toggles(),

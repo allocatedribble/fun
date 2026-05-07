@@ -228,6 +228,7 @@ pub enum GraphicsBackendSetting {
     Auto,
     Dx12,
     Vulkan,
+    Metal,
 }
 
 impl GraphicsBackendSetting {
@@ -237,6 +238,7 @@ impl GraphicsBackendSetting {
             Self::Auto => "auto",
             Self::Dx12 => "dx12",
             Self::Vulkan => "vulkan",
+            Self::Metal => "metal",
         }
     }
 
@@ -246,6 +248,7 @@ impl GraphicsBackendSetting {
             Self::Auto => None,
             Self::Dx12 => Some(FunRendererBackend::Dx12),
             Self::Vulkan => Some(FunRendererBackend::Vulkan),
+            Self::Metal => Some(FunRendererBackend::Metal),
         }
     }
 }
@@ -714,6 +717,7 @@ pub struct RendererCompiledFeatureSupport {
     pub new_core: bool,
     pub dx12: bool,
     pub vulkan: bool,
+    pub metal: bool,
     pub cef_gpu_only: bool,
     pub upscaling: bool,
     pub dlss: bool,
@@ -735,6 +739,7 @@ impl RendererCompiledFeatureSupport {
         new_core: cfg!(feature = "fun_renderer_core"),
         dx12: cfg!(feature = "dx12_native_interop"),
         vulkan: cfg!(feature = "vulkan_backend"),
+        metal: cfg!(feature = "metal_backend"),
         cef_gpu_only: cfg!(feature = "cef_gpu_only"),
         upscaling: cfg!(feature = "upscaling"),
         dlss: cfg!(feature = "dlss"),
@@ -757,6 +762,7 @@ impl RendererCompiledFeatureSupport {
             new_core: features.new_core,
             dx12: features.dx12,
             vulkan: features.vulkan,
+            metal: features.metal,
             cef_gpu_only: features.cef_gpu_only,
             upscaling: features.upscale,
             dlss: features.dlss,
@@ -952,6 +958,7 @@ impl RendererCapabilityFacts {
                 new_core: true,
                 dx12: true,
                 vulkan: true,
+                metal: true,
                 cef_gpu_only: true,
                 upscaling: true,
                 dlss: true,
@@ -1547,6 +1554,10 @@ fn graphics_backend_supported(
             capabilities.compiled_features.vulkan
                 || capabilities.actual_backend == GraphicsBackendSetting::Vulkan
         }
+        GraphicsBackendSetting::Metal => {
+            capabilities.compiled_features.metal
+                || capabilities.actual_backend == GraphicsBackendSetting::Metal
+        }
     }
 }
 
@@ -1558,6 +1569,8 @@ fn fallback_graphics_backend(capabilities: RendererCapabilityFacts) -> GraphicsB
         GraphicsBackendSetting::Dx12
     } else if capabilities.compiled_features.vulkan {
         GraphicsBackendSetting::Vulkan
+    } else if capabilities.compiled_features.metal {
+        GraphicsBackendSetting::Metal
     } else {
         GraphicsBackendSetting::Auto
     }

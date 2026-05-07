@@ -174,6 +174,8 @@ fn selected_pipeline_backend() -> FunRendererBackend {
     let selected = selected_render_backend();
     if selected.contains(Backends::DX12) {
         FunRendererBackend::Dx12
+    } else if selected.contains(Backends::METAL) {
+        FunRendererBackend::Metal
     } else {
         FunRendererBackend::Vulkan
     }

@@ -1872,6 +1872,8 @@ pub const fn page_priority(priority: PagePriorityHint) -> u8 {
 pub const fn default_backend_for_target() -> FunRendererBackend {
     if cfg!(target_os = "windows") {
         FunRendererBackend::Dx12
+    } else if cfg!(target_os = "macos") {
+        FunRendererBackend::Metal
     } else {
         FunRendererBackend::Vulkan
     }

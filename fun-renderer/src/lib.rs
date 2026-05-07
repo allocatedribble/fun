@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod backend;
 pub mod benchmark;
 pub mod default_flip;
 pub mod dynamic_geometry;
@@ -586,16 +587,18 @@ pub const FUN_RENDERER_DYNAMIC_SCENE_TARGET: FunRendererDynamicSceneTarget =
 pub enum FunRendererBackend {
     Dx12,
     Vulkan,
+    Metal,
 }
 
 impl FunRendererBackend {
-    pub const ALL: [Self; 2] = [Self::Dx12, Self::Vulkan];
+    pub const ALL: [Self; 3] = [Self::Dx12, Self::Vulkan, Self::Metal];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Dx12 => "dx12",
             Self::Vulkan => "vulkan",
+            Self::Metal => "metal",
         }
     }
 }
@@ -608,7 +611,7 @@ pub struct FunRendererBackendDescriptor {
     pub native_handle_access_owner: FunRendererOwner,
 }
 
-pub const FUN_RENDERER_BACKEND_DESCRIPTORS: [FunRendererBackendDescriptor; 2] = [
+pub const FUN_RENDERER_BACKEND_DESCRIPTORS: [FunRendererBackendDescriptor; 3] = [
     FunRendererBackendDescriptor {
         backend: FunRendererBackend::Dx12,
         stable_id: "fun_renderer.backend.dx12",
@@ -618,6 +621,12 @@ pub const FUN_RENDERER_BACKEND_DESCRIPTORS: [FunRendererBackendDescriptor; 2] = 
     FunRendererBackendDescriptor {
         backend: FunRendererBackend::Vulkan,
         stable_id: "fun_renderer.backend.vulkan",
+        capability_reporting_required: true,
+        native_handle_access_owner: FunRendererOwner::FunRenderer,
+    },
+    FunRendererBackendDescriptor {
+        backend: FunRendererBackend::Metal,
+        stable_id: "fun_renderer.backend.metal",
         capability_reporting_required: true,
         native_handle_access_owner: FunRendererOwner::FunRenderer,
     },
@@ -792,6 +801,7 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 };
 
 pub use api::*;
+pub use backend::*;
 pub use benchmark::*;
 pub use dynamic_geometry::*;
 #[cfg(feature = "bevy_ecs")]
@@ -988,10 +998,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_contract_is_dx12_and_vulkan_only() {
+    fn backend_contract_covers_dx12_vulkan_and_metal() {
         assert_eq!(
             FunRendererBackend::ALL,
-            [FunRendererBackend::Dx12, FunRendererBackend::Vulkan]
+            [
+                FunRendererBackend::Dx12,
+                FunRendererBackend::Vulkan,
+                FunRendererBackend::Metal
+            ]
         );
 
         for descriptor in FUN_RENDERER_BACKEND_DESCRIPTORS {
