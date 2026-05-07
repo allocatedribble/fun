@@ -501,6 +501,28 @@ The first phase labels are Bevy `SystemSet`s: `RendererBackendInit`,
 phase drivers until graph packets are recorded, but they establish the stable
 ECS schedule contract consumed by `fun_render::FunRenderCorePlugin`.
 
+Pass 3 adds the gameplay-facing component and asset surface in
+`fun_renderer::component_api`. This API is intentionally above the bridge:
+gameplay and scene systems express renderer intent through renderable, camera,
+light, UI/CEF, post-process, upscaler, material, texture, sampler, and shader
+records without naming `wgpu`, `wgpu-core`, `wgpu-hal`, Naga, or backend-native
+handles.
+
+The component API carries a machine-workable hot/cold split guide in
+`RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE`. Hot components are compact, copyable
+records or marker components for query specialization. Cold components hold
+debug names, render-target selection, UI transport state, post settings, and
+quality controls. Per-frame churn should flow through Bevy change detection,
+typed dirty bits, or events; steady-state hot paths should not insert/remove
+components only to express transient renderer state.
+
+The asset API is described by `RENDERER_ASSET_API`. Material and texture state
+uses stable renderer asset IDs, binding schemas, feature masks, and descriptor
+records. Tests assert that the public component descriptors cover the Pass 3
+contract and that descriptor names do not leak backend handle terminology. Any
+future wgpu upgrade or direct DX12/Vulkan/Metal backend must preserve this
+public ECS/asset API and adapt below it.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

@@ -3,6 +3,8 @@
 pub mod api;
 pub mod backend;
 pub mod benchmark;
+#[cfg(feature = "bevy_ecs")]
+pub mod component_api;
 pub mod default_flip;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
@@ -805,6 +807,8 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 pub use api::*;
 pub use backend::*;
 pub use benchmark::*;
+#[cfg(feature = "bevy_ecs")]
+pub use component_api::*;
 pub use dynamic_geometry::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
