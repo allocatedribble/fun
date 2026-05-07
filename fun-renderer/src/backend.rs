@@ -792,6 +792,9 @@ pub struct MetalHalBridge;
 pub type WgpuDx12Backend = WgpuBridge<Dx12HalBridge>;
 pub type WgpuVulkanBackend = WgpuBridge<VulkanHalBridge>;
 pub type WgpuMetalBackend = WgpuBridge<MetalHalBridge>;
+pub type WgpuDx12Bridge = WgpuDx12Backend;
+pub type WgpuVulkanBridge = WgpuVulkanBackend;
+pub type WgpuMetalBridge = WgpuMetalBackend;
 
 pub struct DirectDx12Backend;
 pub struct DirectVulkanBackend;

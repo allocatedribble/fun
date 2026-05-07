@@ -246,6 +246,8 @@ impl Plugin for FunRenderCorePlugin {
 }
 
 pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
+    app.add_plugins(fun_renderer::DefaultFunRendererPlugin::default());
+
     let renderer_bridge_settings = RendererBridgeSettings::from_env();
     install_renderer_bridge_api(app, renderer_bridge_settings);
 

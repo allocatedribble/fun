@@ -3218,6 +3218,7 @@ dependencies = [
 name = "fun-renderer"
 version = "0.1.0"
 dependencies = [
+ "bevy_app",
  "bevy_camera",
  "bevy_ecs",
  "bevy_transform",

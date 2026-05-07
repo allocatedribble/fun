@@ -477,6 +477,30 @@ High-level renderer data uses generation-checked typed handles such as
 `BindTableId<TLayout>`, and `GraphResourceId<TKind>` instead of boxed backend
 objects or string keys.
 
+Pass 2 adds the Bevy plugin spine in `fun_renderer::plugin`. The public install
+surface is `FunRendererPlugin<B>`, with `DefaultFunRendererPlugin` selecting
+DX12 on Windows, Metal on macOS, and Vulkan elsewhere through the static
+backend selection policy. Tooling can use `DynamicFunRendererPlugin`, but it
+marks diagnostics as dynamic dispatch and is not valid production performance
+evidence.
+
+The renderer-owned ECS spine exposes public resources only for high-level
+systems: `RendererConfig`, `RendererBackendSelection`, `RendererBridgeState`,
+`RendererCapabilities`, `RendererFrameIndex`, `RendererFeatureFlags`,
+`RendererQualitySettings`, `RendererDiagnostics`, and `RendererFailureState`.
+Backend bridge resources such as `WgpuBridgeDevice`, `WgpuBridgeQueue`,
+`WgpuBridgeSurface`, `WgpuCoreState`, `WgpuHalAccess`, `NagaShaderBridge`,
+`BackendCommandPools`, and `BackendPipelineCache` are private to the plugin
+module.
+
+The first phase labels are Bevy `SystemSet`s: `RendererBackendInit`,
+`RendererExtract`, `RendererPrepareAssets`, `RendererPrepareScene`,
+`RendererVisibility`, `RendererQueue`, `RendererGraphBuild`,
+`RendererGraphCompile`, `RendererRecord`, `RendererSubmit`, `RendererPresent`,
+`RendererCleanup`, and `RendererDiagnosticsFlush`. They are no-op/counting
+phase drivers until graph packets are recorded, but they establish the stable
+ECS schedule contract consumed by `fun_render::FunRenderCorePlugin`.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

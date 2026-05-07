@@ -16,6 +16,8 @@ pub mod ml;
 pub mod page;
 pub mod parity;
 pub mod pipeline;
+#[cfg(feature = "bevy_ecs")]
+pub mod plugin;
 pub mod research;
 pub mod resource;
 pub mod scene;
@@ -813,6 +815,8 @@ pub use heuristics::*;
 pub use ml::*;
 pub use page::*;
 pub use pipeline::*;
+#[cfg(feature = "bevy_ecs")]
+pub use plugin::*;
 pub use research::*;
 pub use resource::*;
 pub use scene::*;

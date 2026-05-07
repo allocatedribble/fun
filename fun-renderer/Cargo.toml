@@ -11,7 +11,7 @@ workspace = true
 
 [features]
 default = ["bevy_ecs", "fun_renderer_core"]
-bevy_ecs = ["dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
+bevy_ecs = ["dep:bevy_app", "dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
 cef_gpu_only = []
 dlss = []
 dx12_native_interop = []
@@ -50,6 +50,7 @@ fun_renderer_upscale = ["upscaling"]
 fun_renderer_vulkan = ["vulkan_backend"]
 
 [dependencies]
+bevy_app = { workspace = true, optional = true }
 bevy_camera = { workspace = true, optional = true }
 bevy_ecs = { workspace = true, optional = true }
 bevy_transform = { workspace = true, optional = true }

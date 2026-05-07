@@ -1,0 +1,1004 @@
+use core::marker::PhantomData;
+
+use bevy_app::{App, Plugin, Update};
+use bevy_ecs::{
+    prelude::{ResMut, Resource},
+    schedule::{IntoScheduleConfigs, SystemSet},
+};
+
+use crate::{
+    RendererFeatureToggles,
+    backend::{
+        BackendBridgeType, BackendCapabilityReport, BackendDiagnostics, BackendDispatchMode,
+        BackendNativeInterop, BackendNativeInteropStatus, BackendResource, BackendShader,
+        BackendTiming, DefaultProductionBackendSelection, DynamicRendererBackend, NativeBackend,
+        RendererBackend, StaticBackendSelection, WgpuDx12Bridge, WgpuMetalBridge, WgpuVulkanBridge,
+    },
+    settings::{GraphicsBackendSetting, RendererQualityTier},
+};
+
+pub const FUN_RENDERER_PLUGIN_SCHEMA_VERSION: u16 = 1;
+pub const RENDERER_PHASE_COUNT: usize = 13;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RendererPhase {
+    BackendInit,
+    Extract,
+    PrepareAssets,
+    PrepareScene,
+    Visibility,
+    Queue,
+    GraphBuild,
+    GraphCompile,
+    Record,
+    Submit,
+    Present,
+    Cleanup,
+    DiagnosticsFlush,
+}
+
+impl RendererPhase {
+    pub const ORDER: [Self; RENDERER_PHASE_COUNT] = [
+        Self::BackendInit,
+        Self::Extract,
+        Self::PrepareAssets,
+        Self::PrepareScene,
+        Self::Visibility,
+        Self::Queue,
+        Self::GraphBuild,
+        Self::GraphCompile,
+        Self::Record,
+        Self::Submit,
+        Self::Present,
+        Self::Cleanup,
+        Self::DiagnosticsFlush,
+    ];
+
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::BackendInit => 0,
+            Self::Extract => 1,
+            Self::PrepareAssets => 2,
+            Self::PrepareScene => 3,
+            Self::Visibility => 4,
+            Self::Queue => 5,
+            Self::GraphBuild => 6,
+            Self::GraphCompile => 7,
+            Self::Record => 8,
+            Self::Submit => 9,
+            Self::Present => 10,
+            Self::Cleanup => 11,
+            Self::DiagnosticsFlush => 12,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BackendInit => "renderer_backend_init",
+            Self::Extract => "renderer_extract",
+            Self::PrepareAssets => "renderer_prepare_assets",
+            Self::PrepareScene => "renderer_prepare_scene",
+            Self::Visibility => "renderer_visibility",
+            Self::Queue => "renderer_queue",
+            Self::GraphBuild => "renderer_graph_build",
+            Self::GraphCompile => "renderer_graph_compile",
+            Self::Record => "renderer_record",
+            Self::Submit => "renderer_submit",
+            Self::Present => "renderer_present",
+            Self::Cleanup => "renderer_cleanup",
+            Self::DiagnosticsFlush => "renderer_diagnostics_flush",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RendererPhaseDescriptor {
+    pub phase: RendererPhase,
+    pub order_key: u16,
+    pub public_ecs_boundary: bool,
+    pub backend_internal_boundary: bool,
+}
+
+pub const RENDERER_PHASE_DESCRIPTORS: [RendererPhaseDescriptor; RENDERER_PHASE_COUNT] = [
+    RendererPhaseDescriptor {
+        phase: RendererPhase::BackendInit,
+        order_key: 10,
+        public_ecs_boundary: true,
+        backend_internal_boundary: true,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Extract,
+        order_key: 20,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::PrepareAssets,
+        order_key: 30,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::PrepareScene,
+        order_key: 40,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Visibility,
+        order_key: 50,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Queue,
+        order_key: 60,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::GraphBuild,
+        order_key: 70,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::GraphCompile,
+        order_key: 80,
+        public_ecs_boundary: true,
+        backend_internal_boundary: true,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Record,
+        order_key: 90,
+        public_ecs_boundary: true,
+        backend_internal_boundary: true,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Submit,
+        order_key: 100,
+        public_ecs_boundary: true,
+        backend_internal_boundary: true,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Present,
+        order_key: 110,
+        public_ecs_boundary: true,
+        backend_internal_boundary: true,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::Cleanup,
+        order_key: 120,
+        public_ecs_boundary: true,
+        backend_internal_boundary: true,
+    },
+    RendererPhaseDescriptor {
+        phase: RendererPhase::DiagnosticsFlush,
+        order_key: 130,
+        public_ecs_boundary: true,
+        backend_internal_boundary: false,
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererBackendInit;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererExtract;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererPrepareAssets;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererPrepareScene;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererVisibility;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererQueue;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererGraphBuild;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererGraphCompile;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererRecord;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererSubmit;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererPresent;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererCleanup;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub struct RendererDiagnosticsFlush;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererConfig {
+    pub schema_version: u16,
+    pub ecs_owned_orchestration: bool,
+    pub backend_internals_private: bool,
+    pub production_static_dispatch: bool,
+}
+
+impl RendererConfig {
+    pub const DEFAULT: Self = Self {
+        schema_version: FUN_RENDERER_PLUGIN_SCHEMA_VERSION,
+        ecs_owned_orchestration: true,
+        backend_internals_private: true,
+        production_static_dispatch: true,
+    };
+}
+
+impl Default for RendererConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub enum RendererBackendSelection {
+    Static {
+        backend_name: &'static str,
+        bridge_type: BackendBridgeType,
+        native_backend: NativeBackend,
+    },
+    DynamicTooling {
+        backend: DynamicRendererBackend,
+        bridge_type: BackendBridgeType,
+        native_backend: NativeBackend,
+    },
+}
+
+impl RendererBackendSelection {
+    #[must_use]
+    pub const fn static_for<B: RendererBackend>() -> Self {
+        Self::Static {
+            backend_name: B::NAME,
+            bridge_type: B::CAPABILITY_REPORT.bridge_type,
+            native_backend: B::CAPABILITY_REPORT.actual_native_backend,
+        }
+    }
+
+    #[must_use]
+    pub const fn dynamic(backend: DynamicRendererBackend) -> Self {
+        let report = backend.capability_report();
+        Self::DynamicTooling {
+            backend,
+            bridge_type: report.bridge_type,
+            native_backend: report.actual_native_backend,
+        }
+    }
+
+    #[must_use]
+    pub const fn production_perf_evidence_allowed(self) -> bool {
+        matches!(self, Self::Static { .. })
+    }
+}
+
+impl Default for RendererBackendSelection {
+    fn default() -> Self {
+        Self::static_for::<<DefaultProductionBackendSelection as StaticBackendSelection>::Backend>()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererBridgeState {
+    pub backend_resources_installed: bool,
+    pub initialized: bool,
+    pub dispatch_mode: BackendDispatchMode,
+    pub bridge_type: BackendBridgeType,
+    pub actual_native_backend: NativeBackend,
+    pub native_interop: BackendNativeInteropStatus,
+}
+
+impl RendererBridgeState {
+    #[must_use]
+    pub const fn from_report(report: BackendCapabilityReport) -> Self {
+        Self {
+            backend_resources_installed: false,
+            initialized: false,
+            dispatch_mode: report.dispatch_mode,
+            bridge_type: report.bridge_type,
+            actual_native_backend: report.actual_native_backend,
+            native_interop: BackendNativeInteropStatus::from_report(report),
+        }
+    }
+}
+
+impl Default for RendererBridgeState {
+    fn default() -> Self {
+        Self::from_report(BackendCapabilityReport::NULL)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererCapabilities {
+    pub report: BackendCapabilityReport,
+}
+
+impl RendererCapabilities {
+    #[must_use]
+    pub const fn from_report(report: BackendCapabilityReport) -> Self {
+        Self { report }
+    }
+}
+
+impl Default for RendererCapabilities {
+    fn default() -> Self {
+        Self::from_report(BackendCapabilityReport::NULL)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Resource)]
+pub struct RendererFrameIndex(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererFeatureFlags {
+    pub legacy: bool,
+    pub new_core: bool,
+    pub dx12: bool,
+    pub vulkan: bool,
+    pub metal: bool,
+    pub cef_gpu_only: bool,
+    pub upscaling: bool,
+    pub dlss: bool,
+    pub fsr: bool,
+    pub frame_generation: bool,
+    pub experimental_ml: bool,
+}
+
+impl RendererFeatureFlags {
+    #[must_use]
+    pub const fn from_toggles(toggles: RendererFeatureToggles) -> Self {
+        Self {
+            legacy: toggles.legacy,
+            new_core: toggles.new_core,
+            dx12: toggles.dx12,
+            vulkan: toggles.vulkan,
+            metal: toggles.metal,
+            cef_gpu_only: toggles.cef_gpu_only,
+            upscaling: toggles.upscale,
+            dlss: toggles.dlss,
+            fsr: toggles.fsr,
+            frame_generation: toggles.frame_generation,
+            experimental_ml: toggles.experimental_ml,
+        }
+    }
+
+    #[must_use]
+    pub const fn compiled() -> Self {
+        Self::from_toggles(RendererFeatureToggles::COMPILED)
+    }
+}
+
+impl Default for RendererFeatureFlags {
+    fn default() -> Self {
+        Self::compiled()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererQualitySettings {
+    pub quality_tier: RendererQualityTier,
+    pub graphics_backend: GraphicsBackendSetting,
+}
+
+impl RendererQualitySettings {
+    pub const BASELINE: Self = Self {
+        quality_tier: RendererQualityTier::Baseline,
+        graphics_backend: GraphicsBackendSetting::Auto,
+    };
+}
+
+impl Default for RendererQualitySettings {
+    fn default() -> Self {
+        Self::BASELINE
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererDiagnostics {
+    pub phase_runs: [u64; RENDERER_PHASE_COUNT],
+    pub last_completed_phase: Option<RendererPhase>,
+    pub dynamic_dispatch_used: bool,
+    pub diagnostics_flush_count: u64,
+}
+
+impl RendererDiagnostics {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            phase_runs: [0; RENDERER_PHASE_COUNT],
+            last_completed_phase: None,
+            dynamic_dispatch_used: false,
+            diagnostics_flush_count: 0,
+        }
+    }
+
+    pub fn record_phase(&mut self, phase: RendererPhase) {
+        let index = phase.index();
+        self.phase_runs[index] = self.phase_runs[index].saturating_add(1);
+        self.last_completed_phase = Some(phase);
+    }
+}
+
+impl Default for RendererDiagnostics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RendererFailureReason {
+    BackendResourceInstallFailed,
+    DynamicBackendUsedForProductionEvidence,
+    CapabilityMismatch,
+}
+
+impl RendererFailureReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BackendResourceInstallFailed => "backend_resource_install_failed",
+            Self::DynamicBackendUsedForProductionEvidence => {
+                "dynamic_backend_used_for_production_evidence"
+            }
+            Self::CapabilityMismatch => "capability_mismatch",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct RendererFailureState {
+    pub failed: bool,
+    pub reason: Option<RendererFailureReason>,
+}
+
+pub type DefaultFunRendererPlugin =
+    FunRendererPlugin<<DefaultProductionBackendSelection as StaticBackendSelection>::Backend>;
+
+pub struct FunRendererPlugin<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> FunRendererPlugin<B> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+impl<B: RendererBackend> Default for FunRendererPlugin<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<B> Plugin for FunRendererPlugin<B>
+where
+    B: RendererBackend
+        + BackendDiagnostics
+        + BackendNativeInterop
+        + BackendResource
+        + BackendShader
+        + BackendTiming,
+{
+    fn build(&self, app: &mut App) {
+        install_public_renderer_resources::<B>(app);
+        app.add_plugins(FunWgpuBridgePlugin::<B>::default());
+        install_renderer_phase_systems::<B>(app);
+    }
+}
+
+pub struct DynamicFunRendererPlugin {
+    backend: DynamicRendererBackend,
+}
+
+impl DynamicFunRendererPlugin {
+    #[must_use]
+    pub const fn new(backend: DynamicRendererBackend) -> Self {
+        Self { backend }
+    }
+}
+
+impl Default for DynamicFunRendererPlugin {
+    fn default() -> Self {
+        Self::new(DynamicRendererBackend::Null)
+    }
+}
+
+impl Plugin for DynamicFunRendererPlugin {
+    fn build(&self, app: &mut App) {
+        let report = self.backend.capability_report();
+        app.insert_resource(RendererConfig {
+            production_static_dispatch: false,
+            ..RendererConfig::DEFAULT
+        })
+        .insert_resource(RendererBackendSelection::dynamic(self.backend))
+        .insert_resource(RendererBridgeState::from_report(report))
+        .insert_resource(RendererCapabilities::from_report(report))
+        .init_resource::<RendererFrameIndex>()
+        .init_resource::<RendererFeatureFlags>()
+        .init_resource::<RendererQualitySettings>()
+        .insert_resource(RendererDiagnostics {
+            dynamic_dispatch_used: true,
+            ..RendererDiagnostics::new()
+        })
+        .init_resource::<RendererFailureState>();
+        app.insert_resource(DynamicBackendToolingState {
+            backend: self.backend,
+            dispatch_mode: BackendDispatchMode::DynamicTooling,
+        });
+        install_renderer_phase_systems_dynamic(app);
+    }
+}
+
+pub struct FunWgpuBridgePlugin<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> FunWgpuBridgePlugin<B> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+impl<B: RendererBackend> Default for FunWgpuBridgePlugin<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<B> Plugin for FunWgpuBridgePlugin<B>
+where
+    B: RendererBackend + BackendDiagnostics + BackendNativeInterop + BackendShader + BackendTiming,
+{
+    fn build(&self, app: &mut App) {
+        app.init_resource::<WgpuBridgeDevice<B>>()
+            .init_resource::<WgpuBridgeQueue<B>>()
+            .init_resource::<WgpuBridgeSurface<B>>()
+            .init_resource::<WgpuCoreState>()
+            .init_resource::<WgpuHalAccess>()
+            .init_resource::<NagaShaderBridge>()
+            .init_resource::<BackendCommandPools<B>>()
+            .init_resource::<BackendPipelineCache<B>>();
+    }
+}
+
+pub type FunDx12BridgePlugin = FunWgpuBridgePlugin<WgpuDx12Bridge>;
+pub type FunVulkanBridgePlugin = FunWgpuBridgePlugin<WgpuVulkanBridge>;
+pub type FunMetalBridgePlugin = FunWgpuBridgePlugin<WgpuMetalBridge>;
+
+pub fn install_public_renderer_resources<B>(app: &mut App)
+where
+    B: RendererBackend + BackendNativeInterop,
+{
+    let report = B::CAPABILITY_REPORT;
+    app.insert_resource(RendererConfig::DEFAULT)
+        .insert_resource(RendererBackendSelection::static_for::<B>())
+        .insert_resource(RendererBridgeState::from_report(report))
+        .insert_resource(RendererCapabilities::from_report(report))
+        .init_resource::<RendererFrameIndex>()
+        .init_resource::<RendererFeatureFlags>()
+        .insert_resource(RendererQualitySettings {
+            quality_tier: RendererQualityTier::Baseline,
+            graphics_backend: graphics_backend_for_native(report.actual_native_backend),
+        })
+        .init_resource::<RendererDiagnostics>()
+        .init_resource::<RendererFailureState>();
+}
+
+pub fn install_renderer_phase_systems<B>(app: &mut App)
+where
+    B: RendererBackend + BackendDiagnostics + BackendNativeInterop,
+{
+    app.configure_sets(
+        Update,
+        (
+            RendererBackendInit,
+            RendererExtract,
+            RendererPrepareAssets,
+            RendererPrepareScene,
+            RendererVisibility,
+            RendererQueue,
+            RendererGraphBuild,
+            RendererGraphCompile,
+            RendererRecord,
+            RendererSubmit,
+            RendererPresent,
+            RendererCleanup,
+            RendererDiagnosticsFlush,
+        )
+            .chain(),
+    )
+    .add_systems(
+        Update,
+        (
+            renderer_backend_init::<B>.in_set(RendererBackendInit),
+            renderer_extract_phase.in_set(RendererExtract),
+            renderer_prepare_assets_phase.in_set(RendererPrepareAssets),
+            renderer_prepare_scene_phase.in_set(RendererPrepareScene),
+            renderer_visibility_phase.in_set(RendererVisibility),
+            renderer_queue_phase.in_set(RendererQueue),
+            renderer_graph_build_phase.in_set(RendererGraphBuild),
+            renderer_graph_compile_phase.in_set(RendererGraphCompile),
+            renderer_record_phase.in_set(RendererRecord),
+            renderer_submit_phase.in_set(RendererSubmit),
+            renderer_present_phase.in_set(RendererPresent),
+            renderer_cleanup_phase.in_set(RendererCleanup),
+            renderer_diagnostics_flush_phase.in_set(RendererDiagnosticsFlush),
+        ),
+    );
+}
+
+fn install_renderer_phase_systems_dynamic(app: &mut App) {
+    app.configure_sets(
+        Update,
+        (
+            RendererBackendInit,
+            RendererExtract,
+            RendererPrepareAssets,
+            RendererPrepareScene,
+            RendererVisibility,
+            RendererQueue,
+            RendererGraphBuild,
+            RendererGraphCompile,
+            RendererRecord,
+            RendererSubmit,
+            RendererPresent,
+            RendererCleanup,
+            RendererDiagnosticsFlush,
+        )
+            .chain(),
+    )
+    .add_systems(
+        Update,
+        (
+            dynamic_renderer_backend_init.in_set(RendererBackendInit),
+            renderer_extract_phase.in_set(RendererExtract),
+            renderer_prepare_assets_phase.in_set(RendererPrepareAssets),
+            renderer_prepare_scene_phase.in_set(RendererPrepareScene),
+            renderer_visibility_phase.in_set(RendererVisibility),
+            renderer_queue_phase.in_set(RendererQueue),
+            renderer_graph_build_phase.in_set(RendererGraphBuild),
+            renderer_graph_compile_phase.in_set(RendererGraphCompile),
+            renderer_record_phase.in_set(RendererRecord),
+            renderer_submit_phase.in_set(RendererSubmit),
+            renderer_present_phase.in_set(RendererPresent),
+            renderer_cleanup_phase.in_set(RendererCleanup),
+            renderer_diagnostics_flush_phase.in_set(RendererDiagnosticsFlush),
+        ),
+    );
+}
+
+fn renderer_backend_init<B>(
+    mut bridge_state: ResMut<RendererBridgeState>,
+    mut capabilities: ResMut<RendererCapabilities>,
+    mut diagnostics: ResMut<RendererDiagnostics>,
+) where
+    B: RendererBackend + BackendNativeInterop,
+{
+    bridge_state.backend_resources_installed = true;
+    bridge_state.initialized = true;
+    bridge_state.dispatch_mode = BackendDispatchMode::StaticProduction;
+    bridge_state.bridge_type = B::CAPABILITY_REPORT.bridge_type;
+    bridge_state.actual_native_backend = B::CAPABILITY_REPORT.actual_native_backend;
+    bridge_state.native_interop = B::native_interop_status();
+    capabilities.report = B::CAPABILITY_REPORT;
+    diagnostics.record_phase(RendererPhase::BackendInit);
+}
+
+fn dynamic_renderer_backend_init(
+    tooling: ResMut<DynamicBackendToolingState>,
+    mut bridge_state: ResMut<RendererBridgeState>,
+    mut capabilities: ResMut<RendererCapabilities>,
+    mut diagnostics: ResMut<RendererDiagnostics>,
+) {
+    let report = tooling.backend.capability_report();
+    bridge_state.backend_resources_installed = true;
+    bridge_state.initialized = true;
+    bridge_state.dispatch_mode = tooling.dispatch_mode;
+    bridge_state.bridge_type = report.bridge_type;
+    bridge_state.actual_native_backend = report.actual_native_backend;
+    bridge_state.native_interop = BackendNativeInteropStatus::from_report(report);
+    capabilities.report = report;
+    diagnostics.dynamic_dispatch_used = true;
+    diagnostics.record_phase(RendererPhase::BackendInit);
+}
+
+fn renderer_extract_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::Extract);
+}
+
+fn renderer_prepare_assets_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::PrepareAssets);
+}
+
+fn renderer_prepare_scene_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::PrepareScene);
+}
+
+fn renderer_visibility_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::Visibility);
+}
+
+fn renderer_queue_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::Queue);
+}
+
+fn renderer_graph_build_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::GraphBuild);
+}
+
+fn renderer_graph_compile_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::GraphCompile);
+}
+
+fn renderer_record_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::Record);
+}
+
+fn renderer_submit_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::Submit);
+}
+
+fn renderer_present_phase(
+    mut frame_index: ResMut<RendererFrameIndex>,
+    mut diagnostics: ResMut<RendererDiagnostics>,
+) {
+    diagnostics.record_phase(RendererPhase::Present);
+    frame_index.0 = frame_index.0.saturating_add(1);
+}
+
+fn renderer_cleanup_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::Cleanup);
+}
+
+fn renderer_diagnostics_flush_phase(mut diagnostics: ResMut<RendererDiagnostics>) {
+    diagnostics.record_phase(RendererPhase::DiagnosticsFlush);
+    diagnostics.diagnostics_flush_count = diagnostics.diagnostics_flush_count.saturating_add(1);
+}
+
+const fn graphics_backend_for_native(native_backend: NativeBackend) -> GraphicsBackendSetting {
+    match native_backend {
+        NativeBackend::Dx12 => GraphicsBackendSetting::Dx12,
+        NativeBackend::Vulkan => GraphicsBackendSetting::Vulkan,
+        NativeBackend::Metal => GraphicsBackendSetting::Metal,
+        NativeBackend::Unknown => GraphicsBackendSetting::Auto,
+    }
+}
+
+#[derive(Resource)]
+struct DynamicBackendToolingState {
+    backend: DynamicRendererBackend,
+    dispatch_mode: BackendDispatchMode,
+}
+
+#[derive(Resource)]
+struct WgpuBridgeDevice<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> Default for WgpuBridgeDevice<B> {
+    fn default() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct WgpuBridgeQueue<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> Default for WgpuBridgeQueue<B> {
+    fn default() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct WgpuBridgeSurface<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> Default for WgpuBridgeSurface<B> {
+    fn default() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+#[derive(Default, Resource)]
+struct WgpuCoreState;
+
+#[derive(Default, Resource)]
+struct WgpuHalAccess;
+
+#[derive(Default, Resource)]
+struct NagaShaderBridge;
+
+#[derive(Resource)]
+struct BackendCommandPools<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> Default for BackendCommandPools<B> {
+    fn default() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct BackendPipelineCache<B: RendererBackend> {
+    _backend: PhantomData<fn() -> B>,
+}
+
+impl<B: RendererBackend> Default for BackendPipelineCache<B> {
+    fn default() -> Self {
+        Self {
+            _backend: PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{WgpuDx12Backend, WgpuVulkanBackend};
+
+    #[test]
+    fn fun_renderer_plugin_installs_static_dx12_spine_resources() {
+        let mut app = App::new();
+        app.add_plugins(FunRendererPlugin::<WgpuDx12Backend>::default());
+
+        assert!(app.world().contains_resource::<RendererConfig>());
+        assert!(app.world().contains_resource::<RendererBackendSelection>());
+        assert!(app.world().contains_resource::<RendererBridgeState>());
+        assert!(app.world().contains_resource::<RendererCapabilities>());
+        assert!(app.world().contains_resource::<RendererFrameIndex>());
+        assert!(app.world().contains_resource::<RendererFeatureFlags>());
+        assert!(app.world().contains_resource::<RendererQualitySettings>());
+        assert!(app.world().contains_resource::<RendererDiagnostics>());
+        assert!(app.world().contains_resource::<RendererFailureState>());
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeDevice<WgpuDx12Backend>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<BackendPipelineCache<WgpuDx12Backend>>()
+        );
+
+        let selection = app.world().resource::<RendererBackendSelection>();
+        assert_eq!(
+            *selection,
+            RendererBackendSelection::Static {
+                backend_name: "wgpu_dx12",
+                bridge_type: BackendBridgeType::Wgpu,
+                native_backend: NativeBackend::Dx12,
+            }
+        );
+
+        app.update();
+
+        let frame = app.world().resource::<RendererFrameIndex>();
+        assert_eq!(frame.0, 1);
+        let diagnostics = app.world().resource::<RendererDiagnostics>();
+        assert_eq!(
+            diagnostics.last_completed_phase,
+            Some(RendererPhase::DiagnosticsFlush)
+        );
+        for phase in RendererPhase::ORDER {
+            assert_eq!(
+                diagnostics.phase_runs[phase.index()],
+                1,
+                "{}",
+                phase.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn backend_bridge_plugins_install_internal_resources_only() {
+        let mut app = App::new();
+        app.add_plugins(FunDx12BridgePlugin::default());
+
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeDevice<WgpuDx12Bridge>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeQueue<WgpuDx12Bridge>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeSurface<WgpuDx12Bridge>>()
+        );
+        assert!(app.world().contains_resource::<WgpuCoreState>());
+        assert!(app.world().contains_resource::<WgpuHalAccess>());
+        assert!(app.world().contains_resource::<NagaShaderBridge>());
+        assert!(
+            app.world()
+                .contains_resource::<BackendCommandPools<WgpuDx12Bridge>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<BackendPipelineCache<WgpuDx12Bridge>>()
+        );
+        assert!(!app.world().contains_resource::<RendererConfig>());
+    }
+
+    #[test]
+    fn dynamic_renderer_plugin_marks_tooling_dispatch() {
+        let mut app = App::new();
+        app.add_plugins(DynamicFunRendererPlugin::new(
+            DynamicRendererBackend::WgpuVulkan,
+        ));
+
+        let selection = app.world().resource::<RendererBackendSelection>();
+        assert!(!selection.production_perf_evidence_allowed());
+        assert_eq!(
+            app.world()
+                .resource::<RendererConfig>()
+                .production_static_dispatch,
+            false
+        );
+
+        app.update();
+
+        let diagnostics = app.world().resource::<RendererDiagnostics>();
+        assert!(diagnostics.dynamic_dispatch_used);
+        assert_eq!(
+            app.world().resource::<RendererBridgeState>().dispatch_mode,
+            BackendDispatchMode::DynamicTooling
+        );
+    }
+
+    #[test]
+    fn renderer_phase_descriptors_cover_required_spine_order() {
+        assert_eq!(RENDERER_PHASE_DESCRIPTORS.len(), RENDERER_PHASE_COUNT);
+        let mut previous = 0;
+        for descriptor in RENDERER_PHASE_DESCRIPTORS {
+            assert!(descriptor.order_key > previous);
+            previous = descriptor.order_key;
+            assert!(descriptor.public_ecs_boundary);
+        }
+        assert_eq!(RendererPhase::ORDER[0], RendererPhase::BackendInit);
+        assert_eq!(
+            RendererPhase::ORDER[RENDERER_PHASE_COUNT - 1],
+            RendererPhase::DiagnosticsFlush
+        );
+    }
+
+    #[test]
+    fn vulkan_and_metal_plugin_aliases_are_static_wgpu_bridges() {
+        let mut vulkan = App::new();
+        vulkan.add_plugins(FunRendererPlugin::<WgpuVulkanBackend>::default());
+        assert_eq!(
+            vulkan
+                .world()
+                .resource::<RendererCapabilities>()
+                .report
+                .actual_native_backend,
+            NativeBackend::Vulkan
+        );
+
+        let mut metal = App::new();
+        metal.add_plugins(FunMetalBridgePlugin::default());
+        assert!(
+            metal
+                .world()
+                .contains_resource::<WgpuBridgeDevice<WgpuMetalBridge>>()
+        );
+    }
+}

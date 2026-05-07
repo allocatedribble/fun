@@ -46,6 +46,7 @@ implicit_clone = "warn"
 [workspace.dependencies]
 avian3d = { path = "../avian/crates/avian3d" }
 bevy = { path = "../bevy", features = ["bevy_dev_tools", "bevy_solari", "meshlet", "meshlet_processor"] }
+bevy_app = { path = "../bevy/crates/bevy_app" }
 bevy_camera = { path = "../bevy/crates/bevy_camera" }
 bevy_color = { path = "../bevy/crates/bevy_color" }
 bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
