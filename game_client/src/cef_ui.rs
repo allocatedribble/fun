@@ -1927,6 +1927,7 @@ const fn dx12_cef_interop_fallback_reason(
         }
         crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11On12CreateDeviceFailed
         | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11DeviceMissing
+        | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11Device1QueryFailed
         | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11ImmediateContextMissing
         | crate::cef_ui_dx12::Dx12CefInteropFailure::D3d11On12QueryFailed
         | crate::cef_ui_dx12::Dx12CefInteropFailure::FenceCreateFailed => {

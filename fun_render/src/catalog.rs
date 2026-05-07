@@ -184,10 +184,20 @@ impl WorldRenderCatalog {
 pub fn prewarm_world_render_catalog(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut meshlet_meshes: ResMut<Assets<MeshletMesh>>,
+    mut meshlet_meshes: Option<ResMut<Assets<MeshletMesh>>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     render_config: Res<ClientRenderConfig>,
 ) {
+    let mut catalog_render_config = *render_config;
+    if catalog_render_config.meshlets_enabled && meshlet_meshes.is_none() {
+        catalog_render_config.meshlets_enabled = false;
+        game_shared::fun_diag_warn!(
+            target: "fun::render_catalog",
+            geometry_policy = ?render_config.geometry_policy,
+            "meshlet assets unavailable during catalog prewarm; falling back to raster paths"
+        );
+    }
+
     let compiled_package = CompiledWorldPackage::demo_package();
     let _occlusion_cells = compiled_package
         .static_assets
@@ -240,8 +250,12 @@ pub fn prewarm_world_render_catalog(
             .map(geometry_triangle_count)
             .unwrap_or_default();
         let fun_geometry_class = fun_geometry_class(entry);
-        let render_path_selection =
-            select_render_path(entry, triangle_count, fun_geometry_class, &render_config);
+        let render_path_selection = select_render_path(
+            entry,
+            triangle_count,
+            fun_geometry_class,
+            &catalog_render_config,
+        );
         let render_path = render_path_selection.render_path;
         let geometry_class = render_path_selection.geometry_class;
         let material_policy = material_policy_for_catalog_entry(entry);
@@ -267,16 +281,28 @@ pub fn prewarm_world_render_catalog(
         };
 
         let meshlet_mesh = if geometry_class.uses_meshlet() {
-            entry.geometry.map(mesh_from_catalog_geometry).map(|mesh| {
-                let meshlet = MeshletMesh::from_mesh(
-                    &mesh,
-                    MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR,
-                )
-                .unwrap_or_else(|error| {
-                    panic!("failed to build {} meshlet mesh: {error}", entry.name)
-                });
-                meshlet_meshes.add(meshlet)
-            })
+            if let Some(meshlet_meshes) = meshlet_meshes.as_deref_mut() {
+                entry.geometry.map(mesh_from_catalog_geometry).map(|mesh| {
+                    let meshlet = MeshletMesh::from_mesh(
+                        &mesh,
+                        MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("failed to build {} meshlet mesh: {error}", entry.name)
+                    });
+                    meshlet_meshes.add(meshlet)
+                })
+            } else {
+                game_shared::fun_diag_warn!(
+                    target: "fun::render_catalog",
+                    asset_id = entry.asset_id.0,
+                    name = entry.name,
+                    geometry_class = ?geometry_class,
+                    render_path = render_path.as_str(),
+                    "meshlet render path selected without meshlet asset storage"
+                );
+                None
+            }
         } else {
             None
         };
@@ -338,8 +364,9 @@ pub fn prewarm_world_render_catalog(
         target: "fun::render_catalog",
         asset_count = catalog.assets.len(),
         material_count = catalog.materials.len(),
-        geometry_policy = ?render_config.geometry_policy,
-        meshlet_min_triangles = render_config.meshlet_min_triangles,
+        geometry_policy = ?catalog_render_config.geometry_policy,
+        meshlets_enabled = catalog_render_config.meshlets_enabled,
+        meshlet_min_triangles = catalog_render_config.meshlet_min_triangles,
         "world render catalog prewarmed"
     );
     let pipeline_catalog = RenderPipelineSignatureCatalog::prewarmed_defaults();
@@ -719,6 +746,57 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);
         assert_eq!(materials.len(), 1);
+    }
+
+    #[test]
+    fn catalog_prewarm_allows_disabled_meshlets_without_meshlet_assets() {
+        let mut config = test_render_config(RenderGeometryPolicy::MeshletWhereSupported);
+        config.meshlets_enabled = false;
+        let mut app = App::new();
+        app.insert_resource(Assets::<Mesh>::default());
+        app.insert_resource(Assets::<StandardMaterial>::default());
+        app.insert_resource(config);
+        app.add_systems(Update, prewarm_world_render_catalog);
+
+        app.update();
+
+        assert!(!app.world().contains_resource::<Assets<MeshletMesh>>());
+        let catalog = app.world().resource::<WorldRenderCatalog>();
+        assert!(
+            catalog
+                .compiled_assets()
+                .all(|asset| !asset.geometry_class.uses_meshlet())
+        );
+        assert!(
+            catalog
+                .compiled_assets()
+                .all(|asset| asset.meshlet_mesh.is_none())
+        );
+    }
+
+    #[test]
+    fn catalog_prewarm_falls_back_when_meshlet_assets_are_missing() {
+        let config = test_render_config(RenderGeometryPolicy::MeshletWhereSupported);
+        let mut app = App::new();
+        app.insert_resource(Assets::<Mesh>::default());
+        app.insert_resource(Assets::<StandardMaterial>::default());
+        app.insert_resource(config);
+        app.add_systems(Update, prewarm_world_render_catalog);
+
+        app.update();
+
+        assert!(!app.world().contains_resource::<Assets<MeshletMesh>>());
+        let catalog = app.world().resource::<WorldRenderCatalog>();
+        assert!(
+            catalog
+                .compiled_assets()
+                .all(|asset| !asset.geometry_class.uses_meshlet())
+        );
+        assert!(
+            catalog
+                .compiled_assets()
+                .all(|asset| asset.meshlet_mesh.is_none())
+        );
     }
 
     #[test]

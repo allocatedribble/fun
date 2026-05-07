@@ -25,7 +25,7 @@ use windows::{
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_TEXTURE2D_DESC,
-                ID3D11Device, ID3D11DeviceContext, ID3D11Resource, ID3D11Texture2D,
+                ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Resource, ID3D11Texture2D,
             },
             Direct3D11on12::{D3D11_RESOURCE_FLAGS, D3D11On12CreateDevice, ID3D11On12Device},
             Direct3D12::{
@@ -60,6 +60,7 @@ pub enum Dx12CefInteropFailure {
     QueueHalUnavailable,
     D3d11On12CreateDeviceFailed,
     D3d11DeviceMissing,
+    D3d11Device1QueryFailed,
     D3d11ImmediateContextMissing,
     D3d11On12QueryFailed,
     FenceCreateFailed,
@@ -82,6 +83,7 @@ impl Dx12CefInteropFailure {
             Self::QueueHalUnavailable => "queue_hal_unavailable",
             Self::D3d11On12CreateDeviceFailed => "d3d11on12_create_device_failed",
             Self::D3d11DeviceMissing => "d3d11_device_missing",
+            Self::D3d11Device1QueryFailed => "d3d11_device1_query_failed",
             Self::D3d11ImmediateContextMissing => "d3d11_immediate_context_missing",
             Self::D3d11On12QueryFailed => "d3d11on12_query_failed",
             Self::FenceCreateFailed => "fence_create_failed",
@@ -606,25 +608,23 @@ impl Dx12CefInterop {
             ));
         }
 
-        let mut texture = None;
-        unsafe {
-            self.d3d11_device
-                .OpenSharedResource::<ID3D11Texture2D>(HANDLE(shared_handle), &mut texture)
+        let d3d11_device1 = self.d3d11_device.cast::<ID3D11Device1>().map_err(|error| {
+            self.diagnostics.record_shared_texture_open_failure();
+            Dx12CefInteropError::from_windows(
+                Dx12CefInteropFailure::D3d11Device1QueryFailed,
+                "ID3D11Device did not expose ID3D11Device1 for CEF NT shared texture handles",
+                error,
+            )
+        })?;
+        let texture = unsafe {
+            d3d11_device1.OpenSharedResource1::<ID3D11Texture2D>(HANDLE(shared_handle))
         }
         .map_err(|error| {
             self.diagnostics.record_shared_texture_open_failure();
             Dx12CefInteropError::from_windows(
                 Dx12CefInteropFailure::SharedTextureOpenFailed,
-                "ID3D11Device::OpenSharedResource failed for CEF accelerated paint texture",
+                "ID3D11Device1::OpenSharedResource1 failed for CEF accelerated paint texture",
                 error,
-            )
-        })?;
-        let texture = texture.ok_or_else(|| {
-            self.diagnostics.record_shared_texture_open_failure();
-            Dx12CefInteropError::new(
-                Dx12CefInteropFailure::SharedTextureOpenFailed,
-                "ID3D11Device::OpenSharedResource returned no texture",
-                None,
             )
         })?;
         self.diagnostics.record_shared_texture_open();
@@ -801,6 +801,7 @@ impl Dx12CefInterop {
             }
             Dx12CefInteropFailure::D3d11On12CreateDeviceFailed
             | Dx12CefInteropFailure::D3d11DeviceMissing
+            | Dx12CefInteropFailure::D3d11Device1QueryFailed
             | Dx12CefInteropFailure::D3d11ImmediateContextMissing
             | Dx12CefInteropFailure::D3d11On12QueryFailed
             | Dx12CefInteropFailure::FenceCreateFailed => {

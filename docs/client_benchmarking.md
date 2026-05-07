@@ -101,9 +101,12 @@ Rendered view consumers may request:
 - `target\benchmarks\client\<timestamp>\summary.md`
 
 `fun-bench client` calls the stack runner through a resolved stack profile. By
-default it selects `default.<backend>.<present>`, then passes benchmark flags as
-command-line overrides so existing lanes keep their explicit settings. Use
-`--stack-profile <profile-name>` only for lanes that intentionally need a
+default it selects `default.<backend>.<present>`. The stack runner is Rust-owned:
+`fun-bench run-stack --profile <name>` reads
+`scripts/stack/profiles/<name>.json`, validates the typed `stack_profile_v1`
+contract, and writes the resolved build plan, profile path, redacted
+environment fingerprint, process plan, and PIDs under `target\run-stack\`.
+Use `--stack-profile <profile-name>` only for lanes that intentionally need a
 different profile contract. Every emitted benchmark bundle records the
 additive, schema-marked `stack_runner` object with the resolved profile,
 override map, command, and runner session path. Rendered JSON views expose the

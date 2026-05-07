@@ -313,9 +313,6 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .add_message::<crate::fun_lux::LuxLightEvent>()
         .add_message::<bevy::solari::prelude::SolariResetEvent>()
         .add_plugins(ExtractResourcePlugin::<FunRenderRtFeatures>::default())
-        .add_plugins(MeshletPlugin {
-            cluster_buffer_slots: 1 << 14,
-        })
         .add_systems(
             Startup,
             (
@@ -338,6 +335,11 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
                 .chain(),
         );
 
+    if render_config.meshlets_enabled {
+        app.add_plugins(MeshletPlugin {
+            cluster_buffer_slots: 1 << 14,
+        });
+    }
     if solari_enabled {
         app.add_plugins(SolariPlugins);
     }

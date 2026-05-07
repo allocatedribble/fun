@@ -3,7 +3,7 @@
   "name": "cef.d3d11on12.strict",
   "description": "CEF UI enabled with strict D3D11On12 accelerated paint.",
   "build": { "release": false, "static_bevy": false },
-  "features": { "disable_solari": false, "disable_meshlets": false, "disable_clouds": false, "enable_dx12_dlss_rr": false, "disable_dlss_rr": false, "solari_debug_direct_visibility": false, "render_unknown_vendor": false },
+  "features": { "disable_solari": false, "disable_meshlets": true, "disable_clouds": false, "enable_dx12_dlss_rr": false, "disable_dlss_rr": false, "solari_debug_direct_visibility": false, "render_unknown_vendor": false },
   "env": {},
   "processes": { "server": true, "client": true, "launcher": false },
   "diagnostics": { "render": true, "trace": false, "render_profile_verbose": false, "frame_time": false, "benchmark_log_minimal": false, "log_stream_verbose": false, "log_net_verbose": false, "log_render_verbose": false },
