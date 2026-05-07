@@ -165,7 +165,7 @@ impl RendererCapabilityReport {
                 "native_handle_support_unavailable"
             };
         let dlss_availability = dlss_availability(native_dlss_config, dlss_support, actual_is_dx12);
-        let report = Self {
+        Self {
             schema: RENDERER_CAPABILITY_REPORT_SCHEMA,
             selected_renderer_lane: settings.backend_selection.requested.as_env_value(),
             actual_renderer_lane: settings.backend_selection.resolved.as_env_value(),
@@ -235,8 +235,7 @@ impl RendererCapabilityReport {
             bevy_backend_capabilities: BevyBackendCapabilityReport::from_bevy(backend_capabilities),
             active_feature_flags: BridgeFeatureFlagReport::from_bridge(settings.features),
             environment_overrides: collect_environment_overrides(),
-        };
-        report
+        }
     }
 
     fn log_startup(&self) {

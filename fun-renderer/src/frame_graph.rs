@@ -426,10 +426,7 @@ impl RendererFrameGraphDiagnostics {
 
     #[must_use]
     pub fn validation_failure_count(&self) -> u16 {
-        match u16::try_from(self.validation_failures.len()) {
-            Ok(value) => value,
-            Err(_) => u16::MAX,
-        }
+        u16::try_from(self.validation_failures.len()).unwrap_or(u16::MAX)
     }
 }
 

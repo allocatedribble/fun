@@ -38,7 +38,7 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 - `FUN_RENDER_DX12_DLSS_MODE=quality|balanced|performance|ultra_performance` selects the future SR mode.
 - `FUN_DX12_DLSS=1` and `FUN_DX12_DLSS_MODE=quality|balanced|performance|ultra_performance` are supported aliases for the same SR request.
 - `FUN_RENDER_DX12_DLSS_RR=1` is intentionally separate and defaults off; Super Resolution must work before RR is connected. `FUN_SOLARI_DENOISE_MODE=rr|dlss|dlss-rr|ray-reconstruction` now falls back to `balanced-fast` unless this explicit RR gate is enabled and the legacy `FUN_DISABLE_DLSS_RR` kill switch is absent.
-- `scripts/run_stack.ps1`, `scripts/benchmark_client.ps1`, and the RR benchmark matrix lanes use `-EnableDx12DlssRr` for the explicit gate; `-DisableDlssRr` remains the kill switch.
+- `fun-bench run-stack`, `fun-bench client`, and the RR benchmark matrix lanes use `--enable-dx12-dlss-rr` for the explicit gate; `--disable-dlss-rr` remains the kill switch.
 - `FUN_RENDER_DX12_DLSS_DEBUG=1`, `FUN_RENDER_DX12_DLSS_RESET=1`, and `FUN_RENDER_DX12_DLSS_SHARPNESS=<f32>` are parsed for future bridge use.
 - `FUN_RENDER_DX12_DLSS_DEBUG_VIEW=depth|depth_histogram|motion|zero|overlarge|moving` selects the future DLSS debug visualization surface.
 
@@ -134,7 +134,7 @@ All required present guide surfaces must still be validated at the native-DX12 h
 
 ## RR Acceptance Criteria
 
-`scripts/benchmark_client.ps1 -RequireDx12DlssRrAcceptance` is the machine gate for a future RR acceptance run. A passing run must use `-EnableDx12DlssRr`, select an RR Solari denoise mode, observe at least 500 estimated live frames, and record all required metrics.
+`fun-bench client --require-dx12-dlss-rr-acceptance` is the machine gate for a future RR acceptance run. A passing run must use `--enable-dx12-dlss-rr`, select an RR Solari denoise mode, observe at least 500 estimated live frames, and record all required metrics.
 
 Required metrics in `summary.json`:
 
@@ -180,7 +180,7 @@ The acceptance command fails if the estimated stress-frame count is below `-RrSt
 - Do not rewrite Bevy's `bevy_anti_alias::dlss` internals.
 - Do not replace `dlss_wgpu`; keep it as the existing Vulkan/Bevy comparison and fallback lane.
 - Do not remove the explicit Vulkan comparison lane; Windows now defaults to
-  DX12, but `FUN_RENDER_BACKEND=vulkan` and `-RenderBackend vulkan` must remain
+  DX12, but `FUN_RENDER_BACKEND=vulkan` and `--render-backend vulkan` must remain
   available for comparison and fallback captures.
 - Do not route DLSS work through CEF/Svelte or `fun_ui_cef`.
 - Do not re-enable RR through the native path until native Super Resolution is stable and benchmarked.

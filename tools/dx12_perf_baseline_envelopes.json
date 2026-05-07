@@ -3,7 +3,7 @@
   "default_lane": "dx12_required_steady_state",
   "lanes": {
     "dx12_required_steady_state": {
-      "description": "Required Windows DX12 steady-state lane after warmup. Baseline and current inputs are benchmark_client.ps1 summary.json files from comparable hardware, resolution, present mode, UI state, and build profile.",
+      "description": "Required Windows DX12 steady-state lane after warmup. Baseline and current inputs are benchmark.funpb.zst bundles from comparable hardware, resolution, present mode, UI state, and build profile.",
       "hard": [
         {
           "id": "frame_p95_regression",

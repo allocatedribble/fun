@@ -11,7 +11,7 @@ DX12 baseline ready for DLSS SR bring-up: no
 | gate | status | evidence source |
 | --- | --- | --- |
 | DX12 vs Vulkan parity report exists | partial | selected local report exists at `target\dx12-parity\current\dx12_parity_report.md`; full scene/present coverage is not complete |
-| Present-mode matrix complete | partial | selected immediate/fifo/auto-no-vsync lanes ran; full `-MatrixSize present` output is not attached |
+| Present-mode matrix complete | partial | selected immediate/fifo/auto-no-vsync lanes ran; full `--matrix-size present` output is not attached |
 | CEF accelerated path health is isolated | blocked | latest 1280x720 animated `d3d11on12` request selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, nonzero CPU upload bytes, and no accelerated paint callbacks; the health badge and CEF transport matrix are instrumented for the next live proof |
 | Hot upload callsites identified | partial | current matrix summaries include upload counters; top-callsite review is not attached |
 | Barrier audit complete | not_ready | `target\dx12-pix\barrier_summary.md` exists but is blocked because no PIX CSV/capture rows are attached |

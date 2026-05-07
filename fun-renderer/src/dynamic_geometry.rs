@@ -207,6 +207,7 @@ pub struct DynamicGeometrySubmission {
 
 impl DynamicGeometrySubmission {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn from_scene_declaration(
         id: DynamicGeometrySubmissionId,
         renderable: &Renderable,
@@ -402,7 +403,7 @@ pub struct DynamicGeometryDebugArtifact {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DynamicGeometryExecutionPolicy {
+pub struct DynamicGeometryRuntimePolicy {
     pub dynamic_clusters_enabled: bool,
     pub classic_mesh_draws_enabled: bool,
     pub destruction_fragments_use_dynamic_clusters: bool,
@@ -410,7 +411,7 @@ pub struct DynamicGeometryExecutionPolicy {
     pub vehicles_use_dynamic_clusters: bool,
 }
 
-impl Default for DynamicGeometryExecutionPolicy {
+impl Default for DynamicGeometryRuntimePolicy {
     fn default() -> Self {
         Self {
             dynamic_clusters_enabled: true,
@@ -432,8 +433,10 @@ pub struct DynamicGeometryDatabase {
 impl DynamicGeometryDatabase {
     #[must_use]
     pub fn new() -> Self {
-        let mut diagnostics = DynamicGeometryDiagnostics::default();
-        diagnostics.schema_version = DYNAMIC_GEOMETRY_SCHEMA_VERSION;
+        let diagnostics = DynamicGeometryDiagnostics {
+            schema_version: DYNAMIC_GEOMETRY_SCHEMA_VERSION,
+            ..DynamicGeometryDiagnostics::default()
+        };
         Self {
             frame_index: 0,
             records: BTreeMap::new(),
@@ -623,7 +626,7 @@ impl DynamicGeometryDatabase {
     #[must_use]
     pub fn build_frame_plan(
         &mut self,
-        policy: DynamicGeometryExecutionPolicy,
+        policy: DynamicGeometryRuntimePolicy,
     ) -> DynamicGeometryFramePlan {
         let mut packets = Vec::new();
         let mut diagnostics = self.diagnostics;
@@ -933,7 +936,7 @@ fn gpu_cost_for(submission: &DynamicGeometrySubmission, dirty: DynamicGeometryDi
 
 fn draw_path_for(
     submission: &DynamicGeometrySubmission,
-    policy: DynamicGeometryExecutionPolicy,
+    policy: DynamicGeometryRuntimePolicy,
 ) -> DynamicDrawPath {
     if !policy.dynamic_clusters_enabled || submission.payload.dynamic_cluster_budget == 0 {
         return DynamicDrawPath::ClassicMeshDraw;
@@ -953,7 +956,7 @@ fn draw_path_for(
 
 fn class_uses_dynamic_clusters(
     class: DynamicGeometryClass,
-    policy: DynamicGeometryExecutionPolicy,
+    policy: DynamicGeometryRuntimePolicy,
 ) -> bool {
     match class {
         DynamicGeometryClass::DestructionFragment => {
@@ -1085,7 +1088,7 @@ mod tests {
             };
             database.submit(submission);
         }
-        let plan = database.build_frame_plan(DynamicGeometryExecutionPolicy::default());
+        let plan = database.build_frame_plan(DynamicGeometryRuntimePolicy::default());
         let artifact = database.debug_artifact();
         if let Some(path) = std::env::var_os(DYNAMIC_GEOMETRY_BENCHMARK_ARTIFACT_ENV) {
             if let Some(parent) = std::path::Path::new(&path).parent() {
@@ -1129,7 +1132,7 @@ mod tests {
             cluster_mode: DynamicClusterMode::GenerateDynamicClusters,
             ..actor
         });
-        let plan = database.build_frame_plan(DynamicGeometryExecutionPolicy::default());
+        let plan = database.build_frame_plan(DynamicGeometryRuntimePolicy::default());
 
         assert_eq!(plan.packets.len(), 1);
         assert_eq!(

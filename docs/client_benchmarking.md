@@ -40,19 +40,19 @@ and pass cost depends on resolution, scene, driver, and queue behavior.
 
 Capture a named Criterion baseline before a change:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline before
 ```
 
 Compare the candidate against that baseline:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --baseline before --save-baseline after
 ```
 
 For fast compile/smoke validation while editing benchmark code:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline smoke --warmup-seconds 0.1 --measurement-seconds 0.2 --sample-size 10
 ```
 
@@ -70,24 +70,17 @@ Criterion writes its HTML and raw estimates under `target\criterion`.
 
 ## Runtime Benchmark Command
 
-Use the Rust benchmark CLI for repeatable captures. During the transition, the
-PowerShell files in `scripts\` are compatibility wrappers around these
-subcommands and preserve old parameter names as `--legacy-arg` metadata.
+Use the Rust benchmark CLI for repeatable captures. First-party docs, CI,
+fixtures, and agent commands call these Rust subcommands directly.
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client
 ```
 
-The wrapper remains available only for existing reviewer habits:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1
-```
-
 The Rust command starts the server and client through `fun-bench run-stack`,
-enables render diagnostics, warms up, samples the client log, stops the stack,
-and writes the canonical telemetry bundle first. Legacy files below are
-rendered compatibility views generated from the decoded bundle:
+enables render diagnostics, warms up, samples typed telemetry, stops the stack,
+and writes the canonical telemetry bundle first. Files below with text-oriented
+extensions are rendered views generated from the decoded bundle:
 
 - `target\benchmarks\client\<timestamp>\benchmark.funpb.zst`
 - `target\benchmarks\client\<timestamp>\summary.json`
@@ -102,7 +95,7 @@ The hard telemetry contract lives in the umbrella docs:
 Benchmark captures use `BenchmarkCapture` unless a narrower lane explicitly
 declares `HotPathCounters`, `SampledRuntime`, or `TargetedTrace`.
 
-During transition, older consumers may still read:
+Rendered view consumers may request:
 
 - `target\benchmarks\client\<timestamp>\summary.json`
 - `target\benchmarks\client\<timestamp>\summary.md`
@@ -111,18 +104,19 @@ During transition, older consumers may still read:
 default it selects `default.<backend>.<present>`, then passes benchmark flags as
 command-line overrides so existing lanes keep their explicit settings. Use
 `--stack-profile <profile-name>` only for lanes that intentionally need a
-different profile contract. Every emitted
-`summary.json` records the additive, schema-marked `stack_runner` object with
-the resolved profile, override map, command, and runner session path.
+different profile contract. Every emitted benchmark bundle records the
+additive, schema-marked `stack_runner` object with the resolved profile,
+override map, command, and runner session path. Rendered JSON views expose the
+same fields for humans and compatibility import tests.
 
 Required 144 FPS lanes are run through the same Rust engine, not a separate
 measurement universe:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- required-lanes --render-backend dx12 --present-mode immediate
 ```
 
-Each lane writes its own `summary.json`:
+Each lane writes its own benchmark bundle and optional rendered summary views:
 
 - `full_runtime`: Solari plus meshlets plus normal gameplay.
 - `solari_floor`: Solari disabled only to expose the non-Solari floor.
@@ -161,7 +155,7 @@ also report `meshlet_material_queue_cpu_ns` and
 `meshlet_material_queue_dirty_instance_count`. Per-view meshlet resource reset
 changes must report `meshlet_view_reset_cpu_queue_writes`,
 `meshlet_view_reset_cpu_queue_writes_per_view`, and `meshlet_view_count`.
-When frame attribution is needed, run with `-FrameTimeDiagnostics`; this enables
+When frame attribution is needed, run with `--frame-time-diagnostics`; this enables
 the debug-only `game_client/render_diagnostics` feature and writes a per-frame
 hierarchical `fun::frame_time` report with thread buckets, function names,
 file/line callsites, inclusive ns, `self_ns`, and child percentages. Diagnostic
@@ -187,20 +181,20 @@ barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
 native interop, then bring up DLSS Super Resolution and only later consider Ray
 Reconstruction.
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity
 ```
 
-For script/schema validation without launching the client:
+For command/schema validation without launching the client:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --plan-only
 ```
 
 The quick profile captures the Vulkan and DX12 present-mode controls plus the
 highest-risk UI and feature lanes. The full profile adds every declared lane:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size full --continue-on-failure
 ```
 
@@ -219,7 +213,7 @@ Current stack support records these as windowed lanes; borderless fullscreen
 still needs a dedicated host/window-mode switch before it can be included as a
 live lane.
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size present --continue-on-failure
 ```
 
@@ -227,22 +221,22 @@ Use the stream-pressure matrix before claiming meshlet/world-stream p95
 improvements. It runs the `streaming_spike` lane through DX12 and Vulkan
 controls, then expands DX12 render-prep budget and chunk-cap tuning lanes:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size stream-pressure --continue-on-failure
 ```
 
 The live controls are:
 
-- `-StreamRenderPrepBudgetMs 1|2|4|8`, forwarded as
+- `--stream-render-prep-budget-ms 1|2|4|8`, forwarded as
   `FUN_STREAM_RENDER_PREP_BUDGET_MS`.
-- `-StreamRenderPrepMaxChunksPerFrame <n>`, forwarded as
+- `--stream-render-prep-max-chunks-per-frame <n>`, forwarded as
   `FUN_STREAM_RENDER_PREP_MAX_CHUNKS_PER_FRAME`; `0` means uncapped.
 
 Use the focused report to decide whether power-of-two meshlet capacity changes
 actually bounded reallocations and whether the render-prep budget is limiting
 time-to-ready:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-meshlet-stream-pressure `
   --matrix-json target\dx12-parity\stream-pressure\matrix.json `
   --markdown-report target\dx12-parity\stream-pressure\dx12_meshlet_stream_pressure_report.md `
@@ -267,17 +261,18 @@ The declared lane vocabulary is:
 
 CEF transport controls used by the matrix and direct client benchmark runs:
 
-- `-CefPaintTransport disabled|cpu|auto|d3d11on12`
-- `-CefAcceleratedStrict`
-- `-CefGpuRingDepth 2|3|4|5`
-- `-CefCopyDirtyRects`
-- `-CefDebugTimings`
+- `--cef-paint-transport disabled|cpu|auto|d3d11on12`
+- `--cef-accelerated-strict`
+- `--cef-gpu-ring-depth 2|3|4|5`
+- `--cef-copy-dirty-rects`
+- `--cef-debug-timings`
 
 `auto` never fails the app just because accelerated setup is unavailable;
-`-CefAcceleratedStrict` is the debugging lane that turns accelerated setup or
+`--cef-accelerated-strict` is the debugging lane that turns accelerated setup or
 copy failures into loud errors instead of quiet CPU fallback.
 
-Every matrix writes:
+Every matrix writes a compressed protobuf bundle first and rendered views only
+when requested:
 
 - `target\benchmarks\dx12_parity\<timestamp>\matrix.json`
 - `target\benchmarks\dx12_parity\<timestamp>\summary.md`
@@ -288,7 +283,7 @@ until those recommendations come from comparable live runs.
 
 For an explicit default/benchmark decision artifact, run:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-present-decision --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_present_decision_report.md --json-report target\dx12-parity\current\dx12_present_decision_report.json
 ```
 
@@ -307,16 +302,16 @@ transport counters: `cef_on_paint_fps`, `cef_on_accelerated_paint_fps`,
 `cef_gpu_frame_ready_count`, `cef_gpu_frame_not_ready_count`,
 `cef_gpu_frame_reused_count`, `cef_gpu_frame_blocking_wait_count`,
 `cef_transport_fallback_count`, `cef_published_generation`,
-`cef_sampled_generation`, and `cef_stale_frame_count`. `summary.json` also
+`cef_sampled_generation`, and `cef_stale_frame_count`. The benchmark bundle also
 records `cef_ui_transport_selection` with the requested transport, selected
 transport, backend, bridge readiness, CPU fallback policy, ring depth, copy
 mode, strict flag, debug-timing flag, and fallback reason. Render upload
-counters are enabled by `-RenderDiagnostics` and recorded as
+counters are enabled by `--render-diagnostics` and recorded as
 `render_upload_write_texture_calls`, `render_upload_write_texture_bytes`,
 `render_upload_write_buffer_calls`, `render_upload_write_buffer_bytes`,
 `render_upload_write_buffer_with_calls`,
 `render_upload_write_buffer_with_bytes`, and
-`render_upload_callsite_count`; `summary.json` also includes
+`render_upload_callsite_count`; the rendered JSON view also includes
 `render_upload_callsites` with the top ten callsites aggregated over the sample
 window. Render churn counters are enabled by the same diagnostics path and
 recorded as `render_churn_bind_group_creations`,
@@ -331,7 +326,7 @@ recorded as `render_churn_bind_group_creations`,
 `render_churn_pipeline_cache_hits`,
 `render_churn_pipeline_cache_misses`, and per-family pipeline-key counts such as
 `render_churn_material_pipeline_key_count` and
-`render_churn_cloud_pipeline_key_count`; `summary.json` also includes
+`render_churn_cloud_pipeline_key_count`; the rendered JSON view also includes
 `render_churn_events` with the top ten creation/cache events.
 Command submission metrics are recorded as
 `render_command_command_encoder_creations`, `render_command_render_passes`,
@@ -339,7 +334,7 @@ Command submission metrics are recorded as
 `render_command_command_buffers_submitted`, `render_command_queue_submits`,
 `render_command_copy_commands`,
 `render_command_native_interop_command_insertions`, and
-`render_command_event_count`; `summary.json` also includes
+`render_command_event_count`; the rendered JSON view also includes
   `render_command_events` with the top ten operation/category/label rows.
 Stream-pressure diagnostics are recorded as
 `meshlet_buffer_reallocations`,
@@ -368,12 +363,12 @@ Readback diagnostics are recorded as
 `render_readback_readback_latency_frame_sum`,
 `render_readback_readback_latency_frame_max`,
 `render_readback_map_async_count`, `render_readback_poll_count`, and
-`render_readback_event_count`; `summary.json` also includes
+`render_readback_event_count`; the rendered JSON view also includes
 `render_readback_events`.
 
 For the focused command/readback decision artifact, run:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-command-readback `
   --matrix-json target\dx12-parity\current\matrix.json `
   --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
@@ -398,7 +393,7 @@ Shader diagnostics are recorded as
 `render_shader_pipeline_create_count`,
 `render_shader_pipeline_create_ns`,
 `render_shader_pipeline_specialization_count`, and
-`render_shader_event_count`; `summary.json` also includes
+`render_shader_event_count`; the rendered JSON view also includes
 `render_shader_events` with the top ten shader/pipeline events.
 
 PIX, GPUView, and PresentMon-only values are not guessed from client logs. The
@@ -407,18 +402,20 @@ matrix JSON lists them under `dx12_external_metrics` with
 barrier counts, descriptor heap switches, command-list counts, fence waits,
 submit counts, and GPU queue idle intervals.
 
-Use the JSON file as the baseline for a second run:
+Use the protobuf bundle as the baseline for a second run. Rendered JSON remains
+a generated view for compatibility import tests:
 
-```powershell
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --baseline target\benchmarks\client\<baseline>\summary.json
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --baseline target\benchmarks\client\<baseline>\benchmark.funpb.zst
 ```
 
-For a generated DX12 parity dashboard from one Vulkan JSON and one DX12 JSON:
+For a generated DX12 parity dashboard from one Vulkan bundle and one DX12
+bundle:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity `
-  --vulkan target\benchmarks\client\<vulkan>\summary.json `
-  --dx12 target\benchmarks\client\<dx12>\summary.json `
+  --vulkan target\benchmarks\client\<vulkan>\benchmark.funpb.zst `
+  --dx12 target\benchmarks\client\<dx12>\benchmark.funpb.zst `
   --markdown target\benchmarks\dx12_parity\dashboard.md `
   --csv target\benchmarks\dx12_parity\dashboard.csv
 ```
@@ -440,18 +437,18 @@ post-parity Tier 19 experiments. The parity dashboard prints moonshot
 eligibility and a `DX12 Memory Budget` table when native/DXGI budget samples or
 adapter RAM are available.
 
-The legacy Python DX12 report wrapper paths were removed in Pass 13. CI and
-agent workflows must call `fun-data report <kind>` directly.
+CI and agent workflows call `fun-data report <kind>` directly.
 
 ## DX12 Perf Regression Gate
 
-Use the local gate when a baseline and candidate `summary.json` are available
-from the same hardware, resolution, present mode, CEF mode, and build profile:
+Use the local gate when baseline and candidate `benchmark.funpb.zst` bundles
+are available from the same hardware, resolution, present mode, CEF mode, and
+build profile:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check `
-  --baseline target\benchmarks\client\<baseline>\summary.json `
-  --current target\benchmarks\client\<candidate>\summary.json `
+  --baseline target\benchmarks\client\<baseline>\benchmark.funpb.zst `
+  --current target\benchmarks\client\<candidate>\benchmark.funpb.zst `
   --report-path target\benchmarks\dx12_perf_gate\report.md `
   --json-out target\benchmarks\dx12_perf_gate\report.json
 ```
@@ -466,11 +463,11 @@ Hard failures are:
 
 Warnings do not fail by default. They cover mean FPS regression over 3 percent,
 present-wait p95 increases, upload-byte growth over 1 MiB at p95, and transient
-create-count increases. Use `-FailOnWarning` only for local ratcheting runs.
+create-count increases. Use `--fail-on-warning` only for local ratcheting runs.
 
 CI runs correctness-only self-tests on normal Windows runners:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --self-test
 ```
 
@@ -479,14 +476,13 @@ cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regres
 Use the doctrine gate for hardware-free PR checks and to validate supplied CEF
 summary artifacts:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --self-test
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --summary-path target\benchmarks\client\<candidate>\summary.json
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --summary-path target\benchmarks\client\<candidate>\benchmark.funpb.zst
 ```
 
-The old PowerShell paths remain compatibility wrappers. The checker requires
-`.dx12_change_category`, blocks `dlss-sr` changes until
+The checker requires `.dx12_change_category`, blocks `dlss-sr` changes until
 `docs\dx12_dlss_boundary_gate.md` says the baseline is ready, denies raw DX12
 HAL extraction outside `fun_render\src\dx12_native`, and fails accelerated CEF
 summary artifacts that report nonzero `cef_cpu_upload_bytes`.
@@ -496,8 +492,7 @@ non-blocking. It targets self-hosted runners labeled `windows` and `dx12-perf`;
 those runners can execute the full benchmark matrix when the sibling path
 dependencies are present.
 
-During the Rust tooling cutover, umbrella CI runs direct Rust benchmark/report
-fixtures under:
+Umbrella CI runs direct Rust benchmark/report fixtures under:
 
 ```text
 target/data-platform-cutover/fun-fixtures/
@@ -507,32 +502,26 @@ Standalone `fun` CI emits the same direct Rust artifact shape when `..\fun-cli`
 is present. If the nested checkout is tested alone, it writes a skip JSON
 artifact and the umbrella root workflow remains the authoritative cutover gate.
 
-For parser-only checks against an existing client log:
+For parser-only checks against an existing local debug view:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --input-log target\run-stack\logs\game_client.out.log --dry-run
 ```
 
-For static CPU-vs-GPU CEF visual checks after capturing matched UI screenshots:
-the remaining PowerShell utility is optional local analysis and is tracked as a
-non-core follow-up in the root migration ledger.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare_cef_ui_screenshots.ps1 `
-  -CpuReference target\captures\cef_cpu.png `
-  -GpuCandidate target\captures\cef_gpu.png `
-  -JsonOut target\captures\cef_ui_screenshot_diff.json
-```
+For static CPU-vs-GPU CEF visual checks after capturing matched UI screenshots,
+use `fun-data report dx12-parity` or a typed `fun-bench` visual comparison
+subcommand once that lane is wired. Do not add shell-script launchers for this
+analysis path.
 
 For denoiser and DLSS Ray Reconstruction comparisons:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- denoisers
 ```
 
 That matrix runs `off`, `cheap-temporal`, `balanced-fast`, `balanced`,
 `quality`, and `rr`, then writes
-`target\benchmarks\denoisers\<timestamp>\summary.md` with denoiser compute
+`target\benchmarks\denoisers\<timestamp>\summary.md` as a rendered view with denoiser compute
 nanoseconds, RR guide resolve nanoseconds, external RR nanoseconds, specular
 regular/PSR costs, Solari total cost, frame p95, and FPS.
 
@@ -547,13 +536,13 @@ is fixed.
 
 For the RT/Solari capability matrix:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- rt-matrix --render-backend dx12 --present-mode immediate
 ```
 
 That matrix records both `rt_feature_gates.rt_feature_hash` from the requested
 Fun RT gates and `render_capabilities.backend_capability_hash` from the Bevy
-startup capability line into every `summary.json`. When Bevy's
+startup capability line into every benchmark bundle. When Bevy's
 `bevy_dx12_backend_diagnostics` feature emits the compact
 `[bevy render] dx12 backend:` startup line, the benchmark parser also records it
 as `dx12_backend_diagnostics` with the Bevy snapshot schema version, redacted
@@ -601,20 +590,18 @@ The hard gates are:
 - no unbounded page-fault storm;
 - no unsupported frame generation;
 - no hidden product Bevy UI dependency;
-- no performance claim without a JSON or Markdown artifact.
+- no performance claim without a compressed protobuf benchmark bundle.
 
 Local validation:
 
-```powershell
+```text
 cargo test -p fun-renderer --lib benchmark
-$root=(Get-Location).Path
-$env:FUN_RENDERER_BENCHMARK_ARTIFACT=Join-Path $root 'target\benchmarks\renderer\pass21-renderer-benchmark.json'
-cargo test -p fun-renderer --lib benchmark::tests::benchmark_artifacts_record_json_markdown_and_gate_status -- --exact --nocapture
+cargo test -p fun-renderer --lib benchmark::tests::benchmark_artifacts_record_bundle_and_gate_status -- --exact --nocapture
 ```
 
-The artifact writer emits both `.json` and `.md` files with the same stem.
-Renderer performance notes should cite one of these artifacts before claiming a
-pass improved, regressed, or merely moved complexity.
+The artifact writer emits compressed protobuf first. Renderer performance notes
+should cite the bundle before claiming a pass improved, regressed, or merely
+moved complexity; JSON or Markdown may be generated only as views.
 
 ## Renderer Research Spike Benchmarks
 
@@ -631,16 +618,14 @@ The registered spikes and compile-time gates are:
 
 Local validation:
 
-```powershell
+```text
 cargo test -p fun-renderer --lib research
 cargo test -p fun-lux --lib research
-$root=(Get-Location).Path
-$env:FUN_RENDERER_RESEARCH_SPIKE_ARTIFACT=Join-Path $root 'target\research\pass22-research-spikes.json'
 cargo test -p fun-renderer --lib research::tests::research_spike_artifact_records_recommendations -- --exact --nocapture
 ```
 
-The artifact writer emits both `.json` and `.md` files with the same stem.
-Spike recommendations must be one of `abandon`, `keep_experimental`, or
+The artifact writer emits compressed protobuf first; JSON and Markdown are
+views. Spike recommendations must be one of `abandon`, `keep_experimental`, or
 `promote_to_production_pass`; promotion is invalid if a spike becomes a default
 boot dependency, loses compile/runtime disable support, lacks capability facts,
 or lacks a benchmark artifact.
@@ -657,50 +642,48 @@ contract is now:
 
 Local validation:
 
-```powershell
+```text
 cargo test -p fun-renderer --lib default_flip
 cargo test -p fun_render --lib auto_backend_initializes_fun_core_by_default
 cargo test -p fun_render --lib explicit_legacy_backend_is_diagnostic_only_and_loud
-$root=(Get-Location).Path
-$env:FUN_RENDERER_DEFAULT_FLIP_ARTIFACT=Join-Path $root 'target\default-flip\pass23-default-flip.txt'
 cargo test -p fun-renderer --lib default_flip::tests::default_flip_artifact_records_stage_policy_and_owners -- --exact --nocapture
 ```
 
-Attach `target\default-flip\pass23-default-flip.txt` next to renderer benchmark
-artifacts when a run depends on the default backend policy.
+Attach the generated default-flip rendered view next to renderer benchmark
+bundles when a run depends on the default backend policy.
 
 ## Default Client Matrix
 
 The quick iteration benchmark is:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --render-backend dx12 --present-mode immediate
 ```
 
 The required performance benchmark for changes that claim client performance is:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --release --static-bevy --render-backend dx12 --present-mode immediate
 ```
 
 When a change touches one of these systems, also run the matching isolation case:
 
-- Solari: add `-DisableSolari`.
-- Clouds: compare `-DisableClouds` against default scattered, then run
-  `-CloudProfile overcast` and `-CloudProfile storm_front` for dense and
+- Solari: add `--disable-solari`.
+- Clouds: compare `--disable-clouds` against default scattered, then run
+  `--cloud-profile overcast` and `--cloud-profile storm-front` for dense and
   high-motion weather stress.
-- Cloud quality: compare `-CloudQuality cheap` and `-CloudQuality balanced`.
-- Meshlets: add `-DisableMeshlets`.
+- Cloud quality: compare `--cloud-quality cheap` and `--cloud-quality balanced`.
+- Meshlets: add `--disable-meshlets`.
 - DLSS Ray Reconstruction: diagnostic runs must opt in with
-  `-EnableDx12DlssRr -SolariDenoiseMode rr`. Acceptance runs must additionally
-  pass `-RequireDx12DlssRrAcceptance`. The script fails acceptance if
+  `--enable-dx12-dlss-rr --solari-denoise-mode rr`. Acceptance runs must additionally
+  pass `--require-dx12-dlss-rr-acceptance`. The Rust benchmark command fails acceptance if
   `dlss_rr_gpu_ns`,
   `solari_pass_dlss_rr_guide_resolve_ns`, `frame_ns.mean`, or `frame_ns.p95`
   is missing, or if fewer than 500 estimated live frames were observed.
-- Denoisers: compare `-SolariDenoiseMode off`, `cheap-temporal`,
+- Denoisers: compare `--solari-denoise-mode off`, `cheap-temporal`,
   `balanced-fast`, `balanced`, `quality`, and the DLSS RR preset where
   available.
-- Solari internal GI scale: compare `-SolariInternalScale 1.0` against `0.75`,
+- Solari internal GI scale: compare `--solari-internal-scale 1.0` against `0.75`,
   `0.66`, and `0.5`; track diffuse initial/spatial ns and Solari VRAM logs.
 - CPU-heavy gameplay or networking: keep rendering settings fixed and compare
   process CPU, memory, FPS, and frame time.
@@ -709,10 +692,10 @@ When a change touches one of these systems, also run the matching isolation case
 
 For visible cloud-render changes, run the stack runner at least three ways:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -DisableClouds
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -CloudProfile scattered -CloudQuality balanced
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -CloudDebugOverlay coverage
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --disable-clouds
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --cloud-profile scattered --cloud-quality balanced
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --cloud-debug-overlay coverage
 ```
 
 Capture screenshots or a short note confirming that clouds are visible on
@@ -742,8 +725,8 @@ Use this shape in commit messages, PR notes, or review replies:
 ```text
 Client benchmark:
 - Command: cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client ...
-- Baseline: target\benchmarks\client\<timestamp>\summary.json
-- Candidate: target\benchmarks\client\<timestamp>\summary.json
+- Baseline: target\benchmarks\client\<timestamp>\benchmark.funpb.zst
+- Candidate: target\benchmarks\client\<timestamp>\benchmark.funpb.zst
 - FPS mean/p50/p95: ... -> ... (...%)
 - Frame ns mean/p95: ... -> ... (...%)
 - Main pass deltas:
@@ -775,4 +758,4 @@ Performance work is not complete until the project can answer these questions:
 - Which pass moved?
 - Did p95 improve, or did only the average improve?
 - Did visual quality change?
-- Can another developer reproduce the measurement from committed scripts?
+- Can another developer reproduce the measurement from committed Rust commands?

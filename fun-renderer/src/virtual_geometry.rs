@@ -644,7 +644,7 @@ impl VirtualGeometryDrawPath {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StaticVirtualGeometryExecutionPolicy {
+pub struct StaticVirtualGeometryRuntimePolicy {
     pub screen_space_error_threshold_pixels: f32,
     pub affordable_child_page_bytes: u64,
     pub max_material_ranges_per_cluster: u8,
@@ -652,7 +652,7 @@ pub struct StaticVirtualGeometryExecutionPolicy {
     pub mesh_shader_mode: VirtualGeometryMeshShaderMode,
 }
 
-impl Default for StaticVirtualGeometryExecutionPolicy {
+impl Default for StaticVirtualGeometryRuntimePolicy {
     fn default() -> Self {
         Self {
             screen_space_error_threshold_pixels: 1.5,
@@ -949,7 +949,7 @@ pub fn select_static_virtual_geometry_frame(
     asset: &StaticVirtualGeometryAsset,
     scheduler: &mut PageScheduler,
     context: StaticVirtualGeometryViewContext,
-    policy: StaticVirtualGeometryExecutionPolicy,
+    policy: StaticVirtualGeometryRuntimePolicy,
 ) -> StaticVirtualGeometryFrameSelection {
     let mut selection = StaticVirtualGeometryFrameSelection::empty(asset, context);
     if !context.object_visible {
@@ -1276,7 +1276,7 @@ fn cull_static_virtual_geometry_clusters(
     asset: &StaticVirtualGeometryAsset,
     selected_clusters: &[VirtualGeometrySelectedCluster],
     context: StaticVirtualGeometryViewContext,
-    policy: StaticVirtualGeometryExecutionPolicy,
+    policy: StaticVirtualGeometryRuntimePolicy,
 ) -> Vec<VirtualGeometrySelectedCluster> {
     let mut visible = Vec::with_capacity(selected_clusters.len());
     for selected in selected_clusters {
@@ -1313,7 +1313,7 @@ fn build_virtual_geometry_draw_packets(
     asset: &StaticVirtualGeometryAsset,
     visible_clusters: &[VirtualGeometrySelectedCluster],
     context: StaticVirtualGeometryViewContext,
-    policy: StaticVirtualGeometryExecutionPolicy,
+    policy: StaticVirtualGeometryRuntimePolicy,
 ) -> Vec<VirtualGeometryDrawPacket> {
     let draw_path = draw_path_for_context(context, policy);
     let mut builders = BTreeMap::<
@@ -1346,7 +1346,7 @@ fn build_virtual_geometry_draw_packets(
 fn build_fallback_mesh_packet(
     asset: &StaticVirtualGeometryAsset,
     context: StaticVirtualGeometryViewContext,
-    policy: StaticVirtualGeometryExecutionPolicy,
+    policy: StaticVirtualGeometryRuntimePolicy,
 ) -> VirtualGeometryDrawPacket {
     let material_signature = asset
         .material_ranges
@@ -1370,7 +1370,7 @@ fn build_fallback_mesh_packet(
 
 fn draw_path_for_context(
     context: StaticVirtualGeometryViewContext,
-    policy: StaticVirtualGeometryExecutionPolicy,
+    policy: StaticVirtualGeometryRuntimePolicy,
 ) -> VirtualGeometryDrawPath {
     if matches!(
         policy.mesh_shader_mode,
@@ -1674,7 +1674,7 @@ mod tests {
             &asset,
             &mut scheduler,
             StaticVirtualGeometryViewContext::default(),
-            StaticVirtualGeometryExecutionPolicy::default(),
+            StaticVirtualGeometryRuntimePolicy::default(),
         );
 
         assert_eq!(
@@ -1727,7 +1727,7 @@ mod tests {
                 projected_bounds_radius_pixels: 1024.0,
                 ..Default::default()
             },
-            StaticVirtualGeometryExecutionPolicy {
+            StaticVirtualGeometryRuntimePolicy {
                 affordable_child_page_bytes: 64 * 1024 * 1024,
                 ..Default::default()
             },
@@ -1760,7 +1760,7 @@ mod tests {
                 mesh_shader_supported: false,
                 ..Default::default()
             },
-            StaticVirtualGeometryExecutionPolicy {
+            StaticVirtualGeometryRuntimePolicy {
                 mesh_shader_mode: VirtualGeometryMeshShaderMode::Optional,
                 ..Default::default()
             },
@@ -1792,7 +1792,7 @@ mod tests {
             &asset,
             &mut scheduler,
             StaticVirtualGeometryViewContext::default(),
-            StaticVirtualGeometryExecutionPolicy::default(),
+            StaticVirtualGeometryRuntimePolicy::default(),
         );
 
         assert!(selection.metrics.culled_clusters > 0);
@@ -1824,7 +1824,7 @@ mod tests {
                 mesh_shader_supported: true,
                 ..Default::default()
             },
-            StaticVirtualGeometryExecutionPolicy {
+            StaticVirtualGeometryRuntimePolicy {
                 mesh_shader_mode: VirtualGeometryMeshShaderMode::Optional,
                 ..Default::default()
             },
@@ -1844,7 +1844,7 @@ mod tests {
                 mesh_shader_supported: false,
                 ..Default::default()
             },
-            StaticVirtualGeometryExecutionPolicy {
+            StaticVirtualGeometryRuntimePolicy {
                 mesh_shader_mode: VirtualGeometryMeshShaderMode::Optional,
                 ..Default::default()
             },
@@ -1897,7 +1897,7 @@ mod tests {
                 editor_focus: 160,
                 ..Default::default()
             },
-            StaticVirtualGeometryExecutionPolicy {
+            StaticVirtualGeometryRuntimePolicy {
                 affordable_child_page_bytes: 64 * 1024 * 1024,
                 ..Default::default()
             },

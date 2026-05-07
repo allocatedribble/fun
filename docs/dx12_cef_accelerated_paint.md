@@ -227,7 +227,7 @@ developer-facing transport badge; it is independent of the Svelte RAF FPS badge:
 [client perf] cef_ui transport health: transport=d3d11on12 status=healthy accel_paint_fps=<rate> paint_fps=0 gpu_copy_ms=0.180 gpu_copy_ns_per_copy=180000 cpu_upload_bytes_per_frame=0 reused_frames=2 not_ready_frames=0 blocking_waits=0 fallback_count=0 ring_depth=3
 ```
 
-`benchmark_client.ps1` records the latest line as `cef_ui_transport_health` and
+`fun-bench client` records the latest line as `cef_ui_transport_health` and
 also folds numeric fields into `cef_health_*` metrics. The DX12 parity dashboard
 renders a compact CEF Transport Health section in the form:
 
@@ -454,7 +454,7 @@ The UI RAF badge is not evidence of CEF paint callback cadence or GPU transport.
 
 ## CEF Transport Matrix
 
-`scripts\benchmark_dx12_parity.ps1 -MatrixSize cef_transport` expands the CEF
+`fun-bench dx12-parity --matrix-size cef_transport` expands the CEF
 decision lanes:
 
 - hidden control;
@@ -476,11 +476,11 @@ the documented default remains `3`.
 ## Static Visual Match
 
 When validating the accelerated path, capture the same static UI route once with
-`-CefPaintTransport cpu` and once with `-CefPaintTransport d3d11on12`. Compare
+`--cef-paint-transport cpu` and once with `--cef-paint-transport d3d11on12`. Compare
 the screenshots with:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare_cef_ui_screenshots.ps1 `
+```text
+fun-data report dx12-parity `
   -CpuReference target\captures\cef_cpu.png `
   -GpuCandidate target\captures\cef_gpu.png `
   -JsonOut target\captures\cef_ui_screenshot_diff.json

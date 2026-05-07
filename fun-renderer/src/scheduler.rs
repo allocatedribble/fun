@@ -795,10 +795,10 @@ impl SharedHeuristicScheduler {
 
     #[must_use]
     pub fn evaluate(&mut self, inputs: SharedPriorityInputs) -> NormalizedPriorityScore {
-        if self.config.debug_controls.freeze_priorities {
-            if let Some(score) = self.frozen_score {
-                return score;
-            }
+        if self.config.debug_controls.freeze_priorities
+            && let Some(score) = self.frozen_score
+        {
+            return score;
         }
         let score = evaluate_priority(
             inputs,
@@ -927,10 +927,11 @@ pub fn evaluate_priority(
     }
     let normalized = if let Some(forced) = forced_priority_per_mille {
         clamp_priority_input(forced)
-    } else if weight_sum == 0 {
-        0
     } else {
-        (weighted_sum / weight_sum).min(u32::from(PRIORITY_SCALE_PER_MILLE)) as u16
+        weighted_sum
+            .checked_div(weight_sum)
+            .unwrap_or(0)
+            .min(u32::from(PRIORITY_SCALE_PER_MILLE)) as u16
     };
     NormalizedPriorityScore {
         normalized_per_mille: normalized,
@@ -1563,11 +1564,13 @@ mod tests {
 
     #[test]
     fn debug_freeze_and_lock_controls_keep_reproducible_priority_and_budget() {
-        let mut config = SharedSchedulerConfig::default();
-        config.debug_controls = SchedulerDebugControls {
-            freeze_priorities: true,
-            lock_budgets: true,
-            force_heatmap_capture: false,
+        let config = SharedSchedulerConfig {
+            debug_controls: SchedulerDebugControls {
+                freeze_priorities: true,
+                lock_budgets: true,
+                force_heatmap_capture: false,
+            },
+            ..SharedSchedulerConfig::default()
         };
         let mut scheduler = SharedHeuristicScheduler::new(config);
         let first = scheduler.evaluate(SharedPriorityInputs::stress_high());

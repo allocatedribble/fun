@@ -37,7 +37,7 @@ renderer behavior was intentionally changed.
 | stream-pressure matrix mode | measured | `target\dx12-parity\stream-pressure-plan-validation\matrix.json` |
 | stream-pressure decision report smoke | measured | `target\dx12-parity\current\dx12_meshlet_stream_pressure_report.md` |
 | stream-pressure DX12/Vulkan control smoke | measured | `target\dx12-parity\stream-pressure-smoke-capture-from-start\dx12_meshlet_stream_pressure_report.md` |
-| CEF transport matrix mode | measured | `scripts\benchmark_dx12_parity.ps1 -MatrixSize cef_transport -PlanOnly` |
+| CEF transport matrix mode | measured | `fun-bench dx12-parity --matrix-size cef_transport --plan-only` |
 | CEF accelerated live lane | measured_blocked | `target\benchmarks\client\20260504-005500-247\summary.json` |
 | Pass 9 backend truth smoke | measured_fail | `target\benchmarks\client\20260506-032407-482\summary.json` |
 | Pass 9 capability report | measured_fail | `target\run-stack\renderer-capabilities.json` |
@@ -47,7 +47,7 @@ renderer behavior was intentionally changed.
 Selected local lanes were run at 1280x720 for `dx12` and `vulkan` across
 `immediate`, `fifo`, and `auto_no_vsync`, plus CEF hidden, CEF CPU paint,
 requested CEF D3D11On12, and clouds/Solari/meshlet toggle lanes. This is not a
-full `-MatrixSize present` run and does not include PIX, PresentMon, or the
+full `--matrix-size present` run and does not include PIX, PresentMon, or the
 representative/cloud-heavy/stream-stress scene expansion.
 
 The present matrix definition now includes the required decision scenarios:
@@ -90,7 +90,7 @@ frame generation claims.
 | upload top-callsite table | measured | current `summary.json` files include render upload counters; top-callsite review is still pending |
 | command/readback decision report | measured | current report says `candidate_needs_pix_before_behavior_change` for command submission and `nonblocking_proven` for readback; no submit reduction is selected |
 | meshlet/world-stream pressure report | measured | DX12/Vulkan control smoke exists at `target\dx12-parity\stream-pressure-smoke-capture-from-start\dx12_meshlet_stream_pressure_report.md`; full budget/chunk-cap expansion and matched before/after baseline remain missing |
-| CEF accelerated health report | blocked | latest present smoke `d3d11on12` request selected CPU fallback with `cef_cpu_upload_bytes.mean=44236800`, `cef_gpu_copy_bytes.mean=0`, `cef_on_accelerated_paint_fps.mean=0`, and health `fallback`; Pass 9 also shows requested DX12 resolving to actual Vulkan in the capability report; new `cef_ui_transport_health` badge and `-MatrixSize cef_transport` lanes are ready for the next live capture |
+| CEF accelerated health report | blocked | latest present smoke `d3d11on12` request selected CPU fallback with `cef_cpu_upload_bytes.mean=44236800`, `cef_gpu_copy_bytes.mean=0`, `cef_on_accelerated_paint_fps.mean=0`, and health `fallback`; Pass 9 also shows requested DX12 resolving to actual Vulkan in the capability report; new `cef_ui_transport_health` badge and `--matrix-size cef_transport` lanes are ready for the next live capture |
 | PIX barrier summary | blocked | blocked artifact written to `target\dx12-pix\barrier_summary.md`; no PIX CSV was available locally |
 | steady-state pipeline creation report | measured | `target\dx12-pix\pipeline_cardinality_report.md` reports render pipeline p95 `22`, compute pipeline p95 `82`, shader pipeline p95 `104`; shader creation families are led by PBR, Solari, meshlet, and UI pipelines |
 
@@ -116,7 +116,7 @@ Allowed statuses: `missing`, `measured`, `optimized`, `blocked`,
 | --- | --- | --- | --- |
 | upload path decision | measured | no new upload optimization selected | current top ten upload callsites and CEF CPU upload isolation |
 | backend truth decision | measured_fail | requested/selected DX12 is not sufficient evidence; current local smoke is actual Vulkan with `actual_backend_mismatch`, so premium rendering remains blocked | produce a live artifact with `actual_graphics_backend=dx12`, `fallback_graphics_backend=none`, and `dx12_native_interop_support=supported` |
-| CEF transport decision | blocked | keep accelerated path fail-closed; current D3D11On12 request cannot be treated as healthy while backend truth reports actual Vulkan or bridge readiness reports `render_backend_not_dx12` | run `-MatrixSize cef_transport`, screenshot diff, resize, alt-tab, and editor/launcher transition checks after DX12 bridge readiness is fixed |
+| CEF transport decision | blocked | keep accelerated path fail-closed; current D3D11On12 request cannot be treated as healthy while backend truth reports actual Vulkan or bridge readiness reports `render_backend_not_dx12` | run `--matrix-size cef_transport`, screenshot diff, resize, alt-tab, and editor/launcher transition checks after DX12 bridge readiness is fixed |
 | present default decision | measured | do not change defaults; the decision report requires a complete live scenario matrix plus latency evidence before recommending a default change | full present matrix with mean FPS, p95, and present-wait recommendations |
 | barrier cleanup decision | blocked | no cleanup selected; local barrier artifact is blocked because no PIX CSV was available | PIX barrier/resource-state summary with named resources and transitions |
 | PSO/churn decision | measured | runtime PSO churn is a current bottleneck candidate; use `FUN_RENDER_PIPELINE_WARMUP=observed` for the next measured lane before layout canonicalization | rerun benchmark after creation-focused churn rows are present, then compare before/after observed warmup |
@@ -130,7 +130,7 @@ Allowed statuses: `missing`, `measured`, `optimized`, `blocked`,
 - PR metadata file: `.dx12_change_category`
 - Doctrine checker: `fun-bench dx12-doctrine-check`
 - Hardware-free validation: `fun-bench dx12-doctrine-check --self-test`
-- Compatibility wrapper: `tools\check_dx12_doctrine.ps1`
+- Rust command: fun-bench dx12-doctrine-check
 
 Every later DX12 PR updates this document when it changes a gate status,
 attaches a new evidence artifact, or makes one of the decision-log calls.

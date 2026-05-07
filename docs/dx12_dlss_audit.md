@@ -54,10 +54,10 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 
 ## Benchmark Hooks
 
-- `scripts/benchmark_client.ps1`: captures FPS/frame/Solari/meshlet/DLSS RR metrics.
-- `scripts/benchmark_denoisers.ps1`: compares denoiser and RR modes, including `dlss_rr_gpu_ns` plus guide resolve; RR lanes pass `-EnableDx12DlssRr`.
-- `scripts/benchmark_rt_matrix.ps1`: includes a `dlss_rr_diagnostic` lane that passes `-EnableDx12DlssRr`.
-- `scripts/benchmark_required_lanes.ps1`: runs required client benchmark lanes.
+- `fun-bench client`: captures FPS/frame/Solari/meshlet/DLSS RR metrics.
+- `fun-bench denoisers`: compares denoiser and RR modes, including `dlss_rr_gpu_ns` plus guide resolve; RR lanes pass `--enable-dx12-dlss-rr`.
+- `fun-bench rt-matrix`: includes a `dlss_rr_diagnostic` lane that passes `--enable-dx12-dlss-rr`.
+- `fun-bench required-lanes`: runs required client benchmark lanes.
 - `docs/client_benchmarking.md` and `docs/client_diagnostics.md` define the current benchmark and diagnostic expectations.
 
 ## DLSS References
@@ -74,8 +74,8 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 - `fun_render/src/solari.rs`: denoiser mode parsing.
 - `fun_render/src/signature.rs`: render path signature records Bevy-facing RR state.
 - `game_client/src/lib.rs`: camera-side RR activation, reset, and diagnostics.
-- `scripts/benchmark_client.ps1`: `dlss_rr_gpu_ms` parsing and benchmark output.
-- `scripts/benchmark_denoisers.ps1`: denoiser/RR cost comparison.
+- `fun-bench client`: `dlss_rr_gpu_ms` parsing and benchmark output.
+- `fun-bench denoisers`: denoiser/RR cost comparison.
 
 ## Backend Selection
 
@@ -84,4 +84,4 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 - Empty, absent, or unknown values select the platform default: DX12 on Windows,
   Vulkan elsewhere.
 - `FUN_RENDER_BACKEND=auto` selects `Backends::VULKAN | Backends::DX12`.
-- The stack and benchmark PowerShell helpers default to DX12 on Windows.
+- The stack and benchmark Rust commands default to DX12 on Windows.

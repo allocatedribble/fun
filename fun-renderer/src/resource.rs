@@ -1,8 +1,8 @@
 pub const RENDERER_RESOURCE_SCHEMA_VERSION: u16 = 1;
 pub const RESOURCE_DIAGNOSTIC_TOP_SITE_COUNT: usize = 4;
-pub const PASS5_DX12_PARITY_ARTIFACT: &str = "target/dx12-parity/current/dx12_parity_report.json";
+pub const PASS5_DX12_PARITY_ARTIFACT: &str = "target/dx12-parity/current/dx12_parity.funpb.zst";
 pub const PASS5_UPLOAD_BENCHMARK_BASELINE_ARTIFACT: &str =
-    "target/benchmarks/client/20260506-005505-031/summary.json";
+    "target/benchmarks/client/20260506-005505-031/benchmark.funpb.zst";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RendererResourceClass {
@@ -189,8 +189,9 @@ impl RendererResourceOwner {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ResourceOwnershipPhase {
+    #[default]
     ObserveOnly,
     BridgeCompatibilityShim,
     RendererOwnedPolicy,
@@ -206,12 +207,6 @@ impl ResourceOwnershipPhase {
             Self::RendererOwnedPolicy => "renderer_owned_policy",
             Self::RendererOwnedAllocation => "renderer_owned_allocation",
         }
-    }
-}
-
-impl Default for ResourceOwnershipPhase {
-    fn default() -> Self {
-        Self::ObserveOnly
     }
 }
 

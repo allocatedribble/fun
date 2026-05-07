@@ -495,7 +495,7 @@ facts. `game_client` converts `Dx12CefReadyFrameToken` into
 The frame graph imports this layer through `FrameGraphPassRole::CefGpuImport`
 and `FrameGraphResourceType::UiColorAlpha`, then composes UI after scene
 rendering/upscaling. Product UI policy is executable through
-`tools/check_product_ui_policy.ps1`.
+`fun-quality check-code-shape`.
 
 ## UI Boundary
 

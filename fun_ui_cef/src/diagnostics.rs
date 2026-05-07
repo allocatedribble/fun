@@ -1,4 +1,6 @@
 pub const FUN_UI_DIAGNOSTICS_TARGET: &str = "fun::ui";
+pub const TELEMETRY_BUDGET_CLASS: &str = "SampledRuntime";
+pub const TELEMETRY_RETENTION_CLASS: &str = "SummarizeThenDiscardRaw";
 
 use std::sync::{
     Arc,

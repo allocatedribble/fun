@@ -16,40 +16,40 @@ capture shows which pass owns the cost.
 Use the same scene and timing window for Vulkan and DX12 benchmarking, then
 attach PIX only to the DX12 run:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 `
-  -RenderBackend dx12 `
-  -PresentMode immediate `
-  -CefPaintTransport d3d11on12 `
-  -CefGpuRingDepth 3 `
-  -CefDebugTimings `
-  -TraceDiagnostics `
-  -SampleSeconds 20 `
-  -WarmupSeconds 5
+```text
+scripts\fun-bench client `
+  --render-backend dx12 `
+  --present-mode immediate `
+  --cef-paint-transport d3d11on12 `
+  --cef-gpu-ring-depth 3 `
+  --cef-debug-timings `
+  --trace-diagnostics `
+  --sample-seconds 20 `
+  --warmup-seconds 5
 ```
 
 For a CPU fallback comparison:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 `
-  -RenderBackend dx12 `
-  -PresentMode immediate `
-  -CefPaintTransport cpu `
-  -TraceDiagnostics `
-  -SampleSeconds 20 `
-  -WarmupSeconds 5
+```text
+scripts\fun-bench client `
+  --render-backend dx12 `
+  --present-mode immediate `
+  --cef-paint-transport cpu `
+  --trace-diagnostics `
+  --sample-seconds 20 `
+  --warmup-seconds 5
 ```
 
 For a render-only control:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 `
-  -RenderBackend dx12 `
-  -PresentMode immediate `
-  -CefPaintTransport disabled `
-  -TraceDiagnostics `
-  -SampleSeconds 20 `
-  -WarmupSeconds 5
+```text
+scripts\fun-bench client `
+  --render-backend dx12 `
+  --present-mode immediate `
+  --cef-paint-transport disabled `
+  --trace-diagnostics `
+  --sample-seconds 20 `
+  --warmup-seconds 5
 ```
 
 PIX capture window:
@@ -188,7 +188,7 @@ loss.
 `fun-data report dx12-pix-barrier-summary` writes the pass artifact required by the
 barrier gate:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-pix-barrier-summary `
   --matrix target\dx12-parity\current\matrix.json `
   --pix target\dx12-pix\pix_export.csv `

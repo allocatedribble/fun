@@ -7,11 +7,11 @@ Status: measurement slice, upload cleanup tier 3.1 + pass5 resource ownership bo
 - `FUN_RENDER_UPLOAD_COUNTERS=1` or `BEVY_RENDER_UPLOAD_COUNTERS=1` enables
   Bevy `RenderQueue` counters for `write_texture`, `write_buffer`, and
   `write_buffer_with`.
-- `scripts/run_stack.ps1 -RenderDiagnostics` enables the counters for benchmark
+- `fun-bench run-stack --render-diagnostics` enables the counters for benchmark
   runs.
 - `game_client` emits `[client perf] render uploads:` totals and top-ten
   `[client perf] render upload top:` callsites.
-- `scripts/benchmark_client.ps1` records upload totals in `metrics` and
+- `fun-bench client` records upload totals in `metrics` and
   aggregates top callsites under `render_upload_callsites`.
 - `fun-data report dx12-parity` turns the DX12 summary's
   `render_upload_callsites` into a top-callsite kill list with calls/frame,
@@ -21,7 +21,7 @@ Status: measurement slice, upload cleanup tier 3.1 + pass5 resource ownership bo
 
 Search command:
 
-```powershell
+```text
 rg -n "\.write_texture\(|\.write_buffer\(|\.write_buffer_with\(|RenderQueue::write_texture|RenderQueue::write_buffer|Queue::write_texture|Queue::write_buffer|write_buffer_range" fun bevy avian bevy_quinnet thunder -g "*.rs"
 ```
 

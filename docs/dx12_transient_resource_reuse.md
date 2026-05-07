@@ -11,7 +11,7 @@ measurement and cleanup contract.
 ## Runtime Metrics
 
 `bevy_render::transient` emits the frame summary when render diagnostics enable
-that target. `scripts/run_stack.ps1 -RenderDiagnostics` now enables:
+that target. `fun-bench run-stack --render-diagnostics` now enables:
 
 ```text
 bevy_render::transient=debug
@@ -54,7 +54,7 @@ Benchmark JSON stores top rows under:
 
 Generate a focused reuse decision artifact with:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-transient-reuse --matrix-json target\dx12-parity\current\matrix.json --markdown-report target\dx12-parity\current\dx12_transient_reuse_report.md --json-report target\dx12-parity\current\dx12_transient_reuse_report.json
 ```
 

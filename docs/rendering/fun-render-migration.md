@@ -55,11 +55,11 @@ first-order migration blockers.
 | `fun_render` | Bevy/game renderer bridge and visible Winit compatibility shell, plus current Solari/cloud/meshlet integration, CEF texture bridge, DX12 interop, DLSS scaffolding, diagnostics, and benchmark parsing until those lanes are fully moved behind renderer-owned execution. | Bevy/app bridge only: plugin registration, extraction, app integration, migration flags, diagnostics, benchmark hooks, and explicit diagnostic legacy routing. | Runtime selector is installed by `FunRenderCorePlugin`; unset, `auto`, and `FUN_RENDERER_BACKEND=fun` boot the no-op core/lux path by default. Explicit `legacy` is loud and diagnostic-only. | `default=[offscreen,volumetric_clouds,fun_renderer_core]`, `winit_presentation`, `render_diagnostics`, `diagnostics`, `dlss`, `dx12_dlss_native`, `dx12_native_interop`, `dx12_native_object_names`, `dx12_mesh_shader_experiment`, canonical renderer flags plus compatibility `fun_renderer_*`/`fun_lux_*` aliases. | `cargo check -p fun_render`; `cargo test -p fun_render --lib`; `cargo check -p fun_render --features dx12_native_interop`; targeted `cargo test -p fun_render pipeline_warmup --locked`. |
 | `fun-renderer` / `fun_renderer` | Compile-checked renderer-core contracts, ECS schedule/data layout, GPU scene DB records, frame graph skeleton, ECS heuristic systems, shared scheduler priority language, quality/settings schema, capability-aware defaults, benchmark scene/gate/artifact schema, no-op clear-color boot path, backend selector types, pass diagnostics, renderer resource ownership policy, shared page scheduler, static virtual geometry format/runtime, dynamic geometry/procedural submission substrate, page-based virtual shadow storage, renderer-owned CEF compositor, upload/upscale seams, `upscaling::Upscaler*` selection/evaluation diagnostics, `frame_generation::FrameGeneration*` eligibility/disable diagnostics, `ml::RendererPredictionClient` request/fallback scaffolding, `research::RENDERER_RESEARCH_SPIKES` isolation/evidence contracts, and `default_flip` policy/artifact coverage. | Default renderer core: GPU scene DB, frame graph execution, virtual geometry/shadows, dynamic/procedural geometry submission, shared heuristic scheduler, quality/settings policy, page scheduler, CEF compositor, benchmark/perf-gate truth, resource allocation ownership, upscale/FG boundary, DX12/Vulkan backend abstraction. Research spikes stay opt-in and are not default boot dependencies. | Exists as real crate; `auto` now resolves to `fun` and the bridge boots the no-op core/lux path by default. Product swapchain and visible backend execution are still a tracked compatibility-shell gate rather than a completed renderer-owned present path. Pass 23 adds `default_flip` status, stage catalog, retirement policy, artifact writer, and tests that make legacy product routing, product Bevy UI, CPU CEF fallback, duplicate upload systems, duplicate lighting/shadow policy, and stale transition flags explicit gates. | `default=[bevy_ecs,fun_renderer_core]`, `bevy_ecs`, `legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`, `vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`, `frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`, `hybrid_gi`, `experimental_renderer_ml`, `experimental_work_graphs`, `mesh_shader_path`, `learned_page_priority_predictor`, `neural_texture_compression`; old names are aliases until cleanup. | `cargo check -p fun-renderer`; `cargo test -p fun-renderer --lib default_flip`; `cargo test -p fun-renderer --features experimental_renderer_ml`; `cargo check -p fun-renderer --features upscaling,dlss,fsr,frame_generation,cef_gpu_only`; `cargo test -p fun-renderer --lib`; `cargo test -p fun_render --lib auto_backend_initializes_fun_core_by_default`; `cargo test -p fun_render --lib explicit_legacy_backend_is_diagnostic_only_and_loud`; `cargo test -p fun_render --no-default-features --lib settings_bridge`; `cargo test -p fun_render --lib extraction`. |
 | `fun-lux` / `fun_lux` | Lighting/GI policy descriptors, light DB API, no-op Lux core, ECS resources/systems for light/emissive/GI/shadow participant extraction and diagnostics, many-light candidate/reservoir policy, hybrid GI/reflection policy, shadow policy decisions separate from renderer storage, and `research::RADIANCE_NEURAL_CACHE_RESEARCH_CONTRACT`. | Direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction, radiance/surface/probe caches. Research radiance/neural-cache work stays under `fun-lux` with optional `fun-ai` support. | Exists as real crate; now exposes baseline no-op frame and shutdown reports for bridge boot. Pass 13 adds `shadow::ShadowPolicyEngine` for caster selection, quality tier, soft-shadow mode, reconstruction mode, directional clipmap budget, local-light shadow budget, and policy diagnostics. Pass 14 adds `many_light::GpuLightDatabase`, clustered/Forward+ candidate lists, temporal/spatial reservoirs, emissive promotion, budgeted shadow request intents, and benchmark/shadow/overlay artifacts. Pass 15 adds `gi::SurfaceCache`, GI quality tiers, persistent cache invalidation/update lifecycle, reflection source selection, and GI/reflection debug artifacts. Pass 22 adds the opt-in `radiance_neural_cache` research contract, requiring deterministic surface-cache fallback and stability/invalidation/latency/memory/quality comparison before promotion. | `many_light`, `virtual_shadows`, `hybrid_gi`, `radiance_neural_cache`; no default features; old `fun_lux_*` names are aliases. | `cargo check -p fun-lux`; `cargo check -p fun-lux --features radiance_neural_cache`; `cargo test -p fun-lux --lib`; `cargo test -p fun-lux --lib research`; `cargo test -p fun-lux --lib shadow`; `cargo test -p fun-lux --lib many_light`; `cargo test -p fun-lux --lib gi`. |
-| `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `tools/check_fun_scene_migration.ps1`. |
-| `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI now publishes accelerated ready-frame tokens into `RendererCefCompositor` and rejects CPU `OnPaint` product fallback. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `tools/check_product_ui_policy.ps1`; `scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate`. |
+| `fun-scene` / `fun_scene` | FUN-owned `fun!`/`fun_list!` authoring wrappers, scene manifests, stable identity, networking/streaming primitives, renderer/lux/UI/upscale authoring components, editor operations. | First-party scene DSL, deterministic scene authority, streaming manifests, renderer/lux declarations, editor/server/client shared scene substrate. | Exists and migrated into `game_scene`; scene component names are domain names without product prefixes. | No feature flags. Depends on Bevy ECS/scene/transform/camera/color and `fun-scene-macros`. | `cargo check -p fun-scene`; `cargo test -p fun-scene --lib`; `fun-quality check-code-shape`. |
+| `game_client` | Runtime app, Winit client, server connection, game/editor host modes, CEF bridge, CEF DX12 accelerated interop module, Svelte host page integration, benchmark/runtime diagnostics. | Product client using `fun_render` bridge, CEF/Svelte product UI, and later `fun-renderer` visible path. | Current frame path is legacy Bevy/wgpu through `fun_render`; CEF UI now publishes accelerated ready-frame tokens into `RendererCefCompositor` and rejects CPU `OnPaint` product fallback. | `default=[dlss,volumetric_clouds]`, `cef_ui`, `cef_ui_dx12_accelerated_paint`, `dx12_native_object_names`, `render_diagnostics`, `diagnostics`, `benchmarks`, `dlss`, `dx12_dlss_native`, `force_disable_dlss`. | `cargo check -p game_client`; `cargo check -p game_client --no-default-features --features cef_ui --locked`; `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked`; `fun-quality check-code-shape`; `fun-bench run-stack --render-backend dx12 --present-mode immediate`. |
 | `fun_host` | Rust-owned host/launcher/editor command authority, current-client preview state, command routing to CEF/Svelte. | Rust authoritative host bridge for Svelte/CEF, not a renderer. | Active; editor preview is current-client metadata, not child process or HWND path. | No explicit feature flags. | `cargo check -p fun_host`; `cargo test -p fun_host --lib`. |
 | `fun_ui_cef` | CEF runtime, browser lifetime, offscreen browser settings, JavaScript bridge, security validation, CPU paint compositor, accelerated callback surface and counters. | Browser subsystem only: callbacks/transport policy/events, while `fun-renderer` owns final GPU compositor contract. | Active; accelerated callback surface exists; CPU `OnPaint` path remains compiled as compatibility lane. | `debug_remote`; no default features. | `cargo check -p fun_ui_cef`; `cargo test -p fun_ui_cef --lib`. |
-| `game_scene` | Game-specific scene catalog over `fun_scene`, default arenas, deterministic manifests/chunks. | Game-specific catalog only; generic scene authority stays in `fun-scene`. | Migrated off direct `bsn!` usage. | No explicit feature flags. | `cargo test -p game_scene --locked`; `tools/check_fun_scene_migration.ps1`. |
+| `game_scene` | Game-specific scene catalog over `fun_scene`, default arenas, deterministic manifests/chunks. | Game-specific catalog only; generic scene authority stays in `fun-scene`. | Migrated off direct `bsn!` usage. | No explicit feature flags. | `cargo test -p game_scene --locked`; `fun-quality check-code-shape`. |
 | `fun_dx12_dlss` | Fail-closed native Windows DLSS C ABI scaffold and runtime discovery surface. | Native bridge crate consumed by `fun-renderer`/`fun_render` after DX12 baseline is ready. | Scaffolded; Streamline/NGX evaluation not linked. | No listed package-level feature flags in this inventory pass. | `cargo check -p fun_dx12_dlss`; DLSS SR acceptance remains blocked by boundary gate. |
 
 ## Runtime Selector
@@ -115,9 +115,9 @@ Compatibility aliases retained for one transition cycle:
 `fun_render` now emits a startup capability report with schema
 `fun.renderer.capability_report.v1`. The report is a render-world resource and
 can also be written to JSON by setting
-`FUN_RENDERER_CAPABILITY_REPORT_PATH`. `scripts/run_stack.ps1` wires this to
+`FUN_RENDERER_CAPABILITY_REPORT_PATH`. `fun-bench run-stack` wires this to
 `target/run-stack/renderer-capabilities.json` for client runs, and
-`scripts/benchmark_client.ps1` embeds the report under
+`fun-bench client` embeds the report under
 `renderer_capability_report` in benchmark summaries.
 
 The report records:
@@ -211,29 +211,29 @@ contract.
 
 Runtime smoke was attempted with:
 
-```powershell
+```text
 $env:FUN_RENDERER_BACKEND='fun'
 $env:FUN_RENDER_PIPELINE_WARMUP='observed'
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 `
-  -BenchmarkLane cpu_floor `
-  -BenchmarkProfile pass4_pipeline `
-  -BenchmarkScenario runtime_creation_zero_smoke `
-  -BenchmarkMatrixLane dx12_pipeline_smoke `
-  -RenderBackend dx12 `
-  -PresentMode immediate `
-  -WarmupSeconds 2 `
-  -SampleSeconds 3 `
-  -DisableClouds `
-  -DisableSolari `
-  -DisableMeshlets `
-  -DisableFpsOverlay `
-  -WindowWidth 320 `
-  -WindowHeight 180
+scripts\fun-bench client `
+  --benchmark-lane cpu_floor `
+  --benchmark-profile pass4_pipeline `
+  --benchmark-scenario runtime_creation_zero_smoke `
+  --benchmark-matrix-lane dx12_pipeline_smoke `
+  --render-backend dx12 `
+  --present-mode immediate `
+  --warmup-seconds 2 `
+  --sample-seconds 3 `
+  --disable-clouds `
+  --disable-solari `
+  --disable-meshlets `
+  --disable-fps-overlay `
+  --window-width 320 `
+  --window-height 180
 ```
 
 The live wrapper did not exit before the local command timeout, so the child
 stack was stopped and the captured client log was parsed through
-`scripts/benchmark_client.ps1 -InputLog`. The resulting artifact is:
+`fun-bench client --input-log`. The resulting artifact is:
 
 - `target/benchmarks/client/20260506-005505-031/summary.json`
 - `target/benchmarks/client/20260506-005505-031/summary.md`
@@ -429,7 +429,7 @@ motion vectors, and present-time resource lifetime facts.
 Diagnostics now cover callback-to-import latency, import/copy duration, UI
 composite pass duration, dropped/stale UI frames, invalid frame metadata,
 copied bytes, CPU fallback attempts, and fail-closed count. The product policy
-checker is `tools/check_product_ui_policy.ps1`; it rejects Bevy UI product
+checker is `fun-quality check-code-shape`; it rejects Bevy UI product
 components, CEF CPU upload/write paths, and the removed CEF-to-Bevy-image copy
 bridge.
 
@@ -459,7 +459,7 @@ The required backend parity scene catalog now lives in
 
 `game_client` now reads the renderer capability report before writing
 `target/run-stack/cef-ui-transport.json`, and CEF transport logs/status include
-the same backend truth fields. `scripts/benchmark_client.ps1` merges renderer
+the same backend truth fields. `fun-bench client` merges renderer
 backend truth into `cef_ui_transport_selection`, and
 `fun-data report dx12-parity` fails a DX12 lane when the report says the actual
 backend is not DX12.
@@ -563,7 +563,7 @@ The renderer-owned asset format is `StaticVirtualGeometryAsset`. It contains:
 - debug metadata for deterministic bake validation.
 
 Runtime selection uses `select_static_virtual_geometry_frame` and
-`StaticVirtualGeometryExecutionPolicy`. It performs:
+`static virtual geometry runtime policy type`. It performs:
 
 - static asset validation and checksum verification;
 - hierarchical screen-error refinement;
@@ -953,7 +953,7 @@ the new core.
 
 The remaining legacy lane is explicit and loud:
 
-```powershell
+```text
 $env:FUN_RENDERER_BACKEND='legacy'
 ```
 
@@ -979,8 +979,8 @@ policy, CEF fallback policy, and ownership map for `fun-renderer`, `fun_render`,
 | Scene substrate | `fun-scene/src/*`, `fun-scene-macros/src/*`, `game_scene/src/*` | `fun-scene` + `game_scene` | same split | Active and first-party. |
 | CEF/Svelte product UI | `game_client/ui/main`, `game_client/src/cef_ui.rs`, `fun_ui_cef/src/*`, `fun_host/src/lib.rs`, `fun-renderer/src/ui/cef.rs` | browser lifetime in `fun_ui_cef`, host/app bridge in `game_client`, compositor contract in `fun-renderer` | CEF/Svelte UI with renderer-owned GPU compositor | Active product lane now imports GPU tokens into `RendererCefCompositor`; visible swapchain composition still awaits renderer present handoff. |
 | CEF DX12 accelerated transport | `game_client/src/cef_ui_dx12/*`, `fun_render/src/dx12_native/cef.rs`, `docs/dx12_cef_accelerated_paint.md` | `game_client` interop over `fun_render::dx12_native` | `fun-renderer` compositor/backend boundary with `fun_ui_cef` callbacks | D3D11 shared texture is copied into a FUN-owned D3D12 ring and exposed as safe ready-frame tokens; latest local runtime status is still bridge-blocked. |
-| DX12 parity/benchmark tools | `scripts/benchmark_dx12_parity.ps1`, `scripts/benchmark_client.ps1`, `tools/dx12_*`, `tools/check_dx12_*` | `fun` tooling | remains benchmark/governance tooling | Active. |
-| CEF parity/visual checks | `tools/compare_cef_ui_screenshots.ps1`, `scripts/stack/profiles/cef.*.json`, `scripts/benchmark_dx12_parity.ps1 -MatrixSize cef_transport` | `fun` tooling | remains benchmark/governance tooling | Plan and health parsing exist; full healthy matrix blocked. |
+| DX12 parity/benchmark tools | `fun-bench dx12-parity`, `fun-bench client`, `tools/dx12_*`, `tools/check_dx12_*` | `fun` tooling | remains benchmark/governance tooling | Active. |
+| CEF parity/visual checks | `fun-data report dx12-parity`, `scripts/stack/profiles/cef.*.json`, `fun-bench dx12-parity --matrix-size cef_transport` | `fun` tooling | remains benchmark/governance tooling | Plan and health parsing exist; full healthy matrix blocked. |
 | Upload arena and upload reports | `fun-renderer/src/resource.rs`, `fun_render/src/upload_{arena,budget,labels,ranges,report}.rs`, `fun_render/src/instance_tables.rs`, `docs/dx12_upload_audit.md` | policy in `fun-renderer`, compatibility shim in `fun_render` | renderer-owned resource model with bridge shims until measured owners are migrated | Boundary exists; resource classes and allocation diagnostics are typed; top offenders still generic Bevy write helpers. |
 | Pipeline diagnostics | `fun_render/src/pipeline_warmup.rs`, `docs/dx12_descriptor_pipeline_churn.md`, `docs/dx12_shader_quality.md`, `fun-data report dx12-pipeline-cardinality` | `fun_render` + Bevy diagnostics | renderer diagnostics through `fun-renderer`/engine hooks | Runtime creation still measured after warmup. |
 | Native interop | `fun_render/src/dx12_native/*`, `game_client/src/cef_ui_dx12/*` | `fun_render` interop gate, `game_client` CEF bridge | `fun-renderer` backend abstraction after migration | Centralized gate exists; raw command-list accessor still intentionally limited. |
@@ -998,13 +998,13 @@ policy, CEF fallback policy, and ownership map for `fun-renderer`, `fun_render`,
 | Runtime compute pipeline creation | Older report records compute pipeline p95 `82`; Pass 4 smoke parse reports compute pipeline p95 `0` after observed warmup. | Bevy/Solari/meshlet pipelines + `fun_render` warmup, with registry metadata in `fun-renderer` | Hard failure if nonzero after warmup; compute-culling read-only binding mismatch is fixed. | Keep creation-focused events and verify warmup coverage against registry labels. |
 | Runtime shader pipeline creation | Older report records shader pipeline create p95 `104`; Pass 4 smoke parse reports shader pipeline p95 `0` after observed warmup. | Bevy/Solari/meshlet families plus `fun-renderer` variant axes | Hard failure if nonzero after warmup; product Bevy UI paths have been removed from the CEF lane. | Keep shader variants on explicit registry axes and block ad hoc stringly permutations. |
 | DLSS boundary gate not ready | `docs/dx12_dlss_boundary_gate.md` says `DX12 baseline ready for DLSS SR bring-up: no`. CEF health, uploads, barriers, and pipeline creation are not ready. | `fun_render` DLSS scaffold today; intended `fun-renderer` presentation boundary | DLSS/FSR/FG cannot be used for performance claims. | Gate flips to `yes` with attached parity, CEF GPU, upload, PIX/barrier, present, and pipeline evidence. |
-| Runtime Bevy UI product dependency | Pass 8 removes `game_client` CEF `Node`/`ImageNode` presentation, CPU texture upload helpers, client FPS Bevy UI, and `fun_render` `FpsOverlayPlugin` registration. `tools/check_product_ui_policy.ps1` blocks regression. | `game_client` + `fun_render` + `fun-renderer` policy | Product UI is now CEF/Svelte through the renderer compositor contract; test-only/compat labels remain classified separately. | Keep checker in validation and route future overlays through CEF/Svelte or renderer debug primitives. |
+| Runtime Bevy UI product dependency | Pass 8 removes `game_client` CEF `Node`/`ImageNode` presentation, CPU texture upload helpers, client FPS Bevy UI, and `fun_render` `FpsOverlayPlugin` registration. `fun-quality check-code-shape` blocks regression. | `game_client` + `fun_render` + `fun-renderer` policy | Product UI is now CEF/Svelte through the renderer compositor contract; test-only/compat labels remain classified separately. | Keep checker in validation and route future overlays through CEF/Svelte or renderer debug primitives. |
 
 ## Bevy UI Usage Map
 
 | path | usage | classification | reason | action |
 | --- | --- | --- | --- | --- |
-| `game_client/src/cef_ui.rs` former `sync_cef_ui_image_node` | Removed. | migrated | The CEF product lane no longer spawns Bevy UI `Node`/`ImageNode` for presentation. | Keep blocked by `tools/check_product_ui_policy.ps1`. |
+| `game_client/src/cef_ui.rs` former `sync_cef_ui_image_node` | Removed. | migrated | The CEF product lane no longer spawns Bevy UI `Node`/`ImageNode` for presentation. | Keep blocked by `fun-quality check-code-shape`. |
 | `game_client/src/cef_ui.rs` former CPU upload path | Removed active GPU writes. CPU `OnPaint` observations are rejected and counted. | migrated/fail-closed | Product CEF pixels no longer use `RenderQueue::write_texture` or a Bevy `Image`. | Keep CPU paint only as diagnostic/test fixture logic until fully deleted. |
 | `game_client/src/cef_ui.rs` former client FPS counter | Removed. | migrated | Runtime/product debug overlay no longer uses Bevy UI text. | Surface FPS through CEF/Svelte diagnostics or renderer debug primitives. |
 | `fun_render/src/core.rs` former `FpsOverlayPlugin` registration | Removed. | migrated | The bridge no longer installs Bevy's FPS overlay plugin. | Keep `FUN_ENABLE_FPS_OVERLAY` as inert transition config until config cleanup. |
@@ -1091,18 +1091,18 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 | Client compile | `cargo check -p game_client` |
 | CEF CPU lane compile | `cargo check -p game_client --no-default-features --features cef_ui --locked` |
 | CEF accelerated lane compile | `cargo check -p game_client --no-default-features --features cef_ui_dx12_accelerated_paint --locked` |
-| Scene migration check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1 -SelfTest`; then without `-SelfTest` |
-| Product UI policy check | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_product_ui_policy.ps1 -SelfTest`; then `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_product_ui_policy.ps1 -EmitArtifact target\cef-parity\pass8-product-ui-policy.json` |
+| Scene migration check | `fun-quality check-code-shape -SelfTest`; then without `-SelfTest` |
+| Product UI policy check | `fun-quality check-code-shape -SelfTest`; then `fun-quality check-code-shape -EmitArtifact target\cef-parity\pass8-product-ui-policy.json` |
 | DX12 doctrine check | `cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --self-test`; then without `--self-test` |
-| Renderer backend truth smoke | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -BenchmarkLane presentation_floor -BenchmarkProfile pass9_backend_truth -BenchmarkScenario dx12_truth_smoke -BenchmarkMatrixLane dx12_backend_truth_smoke -RenderBackend dx12 -PresentMode immediate -WarmupSeconds 1 -SampleSeconds 2 -DisableClouds -DisableSolari -DisableMeshlets -DisableFpsOverlay -WindowWidth 320 -WindowHeight 180` |
-| Renderer backend truth parse-only artifact | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -InputLog target\run-stack\logs\game_client.err.log -BenchmarkProfile pass9_backend_truth -BenchmarkScenario dx12_truth_smoke -BenchmarkMatrixLane dx12_backend_truth_smoke -RenderBackend dx12 -PresentMode immediate -WarmupSeconds 0 -SampleSeconds 0 -DisableClouds -DisableSolari -DisableMeshlets -DisableFpsOverlay -WindowWidth 320 -WindowHeight 180` |
+| Renderer backend truth smoke | `fun-bench client --benchmark-lane presentation_floor --benchmark-profile pass9_backend_truth --benchmark-scenario dx12_truth_smoke --benchmark-matrix-lane dx12_backend_truth_smoke --render-backend dx12 --present-mode immediate --warmup-seconds 1 --sample-seconds 2 --disable-clouds --disable-solari --disable-meshlets --disable-fps-overlay --window-width 320 --window-height 180` |
+| Renderer backend truth parse-only artifact | `fun-bench client --input-log target\run-stack\logs\game_client.err.log --benchmark-profile pass9_backend_truth --benchmark-scenario dx12_truth_smoke --benchmark-matrix-lane dx12_backend_truth_smoke --render-backend dx12 --present-mode immediate --warmup-seconds 0 --sample-seconds 0 --disable-clouds --disable-solari --disable-meshlets --disable-fps-overlay --window-width 320 --window-height 180` |
 | DX12 perf gate parser | `cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --self-test` |
-| DX12 parity plan | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_dx12_parity.ps1 -PlanOnly` |
-| CEF transport plan | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_dx12_parity.ps1 -MatrixSize cef_transport -PlanOnly` |
-| Runtime smoke | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate` |
-| Strict CEF GPU proof | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_stack.ps1 -RenderBackend dx12 -PresentMode immediate -CefUi -CefPaintTransport d3d11on12 -CefAcceleratedStrict` |
-| Client benchmark | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_client.ps1 -RenderBackend dx12 -PresentMode immediate` |
-| Required performance lanes | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/benchmark_required_lanes.ps1 -RenderBackend dx12 -PresentMode immediate` |
+| DX12 parity plan | `fun-bench dx12-parity --plan-only` |
+| CEF transport plan | `fun-bench dx12-parity --matrix-size cef_transport --plan-only` |
+| Runtime smoke | `fun-bench run-stack --render-backend dx12 --present-mode immediate` |
+| Strict CEF GPU proof | `fun-bench run-stack --render-backend dx12 --present-mode immediate --cef-ui --cef-paint-transport d3d11on12 --cef-accelerated-strict` |
+| Client benchmark | `fun-bench client --render-backend dx12 --present-mode immediate` |
+| Required performance lanes | `fun-bench required-lanes --render-backend dx12 --present-mode immediate` |
 | Doc-only whitespace | `git diff --check` |
 
 ## First Rollback Strategy
@@ -1117,7 +1117,7 @@ For future behavior passes, the first rollback path remains:
 
 1. Set `FUN_RENDERER_BACKEND=legacy` only for diagnostic compatibility while
    the transition flag exists.
-2. Disable CEF product UI with `-CefPaintTransport disabled` for render-only
+2. Disable CEF product UI with `--cef-paint-transport disabled` for render-only
    diagnosis. Do not re-enable CPU `OnPaint` upload as a product fallback.
 3. Revert the nested `fun` behavior commit before the umbrella root gitlink
    commit.

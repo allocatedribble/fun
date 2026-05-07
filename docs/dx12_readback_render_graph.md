@@ -22,12 +22,12 @@ JSON so it cannot silently explain a DX12 p95 regression.
 
 Enable counters with:
 
-```powershell
+```text
 $env:FUN_RENDER_READBACK_DIAGNOSTICS = "1"
 $env:BEVY_RENDER_READBACK_DIAGNOSTICS = "1"
 ```
 
-`scripts/run_stack.ps1 -RenderDiagnostics` and `-FrameTimeDiagnostics` enable
+`fun-bench run-stack --render-diagnostics` and `--frame-time-diagnostics` enable
 these automatically.
 
 Benchmark metrics use the `render_readback_` prefix:
@@ -51,7 +51,7 @@ Top events are emitted as:
 Use the focused Tier 10 report to prove readback behavior before changing
 render scheduling:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-command-readback `
   --matrix-json target\dx12-parity\current\matrix.json `
   --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `
@@ -67,7 +67,7 @@ path explicitly marks its overhead.
 
 ## Render Graph Flame Map
 
-`scripts/benchmark_client.ps1` now writes a coarse frame artifact to:
+`fun-bench client` now writes a coarse frame artifact to:
 
 ```text
 target/dx12/render_graph_frame_0000.json

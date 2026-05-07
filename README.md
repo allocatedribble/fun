@@ -155,7 +155,7 @@ the same residency API so page priority, fault storms, uploads, and evictions
 are comparable across systems.
 Static virtual geometry is now represented in `fun-renderer` by
 `StaticVirtualGeometryAsset`, `VirtualGeometryClusterHeader`,
-`VirtualGeometryPage`, `StaticVirtualGeometryExecutionPolicy`, and
+`VirtualGeometryPage`, the static virtual geometry runtime policy type, and
 `select_static_virtual_geometry_frame`. The `virtual_geometry_bake` tool emits
 the renderer-owned `.funvg.json` schema deterministically; runtime selection
 uses frustum/HZB culling, hierarchical refinement, shared page-scheduler
@@ -427,41 +427,41 @@ runtime paths.
 Client changes must be measurable. Use the Rust `fun-bench criterion` command
 for deterministic code-path costs, and use `fun-bench client` to capture FPS,
 frame nanoseconds, Solari pass timings, meshlet timings, DLSS RR timings, CPU,
-memory, and before/after deltas. The PowerShell files in `scripts/` are
-compatibility wrappers only.
+memory, and before/after deltas. First-party docs, CI, fixtures, and agent
+commands call Rust tooling directly.
 
 Default Criterion capture:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline before
 ```
 
 Default runtime capture:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --render-backend dx12 --present-mode immediate
 ```
 
 Windows DX12/Vulkan parity capture:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity
 ```
 
 Present pacing matrix and dashboard artifact:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size present --continue-on-failure
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --vulkan target\benchmarks\client\<vulkan>\summary.json --dx12 target\benchmarks\client\<dx12>\summary.json --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --vulkan target\benchmarks\client\<vulkan>\benchmark.funpb.zst --dx12 target\benchmarks\client\<dx12>\benchmark.funpb.zst --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
 ```
 
-Local DX12 regression gate once matched baseline/candidate summaries exist:
+Local DX12 regression gate once matched baseline/candidate bundles exist:
 
-```powershell
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --baseline target\benchmarks\client\<baseline>\summary.json --current target\benchmarks\client\<candidate>\summary.json --report-path target\benchmarks\dx12_perf_gate\report.md
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --baseline target\benchmarks\client\<baseline>\benchmark.funpb.zst --current target\benchmarks\client\<candidate>\benchmark.funpb.zst --report-path target\benchmarks\dx12_perf_gate\report.md
 ```
 
-`-RenderDiagnostics` also enables render upload counters for
+`--render-diagnostics` also enables render upload counters for
 `RenderQueue::write_texture`, `write_buffer`, and `write_buffer_with`. The
 current upload inventory and cleanup target order are in
 [`docs/dx12_upload_audit.md`](docs/dx12_upload_audit.md).
@@ -473,8 +473,7 @@ native interop, then bring up DLSS SR before RR.
 The live pass checklist is
 [`docs/dx12_parity_decision_pass.md`](docs/dx12_parity_decision_pass.md), and
 the hardware-free doctrine checker is
-`fun-bench dx12-doctrine-check`; `tools\check_dx12_doctrine.ps1` remains a
-compatibility wrapper.
+`fun-bench dx12-doctrine-check`.
 It also enables transient render-resource descriptor diagnostics; the reuse,
 near-miss, and aliasing contract is in
 [`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).
@@ -484,13 +483,13 @@ parity dashboard now reports DX12 memory budget/usage fields when available.
 
 Denoiser and DLSS Ray Reconstruction comparison:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- denoisers
 ```
 
 Rich tracing diagnostics:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --render-diagnostics --trace-diagnostics --render-backend dx12 --present-mode immediate
 ```
 

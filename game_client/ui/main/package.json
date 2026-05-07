@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "vite build",
+    "build:rvelte-dev": "node scripts/build-rvelte-dev-island.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },

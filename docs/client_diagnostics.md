@@ -9,7 +9,7 @@ compressed protobuf bundle following the umbrella hard-budget docs:
 - [`../../docs/data-platform/telemetry-size-runtime-budgets.md`](../../docs/data-platform/telemetry-size-runtime-budgets.md)
 - [`../../docs/data-platform/diagnostic-retention-policy.md`](../../docs/data-platform/diagnostic-retention-policy.md)
 
-The existing `[client perf]` lines stay in place only as script/debug views.
+The existing `[client perf]` lines stay in place only as local debug views.
 The same facts must come from bundle-backed typed fields when they are retained,
 uploaded, compared, or rendered into reports.
 
@@ -17,15 +17,74 @@ Default runtime diagnostics are `HotPathDisabled`. Always-on frame/render/networ
 counters must fit `HotPathCounters`; richer captures must use `SampledRuntime`
 or `TargetedTrace` with an explicit duration and byte cap.
 
-## Run With Rich Tracing
+## Debug Benchmark Products
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend dx12 -PresentMode immediate
+`fun-bench` may orchestrate game/client runs, but `fun-data` owns the retained
+benchmark evidence. The canonical outputs are:
+
+| command family | canonical output |
+|---|---|
+| client lane | `benchmark.funpb.zst` |
+| required lanes | lane `benchmark.funpb.zst` bundles plus `matrix.funpb.sum.zst` |
+| DX12 parity, denoisers, RT matrix | lane bundles plus `matrix.funpb.sum.zst` |
+| Criterion orchestration | `criterion.funpb.sum.zst` |
+| stack planning/launch | `run_stack.funpb.sum.zst` |
+| DX12 doctrine and perf gates | `dx12_rule_report.funpb.sum.zst` |
+
+Generated JSON, Markdown, CSV, terminal text, and local debug text captures are
+views or compatibility inputs. Regression checks read bundle-backed fields
+unless `--legacy-input` is explicitly set for migration fixtures.
+
+Every debug benchmark capture declares `benchmark_capture`,
+`summarize_then_discard_raw`, `operational`, `local_tool`, a 30 second duration
+cap, a 64 MiB byte cap, `duration_or_byte_cap_reached` self-stop behavior, and a
+dropped-sample counter in the CLI output. Raw per-sample rows are disabled by
+default and are allowed only for targeted reproducibility or failure evidence.
+
+## Release Telemetry And Crash Evidence
+
+Release client builds enable `game_client/release-telemetry`, which pulls in
+compact tracing capture, crash telemetry, upload/spool support, and retention
+metadata. The compile gate rejects release builds that also enable debug
+diagnostics, debug benchmark runners, local debug captures, rendered-view
+features, or the detailed frame profiler.
+
+Client runtime facts still enter through `tracing` or static counters, but any
+retained or uploaded data is written through `fun-telemetry-core` as compressed
+protobuf. The client release pipeline has this state machine:
+
+```text
+collecting -> encoding -> compressing -> queued local -> uploading -> accepted
 ```
 
-`-TraceDiagnostics` sets both `RUST_LOG` and `BEVY_LOG`. Bevy's log plugin uses
-`RUST_LOG`; `BEVY_LOG` is kept as a project-level alias for scripts and future
-tools.
+Retryable server failures leave the `.funpb.zst` bundle in the local spool for a
+bounded retry. Schema, budget, and redaction rejections are tracked as explicit
+states so operators can distinguish transport failure from invalid telemetry.
+
+Crash capture is a first-class fun-data artifact family:
+
+| field | release behavior |
+|---|---|
+| artifact kind | `client_crash_evidence` |
+| retention class | failure evidence |
+| payload shape | crash signature digest, build/version IDs, platform class, subsystem, severity counts, recent static event IDs, counters/gauges, redacted panic classification |
+| default raw payload policy | no secrets, tokens, raw packets, raw memory dumps, request bodies, UI payloads, or stable device identifiers |
+| optional minidump reference | digest-only reference, only when explicitly enabled |
+
+Crash fallback writes a minimal compressed bundle that can survive restart and
+be uploaded by the next client session. It does not serialize panic text as
+semantic data; panic/fatal messages are classified into stable redacted IDs and
+rendered later from the bundle when needed.
+
+## Run With Rich Tracing
+
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --render-diagnostics --trace-diagnostics --render-backend dx12 --present-mode immediate
+```
+
+`--trace-diagnostics` sets both `RUST_LOG` and `BEVY_LOG`. Bevy's log plugin
+uses `RUST_LOG`; `BEVY_LOG` is kept as a project-level alias for Rust command
+surfaces.
 
 ```text
 RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun::perf::clouds=info,fun::render::clouds=debug,fun::weather=debug,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug
@@ -34,34 +93,34 @@ RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun
 You can override `RUST_LOG` manually when you need a narrower view.
 For every-frame Solari dispatch tracing, use
 `RUST_LOG=info,fun::perf=info,bevy_solari::realtime=trace` for a short capture;
-that mode is intentionally not used by comparison scripts because trace-volume
+that mode is intentionally not used by comparison commands because trace volume
 can perturb frame time.
 
 ## Frame-Time Profiler
 
 The detailed frame profiler is compile-gated behind both
-`game_client/render_diagnostics` and `debug_assertions`. The stack script enables
-that feature automatically for debug builds when `-FrameTimeDiagnostics`,
-`-RenderDiagnostics`, `-TraceDiagnostics`, or `-RenderProfileVerbose` is used,
-and refuses to compile diagnostic features into `--release` runs. Normal and
-release client builds do not compile the profiler module, FPS overlay, Bevy
-render diagnostics plugin, or client diagnostic systems. That same feature
-enables Bevy's `debug` and `track_location` feature flags for debug diagnostic
-builds so system/debug metadata is available without leaking that overhead into
-release.
+`game_client/render_diagnostics` and `debug_assertions`. `fun-bench run-stack`
+enables that feature automatically for debug builds when frame-time, render,
+trace, or verbose render-profile diagnostics are requested, and refuses to
+compile diagnostic features into `--release` runs. Normal and release client
+builds do not compile the profiler module, FPS overlay, Bevy render diagnostics
+plugin, or client diagnostic systems. That same feature enables Bevy's `debug`
+and `track_location` feature flags for debug diagnostic builds so system/debug
+metadata is available without leaking that overhead into release.
 
 Use this for a targeted frame tree without launching any separate benchmark
 tool:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -FrameTimeDiagnostics -FrameTimeDiagnosticInterval 60 -FrameTimeDiagnosticMaxDepth 10 -FrameTimeDiagnosticTopChildren 16 -RenderBackend dx12 -PresentMode immediate
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --frame-time-diagnostics --frame-time-diagnostic-interval 60 --frame-time-diagnostic-max-depth 10 --frame-time-diagnostic-top-children 16 --render-backend dx12 --present-mode immediate
 ```
 
-Set `-FrameTimeDiagnosticMinNs 6944444` to emit only frames that miss the 144 Hz
-budget. Use `-FrameTimeDiagnosticTopSpans 40` to widen the slow-span list, and
-`-FrameTimeDiagnosticRowEvents` when an external parser wants one structured
-event per thread/span/summary row. The report is emitted through `tracing`
-target `fun::frame_time` and is shaped for direct frame attribution:
+Set `--frame-time-diagnostic-min-ns 6944444` to emit only frames that miss the
+144 Hz budget. Use `--frame-time-diagnostic-top-spans 40` to widen the
+slow-span list, and `--frame-time-diagnostic-row-events` when a protobuf bundle
+builder needs one structured event per thread/span/summary row. The report is
+emitted through `tracing` target `fun::frame_time` and is shaped for direct
+frame attribution:
 
 ```text
 GAME FRAME 330: 3012900 ns
@@ -246,8 +305,9 @@ allocation churn without depending on backend-specific explicit heap aliasing.
 Meshlet visibility is the first consumer. Its dummy render target is transient,
 while visibility buffers and cull queues stay persistent because they need stable
 capacity and bind-group behavior. The benchmark parser recognizes
-`bevy_render::transient` logs as `transient_*` metrics when render diagnostics
-are enabled. Descriptor audit details are documented in
+`bevy_render::transient` events as `transient_*` metrics when render diagnostics
+are enabled and retained through `fun-data` telemetry bundles. Descriptor audit
+details are documented in
 [`dx12_transient_resource_reuse.md`](dx12_transient_resource_reuse.md).
 
 ## GPU Contention
@@ -260,8 +320,8 @@ CPU-side meshlet assets for reupload, and reporting every recovery attempt.
 
 When contention is suspected, keep Solari and meshlets enabled and run with:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_stack.ps1 -RenderDiagnostics -TraceDiagnostics -RenderBackend dx12 -PresentMode immediate
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --render-diagnostics --trace-diagnostics --render-backend dx12 --present-mode immediate
 ```
 
 Look for `[client render recovery]` lines and `fun::render::recovery` fields.
@@ -319,7 +379,7 @@ testing; engine-side validation clamps them to bounded GPU-safe ranges:
 meshlets enabled but routes adaptive runtime controls through a per-view Solari
 runtime uniform, so cache-update budgets, ReSTIR reuse radii, temporal
 confidence caps, and reconstruction strength can move without rebuilding
-pipelines. The stack script defaults to `budgeted`, `competitive`, 144 Hz, a
+pipelines. `fun-bench run-stack` defaults to `budgeted`, `competitive`, 144 Hz, a
 6,944,444 ns frame budget, and a 3,000,000 ns Solari GPU budget.
 
 The budgeted path now emits a per-frame Solari director plan into the GPU
@@ -360,14 +420,14 @@ hidden frame-time variable:
 - `FUN_LOG_RENDER_VERBOSE=1` enables render-catalog/render-component details
   unless benchmark-minimal logging is active.
 
-The stack script exposes the same controls as `-BenchmarkLogMinimal`,
-`-LogStreamVerbose`, `-LogNetVerbose`, and `-LogRenderVerbose`. New diagnostic
-output should use tracing macros and targets, not `println!` or duplicate stdout
-paths.
+`fun-bench run-stack` exposes the same controls as `--benchmark-log-minimal`,
+`--log-stream-verbose`, `--log-net-verbose`, and `--log-render-verbose`. New
+diagnostic output should use tracing macros and targets that feed `fun-data`
+telemetry bundles, not `println!` or duplicate stdout paths.
 
 ## Descriptor And Pipeline Churn
 
-`-RenderDiagnostics` enables engine-level resource churn counters through
+`--render-diagnostics` enables engine-level resource churn counters through
 `FUN_RENDER_CHURN_COUNTERS=1` and `BEVY_RENDER_CHURN_COUNTERS=1`. The client
 emits `[client perf] render churn:` totals and top-ten
 `[client perf] render churn top:` rows. Use
@@ -387,7 +447,7 @@ strategy.
 
 ## Shader Compilation And Quality
 
-`-RenderDiagnostics` also enables shader diagnostics through
+`--render-diagnostics` also enables shader diagnostics through
 `FUN_RENDER_SHADER_DIAGNOSTICS=1` and `BEVY_RENDER_SHADER_DIAGNOSTICS=1`. The
 client emits `[client perf] render shaders:` totals and top-ten
 `[client perf] render shader top:` rows. Use
@@ -398,8 +458,8 @@ analysis, and permutation-reduction contract.
 
 The denoiser matrix can also enable the same tracing:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_denoisers.ps1 -TraceDiagnostics
+```text
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- denoisers --trace-diagnostics
 ```
 
 That keeps the summary tables while also producing structured trace context for
@@ -412,11 +472,11 @@ regular Balanced preset keeps the second à trous pass for quality comparison,
 and Quality is opt-in for screenshots or explicit visual checks. DLSS Ray
 Reconstruction is preserved as an explicit `rr`/`dlss-rr` preset, but it is
 currently a known-broken path: it can show a large black square/rectangle and
-leave Solari shadows broken or missing. Use `-SolariDenoiseMode rr` only for
+leave Solari shadows broken or missing. Use `--solari-denoise-mode rr` only for
 targeted RR debugging until that issue is fixed.
 
 RR acceptance is stricter than a normal benchmark. The acceptance run must use
-`scripts\benchmark_client.ps1 -EnableDx12DlssRr -SolariDenoiseMode rr
--RequireDx12DlssRrAcceptance`. The generated `rr_acceptance` JSON block must
-pass and must include `dlss_rr_gpu_ns`,
+`fun-bench client --enable-dx12-dlss-rr --solari-denoise-mode rr
+--require-dx12-dlss-rr-acceptance`. The generated `rr_acceptance` rendered
+view must pass and must include `dlss_rr_gpu_ns`,
 `solari_pass_dlss_rr_guide_resolve_ns`, `frame_ns.mean`, and `frame_ns.p95`.

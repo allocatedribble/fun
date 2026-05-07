@@ -8,7 +8,33 @@ workspace = true
 
 [features]
 default = ["dlss", "volumetric_clouds"]
-benchmarks = ["render_diagnostics", "fun_render/benchmarks"]
+release-telemetry = [
+    "client-telemetry",
+    "crash-telemetry",
+    "telemetry-upload",
+    "telemetry-retention",
+]
+client-telemetry = ["dep:fun_telemetry_core"]
+server-ingest = []
+crash-telemetry = ["client-telemetry"]
+debug-diagnostics = [
+    "diagnostics",
+    "render_diagnostics",
+    "client-telemetry",
+    "telemetry-retention",
+    "telemetry-rendered-views",
+]
+debug-benchmarks = ["benchmarks", "debug-diagnostics"]
+local-debug-captures = ["debug-diagnostics"]
+telemetry-upload = ["client-telemetry"]
+telemetry-retention = ["client-telemetry"]
+telemetry-rendered-views = ["client-telemetry"]
+benchmarks = [
+    "render_diagnostics",
+    "fun_render/benchmarks",
+    "client-telemetry",
+    "telemetry-retention",
+]
 bevy_debug = ["bevy/debug"]
 cef_ui = ["dep:fun_ui_cef"]
 cef_ui_dx12_accelerated_paint = [
@@ -44,6 +70,7 @@ fun_render = { path = "../fun_render", default-features = false, features = [
     "fun_renderer_core",
 ] }
 fun_scene.workspace = true
+fun_telemetry_core = { workspace = true, optional = true }
 fun_host = { path = "../fun_host" }
 fun_ui_cef = { path = "../fun_ui_cef", optional = true }
 fun-warden-client = { path = "../../fun-warden/crates/fun-warden-client" }

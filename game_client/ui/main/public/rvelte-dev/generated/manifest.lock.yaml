@@ -1,0 +1,31 @@
+schema_version: rvelte.generated.manifest.lock.v1
+component_id: diagnostics_log_panel
+generator: rvelte
+generator_version: 0.1.0
+schema_version_number: 1
+source_hash: fnv64:e8c7eff41c184476
+manifest_hash: fnv64:72fda8f3ce13b37b
+artifacts:
+- path: component.rs
+- path: ids.rs
+- path: static_template.rs
+- path: update.rs
+- path: events.rs
+- path: resources.rs
+- path: tests.rs
+- path: manifest.lock.yaml
+- path: component.scope.css
+- path: facade.runtime.js
+- path: facade.js
+- path: facade.browser-smoke.html
+- path: facade.async-smoke.html
+style:
+  scope_id: rvt-02a322b231
+  scope_attr: data-rvelte-scope
+  emitted_css_path: component.scope.css
+  theme_tokens_used:
+  - none
+  external_resource_references:
+  - none
+  global_selector_policy: reject_without_directive
+  dangerous_url_policy: reject

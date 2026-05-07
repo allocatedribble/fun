@@ -54,5 +54,6 @@ bevy_transform = { workspace = true, optional = true }
 fun_lux.workspace = true
 fun_ai_core = { workspace = true, optional = true }
 fun_scene.workspace = true
+fun_telemetry_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

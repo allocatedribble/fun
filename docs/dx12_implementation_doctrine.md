@@ -73,8 +73,7 @@ Every DX12 performance patch states one category:
 The category lives in `.dx12_change_category` as the first non-comment line.
 `fun-bench dx12-doctrine-check` validates the category, required gate files,
 accelerated CEF CPU-upload evidence when benchmark summaries are supplied, and
-the DX12 native interop boundary. `tools\check_dx12_doctrine.ps1` remains a
-temporary compatibility wrapper around the Rust rule engine.
+the DX12 native interop boundary. `fun-bench dx12-doctrine-check` is enforced by the Rust rule engine.
 
 Every non-measurement category includes:
 

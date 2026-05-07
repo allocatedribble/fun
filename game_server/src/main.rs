@@ -34,6 +34,7 @@ use thunder::prelude::*;
 use tracing::{error, info};
 
 mod ai;
+mod telemetry_gate;
 
 const GAME_PROTOCOL_VERSION: u32 = 2;
 const MAX_CLIENT_CONTROL_PACKET_BYTES: usize = 64 * 1024;
@@ -111,8 +112,17 @@ fn main() {
         .add_systems(PreUpdate, begin_server_profiler_tick)
         .add_systems(Update, log_streamable_inventory);
 
+    #[cfg(feature = "server-ingest")]
+    app.insert_resource(telemetry_gate::server_telemetry_contract());
+    #[cfg(not(feature = "server-ingest"))]
+    app.insert_resource(ServerTelemetryResource);
+
     app.run();
 }
+
+#[cfg(not(feature = "server-ingest"))]
+#[derive(Debug, Clone, Copy, Resource)]
+struct ServerTelemetryResource;
 
 fn start_endpoint(mut server: ResMut<QuinnetServer>, security: Res<GameServerSecurityConfig>) {
     let limits = ChannelLimits::default();

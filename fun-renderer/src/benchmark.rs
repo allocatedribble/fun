@@ -4,6 +4,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use fun_telemetry_core::{
+    BundleHeaderInput, CompressionProfile, FrameReadOptions, FrameWriteOptions,
+    TelemetryBundleBuilder, digest_bytes, enum_values, read_bundle_from_path,
+    telemetry_v1 as telemetry, write_bundle_to_path,
+};
 use serde::Serialize;
 
 use crate::settings::{
@@ -14,6 +19,8 @@ use crate::settings::{
 
 pub const RENDERER_BENCHMARK_SCHEMA: &str = "fun.renderer.benchmark.v1";
 pub const RENDERER_BENCHMARK_SCHEMA_VERSION: u16 = 1;
+pub const RENDERER_BENCHMARK_CANONICAL_SCHEMA: &str = "fun.renderer.benchmark.summary.v1";
+pub const RENDERER_BENCHMARK_CANONICAL_EXTENSION: &str = ".funpb.sum.zst";
 pub const RENDERER_BENCHMARK_ARTIFACT_ENV: &str = "FUN_RENDERER_BENCHMARK_ARTIFACT";
 pub const RENDERER_BENCHMARK_SCENE_COUNT: usize = 14;
 pub const RENDERER_PERF_GATE_COUNT: usize = 7;
@@ -815,7 +822,7 @@ fn performance_claim_gate(
             RendererPerfGateKind::NoPerformanceClaimWithoutArtifact,
             1,
             None,
-            "performance_claim_requires_json_or_markdown_artifact",
+            "performance_claim_requires_fun_data_bundle_artifact",
         );
     }
     RendererPerfGateResult::pass(
@@ -952,20 +959,186 @@ impl RendererBenchmarkMarkdownSummary {
 }
 
 pub fn write_renderer_benchmark_artifacts(
-    json_path: impl AsRef<Path>,
+    requested_path: impl AsRef<Path>,
     artifact: &RendererBenchmarkArtifact,
 ) -> io::Result<PathBuf> {
-    let json_path = json_path.as_ref();
-    if let Some(parent) = json_path.parent() {
+    let bundle_path = canonical_renderer_benchmark_path(requested_path.as_ref());
+    if let Some(parent) = bundle_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_vec_pretty(artifact).map_err(io::Error::other)?;
-    fs::write(json_path, json)?;
+    write_renderer_benchmark_bundle(&bundle_path, artifact)?;
 
-    let markdown_path = json_path.with_extension("md");
+    let json_view_path = bundle_path.with_extension("compatibility-view.json");
+    let generated_view = RendererBenchmarkGeneratedView {
+        view_status: "generated_compatibility_view",
+        canonical_source: format!("{}", bundle_path.display()),
+        artifact,
+    };
+    let json = serde_json::to_vec_pretty(&generated_view).map_err(io::Error::other)?;
+    fs::write(json_view_path, json)?;
+
+    let markdown_path = bundle_path.with_extension("compatibility-view.md");
     let summary = RendererBenchmarkMarkdownSummary::from_artifact(artifact);
     fs::write(&markdown_path, summary.content.as_bytes())?;
-    Ok(markdown_path)
+    Ok(bundle_path)
+}
+
+#[derive(Serialize)]
+struct RendererBenchmarkGeneratedView<'a> {
+    view_status: &'static str,
+    canonical_source: String,
+    artifact: &'a RendererBenchmarkArtifact,
+}
+
+fn canonical_renderer_benchmark_path(requested_path: &Path) -> PathBuf {
+    if requested_path
+        .to_string_lossy()
+        .ends_with(RENDERER_BENCHMARK_CANONICAL_EXTENSION)
+    {
+        return requested_path.to_path_buf();
+    }
+    let mut path = requested_path.to_path_buf();
+    path.set_extension("funpb.sum.zst");
+    path
+}
+
+fn write_renderer_benchmark_bundle(
+    bundle_path: &Path,
+    artifact: &RendererBenchmarkArtifact,
+) -> io::Result<()> {
+    let artifact_bytes = serde_json::to_vec(artifact).map_err(io::Error::other)?;
+    let artifact_digest = digest_bytes(&artifact_bytes);
+    let now_ms = current_unix_ms()?;
+    let failed_gate_count = artifact
+        .perf_gates
+        .results
+        .iter()
+        .filter(|result| !result.passed)
+        .count();
+    let severity = if failed_gate_count == 0 {
+        enum_values::SEVERITY_INFO
+    } else {
+        enum_values::SEVERITY_ERROR
+    };
+    let retention_class = if failed_gate_count == 0 {
+        enum_values::RETENTION_CLASS_KEEP_SUMMARY
+    } else {
+        enum_values::RETENTION_CLASS_KEEP_FAILURE_EVIDENCE
+    };
+    let mut builder = TelemetryBundleBuilder::new(BundleHeaderInput {
+        created_unix_ms: now_ms,
+        start_unix_ms: now_ms,
+        end_unix_ms: now_ms,
+        source_project: enum_values::SOURCE_PROJECT_FUN,
+        artifact_kind: enum_values::ARTIFACT_KIND_BENCHMARK_RUN,
+        budget_class: enum_values::BUDGET_CLASS_BENCHMARK_CAPTURE,
+        retention_class,
+        redaction_class: enum_values::REDACTION_CLASS_OPERATIONAL,
+        trust_boundary: enum_values::TRUST_BOUNDARY_LOCAL_TOOL,
+        artifact_digest,
+        max_raw_bytes: 0,
+        max_summary_bytes: 128 * 1024,
+        max_bundle_bytes: 512 * 1024,
+    });
+    let schema_name_id = builder
+        .intern(RENDERER_BENCHMARK_CANONICAL_SCHEMA)
+        .map_err(io::Error::other)?;
+    let producer_id = builder
+        .intern("fun-renderer.benchmark")
+        .map_err(io::Error::other)?;
+    let scene_id = builder
+        .intern(artifact.scene.stable_id)
+        .map_err(io::Error::other)?;
+    let unit_count_id = builder.intern("count").map_err(io::Error::other)?;
+    let unit_bytes_id = builder.intern("bytes").map_err(io::Error::other)?;
+    builder.add_counter_snapshot(
+        enum_values::STABLE_SUBSYSTEM_FUN_RENDER,
+        81_001,
+        artifact.perf_gates.results.len() as u64,
+        unit_count_id,
+    );
+    builder.add_counter_snapshot(
+        enum_values::STABLE_SUBSYSTEM_FUN_RENDER,
+        81_002,
+        failed_gate_count as u64,
+        unit_count_id,
+    );
+    builder.add_counter_snapshot(
+        enum_values::STABLE_SUBSYSTEM_FUN_RENDER,
+        81_003,
+        artifact.metrics.upload_bytes,
+        unit_bytes_id,
+    );
+    builder.add_counter_snapshot(
+        enum_values::STABLE_SUBSYSTEM_FUN_RENDER,
+        81_004,
+        u64::from(artifact.metrics.runtime_pipeline_creation_count),
+        unit_count_id,
+    );
+    builder.add_counter_snapshot(
+        enum_values::STABLE_SUBSYSTEM_FUN_RENDER,
+        81_005,
+        u64::from(artifact.metrics.page_faults),
+        unit_count_id,
+    );
+    builder.add_counter_snapshot(
+        enum_values::STABLE_SUBSYSTEM_FUN_RENDER,
+        81_006,
+        0,
+        unit_count_id,
+    );
+    builder.add_summary(schema_name_id, scene_id, severity);
+    builder
+        .set_retention_policy(
+            if failed_gate_count == 0 { 55 } else { 85 },
+            if failed_gate_count == 0 {
+                enum_values::IMPORTANCE_CLASS_NORMAL
+            } else {
+                enum_values::IMPORTANCE_CLASS_HIGH
+            },
+            true,
+            false,
+            0,
+            0,
+        )
+        .map_err(io::Error::other)?;
+    builder
+        .set_severity_summary(telemetry::SeveritySummary {
+            max_severity: severity,
+            error_count: if failed_gate_count == 0 { 0 } else { 1 },
+            warn_count: 0,
+            info_count: if failed_gate_count == 0 { 1 } else { 0 },
+            debug_count: 0,
+            trace_count: 0,
+        })
+        .map_err(io::Error::other)?;
+    let mut bundle = builder.build().map_err(io::Error::other)?;
+    if let Some(header) = &mut bundle.header {
+        header.schema_name_id = schema_name_id;
+        header.producer_id = producer_id;
+        if let Some(lineage) = &mut header.lineage {
+            lineage.source_digest.push(artifact_digest.to_vec());
+            lineage.producer_id.push(producer_id);
+        }
+    }
+    write_bundle_to_path(
+        bundle_path,
+        &bundle,
+        FrameWriteOptions {
+            compression_profile: CompressionProfile::ColdCompaction,
+            ..FrameWriteOptions::default()
+        },
+    )
+    .map_err(io::Error::other)?;
+    read_bundle_from_path(bundle_path, FrameReadOptions::default()).map_err(io::Error::other)?;
+    Ok(())
+}
+
+fn current_unix_ms() -> io::Result<u64> {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?;
+    u64::try_from(duration.as_millis()).map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -1201,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_artifacts_record_json_markdown_and_gate_status() {
+    fn benchmark_artifacts_record_fun_data_bundle_views_and_gate_status() {
         let capabilities = RendererCapabilityFacts::high_end_dx12_nvidia();
         let artifact = RendererBenchmarkArtifact::synthetic(
             scene(BenchmarkSceneKind::PipelineWarmupHotLoop),
@@ -1211,10 +1384,16 @@ mod tests {
         assert!(artifact.perf_gates.passed);
 
         if let Some(path) = std::env::var_os(RENDERER_BENCHMARK_ARTIFACT_ENV) {
-            let markdown = write_renderer_benchmark_artifacts(&path, &artifact)
+            let bundle = write_renderer_benchmark_artifacts(&path, &artifact)
                 .expect("renderer benchmark artifact should be writable");
-            assert!(Path::new(&path).exists());
-            assert!(markdown.exists());
+            assert!(
+                bundle
+                    .to_string_lossy()
+                    .ends_with(RENDERER_BENCHMARK_CANONICAL_EXTENSION)
+            );
+            assert!(bundle.exists());
+            assert!(bundle.with_extension("compatibility-view.json").exists());
+            assert!(bundle.with_extension("compatibility-view.md").exists());
         }
     }
 }

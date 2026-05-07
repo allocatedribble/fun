@@ -32,7 +32,7 @@ Callers must use the shared boundary:
 
 Validation check:
 
-```powershell
+```text
 rg -n "as_hal::<|as_hal_mut::<|wgpu::hal::api::Dx12" --glob "*.rs" fun_render/src game_client/src fun_ui_cef/src
 ```
 

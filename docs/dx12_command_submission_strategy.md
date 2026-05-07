@@ -6,7 +6,7 @@ upload batching, async copy, and async compute.
 
 ## 8.1 Command Counters
 
-`scripts/run_stack.ps1 -RenderDiagnostics` enables:
+`fun-bench run-stack --render-diagnostics` enables:
 
 - `FUN_RENDER_COMMAND_COUNTERS=1`
 - `BEVY_RENDER_COMMAND_COUNTERS=1`
@@ -29,7 +29,7 @@ The local Bevy fork records:
 [client perf] render command top: rank=1 operation=compute_pass category=meshlets label=meshlet_first_instance_cull calls=...
 ```
 
-`scripts/benchmark_client.ps1` stores the metrics under the
+`fun-bench client` stores the metrics under the
 `render_command_*` prefix and writes `render_command_events` to `summary.json`.
 `fun-data report dx12-parity` compares the same metrics between Vulkan and
 DX12 and classifies higher DX12 submit or command-buffer counts as
@@ -38,7 +38,7 @@ DX12 and classifies higher DX12 submit or command-buffer counts as
 For the focused Tier 10 command/readback pass, generate the smaller decision
 artifact with:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-command-readback `
   --matrix-json target\dx12-parity\current\matrix.json `
   --markdown-report target\dx12-parity\current\dx12_command_readback_report.md `

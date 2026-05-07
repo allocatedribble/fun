@@ -9,10 +9,9 @@ on:
       - "docs/dx12_dlss_boundary_gate.md"
       - "docs/dx12_implementation_doctrine.md"
       - "docs/dx12_parity_decision_pass.md"
-      - "scripts/benchmark_client.ps1"
-      - "scripts/benchmark_dx12_parity.ps1"
-      - "tools/check_dx12_doctrine.ps1"
-      - "tools/check_dx12_perf_regression.ps1"
+      - "docs/data-platform/**"
+      - "scripts/**"
+      - "tools/**"
       - "tools/dx12_perf_baseline_envelopes.json"
   push:
     branches:
@@ -24,10 +23,9 @@ on:
       - "docs/dx12_dlss_boundary_gate.md"
       - "docs/dx12_implementation_doctrine.md"
       - "docs/dx12_parity_decision_pass.md"
-      - "scripts/benchmark_client.ps1"
-      - "scripts/benchmark_dx12_parity.ps1"
-      - "tools/check_dx12_doctrine.ps1"
-      - "tools/check_dx12_perf_regression.ps1"
+      - "docs/data-platform/**"
+      - "scripts/**"
+      - "tools/**"
       - "tools/dx12_perf_baseline_envelopes.json"
   workflow_dispatch:
     inputs:
@@ -61,6 +59,10 @@ on:
         default: "dx12_required_steady_state"
         type: string
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   correctness:
     name: correctness-only perf gate checks
@@ -69,30 +71,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - name: Check Rust DX12 doctrine gate
-        shell: pwsh
+        shell: bash
         run: |
-          if (-not (Test-Path ..\fun-cli\Cargo.toml)) {
-            Write-Warning "Skipping standalone fun DX12 gate because sibling ..\fun-cli is unavailable. Umbrella data-platform Rust cutover CI runs the authoritative gate."
+          if [ ! -f ../fun-cli/Cargo.toml ]; then
+            echo "::warning::Skipping standalone fun DX12 gate because sibling ../fun-cli is unavailable. Umbrella data-platform Rust cutover CI runs the authoritative gate."
             exit 0
-          }
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --fun-root . --self-test
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-check --fun-root .
+          fi
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-bench -- dx12-doctrine-check --fun-root . --self-test
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-bench -- dx12-doctrine-check --fun-root .
       - name: Check Rust DX12 perf gate
-        shell: pwsh
+        shell: bash
         run: |
-          if (-not (Test-Path ..\fun-cli\Cargo.toml)) {
-            Write-Warning "Skipping standalone fun DX12 perf gate because sibling ..\fun-cli is unavailable. Umbrella data-platform Rust cutover CI runs the authoritative gate."
+          if [ ! -f ../fun-cli/Cargo.toml ]; then
+            echo "::warning::Skipping standalone fun DX12 perf gate because sibling ../fun-cli is unavailable. Umbrella data-platform Rust cutover CI runs the authoritative gate."
             exit 0
-          }
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --fun-root . --self-test
+          fi
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-bench -- dx12-perf-regression-check --fun-root . --self-test
       - name: Check DX12 parity report command
-        shell: pwsh
+        shell: bash
         run: |
-          if (-not (Test-Path ..\fun-cli\Cargo.toml)) {
-            Write-Warning "Skipping standalone fun DX12 report command because sibling ..\fun-cli is unavailable. Umbrella data-platform Rust cutover CI runs the authoritative report fixture."
+          if [ ! -f ../fun-cli/Cargo.toml ]; then
+            echo "::warning::Skipping standalone fun DX12 report command because sibling ../fun-cli is unavailable. Umbrella data-platform Rust cutover CI runs the authoritative report fixture."
             exit 0
-          }
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --self-test
+          fi
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --self-test
 
   cutover-fixtures:
     name: nested fun Rust fixture artifacts
@@ -101,20 +103,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - name: Emit Rust fixture artifacts when umbrella cockpit is present
-        shell: pwsh
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force target\data-platform-cutover\fun-fixtures | Out-Null
-          if (-not (Test-Path ..\fun-cli\Cargo.toml)) {
-            @{
-              schema = "fun.data_platform.nested_cutover_skip.v1"
-              reason = "sibling_fun_cli_unavailable"
-              owner = "umbrella data-platform Rust cutover workflow"
-            } | ConvertTo-Json | Set-Content target\data-platform-cutover\fun-fixtures\skip.json
-            Write-Warning "Skipping nested Rust fixture commands; umbrella root CI owns the authoritative cutover gate."
+          mkdir -p target/data-platform-cutover/fun-fixtures
+          if [ ! -f ../fun-cli/Cargo.toml ]; then
+            printf '{"schema":"fun.data_platform.nested_cutover_skip.v1","reason":"sibling_fun_cli_unavailable","owner":"umbrella data-platform Rust cutover workflow"}\n' > target/data-platform-cutover/fun-fixtures/skip.json
+            echo "::warning::Skipping nested Rust fixture commands; umbrella root CI owns the authoritative cutover gate."
             exit 0
-          }
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --fun-root . --matrix-size present --plan-only --output-root target\data-platform-cutover\fun-fixtures\dx12-parity-plan --format json --output target\data-platform-cutover\fun-fixtures\dx12-parity-plan.json
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --self-test --format json --output target\data-platform-cutover\fun-fixtures\dx12-parity-report.json
+          fi
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-bench -- dx12-parity --fun-root . --matrix-size present --plan-only --output-root target/data-platform-cutover/fun-fixtures/dx12-parity-plan --format json --output target/data-platform-cutover/fun-fixtures/dx12-parity-plan.json
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --self-test --format json --output target/data-platform-cutover/fun-fixtures/dx12-parity-report.json
       - name: Upload nested Rust fixture artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -133,40 +131,40 @@ jobs:
         with:
           path: project-FUN/fun
       - name: Run DX12 parity matrix when sibling path dependencies are present
-        shell: pwsh
+        shell: bash
         working-directory: project-FUN/fun
         run: |
-          $missing = @()
-          foreach ($path in @("..\bevy", "..\avian", "..\thunder", "..\bevy_quinnet")) {
-            if (-not (Test-Path $path)) {
-              $missing += $path
-            }
-          }
-          if ($missing.Count -gt 0) {
-            Write-Warning "Skipping hardware matrix because sibling path dependencies are missing: $($missing -join ', ')"
+          missing=()
+          for path in ../bevy ../avian ../thunder ../bevy_quinnet; do
+            if [ ! -e "${path}" ]; then
+              missing+=("${path}")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::warning::Skipping hardware matrix because sibling path dependencies are missing: ${missing[*]}"
             exit 0
-          }
-          if (-not (Test-Path ..\fun-cli\Cargo.toml)) {
-            Write-Warning "Skipping hardware matrix because sibling ..\fun-cli is unavailable."
+          fi
+          if [ ! -f ../fun-cli/Cargo.toml ]; then
+            echo "::warning::Skipping hardware matrix because sibling ../fun-cli is unavailable."
             exit 0
-          }
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --fun-root . --matrix-size "${{ inputs.matrix_size }}" --continue-on-failure --output-root "target\benchmarks\dx12_parity\ci"
+          fi
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-bench -- dx12-parity --fun-root . --matrix-size "${{ inputs.matrix_size }}" --continue-on-failure --output-root "target/benchmarks/dx12_parity/ci"
       - name: Compare supplied baseline/current summaries
         if: ${{ inputs.baseline_json != '' && inputs.current_json != '' }}
-        shell: pwsh
+        shell: bash
         working-directory: project-FUN/fun
         run: |
-          if (-not (Test-Path ..\fun-cli\Cargo.toml)) {
-            Write-Warning "Skipping supplied baseline/current comparison because sibling ..\fun-cli is unavailable."
+          if [ ! -f ../fun-cli/Cargo.toml ]; then
+            echo "::warning::Skipping supplied baseline/current comparison because sibling ../fun-cli is unavailable."
             exit 0
-          }
-          cargo run --quiet --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check `
-            --fun-root . `
-            --baseline "${{ inputs.baseline_json }}" `
-            --current "${{ inputs.current_json }}" `
-            --lane "${{ inputs.lane }}" `
-            --report-path "target\benchmarks\dx12_perf_gate\report.md" `
-            --json-out "target\benchmarks\dx12_perf_gate\report.json"
+          fi
+          cargo run --quiet --manifest-path ../fun-cli/Cargo.toml -p fun-bench -- dx12-perf-regression-check \
+            --fun-root . \
+            --baseline "${{ inputs.baseline_json }}" \
+            --current "${{ inputs.current_json }}" \
+            --lane "${{ inputs.lane }}" \
+            --report-path "target/benchmarks/dx12_perf_gate/report.md" \
+            --json-out "target/benchmarks/dx12_perf_gate/report.json"
       - name: Upload DX12 perf artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

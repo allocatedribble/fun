@@ -6,7 +6,7 @@ GPU timing and visual regression evidence.
 
 ## 9.1 Shader Diagnostics
 
-`scripts/run_stack.ps1 -RenderDiagnostics` enables:
+`fun-bench run-stack --render-diagnostics` enables:
 
 - `FUN_RENDER_SHADER_DIAGNOSTICS=1`
 - `BEVY_RENDER_SHADER_DIAGNOSTICS=1`
@@ -28,7 +28,7 @@ The local Bevy fork records:
 [client perf] render shader top: rank=1 operation=pipeline_created category=post_process label=post_bloom calls=1 elapsed_ns=... shader_defs=...
 ```
 
-`scripts/benchmark_client.ps1` stores these under the `render_shader_*` prefix
+`fun-bench client` stores these under the `render_shader_*` prefix
 and writes `render_shader_events` to `summary.json`.
 `fun-data report dx12-parity` classifies observed DX12 shader module or
 pipeline creation in the sample window as `shader compilation`, and higher

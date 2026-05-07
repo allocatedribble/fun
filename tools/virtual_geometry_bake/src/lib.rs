@@ -14,8 +14,8 @@ mod tests {
     use super::*;
     use fun_renderer::{
         PageOwner, PageOwnerFrameRequests, PagePriorityInputs, PageRequest, PageScheduler,
-        PageSchedulerConfig, StaticVirtualGeometryExecutionPolicy,
-        StaticVirtualGeometryViewContext, VirtualGeometryAssetDecision, VirtualGeometryDrawPath,
+        PageSchedulerConfig, StaticVirtualGeometryRuntimePolicy, StaticVirtualGeometryViewContext,
+        VirtualGeometryAssetDecision, VirtualGeometryDrawPath,
         select_static_virtual_geometry_frame,
     };
 
@@ -92,7 +92,7 @@ mod tests {
             &asset,
             &mut scheduler,
             StaticVirtualGeometryViewContext::default(),
-            StaticVirtualGeometryExecutionPolicy::default(),
+            StaticVirtualGeometryRuntimePolicy::default(),
         );
 
         assert!(!selection.draw_packets.is_empty());

@@ -61,8 +61,8 @@ impl FunRendererRuntimeBackend {
     }
 
     #[must_use]
-    pub fn from_env_reader<'a>(mut read: impl FnMut(&'static str) -> Option<&'a str>) -> Self {
-        Self::selection_from_env_reader(|name| read(name)).resolved
+    pub fn from_env_reader<'a>(read: impl FnMut(&'static str) -> Option<&'a str>) -> Self {
+        Self::selection_from_env_reader(read).resolved
     }
 
     #[must_use]

@@ -1,5 +1,8 @@
 use std::collections::VecDeque;
 
+pub const TELEMETRY_BUDGET_CLASS: &str = "SampledRuntime";
+pub const TELEMETRY_RETENTION_CLASS: &str = "SummarizeThenDiscardRaw";
+
 const REDACTED_DIAGNOSTIC_VALUE: &str = "<redacted>";
 
 /// Runtime diagnostic severity transported to the editor.

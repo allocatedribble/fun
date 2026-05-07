@@ -17,7 +17,7 @@ unless one of these environment variables is enabled:
 - `BEVY_RENDER_CHURN_COUNTERS=1`
 - `FUN_RENDER_PIPELINE_COUNTERS=1`
 
-`scripts/run_stack.ps1 -RenderDiagnostics` enables them together with render
+`fun-bench run-stack --render-diagnostics` enables them together with render
 upload counters. `game_client` samples and resets the counters on the existing
 client performance interval.
 
@@ -86,19 +86,19 @@ variants in the sample window, not a static shader inventory.
 
 Collect a DX12 lane with churn counters:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_client.ps1 `
-  -RenderBackend dx12 `
-  -PresentMode immediate `
-  -TraceDiagnostics `
-  -SampleSeconds 30 `
-  -WarmupSeconds 10
+```text
+scripts\fun-bench client `
+  --render-backend dx12 `
+  --present-mode immediate `
+  --trace-diagnostics `
+  --sample-seconds 30 `
+  --warmup-seconds 10
 ```
 
 Compare against Vulkan with the same UI/feature lane:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\benchmark_dx12_parity.ps1 -MatrixSize quick -ContinueOnFailure
+```text
+fun-bench dx12-parity --matrix-size quick --continue-on-failure
 ```
 
 The report should show `render_churn_render_pipeline_creations`,
@@ -107,7 +107,7 @@ counts, pipeline cache hit/miss counts, and top churn events.
 
 Generate the focused cardinality report from an existing matrix:
 
-```powershell
+```text
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-pipeline-cardinality `
   --matrix target\dx12-parity\current\matrix.json `
   --output-dir target\dx12-pix

@@ -6,6 +6,9 @@ use std::{
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use tracing::warn;
 
+pub const TELEMETRY_BUDGET_CLASS: &str = "HotPathCounters";
+pub const TELEMETRY_RETENTION_CLASS: &str = "KeepFailureEvidence";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dx12NativeInteropFailure {
     WrongBackend,

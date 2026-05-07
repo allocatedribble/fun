@@ -59,6 +59,7 @@ fun_ai_core = { path = "../fun-ai/crates/fun_ai_core" }
 fun_renderer = { package = "fun-renderer", path = "fun-renderer" }
 fun_scene = { package = "fun-scene", path = "fun-scene" }
 fun_scene_macros = { package = "fun-scene-macros", path = "fun-scene-macros" }
+fun_telemetry_core = { package = "fun-telemetry-core", path = "../fun-data/crates/fun-telemetry-core" }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 secrecy = { version = "0.10", features = ["serde"] }

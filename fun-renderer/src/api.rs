@@ -467,10 +467,7 @@ impl NoopRendererCore {
 
     #[must_use]
     pub fn diagnostics(&self) -> RendererCoreDiagnostics {
-        let registered_passes = match u16::try_from(self.passes.len()) {
-            Ok(value) => value,
-            Err(_) => u16::MAX,
-        };
+        let registered_passes = u16::try_from(self.passes.len()).unwrap_or(u16::MAX);
         RendererCoreDiagnostics {
             runtime_backend: self.settings.runtime_backend,
             backend: self.settings.backend,
@@ -733,10 +730,14 @@ mod tests {
             RENDERER_UPLOAD_ARENA_SEAM.owner_crate,
             crate::FUN_RENDERER_CRATE_NAME
         );
-        assert!(RENDERER_UPLOAD_ARENA_SEAM.legacy_bridge_borrow_allowed);
-        assert!(RENDERER_CEF_COMPOSITOR_INTERFACE.gpu_shared_texture_required);
-        assert!(!RENDERER_CEF_COMPOSITOR_INTERFACE.cpu_runtime_upload_fallback_allowed);
-        assert!(RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE.scene_color_ui_color_separate);
-        assert!(RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE.hudless_scene_color_required);
+        let upload_arena = core::hint::black_box(RENDERER_UPLOAD_ARENA_SEAM);
+        let cef_compositor = core::hint::black_box(RENDERER_CEF_COMPOSITOR_INTERFACE);
+        let upscale_frame_generation =
+            core::hint::black_box(RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE);
+        assert!(upload_arena.legacy_bridge_borrow_allowed);
+        assert!(cef_compositor.gpu_shared_texture_required);
+        assert!(!cef_compositor.cpu_runtime_upload_fallback_allowed);
+        assert!(upscale_frame_generation.scene_color_ui_color_separate);
+        assert!(upscale_frame_generation.hudless_scene_color_required);
     }
 }

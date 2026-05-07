@@ -42,7 +42,7 @@ failures, or become default without before/after benchmark evidence.
 - `Moonshot Experiments`: eligibility status, required gate, current evidence,
   and expected payoff.
 
-`scripts/benchmark_client.ps1` and `scripts/benchmark_dx12_parity.ps1` include a
+`fun-bench client` and `fun-bench dx12-parity` include a
 normalized `dx12_memory` block. Today the block records adapter RAM from WMI and
 accepts native/DXGI budget samples when a runner provides these environment
 variables:

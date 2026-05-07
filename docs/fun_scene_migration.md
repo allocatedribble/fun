@@ -62,9 +62,9 @@ short-lived migration shims. Product scene code should not use them.
 
 Run the migration checker from the `fun` workspace root:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1 -SelfTest
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1
+```text
+fun-quality check-code-shape -SelfTest
+fun-quality check-code-shape
 ```
 
 The checker rejects direct `bevy::scene` BSN imports, direct Bevy scene macro
@@ -76,12 +76,12 @@ Bevy BSN macro target during this transition.
 
 For this migration slice, use:
 
-```powershell
+```text
 cargo fmt --check -p fun-scene -p fun-scene-macros -p game_scene
 cargo check -p fun-scene
 cargo check -p fun-scene-macros
 cargo test -p game_scene --locked
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1 -SelfTest
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_fun_scene_migration.ps1
+fun-quality check-code-shape -SelfTest
+fun-quality check-code-shape
 git diff --check
 ```

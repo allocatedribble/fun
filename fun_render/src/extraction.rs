@@ -88,6 +88,7 @@ pub struct FunRenderSceneExtractionReport {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Component)]
 pub struct ExtractedToRendererScene;
 
+#[allow(clippy::type_complexity)]
 pub fn extract_fun_scene_renderables_to_renderer_database(
     query: Query<
         (
@@ -151,6 +152,7 @@ pub fn extract_fun_scene_renderables_to_renderer_database(
         || removed_renderables != 0;
 }
 
+#[allow(clippy::type_complexity)]
 pub fn extract_fun_scene_lights_to_renderer_database(
     query: Query<
         (

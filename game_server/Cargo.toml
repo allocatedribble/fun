@@ -8,6 +8,16 @@ workspace = true
 
 [features]
 default = []
+release-telemetry = ["server-ingest", "telemetry-retention"]
+client-telemetry = []
+server-ingest = ["dep:fun_telemetry_core"]
+crash-telemetry = []
+debug-diagnostics = ["diagnostics", "server-ingest", "telemetry-rendered-views"]
+debug-benchmarks = ["server-ingest"]
+local-debug-captures = ["debug-diagnostics"]
+telemetry-upload = []
+telemetry-retention = ["server-ingest"]
+telemetry-rendered-views = ["server-ingest"]
 diagnostics = ["game_shared/diagnostics"]
 
 [dependencies]
@@ -19,6 +29,7 @@ fun-warden-server = { path = "../../fun-warden/crates/fun-warden-server" }
 fun_ai_core = { path = "../../fun-ai/crates/fun_ai_core" }
 fun_ai_inference = { path = "../../fun-ai/crates/fun_ai_inference" }
 fun_ai_tactics = { path = "../../fun-ai/crates/fun_ai_tactics" }
+fun_telemetry_core = { workspace = true, optional = true }
 fun_scene.workspace = true
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }

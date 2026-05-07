@@ -1,5 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub const TELEMETRY_BUDGET_CLASS: &str = "HotPathCounters";
+pub const TELEMETRY_RETENTION_CLASS: &str = "SummarizeThenDiscardRaw";
+
 #[derive(Debug, Default)]
 pub struct Dx12CefInteropDiagnostics {
     init_success_count: AtomicU64,

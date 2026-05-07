@@ -8,6 +8,9 @@ pub mod cef_ui_dx12;
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
+#[cfg(feature = "client-telemetry")]
+pub mod release_telemetry;
+pub mod telemetry_gate;
 pub mod warden;
 
 pub(crate) use frame_profile::{
@@ -1514,6 +1517,12 @@ pub fn build_client_app_with_options(options: ClientAppOptions) -> App {
         game_session_id: options.game_session_id.clone(),
     });
     app.insert_resource(host_state);
+    #[cfg(feature = "client-telemetry")]
+    app.insert_resource(telemetry_gate::client_telemetry_contract());
+    #[cfg(all(feature = "release-telemetry", feature = "crash-telemetry"))]
+    {
+        let _ = release_telemetry::install_release_panic_hook_from_env();
+    }
     app.add_plugins((
         FunRenderWinitPresentationPlugin::new(render_options),
         FunRenderCorePlugin::new(render_options),
