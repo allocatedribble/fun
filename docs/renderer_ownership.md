@@ -544,6 +544,23 @@ reference rejections, and Render World memory growth. If those diagnostics are
 persisted or sent across a process/backend boundary later, `fun-data`
 compressed protobuf bundles remain the canonical telemetry format.
 
+Pass 5 adds `fun_renderer::ir`, the backend-neutral renderer intermediate
+representation between Render World data and bridge execution. It defines
+resource, binding, pipeline, command, and graph descriptors without `wgpu`,
+wgpu-core, wgpu-hal, Naga, native device, queue, texture, descriptor heap, or
+command-list handles. Hot draw, dispatch, and indirect packets are fixed-size
+copy records with ID/range fields, not heap-backed per-draw objects.
+
+IR translation is descriptor-granular through `RendererIrBridgeTranslator` and
+`IrBridgeTranslationCache`: resource creation, pipeline creation, pass
+execution, and graph compilation are the only translation steps. Unchanged
+descriptors are fingerprinted and skipped, and entity-level extraction data must
+be compacted before it becomes IR. Validation rejects missing resources, invalid
+formats and sample counts, binding/layout mismatches, graph dependency errors,
+unwritten reads, unconsumed writes, and unsupported backend features. Explicit
+shader, pipeline, material binding, and graph schema versions make wgpu/Naga or
+direct-backend changes visible instead of silent.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

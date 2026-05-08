@@ -15,6 +15,7 @@ pub mod frame_generation;
 pub mod frame_graph;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
+pub mod ir;
 #[cfg(feature = "experimental_renderer_ml")]
 pub mod ml;
 pub mod page;
@@ -819,6 +820,7 @@ pub use extraction::*;
 pub use frame_graph::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
+pub use ir::*;
 #[cfg(feature = "experimental_renderer_ml")]
 pub use ml::*;
 pub use page::*;
