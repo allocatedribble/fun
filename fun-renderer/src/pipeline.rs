@@ -1,4 +1,15 @@
-use crate::FunRendererBackend;
+use crate::{
+    FunRendererBackend,
+    backend::PipelineId,
+    ir::{
+        CullMode, DescriptorFingerprint, DrawPacket, MAX_RENDER_TARGETS_PER_PASS,
+        PrimitiveTopology, TextureFormat,
+    },
+};
+
+pub use crate::ir::{
+    ComputePipelineDesc, PipelineFamily, PipelineLayoutDesc, PipelineVariantKey, RenderPipelineDesc,
+};
 
 pub const PIPELINE_REGISTRY_SCHEMA_VERSION: u16 = 1;
 
@@ -1135,6 +1146,942 @@ impl PipelineRuntimeCreationAudit {
     }
 }
 
+pub struct PreparedPipelinePhase;
+
+pub type PreparedPipelineId = PipelineId<PreparedPipelinePhase>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShaderEntry {
+    pub shader_hash: u64,
+    pub module_label: &'static str,
+    pub entry_point: &'static str,
+}
+
+impl ShaderEntry {
+    pub const EMPTY: Self = Self {
+        shader_hash: 0,
+        module_label: "",
+        entry_point: "",
+    };
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            self.module_label,
+            &[
+                self.shader_hash,
+                DescriptorFingerprint::from_label_and_words(self.entry_point, &[]).0,
+            ],
+        )
+    }
+}
+
+impl Default for ShaderEntry {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShaderEntrySet {
+    pub vertex: ShaderEntry,
+    pub fragment: ShaderEntry,
+    pub compute: ShaderEntry,
+}
+
+impl ShaderEntrySet {
+    pub const EMPTY: Self = Self {
+        vertex: ShaderEntry::EMPTY,
+        fragment: ShaderEntry::EMPTY,
+        compute: ShaderEntry::EMPTY,
+    };
+
+    #[must_use]
+    pub const fn render(vertex: ShaderEntry, fragment: ShaderEntry) -> Self {
+        Self {
+            vertex,
+            fragment,
+            compute: ShaderEntry::EMPTY,
+        }
+    }
+
+    #[must_use]
+    pub const fn compute(compute: ShaderEntry) -> Self {
+        Self {
+            vertex: ShaderEntry::EMPTY,
+            fragment: ShaderEntry::EMPTY,
+            compute,
+        }
+    }
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            "shader_entry_set",
+            &[
+                self.vertex.stable_hash().0,
+                self.fragment.stable_hash().0,
+                self.compute.stable_hash().0,
+            ],
+        )
+    }
+}
+
+impl Default for ShaderEntrySet {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderTargetState {
+    pub color_formats: [TextureFormat; MAX_RENDER_TARGETS_PER_PASS],
+    pub color_target_count: u8,
+    pub depth_format: TextureFormat,
+    pub msaa_count: u8,
+}
+
+impl RenderTargetState {
+    pub const EMPTY: Self = Self {
+        color_formats: [TextureFormat::Undefined; MAX_RENDER_TARGETS_PER_PASS],
+        color_target_count: 0,
+        depth_format: TextureFormat::Undefined,
+        msaa_count: 1,
+    };
+
+    #[must_use]
+    pub const fn from_render_desc(desc: RenderPipelineDesc) -> Self {
+        Self {
+            color_formats: desc.color_formats,
+            color_target_count: desc.color_target_count,
+            depth_format: desc.depth_format,
+            msaa_count: desc.sample_count,
+        }
+    }
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            "render_target_state",
+            &[
+                u64::from(self.color_target_count),
+                self.color_formats[0] as u64,
+                self.color_formats[1] as u64,
+                self.color_formats[2] as u64,
+                self.color_formats[3] as u64,
+                self.depth_format as u64,
+                u64::from(self.msaa_count),
+            ],
+        )
+    }
+}
+
+impl Default for RenderTargetState {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DepthCompareFunction {
+    Never,
+    Less,
+    Equal,
+    #[default]
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DepthState {
+    pub format: TextureFormat,
+    pub write_enabled: bool,
+    pub compare: DepthCompareFunction,
+}
+
+impl DepthState {
+    pub const DISABLED: Self = Self {
+        format: TextureFormat::Undefined,
+        write_enabled: false,
+        compare: DepthCompareFunction::Always,
+    };
+
+    #[must_use]
+    pub const fn from_render_desc(desc: RenderPipelineDesc) -> Self {
+        if desc.depth_format.is_depth() {
+            Self {
+                format: desc.depth_format,
+                write_enabled: true,
+                compare: DepthCompareFunction::LessEqual,
+            }
+        } else {
+            Self::DISABLED
+        }
+    }
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            "depth_state",
+            &[
+                self.format as u64,
+                self.write_enabled as u64,
+                self.compare as u64,
+            ],
+        )
+    }
+}
+
+impl Default for DepthState {
+    fn default() -> Self {
+        Self::DISABLED
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlendMode {
+    #[default]
+    Disabled,
+    AlphaBlend,
+    PremultipliedAlpha,
+    Additive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlendState {
+    pub mode: BlendMode,
+    pub color_write_mask: u8,
+}
+
+impl BlendState {
+    pub const OPAQUE: Self = Self {
+        mode: BlendMode::Disabled,
+        color_write_mask: 0x0f,
+    };
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            "blend_state",
+            &[self.mode as u64, u64::from(self.color_write_mask)],
+        )
+    }
+}
+
+impl Default for BlendState {
+    fn default() -> Self {
+        Self::OPAQUE
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipelineFrontFace {
+    #[default]
+    CounterClockwise,
+    Clockwise,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipelineFillMode {
+    #[default]
+    Fill,
+    Line,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RasterState {
+    pub topology: PrimitiveTopology,
+    pub cull_mode: CullMode,
+    pub front_face: PipelineFrontFace,
+    pub fill_mode: PipelineFillMode,
+}
+
+impl RasterState {
+    #[must_use]
+    pub const fn from_render_desc(desc: RenderPipelineDesc) -> Self {
+        Self {
+            topology: desc.topology,
+            cull_mode: desc.cull_mode,
+            front_face: PipelineFrontFace::CounterClockwise,
+            fill_mode: PipelineFillMode::Fill,
+        }
+    }
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            "raster_state",
+            &[
+                self.topology as u64,
+                self.cull_mode as u64,
+                self.front_face as u64,
+                self.fill_mode as u64,
+            ],
+        )
+    }
+}
+
+impl Default for RasterState {
+    fn default() -> Self {
+        Self {
+            topology: PrimitiveTopology::TriangleList,
+            cull_mode: CullMode::Back,
+            front_face: PipelineFrontFace::CounterClockwise,
+            fill_mode: PipelineFillMode::Fill,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VertexStepMode {
+    #[default]
+    Vertex,
+    Instance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VertexLayout {
+    pub stride_bytes: u16,
+    pub attribute_count: u8,
+    pub attribute_signature: DescriptorFingerprint,
+    pub step_mode: VertexStepMode,
+}
+
+impl VertexLayout {
+    pub const EMPTY: Self = Self {
+        stride_bytes: 0,
+        attribute_count: 0,
+        attribute_signature: DescriptorFingerprint::from_u64(0),
+        step_mode: VertexStepMode::Vertex,
+    };
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            "vertex_layout",
+            &[
+                u64::from(self.stride_bytes),
+                u64::from(self.attribute_count),
+                self.attribute_signature.0,
+                self.step_mode as u64,
+            ],
+        )
+    }
+}
+
+impl Default for VertexLayout {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderPipelineKeyDesc {
+    pub pipeline: RenderPipelineDesc,
+    pub shader_entries: ShaderEntrySet,
+    pub reflection_signature: DescriptorFingerprint,
+    pub bind_layout_hash: DescriptorFingerprint,
+    pub blend_state: BlendState,
+    pub vertex_layout: VertexLayout,
+    pub quality_tier: QualityTier,
+    pub feature_mask: PipelineFeatureMask,
+    pub backend: FunRendererBackend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PipelineCacheKey {
+    pub stable_name: &'static str,
+    pub kind: PipelineKind,
+    pub shader_entries: ShaderEntrySet,
+    pub reflection_signature: DescriptorFingerprint,
+    pub bind_layout_hash: DescriptorFingerprint,
+    pub render_target_state: RenderTargetState,
+    pub depth_state: DepthState,
+    pub blend_state: BlendState,
+    pub raster_state: RasterState,
+    pub vertex_layout: VertexLayout,
+    pub quality_tier: QualityTier,
+    pub feature_mask: PipelineFeatureMask,
+    pub backend: FunRendererBackend,
+}
+
+impl PipelineCacheKey {
+    #[must_use]
+    pub fn from_render_desc(desc: RenderPipelineKeyDesc) -> Self {
+        Self {
+            stable_name: desc.pipeline.stable_name,
+            kind: PipelineKind::Render,
+            shader_entries: desc.shader_entries,
+            reflection_signature: desc.reflection_signature,
+            bind_layout_hash: desc.bind_layout_hash,
+            render_target_state: RenderTargetState::from_render_desc(desc.pipeline),
+            depth_state: DepthState::from_render_desc(desc.pipeline),
+            blend_state: desc.blend_state,
+            raster_state: RasterState::from_render_desc(desc.pipeline),
+            vertex_layout: desc.vertex_layout,
+            quality_tier: desc.quality_tier,
+            feature_mask: desc.feature_mask,
+            backend: desc.backend,
+        }
+    }
+
+    #[must_use]
+    pub fn from_compute_desc(
+        desc: ComputePipelineDesc,
+        shader_entries: ShaderEntrySet,
+        reflection_signature: DescriptorFingerprint,
+        bind_layout_hash: DescriptorFingerprint,
+        quality_tier: QualityTier,
+        feature_mask: PipelineFeatureMask,
+        backend: FunRendererBackend,
+    ) -> Self {
+        Self {
+            stable_name: desc.stable_name,
+            kind: PipelineKind::Compute,
+            shader_entries,
+            reflection_signature,
+            bind_layout_hash,
+            render_target_state: RenderTargetState::EMPTY,
+            depth_state: DepthState::DISABLED,
+            blend_state: BlendState::OPAQUE,
+            raster_state: RasterState::default(),
+            vertex_layout: VertexLayout::EMPTY,
+            quality_tier,
+            feature_mask,
+            backend,
+        }
+    }
+
+    #[must_use]
+    pub fn stable_hash(self) -> DescriptorFingerprint {
+        DescriptorFingerprint::from_label_and_words(
+            self.stable_name,
+            &[
+                self.kind as u64,
+                self.shader_entries.stable_hash().0,
+                self.reflection_signature.0,
+                self.bind_layout_hash.0,
+                self.render_target_state.stable_hash().0,
+                self.depth_state.stable_hash().0,
+                self.blend_state.stable_hash().0,
+                self.raster_state.stable_hash().0,
+                self.vertex_layout.stable_hash().0,
+                self.raster_state.topology as u64,
+                self.quality_tier as u64,
+                u64::from(self.feature_mask.bits),
+                self.backend as u64,
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PreparedPipelineDrawPacket {
+    pub pipeline: PreparedPipelineId,
+    pub draw: DrawPacket,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipelineCreationPhase {
+    Warmup,
+    AssetLoad,
+    RuntimeMeasured,
+}
+
+impl PipelineCreationPhase {
+    #[must_use]
+    pub const fn allows_creation(self) -> bool {
+        !matches!(self, Self::RuntimeMeasured)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipelineCreationKind {
+    ShaderModule,
+    PipelineLayout,
+    RenderPipeline,
+    ComputePipeline,
+}
+
+impl PipelineCreationKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ShaderModule => "shader_module",
+            Self::PipelineLayout => "pipeline_layout",
+            Self::RenderPipeline => "render_pipeline",
+            Self::ComputePipeline => "compute_pipeline",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineCacheTelemetry {
+    pub shader_modules_created: u32,
+    pub pipeline_layouts_created: u32,
+    pub render_pipelines_created: u32,
+    pub compute_pipelines_created: u32,
+    pub cache_hits: u32,
+    pub cache_misses: u32,
+    pub runtime_creation_failures: u32,
+    pub missing_variant_fallbacks: u32,
+    pub debug_material_draws: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingPipelineVariantReason {
+    NotPreparedDuringWarmup,
+    FeatureVariantUnavailable,
+}
+
+impl MissingPipelineVariantReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotPreparedDuringWarmup => "not_prepared_during_warmup",
+            Self::FeatureVariantUnavailable => "feature_variant_unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingPipelineVariantFailure {
+    pub requested_pipeline: &'static str,
+    pub fallback_pipeline: PreparedPipelineId,
+    pub reason: MissingPipelineVariantReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineVariantResolution {
+    pub pipeline: PreparedPipelineId,
+    pub used_debug_material: bool,
+    pub failure: Option<MissingPipelineVariantFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineCacheError {
+    RuntimeCreationAfterWarmup {
+        kind: PipelineCreationKind,
+        stable_name: &'static str,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineCacheDecision {
+    pub kind: PipelineCreationKind,
+    pub stable_name: &'static str,
+    pub fingerprint: DescriptorFingerprint,
+    pub prepared_pipeline: PreparedPipelineId,
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PipelineCacheEntry {
+    kind: PipelineCreationKind,
+    stable_name: &'static str,
+    fingerprint: DescriptorFingerprint,
+    prepared_pipeline: PreparedPipelineId,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PipelineCache {
+    entries: Vec<PipelineCacheEntry>,
+    pub telemetry: PipelineCacheTelemetry,
+}
+
+impl PipelineCache {
+    #[must_use]
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[must_use]
+    pub fn find_prepared_pipeline(&self, key: PipelineCacheKey) -> Option<PreparedPipelineId> {
+        let fingerprint = key.stable_hash();
+        self.entries
+            .iter()
+            .find(|entry| {
+                matches!(
+                    (key.kind, entry.kind),
+                    (PipelineKind::Render, PipelineCreationKind::RenderPipeline)
+                        | (PipelineKind::Compute, PipelineCreationKind::ComputePipeline)
+                ) && entry.fingerprint == fingerprint
+            })
+            .map(|entry| entry.prepared_pipeline)
+    }
+
+    pub fn ensure_shader_module(
+        &mut self,
+        stable_name: &'static str,
+        fingerprint: DescriptorFingerprint,
+        phase: PipelineCreationPhase,
+    ) -> Result<PipelineCacheDecision, PipelineCacheError> {
+        self.ensure_artifact(
+            PipelineCreationKind::ShaderModule,
+            stable_name,
+            fingerprint,
+            phase,
+        )
+    }
+
+    pub fn ensure_pipeline_layout(
+        &mut self,
+        stable_name: &'static str,
+        fingerprint: DescriptorFingerprint,
+        phase: PipelineCreationPhase,
+    ) -> Result<PipelineCacheDecision, PipelineCacheError> {
+        self.ensure_artifact(
+            PipelineCreationKind::PipelineLayout,
+            stable_name,
+            fingerprint,
+            phase,
+        )
+    }
+
+    pub fn ensure_render_pipeline(
+        &mut self,
+        key: PipelineCacheKey,
+        phase: PipelineCreationPhase,
+    ) -> Result<PipelineCacheDecision, PipelineCacheError> {
+        self.ensure_artifact(
+            PipelineCreationKind::RenderPipeline,
+            key.stable_name,
+            key.stable_hash(),
+            phase,
+        )
+    }
+
+    pub fn ensure_compute_pipeline(
+        &mut self,
+        key: PipelineCacheKey,
+        phase: PipelineCreationPhase,
+    ) -> Result<PipelineCacheDecision, PipelineCacheError> {
+        self.ensure_artifact(
+            PipelineCreationKind::ComputePipeline,
+            key.stable_name,
+            key.stable_hash(),
+            phase,
+        )
+    }
+
+    #[must_use]
+    pub fn resolve_pipeline_or_debug_material(
+        &mut self,
+        key: PipelineCacheKey,
+        debug_material_pipeline: PreparedPipelineId,
+        reason: MissingPipelineVariantReason,
+    ) -> PipelineVariantResolution {
+        if let Some(pipeline) = self.find_prepared_pipeline(key) {
+            self.telemetry.cache_hits = self.telemetry.cache_hits.saturating_add(1);
+            return PipelineVariantResolution {
+                pipeline,
+                used_debug_material: false,
+                failure: None,
+            };
+        }
+
+        self.telemetry.cache_misses = self.telemetry.cache_misses.saturating_add(1);
+        self.telemetry.missing_variant_fallbacks =
+            self.telemetry.missing_variant_fallbacks.saturating_add(1);
+        self.telemetry.debug_material_draws = self.telemetry.debug_material_draws.saturating_add(1);
+        PipelineVariantResolution {
+            pipeline: debug_material_pipeline,
+            used_debug_material: true,
+            failure: Some(MissingPipelineVariantFailure {
+                requested_pipeline: key.stable_name,
+                fallback_pipeline: debug_material_pipeline,
+                reason,
+            }),
+        }
+    }
+
+    fn ensure_artifact(
+        &mut self,
+        kind: PipelineCreationKind,
+        stable_name: &'static str,
+        fingerprint: DescriptorFingerprint,
+        phase: PipelineCreationPhase,
+    ) -> Result<PipelineCacheDecision, PipelineCacheError> {
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| entry.kind == kind && entry.fingerprint == fingerprint)
+        {
+            self.telemetry.cache_hits = self.telemetry.cache_hits.saturating_add(1);
+            return Ok(PipelineCacheDecision {
+                kind,
+                stable_name,
+                fingerprint,
+                prepared_pipeline: entry.prepared_pipeline,
+                created: false,
+            });
+        }
+
+        self.telemetry.cache_misses = self.telemetry.cache_misses.saturating_add(1);
+        if !phase.allows_creation() {
+            self.telemetry.runtime_creation_failures =
+                self.telemetry.runtime_creation_failures.saturating_add(1);
+            return Err(PipelineCacheError::RuntimeCreationAfterWarmup { kind, stable_name });
+        }
+
+        let prepared_pipeline = PreparedPipelineId::first(self.entries.len() as u32);
+        self.entries.push(PipelineCacheEntry {
+            kind,
+            stable_name,
+            fingerprint,
+            prepared_pipeline,
+        });
+        self.entries
+            .sort_by_key(|entry| (entry.kind as u8, entry.fingerprint.0));
+        match kind {
+            PipelineCreationKind::ShaderModule => {
+                self.telemetry.shader_modules_created =
+                    self.telemetry.shader_modules_created.saturating_add(1);
+            }
+            PipelineCreationKind::PipelineLayout => {
+                self.telemetry.pipeline_layouts_created =
+                    self.telemetry.pipeline_layouts_created.saturating_add(1);
+            }
+            PipelineCreationKind::RenderPipeline => {
+                self.telemetry.render_pipelines_created =
+                    self.telemetry.render_pipelines_created.saturating_add(1);
+            }
+            PipelineCreationKind::ComputePipeline => {
+                self.telemetry.compute_pipelines_created =
+                    self.telemetry.compute_pipelines_created.saturating_add(1);
+            }
+        }
+        Ok(PipelineCacheDecision {
+            kind,
+            stable_name,
+            fingerprint,
+            prepared_pipeline,
+            created: true,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipelineWarmupPassKind {
+    Depth,
+    Opaque,
+    AlphaTest,
+    Transparent,
+    Shadow,
+    Sky,
+    Ui,
+    Post,
+    DebugViews,
+    Compute,
+}
+
+impl PipelineWarmupPassKind {
+    pub const ALL: [Self; 10] = [
+        Self::Depth,
+        Self::Opaque,
+        Self::AlphaTest,
+        Self::Transparent,
+        Self::Shadow,
+        Self::Sky,
+        Self::Ui,
+        Self::Post,
+        Self::DebugViews,
+        Self::Compute,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Depth => "depth",
+            Self::Opaque => "opaque",
+            Self::AlphaTest => "alpha_test",
+            Self::Transparent => "transparent",
+            Self::Shadow => "shadow",
+            Self::Sky => "sky",
+            Self::Ui => "ui",
+            Self::Post => "post",
+            Self::DebugViews => "debug_views",
+            Self::Compute => "compute",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineWarmupManifestEntry {
+    pub pass_kind: PipelineWarmupPassKind,
+    pub pipeline_static_label: &'static str,
+    pub required_before_measured_frames: bool,
+    pub feature_mask: PipelineFeatureMask,
+    pub quality_tier_mask: PipelineQualityTierMask,
+    pub backend_mask: PipelineBackendMask,
+}
+
+pub const PASS12_WARMUP_MANIFEST_ENTRIES: [PipelineWarmupManifestEntry; 10] = [
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Depth,
+        pipeline_static_label: "renderer_virtual_geometry_static_cluster_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: VIRTUAL_GEOMETRY_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Opaque,
+        pipeline_static_label: "renderer_virtual_geometry_static_cluster_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: VIRTUAL_GEOMETRY_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::AlphaTest,
+        pipeline_static_label: "renderer_virtual_geometry_skinned_cluster_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: VIRTUAL_GEOMETRY_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Transparent,
+        pipeline_static_label: "fun_cloud_view_composite_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: CLOUD_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Shadow,
+        pipeline_static_label: "renderer_virtual_shadow_directional_pages_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: VIRTUAL_SHADOW_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Sky,
+        pipeline_static_label: "fun_cloud_view_composite_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: CLOUD_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Ui,
+        pipeline_static_label: "renderer_cef_gpu_composite_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: CEF_UI_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Post,
+        pipeline_static_label: "renderer_fsr_sr_present_boundary_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: UPSCALE_FEATURES.union(PipelineFeatureMask::FSR),
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::DebugViews,
+        pipeline_static_label: "fun_cloud_debug_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: CLOUD_FEATURES.union(PipelineFeatureMask::DEBUG_OVERLAY),
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+    PipelineWarmupManifestEntry {
+        pass_kind: PipelineWarmupPassKind::Compute,
+        pipeline_static_label: "fun_compute_culling_instance_frustum_pipeline",
+        required_before_measured_frames: true,
+        feature_mask: COMPUTE_CULLING_FEATURES,
+        quality_tier_mask: PipelineQualityTierMask::ALL,
+        backend_mask: PipelineBackendMask::ALL,
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineWarmupManifest {
+    pub entries: &'static [PipelineWarmupManifestEntry],
+}
+
+impl PipelineWarmupManifest {
+    pub const PASS12: Self = Self {
+        entries: &PASS12_WARMUP_MANIFEST_ENTRIES,
+    };
+
+    #[must_use]
+    pub const fn pass12_static() -> Self {
+        Self::PASS12
+    }
+
+    #[must_use]
+    pub fn validate_against_registry(
+        self,
+        registry: &PipelineRegistry,
+    ) -> PipelineWarmupManifestReport {
+        let mut missing_registry_labels = 0;
+        let mut first_missing_label = None;
+        for entry in self.entries {
+            if registry
+                .find_pipeline_by_label(entry.pipeline_static_label)
+                .is_none()
+            {
+                missing_registry_labels += 1;
+                if first_missing_label.is_none() {
+                    first_missing_label = Some(entry.pipeline_static_label);
+                }
+            }
+        }
+
+        let mut missing_required_pass_kinds = 0;
+        let mut first_missing_pass_kind = None;
+        for pass_kind in PipelineWarmupPassKind::ALL {
+            let covered = self
+                .entries
+                .iter()
+                .any(|entry| entry.pass_kind == pass_kind && entry.required_before_measured_frames);
+            if !covered {
+                missing_required_pass_kinds += 1;
+                if first_missing_pass_kind.is_none() {
+                    first_missing_pass_kind = Some(pass_kind);
+                }
+            }
+        }
+
+        PipelineWarmupManifestReport {
+            entry_count: self.entries.len(),
+            missing_registry_labels,
+            missing_required_pass_kinds,
+            first_missing_label,
+            first_missing_pass_kind,
+        }
+    }
+}
+
+impl Default for PipelineWarmupManifest {
+    fn default() -> Self {
+        Self::PASS12
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineWarmupManifestReport {
+    pub entry_count: usize,
+    pub missing_registry_labels: usize,
+    pub missing_required_pass_kinds: usize,
+    pub first_missing_label: Option<&'static str>,
+    pub first_missing_pass_kind: Option<PipelineWarmupPassKind>,
+}
+
+impl PipelineWarmupManifestReport {
+    #[must_use]
+    pub const fn passes(self) -> bool {
+        self.missing_registry_labels == 0 && self.missing_required_pass_kinds == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1292,5 +2239,258 @@ mod tests {
             audit.first_unexpected_label,
             Some("fun_compute_culling_lod_select_pipeline")
         );
+    }
+
+    #[test]
+    fn pipeline_cache_key_tracks_pass12_pso_dimensions() {
+        let base = render_pipeline_desc("test.render.pipeline", 1, TextureFormat::Depth32Float);
+        let entries = test_render_entries();
+        let vertex_layout = VertexLayout {
+            stride_bytes: 32,
+            attribute_count: 3,
+            attribute_signature: DescriptorFingerprint::from_u64(30),
+            step_mode: VertexStepMode::Vertex,
+        };
+        let key = PipelineCacheKey::from_render_desc(RenderPipelineKeyDesc {
+            pipeline: base,
+            shader_entries: entries,
+            reflection_signature: DescriptorFingerprint::from_u64(10),
+            bind_layout_hash: DescriptorFingerprint::from_u64(20),
+            blend_state: BlendState::OPAQUE,
+            vertex_layout,
+            quality_tier: QualityTier::Balanced,
+            feature_mask: PipelineFeatureMask::VIRTUAL_GEOMETRY,
+            backend: FunRendererBackend::Dx12,
+        });
+        let mut msaa_desc = base;
+        msaa_desc.sample_count = 4;
+        let msaa_key = PipelineCacheKey::from_render_desc(RenderPipelineKeyDesc {
+            pipeline: msaa_desc,
+            shader_entries: entries,
+            reflection_signature: DescriptorFingerprint::from_u64(10),
+            bind_layout_hash: DescriptorFingerprint::from_u64(20),
+            blend_state: BlendState::OPAQUE,
+            vertex_layout,
+            quality_tier: QualityTier::Balanced,
+            feature_mask: PipelineFeatureMask::VIRTUAL_GEOMETRY,
+            backend: FunRendererBackend::Dx12,
+        });
+        let vulkan_key = PipelineCacheKey {
+            backend: FunRendererBackend::Vulkan,
+            ..key
+        };
+        let feature_key = PipelineCacheKey {
+            feature_mask: PipelineFeatureMask::VIRTUAL_GEOMETRY
+                .union(PipelineFeatureMask::DEBUG_OVERLAY),
+            ..key
+        };
+
+        assert_ne!(key.stable_hash(), msaa_key.stable_hash());
+        assert_ne!(key.stable_hash(), vulkan_key.stable_hash());
+        assert_ne!(key.stable_hash(), feature_key.stable_hash());
+    }
+
+    #[test]
+    fn pipeline_cache_reuses_prepared_handles_after_warmup() {
+        let mut cache = PipelineCache::default();
+        let key = PipelineCacheKey::from_render_desc(RenderPipelineKeyDesc {
+            pipeline: render_pipeline_desc("test.reused.render", 1, TextureFormat::Depth32Float),
+            shader_entries: test_render_entries(),
+            reflection_signature: DescriptorFingerprint::from_u64(40),
+            bind_layout_hash: DescriptorFingerprint::from_u64(41),
+            blend_state: BlendState::OPAQUE,
+            vertex_layout: VertexLayout::EMPTY,
+            quality_tier: QualityTier::Balanced,
+            feature_mask: PipelineFeatureMask::NONE,
+            backend: FunRendererBackend::Dx12,
+        });
+        let warmup = cache
+            .ensure_render_pipeline(key, PipelineCreationPhase::Warmup)
+            .expect("warmup creates the pipeline");
+        let runtime = cache
+            .ensure_render_pipeline(key, PipelineCreationPhase::RuntimeMeasured)
+            .expect("runtime reuses prepared pipeline");
+
+        assert!(warmup.created);
+        assert!(!runtime.created);
+        assert_eq!(warmup.prepared_pipeline, runtime.prepared_pipeline);
+        assert_eq!(cache.telemetry.render_pipelines_created, 1);
+        assert_eq!(cache.telemetry.cache_hits, 1);
+    }
+
+    #[test]
+    fn pipeline_cache_blocks_measured_runtime_creation_for_all_artifacts() {
+        let mut cache = PipelineCache::default();
+        let render_key = PipelineCacheKey::from_render_desc(RenderPipelineKeyDesc {
+            pipeline: render_pipeline_desc("test.runtime.render", 1, TextureFormat::Depth32Float),
+            shader_entries: test_render_entries(),
+            reflection_signature: DescriptorFingerprint::from_u64(50),
+            bind_layout_hash: DescriptorFingerprint::from_u64(51),
+            blend_state: BlendState::OPAQUE,
+            vertex_layout: VertexLayout::EMPTY,
+            quality_tier: QualityTier::Balanced,
+            feature_mask: PipelineFeatureMask::NONE,
+            backend: FunRendererBackend::Dx12,
+        });
+        let compute_key = PipelineCacheKey::from_compute_desc(
+            compute_pipeline_desc("test.runtime.compute"),
+            ShaderEntrySet::compute(ShaderEntry {
+                shader_hash: 52,
+                module_label: "test.compute.module",
+                entry_point: "main",
+            }),
+            DescriptorFingerprint::from_u64(53),
+            DescriptorFingerprint::from_u64(54),
+            QualityTier::Balanced,
+            PipelineFeatureMask::COMPUTE_CULLING,
+            FunRendererBackend::Dx12,
+        );
+
+        assert_eq!(
+            cache.ensure_shader_module(
+                "test.runtime.shader",
+                DescriptorFingerprint::from_u64(55),
+                PipelineCreationPhase::RuntimeMeasured,
+            ),
+            Err(PipelineCacheError::RuntimeCreationAfterWarmup {
+                kind: PipelineCreationKind::ShaderModule,
+                stable_name: "test.runtime.shader",
+            })
+        );
+        assert_eq!(
+            cache.ensure_pipeline_layout(
+                "test.runtime.layout",
+                DescriptorFingerprint::from_u64(56),
+                PipelineCreationPhase::RuntimeMeasured,
+            ),
+            Err(PipelineCacheError::RuntimeCreationAfterWarmup {
+                kind: PipelineCreationKind::PipelineLayout,
+                stable_name: "test.runtime.layout",
+            })
+        );
+        assert_eq!(
+            cache.ensure_render_pipeline(render_key, PipelineCreationPhase::RuntimeMeasured),
+            Err(PipelineCacheError::RuntimeCreationAfterWarmup {
+                kind: PipelineCreationKind::RenderPipeline,
+                stable_name: "test.runtime.render",
+            })
+        );
+        assert_eq!(
+            cache.ensure_compute_pipeline(compute_key, PipelineCreationPhase::RuntimeMeasured),
+            Err(PipelineCacheError::RuntimeCreationAfterWarmup {
+                kind: PipelineCreationKind::ComputePipeline,
+                stable_name: "test.runtime.compute",
+            })
+        );
+        assert_eq!(cache.telemetry.runtime_creation_failures, 4);
+    }
+
+    #[test]
+    fn missing_pipeline_variant_resolves_to_debug_material_with_named_failure() {
+        let mut cache = PipelineCache::default();
+        let fallback = PreparedPipelineId::first(99);
+        let key = PipelineCacheKey::from_render_desc(RenderPipelineKeyDesc {
+            pipeline: render_pipeline_desc("test.missing.variant", 1, TextureFormat::Depth32Float),
+            shader_entries: test_render_entries(),
+            reflection_signature: DescriptorFingerprint::from_u64(60),
+            bind_layout_hash: DescriptorFingerprint::from_u64(61),
+            blend_state: BlendState::OPAQUE,
+            vertex_layout: VertexLayout::EMPTY,
+            quality_tier: QualityTier::Cinematic,
+            feature_mask: PipelineFeatureMask::DEBUG_OVERLAY,
+            backend: FunRendererBackend::Dx12,
+        });
+        let resolution = cache.resolve_pipeline_or_debug_material(
+            key,
+            fallback,
+            MissingPipelineVariantReason::NotPreparedDuringWarmup,
+        );
+
+        assert_eq!(resolution.pipeline, fallback);
+        assert!(resolution.used_debug_material);
+        assert_eq!(
+            resolution
+                .failure
+                .expect("debug fallback should report the missing variant")
+                .requested_pipeline,
+            "test.missing.variant"
+        );
+        assert_eq!(cache.telemetry.missing_variant_fallbacks, 1);
+        assert_eq!(cache.telemetry.debug_material_draws, 1);
+    }
+
+    #[test]
+    fn pass12_warmup_manifest_covers_required_render_compute_passes() {
+        let registry = PipelineRegistry::default();
+        let manifest = PipelineWarmupManifest::pass12_static();
+        let report = manifest.validate_against_registry(&registry);
+
+        assert!(report.passes());
+        assert_eq!(report.entry_count, PipelineWarmupPassKind::ALL.len());
+        for pass_kind in PipelineWarmupPassKind::ALL {
+            assert!(
+                manifest.entries.iter().any(|entry| {
+                    entry.pass_kind == pass_kind && entry.required_before_measured_frames
+                }),
+                "missing pass 12 warmup category {}",
+                pass_kind.as_str()
+            );
+        }
+        assert!(manifest.entries.iter().any(|entry| {
+            registry
+                .find_pipeline_by_label(entry.pipeline_static_label)
+                .is_some_and(|descriptor| descriptor.kind == PipelineKind::Render)
+        }));
+        assert!(manifest.entries.iter().any(|entry| {
+            registry
+                .find_pipeline_by_label(entry.pipeline_static_label)
+                .is_some_and(|descriptor| descriptor.kind == PipelineKind::Compute)
+        }));
+    }
+
+    fn test_render_entries() -> ShaderEntrySet {
+        ShaderEntrySet::render(
+            ShaderEntry {
+                shader_hash: 1,
+                module_label: "test.vertex.module",
+                entry_point: "vs_main",
+            },
+            ShaderEntry {
+                shader_hash: 2,
+                module_label: "test.fragment.module",
+                entry_point: "fs_main",
+            },
+        )
+    }
+
+    fn render_pipeline_desc(
+        stable_name: &'static str,
+        sample_count: u8,
+        depth_format: TextureFormat,
+    ) -> RenderPipelineDesc {
+        RenderPipelineDesc {
+            stable_name,
+            color_target_count: 1,
+            color_formats: [
+                TextureFormat::Rgba16Float,
+                TextureFormat::Undefined,
+                TextureFormat::Undefined,
+                TextureFormat::Undefined,
+            ],
+            depth_format,
+            sample_count,
+            ..RenderPipelineDesc::default()
+        }
+    }
+
+    fn compute_pipeline_desc(stable_name: &'static str) -> ComputePipelineDesc {
+        ComputePipelineDesc {
+            id: crate::ir::IrComputePipelineId::new(1),
+            schema_version: crate::ir::PIPELINE_IR_SCHEMA_VERSION,
+            stable_name,
+            layout: crate::ir::IrPipelineLayoutId::new(1),
+            compute_shader: crate::ir::IrShaderModuleId::new(1),
+            requires_work_graphs: false,
+        }
     }
 }

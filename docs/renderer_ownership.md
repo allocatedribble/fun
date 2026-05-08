@@ -685,6 +685,28 @@ explicit `RootConstantFallbackCost`. Direct DX12, Vulkan, and Metal mappings are
 recorded beside the same binding model rather than hidden in gameplay or
 material systems.
 
+Pass 12 adds the renderer-owned pipeline/PSO abstraction. `fun_renderer::pipeline`
+keeps `PipelineFamily`, `PipelineVariantKey`, `RenderPipelineDesc`,
+`ComputePipelineDesc`, and `PipelineLayoutDesc` as the high-level IR surface and
+adds `ShaderEntrySet`, `RenderTargetState`, `DepthState`, `BlendState`,
+`RasterState`, `VertexLayout`, `PipelineCacheKey`, and `PreparedPipelineId`.
+The cache key includes shader hashes, reflection signature, bind layout hash,
+render target/depth/MSAA state, blend/depth/raster state, topology, quality
+tier, feature mask, and backend target.
+
+`PipelineCache` permits shader module, pipeline layout, render pipeline, and
+compute pipeline creation only during warmup or asset load. Measured frames can
+reuse prepared handles but cannot create missing variants; missing prepared
+variants resolve to a named debug-material fallback instead of rendering black.
+`PipelineWarmupManifest::PASS12` covers depth, opaque, alpha test,
+transparent, shadow, sky, UI, post, debug views, and compute before measured
+frames.
+
+The wgpu bridge consumes that model through `WgpuPipelineBridgeCache`, which
+fingerprints shader modules/layouts and maps render/compute descriptors into
+renderer-owned PSO keys. Live wgpu PSO realization is still a future bridge
+step, but pipeline churn policy and prepared IDs are now owned above wgpu.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output
