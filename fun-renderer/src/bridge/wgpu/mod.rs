@@ -288,6 +288,11 @@ mod tests {
             health.command_encoder_availability,
             crate::backend::NativeCommandEncoderAvailability::BridgeDoesNotExpose
         );
+        assert_eq!(
+            health.core_bridge_status.backend_truth.status,
+            crate::backend::WgpuBackendTruthStatus::MatchesRequestedBackend
+        );
+        assert!(!health.core_compatibility.private_internals_used);
         assert_eq!(health.pipeline_cache_status.cached_samplers, 1);
     }
 }

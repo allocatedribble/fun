@@ -11,6 +11,7 @@ use crate::{
 
 use super::{
     WgpuNativeBackend,
+    core::{WgpuCoreBridgeStatus, WgpuCoreCompatibilityReport, core_bridge_status},
     device::{WgpuAdapterInfo, WgpuFeatureSummary, WgpuLimitSummary},
 };
 
@@ -257,6 +258,8 @@ pub struct WgpuBridgeHealthReport<'a> {
     pub actual_native_backend: NativeBackend,
     pub adapter_info: WgpuAdapterInfo<'a>,
     pub validation_status: WgpuCoreValidationStatus,
+    pub core_bridge_status: WgpuCoreBridgeStatus,
+    pub core_compatibility: WgpuCoreCompatibilityReport,
     pub limits: WgpuLimitSummary,
     pub features: WgpuFeatureSummary,
     pub hal_access: WgpuHalNativeHandleSupport,
@@ -298,6 +301,8 @@ impl<'a> WgpuBridgeHealthReport<'a> {
             actual_native_backend: report.actual_native_backend,
             adapter_info,
             validation_status: report.wgpu_core_validation,
+            core_bridge_status: core_bridge_status(report),
+            core_compatibility: WgpuCoreCompatibilityReport::PUBLIC_WGPU_API_ONLY,
             limits,
             features,
             hal_access: report.wgpu_hal_native_handle_support,

@@ -582,9 +582,21 @@ through a backend trait object.
 
 The bridge also owns health truth through `WgpuBridgeHealthReport`: selected
 wgpu backend, actual native backend, adapter summary, validation status,
-features/limits summary, HAL access, native command-encoder availability, Naga
-translation path, and pipeline-cache status. This is bridge health only; ECS
-components and high-level renderer IR still do not name wgpu handles.
+wgpu-core bridge status/compatibility, features/limits summary, HAL access,
+native command-encoder availability, Naga translation path, and pipeline-cache
+status. This is bridge health only; ECS components and high-level renderer IR
+still do not name wgpu handles.
+
+Pass 7 makes `fun_renderer::bridge::wgpu::core` the only wgpu-core boundary.
+`WgpuCoreBridge<B>` captures actual adapter backend truth, redacted adapter
+identity, adapter/device feature and limit state, validation/device-lost hook
+availability, redacted validation and device-lost event summaries, internal
+counter summaries, allocator byte/count summaries, and the wgpu stack upgrade
+compatibility facts. It uses wgpu's public wgpu-core-backed APIs today and does
+not reach into private `wgpu_core::Global`, hub, registry, identity-manager, or
+resource-tracker internals. Any future private core access must stay in that
+module, be feature-gated, update `WgpuCoreCompatibilityReport`, and follow the
+root `docs/renderer/v4_wgpu_upgrade_contract.md` checklist.
 
 ## Ownership Rules
 
