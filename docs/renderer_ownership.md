@@ -561,6 +561,31 @@ unwritten reads, unconsumed writes, and unsupported backend features. Explicit
 shader, pipeline, material binding, and graph schema versions make wgpu/Naga or
 direct-backend changes visible instead of silent.
 
+Pass 6 adds the deliberate `fun_renderer::bridge::wgpu` module. It is feature
+gated behind `wgpu_bridge`, enabled for default production renderer builds, and
+kept out of `--no-default-features` so the high-level backend and IR contracts
+remain buildable without a wgpu dependency. The module is split into `device`,
+`surface`, `resource`, `pipeline`, `binding`, `command`, `diagnostics`, `hal`,
+`core`, and `naga` submodules.
+
+The bridge owns direct `wgpu` descriptor translation: resource descriptors map
+to wgpu buffer/texture/sampler descriptors, binding layouts map to wgpu bind
+group layout entries, shader/pipeline helpers build wgpu shader and pipeline
+descriptors once real handles are supplied, and graph pass descriptors compile
+to render/compute/copy pass descriptor records. `WgpuDescriptorCache` keys
+translated descriptors by stable IR fingerprints and reports a named
+`RuntimeCreationAfterWarmup` failure when measured builds try to create or
+recreate cached bridge objects at runtime. `WgpuPassExecutionArrays` compacts
+compiled graph plans into dense render, compute, and copy batches so future
+encoder recording can operate per pass, not per entity or per draw dispatch
+through a backend trait object.
+
+The bridge also owns health truth through `WgpuBridgeHealthReport`: selected
+wgpu backend, actual native backend, adapter summary, validation status,
+features/limits summary, HAL access, native command-encoder availability, Naga
+translation path, and pipeline-cache status. This is bridge health only; ECS
+components and high-level renderer IR still do not name wgpu handles.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

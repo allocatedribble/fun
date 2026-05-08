@@ -194,14 +194,15 @@ impl<I: RenderGenerationalId> TypedRenderIdAllocator<I> {
             .iter()
             .position(|(candidate, _)| *candidate == stable_id)?;
         let (_, id) = self.stable_to_id.swap_remove(index);
-        if let Some(slot) = self.slots.get_mut(id.slot() as usize) {
-            if slot.live && slot.generation == id.generation() {
-                slot.live = false;
-                slot.stable_id = RenderStableId::INVALID;
-                slot.generation = slot.generation.saturating_add(1).max(1);
-                self.free_slots.push(id.slot());
-                self.removed_count = self.removed_count.saturating_add(1);
-            }
+        if let Some(slot) = self.slots.get_mut(id.slot() as usize)
+            && slot.live
+            && slot.generation == id.generation()
+        {
+            slot.live = false;
+            slot.stable_id = RenderStableId::INVALID;
+            slot.generation = slot.generation.saturating_add(1).max(1);
+            self.free_slots.push(id.slot());
+            self.removed_count = self.removed_count.saturating_add(1);
         }
         Some(id)
     }

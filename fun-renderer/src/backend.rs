@@ -781,12 +781,22 @@ pub trait BackendNativeInterop: RendererBackend {
     }
 }
 
+#[cfg(feature = "wgpu_bridge")]
+pub use crate::bridge::wgpu::{
+    Dx12Native as Dx12HalBridge, MetalNative as MetalHalBridge, VulkanNative as VulkanHalBridge,
+    WgpuBridge,
+};
+
+#[cfg(not(feature = "wgpu_bridge"))]
 pub struct WgpuBridge<HalBridge> {
     _hal_bridge: PhantomData<fn() -> HalBridge>,
 }
 
+#[cfg(not(feature = "wgpu_bridge"))]
 pub struct Dx12HalBridge;
+#[cfg(not(feature = "wgpu_bridge"))]
 pub struct VulkanHalBridge;
+#[cfg(not(feature = "wgpu_bridge"))]
 pub struct MetalHalBridge;
 
 pub type WgpuDx12Backend = WgpuBridge<Dx12HalBridge>;

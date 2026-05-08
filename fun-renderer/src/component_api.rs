@@ -424,7 +424,7 @@ impl Default for CameraProjection {
     fn default() -> Self {
         Self {
             mode: CameraProjectionMode::Perspective,
-            vertical_fov_radians: 1.047_197_6,
+            vertical_fov_radians: core::f32::consts::FRAC_PI_3,
             orthographic_height: 10.0,
             near: 0.05,
             far: 50_000.0,

@@ -3228,6 +3228,7 @@ dependencies = [
  "fun_ai_core",
  "serde",
  "serde_json",
+ "wgpu",
 ]
 
 [[package]]

@@ -74,8 +74,9 @@ ir_id!(IrPipelineFamilyId);
 ir_id!(IrGraphPassId);
 ir_id!(IrGraphResourceId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IrResourceKind {
+    #[default]
     Buffer,
     Texture,
     Sampler,
@@ -160,12 +161,6 @@ impl IrResourceRef {
     #[must_use]
     pub const fn is_valid(self) -> bool {
         self.index != u32::MAX
-    }
-}
-
-impl Default for IrResourceKind {
-    fn default() -> Self {
-        Self::Buffer
     }
 }
 
@@ -1062,7 +1057,6 @@ impl RendererIrCatalog {
         self.graph_passes.iter().find(|desc| desc.id == pass)
     }
 
-    #[must_use]
     pub fn compile_graph(
         &self,
         backend: BackendCapabilityReport,
@@ -1509,14 +1503,14 @@ fn validate_graph(
                 );
             }
         }
-        if let Some(command) = pass.compute_command {
-            if !catalog.has_compute_pipeline(command.pipeline) {
-                report.push(
-                    IrValidationCode::MissingResource,
-                    pass.stable_name,
-                    "compute pass command references a missing compute pipeline",
-                );
-            }
+        if let Some(command) = pass.compute_command
+            && !catalog.has_compute_pipeline(command.pipeline)
+        {
+            report.push(
+                IrValidationCode::MissingResource,
+                pass.stable_name,
+                "compute pass command references a missing compute pipeline",
+            );
         }
     }
 

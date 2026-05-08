@@ -10,7 +10,7 @@ name = "fun_renderer"
 workspace = true
 
 [features]
-default = ["bevy_ecs", "fun_renderer_core"]
+default = ["bevy_ecs", "fun_renderer_core", "wgpu_bridge"]
 bevy_ecs = ["dep:bevy_app", "dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
 cef_gpu_only = []
 dlss = []
@@ -31,6 +31,7 @@ upscaling = []
 virtual_geometry = []
 virtual_shadows = ["fun_lux/virtual_shadows"]
 vulkan_backend = []
+wgpu_bridge = ["dep:wgpu"]
 
 # Compatibility aliases for Pass 1 callers. New code should use the canonical
 # ownership-oriented names above.
@@ -60,3 +61,10 @@ fun_scene.workspace = true
 fun_telemetry_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+wgpu = { version = "29.0.3", default-features = false, features = [
+    "wgsl",
+    "dx12",
+    "vulkan",
+    "metal",
+    "naga-ir",
+], optional = true }

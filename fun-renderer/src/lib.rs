@@ -3,6 +3,8 @@
 pub mod api;
 pub mod backend;
 pub mod benchmark;
+#[cfg(feature = "wgpu_bridge")]
+pub mod bridge;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
 pub mod default_flip;
