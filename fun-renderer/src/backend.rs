@@ -493,15 +493,40 @@ pub struct BackendNativeInteropStatus {
     pub native_device: WgpuHalNativeHandleSupport,
     pub native_queue: WgpuHalNativeHandleSupport,
     pub native_command_encoder: NativeCommandEncoderAvailability,
+    pub native_device_available: bool,
+    pub native_queue_available: bool,
+    pub native_command_encoder_available: bool,
+    pub native_command_list_available_dx12: bool,
+    pub native_texture_handle_available: bool,
+    pub native_external_texture_import_available: bool,
+    pub native_fence_interop_available: bool,
+    pub native_debug_marker_available: bool,
 }
 
 impl BackendNativeInteropStatus {
     #[must_use]
     pub const fn from_report(report: BackendCapabilityReport) -> Self {
+        let native_handle_available = matches!(
+            report.wgpu_hal_native_handle_support,
+            WgpuHalNativeHandleSupport::Available | WgpuHalNativeHandleSupport::Partial
+        );
+        let native_command_encoder_available = matches!(
+            report.command_encoder_availability,
+            NativeCommandEncoderAvailability::Available
+        );
         Self {
             native_device: report.wgpu_hal_native_handle_support,
             native_queue: report.wgpu_hal_native_handle_support,
             native_command_encoder: report.command_encoder_availability,
+            native_device_available: native_handle_available,
+            native_queue_available: native_handle_available,
+            native_command_encoder_available,
+            native_command_list_available_dx12: native_command_encoder_available
+                && matches!(report.actual_native_backend, NativeBackend::Dx12),
+            native_texture_handle_available: native_handle_available,
+            native_external_texture_import_available: false,
+            native_fence_interop_available: false,
+            native_debug_marker_available: native_command_encoder_available,
         }
     }
 }
@@ -1174,6 +1199,12 @@ mod tests {
             report.command_encoder_availability,
             NativeCommandEncoderAvailability::BridgeDoesNotExpose
         );
+        let native_interop = BackendNativeInteropStatus::from_report(report);
+        assert!(native_interop.native_device_available);
+        assert!(native_interop.native_queue_available);
+        assert!(native_interop.native_texture_handle_available);
+        assert!(!native_interop.native_command_encoder_available);
+        assert!(!native_interop.native_command_list_available_dx12);
         assert!(!native_encoder.supported);
         assert_eq!(
             native_encoder.missing_reason,

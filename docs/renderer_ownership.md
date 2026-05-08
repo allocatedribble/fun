@@ -598,6 +598,29 @@ resource-tracker internals. Any future private core access must stay in that
 module, be feature-gated, update `WgpuCoreCompatibilityReport`, and follow the
 root `docs/renderer/v4_wgpu_upgrade_contract.md` checklist.
 
+Pass 8 makes `fun_renderer::bridge::wgpu::hal` the native interop boundary.
+`NativeInteropCapabilities` reports whether native device, queue, command
+encoder, DX12 command list, texture handle, external texture import, fence
+interop, and native debug marker access are actually available.
+`BackendNativeInteropStatus` and `WgpuBridgeHealthReport` carry those bits as
+diagnostic truth; public ECS components, extraction tables, and renderer IR
+still do not carry native handles.
+
+Native handles are exposed only through scoped callbacks implemented by
+`HalInteropBridge` for `Dx12HalInterop`, `VulkanHalInterop`, and
+`MetalHalInterop`. The sanctioned entry points are
+`with_native_command_encoder` and `with_dx12_command_list`; both require an
+active bridge recording scope and return structured `HalInteropFailure` values
+instead of falling back silently. The current wgpu DX12 bridge deliberately
+reports `NativeCommandListUnavailable` because wgpu-hal 29 does not expose a
+sanctioned `ID3D12GraphicsCommandList` path.
+
+Native interop is policy-gated for CEF D3D11On12 copies,
+DLSS/Streamline/NGX, vendor SDK hooks, PIX/native markers, and external texture
+import/export. It is rejected for arbitrary gameplay systems, frame-graph state
+bypass, hidden command submission, and graph-resource writes that were not
+declared to the graph.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

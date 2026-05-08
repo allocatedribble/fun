@@ -13,6 +13,7 @@ use super::{
     WgpuNativeBackend,
     core::{WgpuCoreBridgeStatus, WgpuCoreCompatibilityReport, core_bridge_status},
     device::{WgpuAdapterInfo, WgpuFeatureSummary, WgpuLimitSummary},
+    hal::NativeInteropCapabilities,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -264,6 +265,7 @@ pub struct WgpuBridgeHealthReport<'a> {
     pub features: WgpuFeatureSummary,
     pub hal_access: WgpuHalNativeHandleSupport,
     pub command_encoder_availability: NativeCommandEncoderAvailability,
+    pub native_interop_capabilities: NativeInteropCapabilities,
     pub shader_translation_path: NagaShaderTranslationStatus,
     pub pipeline_cache_status: WgpuPipelineCacheStatus,
 }
@@ -307,6 +309,7 @@ impl<'a> WgpuBridgeHealthReport<'a> {
             features,
             hal_access: report.wgpu_hal_native_handle_support,
             command_encoder_availability: report.command_encoder_availability,
+            native_interop_capabilities: NativeInteropCapabilities::from_report(report),
             shader_translation_path: report.naga_shader_translation,
             pipeline_cache_status,
         }

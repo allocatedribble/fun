@@ -288,6 +288,12 @@ mod tests {
             health.command_encoder_availability,
             crate::backend::NativeCommandEncoderAvailability::BridgeDoesNotExpose
         );
+        assert!(health.native_interop_capabilities.native_device_available);
+        assert!(
+            !health
+                .native_interop_capabilities
+                .native_command_list_available_dx12
+        );
         assert_eq!(
             health.core_bridge_status.backend_truth.status,
             crate::backend::WgpuBackendTruthStatus::MatchesRequestedBackend
