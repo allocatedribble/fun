@@ -621,6 +621,23 @@ import/export. It is rejected for arbitrary gameplay systems, frame-graph state
 bypass, hidden command submission, and graph-resource writes that were not
 declared to the graph.
 
+Pass 9 adds the renderer-owned shader schema in `fun_renderer::shader`.
+`RendererShaderSchema` is independent of WGSL, HLSL, SPIR-V, MSL, Naga IR, and
+native compiler handles: it records stage, entry point, pipeline layout, vertex
+inputs, fragment outputs, compute workgroup shape, feature defines, material
+schema, source strategy, and debug name as compact renderer data. Reflection
+uses fixed-capacity records for binding slots, entry points, root constants,
+vertex attributes, render target outputs, depth usage, storage/UAV usage, and
+workgroup sizes.
+
+`fun_renderer::bridge::wgpu::naga::NagaShaderBridge` owns WGSL parsing,
+validation, reflection, redacted diagnostics, and shader translation cache
+decisions below the wgpu bridge. HLSL/DXC for DX12, SPIR-V for Vulkan, Naga IR
+passthrough, and MSL for Metal are represented as source strategies behind the
+same renderer schema; high-level renderer code does not branch on compiler
+source format. Warmup may translate and cache shader metadata, but measured
+runtime frames reject cold translation and can only reuse warmed cache entries.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output

@@ -31,7 +31,7 @@ upscaling = []
 virtual_geometry = []
 virtual_shadows = ["fun_lux/virtual_shadows"]
 vulkan_backend = []
-wgpu_bridge = ["dep:wgpu"]
+wgpu_bridge = ["dep:naga", "dep:wgpu"]
 
 # Compatibility aliases for Pass 1 callers. New code should use the canonical
 # ownership-oriented names above.
@@ -61,6 +61,9 @@ fun_scene.workspace = true
 fun_telemetry_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+naga = { version = "29.0.3", default-features = false, features = [
+    "wgsl-in",
+], optional = true }
 wgpu = { version = "29.0.3", default-features = false, features = [
     "wgsl",
     "dx12",

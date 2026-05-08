@@ -3226,6 +3226,7 @@ dependencies = [
  "fun-scene",
  "fun-telemetry-core",
  "fun_ai_core",
+ "naga",
  "serde",
  "serde_json",
  "wgpu",

@@ -30,6 +30,7 @@ pub mod resource;
 pub mod scene;
 pub mod scheduler;
 pub mod settings;
+pub mod shader;
 pub mod ui;
 pub mod upscaling;
 pub mod virtual_geometry;
