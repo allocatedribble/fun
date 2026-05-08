@@ -179,6 +179,16 @@ caches, texture residency pools, CEF shared textures, swapchain resources,
 vendor SDK resources, diagnostics readback, screenshots, and benchmark
 captures.
 
+Pass 10 promotes that policy into `RendererResourceRegistry`, which owns
+generation-checked `RendererResourceId` records above the bridge. Public
+renderer resource descriptors are `BufferDesc`, `TextureDesc`, `SamplerDesc`,
+`ExternalTextureDesc`, `TransientTextureDesc`, `ReadbackBufferDesc`, and
+`UploadBufferDesc`. Registry records track descriptor, lifetime class, usage
+flags, current graph state, bridge realization handle, memory size, residency,
+debug name, last-used frame, and retirement fence. The lifetime classes are
+`Persistent`, `FrameLocal`, `GraphTransient`, `Imported`, `ExternalProducer`,
+`Readback`, `Upload`, and `DebugOnly`.
+
 `RENDERER_RESOURCE_OWNERSHIP_POLICY` is the migration rule for this boundary.
 `fun-renderer` owns allocator policy, `fun_render` may keep compatibility shims,
 major renderer passes may not allocate hidden transient resources outside the
@@ -187,7 +197,10 @@ through `FunUploadArena` until a semantic owner and render-schedule insertion
 point are known. `ResourceFrameAllocationDiagnostics` is the canonical per-frame
 payload for upload bytes/counts, transient bytes, persistent bytes,
 imported-resource count, readback bytes, top allocation sites, and high-water
-marks.
+marks. `ResourceMemoryTelemetry` is the Pass 10 in-memory counter surface for
+persistent, transient, upload, readback, imported/external, and debug bytes,
+high-water marks, created/destroyed resources, fence retirements, live
+resources, and bridge realization count.
 
 `fun-lux` is also ECS-driven. Scene-authored `LuxLight` components become
 compact GPU `LuxLight` records, `LuxEmissive` components become emissive
@@ -637,6 +650,14 @@ passthrough, and MSL for Metal are represented as source strategies behind the
 same renderer schema; high-level renderer code does not branch on compiler
 source format. Warmup may translate and cache shader metadata, but measured
 runtime frames reject cold translation and can only reuse warmed cache entries.
+
+Pass 10 keeps wgpu realization below the bridge. High-level renderer systems
+store only `RendererResourceId` and backend-neutral descriptor records. The wgpu
+bridge maps those IDs through `WgpuBridgeResourceRealizationMap` to bridge-owned
+object slots and handle kinds; actual `wgpu::Buffer`, `wgpu::Texture`, and
+`wgpu::Sampler` storage remains private to the bridge implementation. Direct
+DX12, Vulkan, and Metal backends can replace that map with native object tables
+without changing renderer resource identity.
 
 ## Ownership Rules
 
