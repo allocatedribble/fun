@@ -3,6 +3,7 @@
 pub mod api;
 pub mod backend;
 pub mod benchmark;
+pub mod binding;
 #[cfg(feature = "wgpu_bridge")]
 pub mod bridge;
 #[cfg(feature = "bevy_ecs")]

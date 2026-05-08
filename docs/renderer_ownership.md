@@ -659,6 +659,32 @@ object slots and handle kinds; actual `wgpu::Buffer`, `wgpu::Texture`, and
 DX12, Vulkan, and Metal backends can replace that map with native object tables
 without changing renderer resource identity.
 
+Pass 11 adds `fun_renderer::binding`, the stable binding and descriptor model
+above wgpu bind groups, DX12 descriptor heaps, Vulkan descriptor sets, and Metal
+argument buffers. Public binding records are `BindLayout`, `BindTable`,
+`BindlessTable`, `ViewBindings`, `SceneBindings`, `MaterialBindings`,
+`PassBindings`, and `RootConstants`. They use compact IR IDs,
+generation-checked `RendererResourceId` records, stable `MaterialId` values,
+stable texture IDs, layout/table/resource hashes, and prepared binding handles;
+they do not expose backend descriptor objects to ECS or renderer IR consumers.
+
+`BindingTranslationCache` is the Pass 11 warmup-only creation gate. Measured
+frames can reuse unchanged layouts/tables or dirty-update an existing table
+when bound renderer resource generations change, but new layout/table/bindless
+creation after warmup returns `RuntimeCreationAfterWarmup`. The production
+`BindingChurnPolicy` forbids per-entity descriptor allocation and per-draw bind
+group creation, and its telemetry records descriptor churn counters as compact
+in-memory state. If those counters become retained artifacts, the canonical
+format remains a `fun-data` compressed protobuf bundle.
+
+The wgpu bridge consumes the same high-level binding records through
+`WgpuBindingBridgeCache`: layouts plan `wgpu::BindGroupLayout`, tables plan
+`wgpu::BindGroup`, bindless tables require binding-array capability, and root
+constants use push constants when supported or a uniform fallback with an
+explicit `RootConstantFallbackCost`. Direct DX12, Vulkan, and Metal mappings are
+recorded beside the same binding model rather than hidden in gameplay or
+material systems.
+
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output
