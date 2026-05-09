@@ -12,7 +12,7 @@ use crate::{
         BackendBridgeType, BackendCapabilityReport, BackendDiagnostics, BackendDispatchMode,
         BackendNativeInterop, BackendNativeInteropStatus, BackendResource, BackendShader,
         BackendTiming, DefaultProductionBackendSelection, DynamicRendererBackend, NativeBackend,
-        RendererBackend, StaticBackendSelection, WgpuDx12Bridge, WgpuMetalBridge, WgpuVulkanBridge,
+        RendererBackend, StaticBackendSelection,
     },
     extraction::{
         begin_render_world_extraction_frame, extract_renderer_asset_events,
@@ -22,6 +22,16 @@ use crate::{
         install_render_world_extraction_resources,
     },
     settings::{GraphicsBackendSetting, RendererQualityTier},
+};
+
+#[cfg(feature = "wgpu_bridge")]
+use crate::{
+    backend::{WgpuDx12Bridge, WgpuMetalBridge, WgpuVulkanBridge},
+    bridge::wgpu::{
+        WgpuBridgeRuntimeFailureReason, WgpuRendererBackend, build_health_artifact_for_state,
+        build_health_artifact_for_unknown_backend, initialize_wgpu_bridge_runtime,
+        snapshot_core_bridge, snapshot_hal_status,
+    },
 };
 
 pub const FUN_RENDERER_PLUGIN_SCHEMA_VERSION: u16 = 1;
@@ -437,6 +447,12 @@ pub enum RendererFailureReason {
     BackendResourceInstallFailed,
     DynamicBackendUsedForProductionEvidence,
     CapabilityMismatch,
+    BridgeRuntimeAdapterSelectionFailed,
+    BridgeRuntimeDeviceCreationFailed,
+    BridgeRuntimeBackendTruthMismatch,
+    BridgeRuntimeInstanceCreationFailed,
+    BridgeRuntimeSurfaceCreationFailed,
+    BridgeRuntimeSurfaceConfigurationFailed,
 }
 
 impl RendererFailureReason {
@@ -448,6 +464,14 @@ impl RendererFailureReason {
                 "dynamic_backend_used_for_production_evidence"
             }
             Self::CapabilityMismatch => "capability_mismatch",
+            Self::BridgeRuntimeAdapterSelectionFailed => "bridge_runtime_adapter_selection_failed",
+            Self::BridgeRuntimeDeviceCreationFailed => "bridge_runtime_device_creation_failed",
+            Self::BridgeRuntimeBackendTruthMismatch => "bridge_runtime_backend_truth_mismatch",
+            Self::BridgeRuntimeInstanceCreationFailed => "bridge_runtime_instance_creation_failed",
+            Self::BridgeRuntimeSurfaceCreationFailed => "bridge_runtime_surface_creation_failed",
+            Self::BridgeRuntimeSurfaceConfigurationFailed => {
+                "bridge_runtime_surface_configuration_failed"
+            }
         }
     }
 }
@@ -480,6 +504,25 @@ impl<B: RendererBackend> Default for FunRendererPlugin<B> {
     }
 }
 
+#[cfg(feature = "wgpu_bridge")]
+impl<B> Plugin for FunRendererPlugin<B>
+where
+    B: WgpuRendererBackend
+        + BackendDiagnostics
+        + BackendNativeInterop
+        + BackendResource
+        + BackendShader
+        + BackendTiming,
+{
+    fn build(&self, app: &mut App) {
+        install_public_renderer_resources::<B>(app);
+        app.add_plugins(FunWgpuBridgePlugin::<B>::default());
+        install_renderer_phase_systems::<B>(app);
+        install_wgpu_bridge_runtime_systems::<B>(app);
+    }
+}
+
+#[cfg(not(feature = "wgpu_bridge"))]
 impl<B> Plugin for FunRendererPlugin<B>
 where
     B: RendererBackend
@@ -491,7 +534,6 @@ where
 {
     fn build(&self, app: &mut App) {
         install_public_renderer_resources::<B>(app);
-        app.add_plugins(FunWgpuBridgePlugin::<B>::default());
         install_renderer_phase_systems::<B>(app);
     }
 }
@@ -540,11 +582,13 @@ impl Plugin for DynamicFunRendererPlugin {
     }
 }
 
-pub struct FunWgpuBridgePlugin<B: RendererBackend> {
+#[cfg(feature = "wgpu_bridge")]
+pub struct FunWgpuBridgePlugin<B: WgpuRendererBackend> {
     _backend: PhantomData<fn() -> B>,
 }
 
-impl<B: RendererBackend> FunWgpuBridgePlugin<B> {
+#[cfg(feature = "wgpu_bridge")]
+impl<B: WgpuRendererBackend> FunWgpuBridgePlugin<B> {
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -553,30 +597,46 @@ impl<B: RendererBackend> FunWgpuBridgePlugin<B> {
     }
 }
 
-impl<B: RendererBackend> Default for FunWgpuBridgePlugin<B> {
+#[cfg(feature = "wgpu_bridge")]
+impl<B: WgpuRendererBackend> Default for FunWgpuBridgePlugin<B> {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "wgpu_bridge")]
 impl<B> Plugin for FunWgpuBridgePlugin<B>
 where
-    B: RendererBackend + BackendDiagnostics + BackendNativeInterop + BackendShader + BackendTiming,
+    B: WgpuRendererBackend
+        + BackendDiagnostics
+        + BackendNativeInterop
+        + BackendShader
+        + BackendTiming,
 {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WgpuBridgeDevice<B>>()
-            .init_resource::<WgpuBridgeQueue<B>>()
-            .init_resource::<WgpuBridgeSurface<B>>()
+        app.init_resource::<WgpuBridgeDevice<B::Native>>()
+            .init_resource::<WgpuBridgeQueue<B::Native>>()
+            .init_resource::<WgpuBridgeAdapter<B::Native>>()
+            .init_resource::<WgpuBridgeSurface<B::Native>>()
             .init_resource::<WgpuCoreState>()
             .init_resource::<WgpuHalAccess>()
             .init_resource::<NagaShaderBridge>()
-            .init_resource::<BackendCommandPools<B>>()
-            .init_resource::<BackendPipelineCache<B>>();
+            .init_resource::<BackendCommandPools<B::Native>>()
+            .init_resource::<WgpuPipelineBridgeCacheResource<B::Native>>()
+            .init_resource::<WgpuBindingBridgeCacheResource<B::Native>>()
+            .init_resource::<WgpuDescriptorCacheResource<B::Native>>()
+            .init_resource::<WgpuBridgeResourceRealizationMapResource<B::Native>>()
+            .init_resource::<BridgeRuntimeOptions<B::Native>>()
+            .init_resource::<WgpuBridgeHealthArtifactResource>()
+            .init_resource::<WgpuBridgeRuntimeInitialized>();
     }
 }
 
+#[cfg(feature = "wgpu_bridge")]
 pub type FunDx12BridgePlugin = FunWgpuBridgePlugin<WgpuDx12Bridge>;
+#[cfg(feature = "wgpu_bridge")]
 pub type FunVulkanBridgePlugin = FunWgpuBridgePlugin<WgpuVulkanBridge>;
+#[cfg(feature = "wgpu_bridge")]
 pub type FunMetalBridgePlugin = FunWgpuBridgePlugin<WgpuMetalBridge>;
 
 pub fn install_public_renderer_resources<B>(app: &mut App)
@@ -803,89 +863,306 @@ const fn graphics_backend_for_native(native_backend: NativeBackend) -> GraphicsB
     }
 }
 
+#[cfg(feature = "wgpu_bridge")]
+const fn renderer_failure_reason_for_runtime(
+    reason: WgpuBridgeRuntimeFailureReason,
+) -> RendererFailureReason {
+    match reason {
+        WgpuBridgeRuntimeFailureReason::AdapterSelectionFailed => {
+            RendererFailureReason::BridgeRuntimeAdapterSelectionFailed
+        }
+        WgpuBridgeRuntimeFailureReason::DeviceCreationFailed => {
+            RendererFailureReason::BridgeRuntimeDeviceCreationFailed
+        }
+        WgpuBridgeRuntimeFailureReason::BackendTruthMismatch => {
+            RendererFailureReason::BridgeRuntimeBackendTruthMismatch
+        }
+        WgpuBridgeRuntimeFailureReason::InstanceCreationFailed => {
+            RendererFailureReason::BridgeRuntimeInstanceCreationFailed
+        }
+        WgpuBridgeRuntimeFailureReason::SurfaceCreationFailed => {
+            RendererFailureReason::BridgeRuntimeSurfaceCreationFailed
+        }
+        WgpuBridgeRuntimeFailureReason::SurfaceConfigurationFailed => {
+            RendererFailureReason::BridgeRuntimeSurfaceConfigurationFailed
+        }
+    }
+}
+
+#[cfg(feature = "wgpu_bridge")]
+fn install_wgpu_bridge_runtime_systems<B>(app: &mut App)
+where
+    B: WgpuRendererBackend
+        + BackendDiagnostics
+        + BackendNativeInterop
+        + BackendShader
+        + BackendTiming,
+{
+    app.add_systems(
+        Update,
+        renderer_bridge_runtime_init::<B>
+            .in_set(RendererBackendInit)
+            .after(renderer_backend_init::<B>),
+    );
+}
+
+#[cfg(feature = "wgpu_bridge")]
+#[allow(clippy::too_many_arguments)]
+fn renderer_bridge_runtime_init<B>(
+    options: ResMut<BridgeRuntimeOptions<B::Native>>,
+    mut initialized: ResMut<WgpuBridgeRuntimeInitialized>,
+    mut device_resource: ResMut<WgpuBridgeDevice<B::Native>>,
+    mut queue_resource: ResMut<WgpuBridgeQueue<B::Native>>,
+    mut adapter_resource: ResMut<WgpuBridgeAdapter<B::Native>>,
+    mut command_pools: ResMut<BackendCommandPools<B::Native>>,
+    mut core_state: ResMut<WgpuCoreState>,
+    mut hal_access: ResMut<WgpuHalAccess>,
+    descriptor_cache: ResMut<WgpuDescriptorCacheResource<B::Native>>,
+    mut artifact: ResMut<WgpuBridgeHealthArtifactResource>,
+    mut bridge_state: ResMut<RendererBridgeState>,
+    mut failure_state: ResMut<RendererFailureState>,
+) where
+    B: WgpuRendererBackend,
+{
+    if initialized.attempted {
+        return;
+    }
+    initialized.attempted = true;
+
+    match initialize_wgpu_bridge_runtime::<B::Native>(&options.options) {
+        Ok(state) => {
+            adapter_resource.adapter = Some(::std::sync::Arc::clone(&state.adapter));
+            queue_resource.queue = Some(::std::sync::Arc::clone(&state.queue));
+            command_pools.device = Some(::std::sync::Arc::clone(&state.device));
+            core_state.snapshot = Some(snapshot_core_bridge::<B::Native>(&state));
+            hal_access.status = Some(snapshot_hal_status::<B::Native>());
+            artifact.artifact = Some(build_health_artifact_for_state::<B::Native>(
+                &state,
+                &descriptor_cache.cache,
+            ));
+            bridge_state.actual_native_backend = state.actual_native_backend;
+            device_resource.state = Some(state);
+            initialized.succeeded = true;
+        }
+        Err(failure) => {
+            failure_state.failed = true;
+            failure_state.reason = Some(renderer_failure_reason_for_runtime(failure.reason));
+            bridge_state.actual_native_backend = failure.actual_backend;
+            artifact.artifact = Some(build_health_artifact_for_unknown_backend::<B::Native>(
+                failure,
+                &descriptor_cache.cache,
+            ));
+            hal_access.status = Some(snapshot_hal_status::<B::Native>());
+            initialized.succeeded = false;
+        }
+    }
+}
+
 #[derive(Resource)]
 struct DynamicBackendToolingState {
     backend: DynamicRendererBackend,
     dispatch_mode: BackendDispatchMode,
 }
 
-#[derive(Resource)]
-struct WgpuBridgeDevice<B: RendererBackend> {
-    _backend: PhantomData<fn() -> B>,
-}
+#[cfg(feature = "wgpu_bridge")]
+#[allow(dead_code)]
+mod wgpu_runtime_resources {
+    use std::sync::Arc;
 
-impl<B: RendererBackend> Default for WgpuBridgeDevice<B> {
-    fn default() -> Self {
-        Self {
-            _backend: PhantomData,
+    use bevy_ecs::prelude::Resource;
+
+    use crate::bridge::wgpu::{
+        WgpuBindingBridgeCache, WgpuBridgeDeviceState, WgpuBridgeHealthArtifact,
+        WgpuBridgeResourceRealizationMap, WgpuBridgeRuntimeOptions, WgpuBridgeSurfaceState,
+        WgpuDescriptorCache, WgpuNativeBackend, WgpuPipelineBridgeCache,
+    };
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuBridgeDevice<B: WgpuNativeBackend> {
+        pub(crate) state: Option<WgpuBridgeDeviceState<B>>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuBridgeDevice<B> {
+        fn default() -> Self {
+            Self { state: None }
         }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuBridgeQueue<B: WgpuNativeBackend> {
+        pub(crate) queue: Option<Arc<::wgpu::Queue>>,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuBridgeQueue<B> {
+        fn default() -> Self {
+            Self {
+                queue: None,
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuBridgeAdapter<B: WgpuNativeBackend> {
+        pub(crate) adapter: Option<Arc<::wgpu::Adapter>>,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuBridgeAdapter<B> {
+        fn default() -> Self {
+            Self {
+                adapter: None,
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuBridgeSurface<B: WgpuNativeBackend> {
+        pub(crate) state: Option<WgpuBridgeSurfaceState>,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuBridgeSurface<B> {
+        fn default() -> Self {
+            Self {
+                state: None,
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Default, Resource)]
+    pub(crate) struct WgpuCoreState {
+        pub(crate) snapshot: Option<crate::bridge::wgpu::WgpuCoreBridgeSnapshot>,
+    }
+
+    #[derive(Default, Resource)]
+    pub(crate) struct WgpuHalAccess {
+        pub(crate) status: Option<crate::bridge::wgpu::WgpuHalBridgeStatus>,
+    }
+
+    #[derive(Default, Resource)]
+    pub(crate) struct NagaShaderBridge {
+        pub(crate) bridge: crate::bridge::wgpu::NagaShaderBridge,
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct BackendCommandPools<B: WgpuNativeBackend> {
+        pub(crate) device: Option<Arc<::wgpu::Device>>,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for BackendCommandPools<B> {
+        fn default() -> Self {
+            Self {
+                device: None,
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuPipelineBridgeCacheResource<B: WgpuNativeBackend> {
+        pub(crate) cache: WgpuPipelineBridgeCache,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuPipelineBridgeCacheResource<B> {
+        fn default() -> Self {
+            Self {
+                cache: WgpuPipelineBridgeCache::default(),
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuBindingBridgeCacheResource<B: WgpuNativeBackend> {
+        pub(crate) cache: WgpuBindingBridgeCache,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuBindingBridgeCacheResource<B> {
+        fn default() -> Self {
+            Self {
+                cache: WgpuBindingBridgeCache::default(),
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuDescriptorCacheResource<B: WgpuNativeBackend> {
+        pub(crate) cache: WgpuDescriptorCache,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuDescriptorCacheResource<B> {
+        fn default() -> Self {
+            Self {
+                cache: WgpuDescriptorCache::default(),
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct WgpuBridgeResourceRealizationMapResource<B: WgpuNativeBackend> {
+        pub(crate) map: WgpuBridgeResourceRealizationMap,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for WgpuBridgeResourceRealizationMapResource<B> {
+        fn default() -> Self {
+            Self {
+                map: WgpuBridgeResourceRealizationMap::new(),
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Resource)]
+    pub(crate) struct BridgeRuntimeOptions<B: WgpuNativeBackend> {
+        pub(crate) options: WgpuBridgeRuntimeOptions,
+        pub(crate) _backend: ::core::marker::PhantomData<fn() -> B>,
+    }
+
+    impl<B: WgpuNativeBackend> Default for BridgeRuntimeOptions<B> {
+        fn default() -> Self {
+            Self {
+                options: WgpuBridgeRuntimeOptions::production_default(),
+                _backend: ::core::marker::PhantomData,
+            }
+        }
+    }
+
+    #[derive(Default, Resource)]
+    pub(crate) struct WgpuBridgeHealthArtifactResource {
+        pub(crate) artifact: Option<WgpuBridgeHealthArtifact>,
+    }
+
+    #[derive(Default, Clone, Copy, PartialEq, Eq, Hash, Resource)]
+    pub(crate) struct WgpuBridgeRuntimeInitialized {
+        pub(crate) attempted: bool,
+        pub(crate) succeeded: bool,
     }
 }
 
-#[derive(Resource)]
-struct WgpuBridgeQueue<B: RendererBackend> {
-    _backend: PhantomData<fn() -> B>,
-}
-
-impl<B: RendererBackend> Default for WgpuBridgeQueue<B> {
-    fn default() -> Self {
-        Self {
-            _backend: PhantomData,
-        }
-    }
-}
-
-#[derive(Resource)]
-struct WgpuBridgeSurface<B: RendererBackend> {
-    _backend: PhantomData<fn() -> B>,
-}
-
-impl<B: RendererBackend> Default for WgpuBridgeSurface<B> {
-    fn default() -> Self {
-        Self {
-            _backend: PhantomData,
-        }
-    }
-}
-
-#[derive(Default, Resource)]
-struct WgpuCoreState;
-
-#[derive(Default, Resource)]
-struct WgpuHalAccess;
-
-#[derive(Default, Resource)]
-struct NagaShaderBridge;
-
-#[derive(Resource)]
-struct BackendCommandPools<B: RendererBackend> {
-    _backend: PhantomData<fn() -> B>,
-}
-
-impl<B: RendererBackend> Default for BackendCommandPools<B> {
-    fn default() -> Self {
-        Self {
-            _backend: PhantomData,
-        }
-    }
-}
-
-#[derive(Resource)]
-struct BackendPipelineCache<B: RendererBackend> {
-    _backend: PhantomData<fn() -> B>,
-}
-
-impl<B: RendererBackend> Default for BackendPipelineCache<B> {
-    fn default() -> Self {
-        Self {
-            _backend: PhantomData,
-        }
-    }
-}
+#[cfg(feature = "wgpu_bridge")]
+use wgpu_runtime_resources::{
+    BackendCommandPools, BridgeRuntimeOptions, NagaShaderBridge, WgpuBindingBridgeCacheResource,
+    WgpuBridgeAdapter, WgpuBridgeDevice, WgpuBridgeHealthArtifactResource, WgpuBridgeQueue,
+    WgpuBridgeResourceRealizationMapResource, WgpuBridgeRuntimeInitialized, WgpuBridgeSurface,
+    WgpuCoreState, WgpuDescriptorCacheResource, WgpuHalAccess, WgpuPipelineBridgeCacheResource,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "wgpu_bridge")]
+    use crate::bridge::wgpu::{Dx12Native, MetalNative, VulkanNative};
     use crate::{
         backend::{WgpuDx12Backend, WgpuVulkanBackend},
         extraction::{
@@ -897,6 +1174,13 @@ mod tests {
     fn fun_renderer_plugin_installs_static_dx12_spine_resources() {
         let mut app = App::new();
         app.add_plugins(FunRendererPlugin::<WgpuDx12Backend>::default());
+        // Use fallback adapter for tests so DX12 init does not require a real GPU.
+        if let Some(mut options) = app
+            .world_mut()
+            .get_resource_mut::<BridgeRuntimeOptions<Dx12Native>>()
+        {
+            options.options = crate::bridge::wgpu::WgpuBridgeRuntimeOptions::fallback_for_tests();
+        }
 
         assert!(app.world().contains_resource::<RendererConfig>());
         assert!(app.world().contains_resource::<RendererBackendSelection>());
@@ -915,11 +1199,23 @@ mod tests {
         );
         assert!(
             app.world()
-                .contains_resource::<WgpuBridgeDevice<WgpuDx12Backend>>()
+                .contains_resource::<WgpuBridgeDevice<Dx12Native>>()
         );
         assert!(
             app.world()
-                .contains_resource::<BackendPipelineCache<WgpuDx12Backend>>()
+                .contains_resource::<WgpuPipelineBridgeCacheResource<Dx12Native>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeAdapter<Dx12Native>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeHealthArtifactResource>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeRuntimeInitialized>()
         );
 
         let selection = app.world().resource::<RendererBackendSelection>();
@@ -949,6 +1245,49 @@ mod tests {
                 phase.as_str()
             );
         }
+
+        let initialized = app.world().resource::<WgpuBridgeRuntimeInitialized>();
+        assert!(initialized.attempted);
+        let artifact = app.world().resource::<WgpuBridgeHealthArtifactResource>();
+        let artifact = artifact
+            .artifact
+            .expect("bridge runtime init must publish a canonical health artifact");
+        assert_eq!(
+            artifact.canonical_path,
+            crate::bridge::wgpu::bridge_health_canonical_artifact_path()
+        );
+        let bridge_state = app.world().resource::<RendererBridgeState>();
+        if initialized.succeeded {
+            assert_eq!(bridge_state.actual_native_backend, NativeBackend::Dx12);
+            assert!(
+                app.world()
+                    .resource::<WgpuBridgeAdapter<Dx12Native>>()
+                    .adapter
+                    .is_some()
+            );
+            assert!(
+                app.world()
+                    .resource::<WgpuBridgeQueue<Dx12Native>>()
+                    .queue
+                    .is_some()
+            );
+        } else {
+            // On hosts without DX12, the truth gate must mark a failure with the
+            // BridgeRuntime* reason. The failure must be captured in
+            // RendererFailureState; the renderer phases must still complete the
+            // spine so diagnostics remain coherent.
+            let failure = app.world().resource::<RendererFailureState>();
+            assert!(failure.failed);
+            assert!(matches!(
+                failure.reason,
+                Some(
+                    RendererFailureReason::BridgeRuntimeAdapterSelectionFailed
+                        | RendererFailureReason::BridgeRuntimeDeviceCreationFailed
+                        | RendererFailureReason::BridgeRuntimeBackendTruthMismatch
+                        | RendererFailureReason::BridgeRuntimeInstanceCreationFailed
+                )
+            ));
+        }
     }
 
     #[test]
@@ -958,26 +1297,42 @@ mod tests {
 
         assert!(
             app.world()
-                .contains_resource::<WgpuBridgeDevice<WgpuDx12Bridge>>()
+                .contains_resource::<WgpuBridgeDevice<Dx12Native>>()
         );
         assert!(
             app.world()
-                .contains_resource::<WgpuBridgeQueue<WgpuDx12Bridge>>()
+                .contains_resource::<WgpuBridgeQueue<Dx12Native>>()
         );
         assert!(
             app.world()
-                .contains_resource::<WgpuBridgeSurface<WgpuDx12Bridge>>()
+                .contains_resource::<WgpuBridgeAdapter<Dx12Native>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeSurface<Dx12Native>>()
         );
         assert!(app.world().contains_resource::<WgpuCoreState>());
         assert!(app.world().contains_resource::<WgpuHalAccess>());
         assert!(app.world().contains_resource::<NagaShaderBridge>());
         assert!(
             app.world()
-                .contains_resource::<BackendCommandPools<WgpuDx12Bridge>>()
+                .contains_resource::<BackendCommandPools<Dx12Native>>()
         );
         assert!(
             app.world()
-                .contains_resource::<BackendPipelineCache<WgpuDx12Bridge>>()
+                .contains_resource::<WgpuPipelineBridgeCacheResource<Dx12Native>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBindingBridgeCacheResource<Dx12Native>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuDescriptorCacheResource<Dx12Native>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<WgpuBridgeResourceRealizationMapResource<Dx12Native>>()
         );
         assert!(!app.world().contains_resource::<RendererConfig>());
     }
@@ -1029,6 +1384,12 @@ mod tests {
     fn vulkan_and_metal_plugin_aliases_are_static_wgpu_bridges() {
         let mut vulkan = App::new();
         vulkan.add_plugins(FunRendererPlugin::<WgpuVulkanBackend>::default());
+        if let Some(mut options) = vulkan
+            .world_mut()
+            .get_resource_mut::<BridgeRuntimeOptions<VulkanNative>>()
+        {
+            options.options = crate::bridge::wgpu::WgpuBridgeRuntimeOptions::fallback_for_tests();
+        }
         assert_eq!(
             vulkan
                 .world()
@@ -1043,7 +1404,37 @@ mod tests {
         assert!(
             metal
                 .world()
-                .contains_resource::<WgpuBridgeDevice<WgpuMetalBridge>>()
+                .contains_resource::<WgpuBridgeDevice<MetalNative>>()
+        );
+    }
+
+    #[test]
+    fn dx12_production_truth_gate_rejects_non_dx12_actual_backend() {
+        // When the runtime cannot produce a DX12 adapter, the truth gate must mark
+        // a clear failure on the renderer failure state and continue running the
+        // ECS spine without exposing wgpu handles to gameplay-facing ECS.
+        let failure_reason = renderer_failure_reason_for_runtime(
+            WgpuBridgeRuntimeFailureReason::BackendTruthMismatch,
+        );
+        assert_eq!(
+            failure_reason,
+            RendererFailureReason::BridgeRuntimeBackendTruthMismatch
+        );
+
+        let adapter_failure = renderer_failure_reason_for_runtime(
+            WgpuBridgeRuntimeFailureReason::AdapterSelectionFailed,
+        );
+        assert_eq!(
+            adapter_failure,
+            RendererFailureReason::BridgeRuntimeAdapterSelectionFailed
+        );
+
+        let device_failure = renderer_failure_reason_for_runtime(
+            WgpuBridgeRuntimeFailureReason::DeviceCreationFailed,
+        );
+        assert_eq!(
+            device_failure,
+            RendererFailureReason::BridgeRuntimeDeviceCreationFailed
         );
     }
 }

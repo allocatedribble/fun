@@ -11,6 +11,7 @@ pub mod hal;
 pub mod naga;
 pub mod pipeline;
 pub mod resource;
+pub mod runtime;
 pub mod surface;
 
 pub use binding::*;
@@ -22,6 +23,7 @@ pub use hal::*;
 pub use naga::*;
 pub use pipeline::*;
 pub use resource::*;
+pub use runtime::*;
 pub use surface::*;
 
 pub const WGPU_BRIDGE_SCHEMA_VERSION: u16 = 1;
@@ -101,6 +103,17 @@ impl<B: WgpuNativeBackend> Default for WgpuBridge<B> {
 pub type WgpuDx12NativeBridge = WgpuBridge<Dx12Native>;
 pub type WgpuVulkanNativeBridge = WgpuBridge<VulkanNative>;
 pub type WgpuMetalNativeBridge = WgpuBridge<MetalNative>;
+
+pub trait WgpuRendererBackend: crate::backend::RendererBackend {
+    type Native: WgpuNativeBackend;
+}
+
+impl<B: WgpuNativeBackend> WgpuRendererBackend for WgpuBridge<B>
+where
+    WgpuBridge<B>: crate::backend::RendererBackend,
+{
+    type Native = B;
+}
 
 #[cfg(test)]
 mod tests {
