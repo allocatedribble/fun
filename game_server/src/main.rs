@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use avian3d::prelude::PhysicsPlugins;
+use avian3d::prelude::{PhysicsPlugins, PhysicsTransformConfig};
 use bevy::{
     app::ScheduleRunnerPlugin, asset::AssetPlugin, log::LogPlugin, mesh::MeshPlugin, prelude::*,
     scene::ScenePlugin,
@@ -54,52 +54,53 @@ const GAME_SERVER_WARDEN_DEFAULT_ADMISSION_KEY_ID: &str = "server_warden_lookup_
 
 fn main() {
     let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-            1.0 / DEFAULT_TICK_RATE_HZ,
-        ))),
-        AssetPlugin::default(),
-        LogPlugin::default(),
-        MeshPlugin,
-        ScenePlugin,
-        PhysicsPlugins::default(),
-        QuinnetServerPlugin::default(),
-        ThunderPlugin::default(),
-        ai::FunAiServerPlugin,
-    ))
-    .insert_resource(GameServerSecurityConfig::from_env())
-    .init_resource::<ServerWorldStream>()
-    .init_resource::<ServerEditorSchema>()
-    .init_resource::<ServerEditorInspectorState>()
-    .insert_resource(ServerLogConfig::from_env())
-    .init_resource::<ConnectedClients>()
-    .init_resource::<ReadyClients>()
-    .init_resource::<ClientRelevanceSets>()
-    .init_resource::<PendingWorldStreams>()
-    .init_resource::<ClientAdmissionStates>()
-    .add_systems(
-        Startup,
-        (
-            start_endpoint,
-            start_server_editor_inspector,
-            game_scene::spawn_default_scene,
-            game_scene::apply_scene_stable_identities,
+    app.insert_resource(PhysicsTransformConfig::server_authoritative())
+        .add_plugins((
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+                1.0 / DEFAULT_TICK_RATE_HZ,
+            ))),
+            AssetPlugin::default(),
+            LogPlugin::default(),
+            MeshPlugin,
+            ScenePlugin,
+            PhysicsPlugins::default(),
+            QuinnetServerPlugin::default(),
+            ThunderPlugin::default(),
+            ai::FunAiServerPlugin,
+        ))
+        .insert_resource(GameServerSecurityConfig::from_env())
+        .init_resource::<ServerWorldStream>()
+        .init_resource::<ServerEditorSchema>()
+        .init_resource::<ServerEditorInspectorState>()
+        .insert_resource(ServerLogConfig::from_env())
+        .init_resource::<ConnectedClients>()
+        .init_resource::<ReadyClients>()
+        .init_resource::<ClientRelevanceSets>()
+        .init_resource::<PendingWorldStreams>()
+        .init_resource::<ClientAdmissionStates>()
+        .add_systems(
+            Startup,
+            (
+                start_endpoint,
+                start_server_editor_inspector,
+                game_scene::spawn_default_scene,
+                game_scene::apply_scene_stable_identities,
+            )
+                .chain(),
         )
-            .chain(),
-    )
-    .add_systems(
-        Update,
-        (
-            cleanup_disconnected_clients,
-            queue_world_stream_for_new_clients,
-            receive_client_control,
-            apply_server_editor_mutations,
-            rebuild_world_stream,
-            update_server_editor_inspector_snapshot,
-            send_pending_world_streams,
-        )
-            .chain(),
-    );
+        .add_systems(
+            Update,
+            (
+                cleanup_disconnected_clients,
+                queue_world_stream_for_new_clients,
+                receive_client_control,
+                apply_server_editor_mutations,
+                rebuild_world_stream,
+                update_server_editor_inspector_snapshot,
+                send_pending_world_streams,
+            )
+                .chain(),
+        );
 
     #[cfg(all(feature = "diagnostics", debug_assertions))]
     app.init_resource::<ServerWorldDiagnostics>()

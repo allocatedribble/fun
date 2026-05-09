@@ -1,4 +1,4 @@
-use avian3d::prelude::{Collider, RigidBody};
+use avian3d::prelude::{Collider, Position, RigidBody, Rotation};
 use bevy::prelude::*;
 use fun_scene::prelude::*;
 #[allow(deprecated)]
@@ -154,6 +154,8 @@ pub fn spawn_default_scene(mut commands: Commands) {
             )))
             fun_value(RigidBody::Static)
             Collider::cuboid(60.0, 0.5, 60.0)
+            fun_value(Position::from_xyz(0.0, -0.25, 0.0))
+            fun_value(Rotation::IDENTITY)
             Transform::from_xyz(0.0, -0.25, 0.0)
         ),
         (
@@ -190,6 +192,8 @@ pub fn spawn_default_scene(mut commands: Commands) {
             )))
             fun_value(RigidBody::Static)
             Collider::cuboid(5.0, 3.0, 1.0)
+            fun_value(Position::from_xyz(0.0, 1.5, -8.0))
+            fun_value(Rotation::IDENTITY)
             Transform::from_xyz(0.0, 1.5, -8.0)
         ),
         (
@@ -226,6 +230,8 @@ pub fn spawn_default_scene(mut commands: Commands) {
             )))
             fun_value(RigidBody::Static)
             Collider::cuboid(3.0, 0.5, 6.0)
+            fun_value(Position::from_xyz(-6.0, 0.25, -2.0))
+            fun_value(Rotation(Quat::from_rotation_z(-12.0_f32.to_radians())))
             fun_value(Transform::from_xyz(-6.0, 0.25, -2.0)
                 .with_rotation(Quat::from_rotation_z(-12.0_f32.to_radians())))
         ),
@@ -269,6 +275,8 @@ fn demo_cube(entity: NetEntity, translation: Vec3) -> impl FunScene {
         )))
         fun_value(RigidBody::Static)
         Collider::cuboid(1.0, 1.0, 1.0)
+        fun_value(Position::new(translation))
+        fun_value(Rotation::IDENTITY)
         fun_value(Transform::from_translation(translation))
     }
 }
@@ -571,6 +579,33 @@ mod tests {
             .collect::<Vec<_>>();
         keys.sort_unstable();
         assert_eq!(keys, ids);
+    }
+
+    #[test]
+    fn default_scene_physics_bodies_have_explicit_server_positions() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            FunScenePlugin,
+        ));
+        app.add_systems(Startup, spawn_default_scene);
+
+        app.update();
+
+        let mut bodies = app
+            .world_mut()
+            .query::<(&RigidBody, &Position, &Rotation, &Transform)>();
+        let body_count = bodies
+            .iter(app.world())
+            .inspect(|(body, position, rotation, transform)| {
+                assert_eq!(**body, RigidBody::Static);
+                assert_eq!(position.0, transform.translation);
+                assert_eq!(rotation.0, transform.rotation);
+            })
+            .count();
+
+        assert_eq!(body_count, 6);
     }
 
     #[test]
