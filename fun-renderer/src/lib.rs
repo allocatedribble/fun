@@ -60,6 +60,8 @@ pub mod tier0_proof_frame_gate;
 pub mod tier1_cache_backed_optimization;
 #[cfg(feature = "bevy_ecs")]
 pub mod tier2_gpu_driven_proof;
+#[cfg(feature = "bevy_ecs")]
+pub mod tier3_lighting_shadows_at_scale;
 pub mod ui;
 pub mod upscaling;
 #[cfg(feature = "bevy_ecs")]
@@ -894,6 +896,8 @@ pub use tier0_proof_frame_gate::*;
 pub use tier1_cache_backed_optimization::*;
 #[cfg(feature = "bevy_ecs")]
 pub use tier2_gpu_driven_proof::*;
+#[cfg(feature = "bevy_ecs")]
+pub use tier3_lighting_shadows_at_scale::*;
 pub use ui::*;
 #[cfg(feature = "bevy_ecs")]
 pub use vendor_sdk_bridge::*;
