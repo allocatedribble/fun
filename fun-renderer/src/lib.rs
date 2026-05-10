@@ -64,6 +64,8 @@ pub mod tier2_gpu_driven_proof;
 pub mod tier3_lighting_shadows_at_scale;
 #[cfg(feature = "bevy_ecs")]
 pub mod tier4_transient_memory_and_barriers;
+#[cfg(feature = "bevy_ecs")]
+pub mod tier5_temporal_reconstruction;
 pub mod ui;
 pub mod upscaling;
 #[cfg(feature = "bevy_ecs")]
@@ -902,6 +904,8 @@ pub use tier2_gpu_driven_proof::*;
 pub use tier3_lighting_shadows_at_scale::*;
 #[cfg(feature = "bevy_ecs")]
 pub use tier4_transient_memory_and_barriers::*;
+#[cfg(feature = "bevy_ecs")]
+pub use tier5_temporal_reconstruction::*;
 pub use ui::*;
 #[cfg(feature = "bevy_ecs")]
 pub use vendor_sdk_bridge::*;
