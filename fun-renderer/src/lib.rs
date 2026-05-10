@@ -59,6 +59,8 @@ pub mod presentation;
 pub mod presentation_stack;
 #[cfg(feature = "bevy_ecs")]
 pub mod proof_scene;
+#[cfg(feature = "bevy_ecs")]
+pub mod quality_audit_contract;
 pub mod queue_scheduler;
 pub mod research;
 pub mod resource;
@@ -963,6 +965,8 @@ pub use presentation::*;
 pub use presentation_stack::*;
 #[cfg(feature = "bevy_ecs")]
 pub use proof_scene::*;
+#[cfg(feature = "bevy_ecs")]
+pub use quality_audit_contract::*;
 pub use queue_scheduler::*;
 pub use research::*;
 pub use resource::*;
