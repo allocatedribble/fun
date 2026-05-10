@@ -50,6 +50,8 @@ pub mod passg_native_ui_product_route;
 pub mod passh_native_command_list_fail_closed;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub mod passi_gpu_driven_compute_indirect;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+pub mod passj_clustered_lighting_live;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -958,6 +960,8 @@ pub use passg_native_ui_product_route::*;
 pub use passh_native_command_list_fail_closed::*;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub use passi_gpu_driven_compute_indirect::*;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+pub use passj_clustered_lighting_live::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;

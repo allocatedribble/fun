@@ -219,6 +219,16 @@ pub const PASS_EVIDENCE_REGISTRY: &[PassEvidenceEntry] = &[
         "pass_i.gpu_driven_compute_indirect",
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass J: clustered lighting + shadow atlas (live GPU).
+    // Real WGSL compute cluster-assignment kernel + real
+    // forward+ shading pass + real shadow-atlas allocation +
+    // real cascade clear pass + cluster-light-count readback
+    // (Priority 2: "clustered lighting and virtual shadows with
+    // real resources").
+    PassEvidenceEntry::new(
+        "pass_j.clustered_lighting_live",
+        EvidenceKind::LiveGpuExecution,
+    ),
     // Tier 0: proof frame keystone — visible frame / GPU timing
     // are planning surfaces today; bridge health + DX12 hardening
     // are typed-contract.
@@ -512,6 +522,14 @@ pub const INTEGRATION_TEST_REGISTRY: &[IntegrationTestRegistryEntry] = &[
         IntegrationTestCategory::AdapterDevice,
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass J: real GPU compute cluster-assignment + real
+    // forward+ shading pass + real shadow-atlas allocation +
+    // real cascade clear + per-cluster light-count readback.
+    IntegrationTestRegistryEntry::new(
+        "live_passj_runs_real_clustered_lighting_with_shadow_atlas",
+        IntegrationTestCategory::AdapterDevice,
+        EvidenceKind::LiveGpuExecution,
+    ),
 ];
 
 // ============================================================================
@@ -708,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn pass_evidence_registry_covers_every_a_through_i_and_tier_0_through_8() {
+    fn pass_evidence_registry_covers_every_a_through_j_and_tier_0_through_8() {
         let ids: Vec<&str> = PASS_EVIDENCE_REGISTRY.iter().map(|e| e.stable_id).collect();
         for pass in [
             "pass_a.truth_resync_and_ui_governance",
@@ -720,6 +738,7 @@ mod tests {
             "pass_g.native_ui_product_route",
             "pass_h.native_command_list_fail_closed",
             "pass_i.gpu_driven_compute_indirect",
+            "pass_j.clustered_lighting_live",
         ] {
             assert!(ids.contains(&pass), "missing Pass: {pass}");
         }
