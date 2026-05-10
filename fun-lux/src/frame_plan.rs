@@ -76,63 +76,22 @@ impl LuxScenePriority {
     }
 }
 
-/// Typed dirty region in framebuffer-pixel coordinates. A
-/// non-empty list signals the renderer that only the typed
-/// regions need re-shaded this frame.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LuxDirtyRegion {
-    pub schema_version: u16,
-    pub min_x: u32,
-    pub min_y: u32,
-    pub max_x: u32,
-    pub max_y: u32,
-}
+// Pass 2 replaced the Pass 1 pixel-rect `LuxDirtyRegion`
+// (framebuffer-coord rectangle) with the typed world-space
+// [`crate::dirty::LuxDirtyRegion`] (LuxAabb + LuxDirtyFlags +
+// priority + cost estimate + deadline). The renderer
+// projects world-space dirty volumes into pixel-space scissor
+// rects when it needs them; the typed lighting plan carries
+// the richer world-space record.
+//
+// `LuxSceneFramePlan::dirty_regions: Vec<LuxDirtyRegion>` uses
+// the Pass 2 type via the re-export below.
 
-impl LuxDirtyRegion {
-    pub const FULL_FRAME: Self = Self {
-        schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
-        min_x: 0,
-        min_y: 0,
-        max_x: u32::MAX,
-        max_y: u32::MAX,
-    };
-
-    #[must_use]
-    pub const fn new(min_x: u32, min_y: u32, max_x: u32, max_y: u32) -> Self {
-        Self {
-            schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        }
-    }
-
-    #[must_use]
-    pub const fn covers_any_pixel(self) -> bool {
-        self.max_x > self.min_x && self.max_y > self.min_y
-    }
-
-    #[must_use]
-    pub const fn is_full_frame(self) -> bool {
-        self.min_x == 0 && self.min_y == 0 && self.max_x == u32::MAX && self.max_y == u32::MAX
-    }
-
-    /// Typed pixel area (clamped at `u64::MAX`).
-    #[must_use]
-    pub const fn pixel_area(self) -> u64 {
-        if !self.covers_any_pixel() {
-            return 0;
-        }
-        let width = self.max_x.saturating_sub(self.min_x) as u64;
-        let height = self.max_y.saturating_sub(self.min_y) as u64;
-        width.saturating_mul(height)
-    }
-}
+pub use crate::dirty::LuxDirtyRegion;
 
 /// Typed per-scene frame plan. `LuxFramePlan` aggregates one
 /// `LuxSceneFramePlan` per scene.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LuxSceneFramePlan {
     pub schema_version: u16,
     pub scene_id: LuxSceneId,
@@ -400,7 +359,12 @@ impl LuxResourceIntent {
 /// handle for Pass 1's "Replace `NoopLuxCore` with a real
 /// `LuxFramePlan`" goal. `fun-renderer` consumes the plan
 /// and dispatches against the real GPU.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `LuxFramePlan` does not derive `Eq` because Pass 2's
+/// world-space [`LuxDirtyRegion`] carries `LuxAabb` (f32) —
+/// equality uses bitwise comparison via `LuxAabb::bitwise_eq`
+/// or the typed `PartialEq` impl below.
+#[derive(Debug, Clone, PartialEq)]
 pub struct LuxFramePlan {
     pub schema_version: u16,
     pub frame_index: u64,
@@ -574,16 +538,27 @@ mod tests {
 
     #[test]
     fn dirty_region_predicates() {
-        let r = LuxDirtyRegion::new(0, 0, 10, 10);
-        assert!(r.covers_any_pixel());
-        assert!(!r.is_full_frame());
-        assert_eq!(r.pixel_area(), 100);
-        let empty = LuxDirtyRegion::new(5, 5, 5, 5);
-        assert!(!empty.covers_any_pixel());
-        assert_eq!(empty.pixel_area(), 0);
-        let full = LuxDirtyRegion::FULL_FRAME;
-        assert!(full.is_full_frame());
-        assert!(full.covers_any_pixel());
+        // Pass 2: LuxDirtyRegion is now the world-space type
+        // from `crate::dirty`. The pixel-rect Pass 1 surface
+        // is gone; the renderer projects bounds to pixel-space
+        // when it needs scissor rects.
+        use crate::aabb::LuxAabb;
+        use crate::dirty::LuxDirtyFlags;
+        let r = LuxDirtyRegion::new(
+            LuxSceneId::PROOF_SCENE,
+            LuxAabb::new([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]),
+            LuxDirtyFlags::TRANSFORM,
+            128,
+            42,
+        );
+        assert_eq!(r.scene_id, LuxSceneId::PROOF_SCENE);
+        assert!(r.flags.contains(LuxDirtyFlags::TRANSFORM));
+        assert!(r.invalidates_shadow_maps());
+        let whole = LuxDirtyRegion::whole_scene(LuxSceneId::PROOF_SCENE, LuxDirtyFlags::COLOR);
+        assert!(whole.bounds.is_whole_world());
+        // COLOR-only does NOT invalidate shadow maps
+        // (Pass 2 acceptance).
+        assert!(!whole.invalidates_shadow_maps());
     }
 
     #[test]

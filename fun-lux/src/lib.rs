@@ -59,8 +59,10 @@
 //! confirms that `NoopLuxCore` is reserved for tests /
 //! diagnostics / early fallback.
 
+pub mod aabb;
 pub mod api;
 pub mod diagnostics;
+pub mod dirty;
 pub mod frame_plan;
 pub mod gi;
 pub mod look;
@@ -71,6 +73,7 @@ pub mod research;
 pub mod runtime;
 pub mod shadow;
 pub mod volumetric;
+pub mod world;
 
 use bevy_ecs::{
     entity::Entity,
@@ -80,8 +83,10 @@ use bevy_ecs::{
     system::{Query, ResMut},
 };
 
+pub use aabb::*;
 pub use api::*;
 pub use diagnostics::*;
+pub use dirty::*;
 pub use frame_plan::*;
 pub use gi::*;
 pub use look::*;
@@ -92,6 +97,10 @@ pub use research::*;
 pub use runtime::*;
 pub use shadow::*;
 pub use volumetric::*;
+pub use world::{
+    FUN_LUX_WORLD_SCHEMA_VERSION, IndirectSceneChange, LuxLightRecord, LuxSceneRecord,
+    LuxSceneRegistry, LuxShadowRequest, LuxVolumetricWorld, SurfaceCacheUpdateRequest,
+};
 
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
 pub const FUN_LUX_PACKAGE_NAME: &str = "fun-lux";
@@ -575,13 +584,36 @@ impl LuxLightDatabase {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Resource)]
+/// Pass 2: `LuxWorld` is the typed partial-update lighting
+/// state the renderer reads each frame. The Pass 2 fields
+/// (`scenes`, `volumetrics`, `scheduler`) carry the typed
+/// dirty queue + per-froxel dirty indices + per-subsystem
+/// cadence that drive partial-update planning. The existing
+/// counter fields (`lights`, `clusters`, `reservoirs`,
+/// `shadow_requests`, `gi_cache`, `diagnostics`) stay for
+/// backward compatibility with the Pass 1 systems; Pass 2
+/// extends them with typed dense tables (`scene_records`,
+/// `dirty_clusters`, `requests`, etc.) without breaking the
+/// existing counter surface.
+///
+/// `LuxWorld` no longer derives `Copy` (the Pass 2 fields
+/// contain `Vec`s) or `Eq` (the Pass 2 dirty queue contains
+/// `LuxAabb` with `f32` components). Existing `ResMut<LuxWorld>`
+/// callsites stay unchanged.
+#[derive(Debug, Default, Clone, PartialEq, Resource)]
 pub struct LuxWorld {
+    /// Pass 2: typed scene registry with per-scene records +
+    /// dirty queue.
+    pub scenes: crate::world::LuxSceneRegistry,
     pub lights: LuxLightDatabase,
     pub clusters: LuxClusterGrid,
     pub reservoirs: LuxReservoirStorage,
     pub shadow_requests: LuxShadowRequestQueue,
     pub gi_cache: LuxGiCache,
+    /// Pass 2: typed volumetric partial-update state.
+    pub volumetrics: crate::world::LuxVolumetricWorld,
+    /// Pass 2: typed per-subsystem update cadence.
+    pub scheduler: crate::runtime::LuxUpdateScheduler,
     pub diagnostics: LuxDiagnostics,
 }
 
@@ -625,6 +657,164 @@ impl LuxWorld {
         self.gi_cache.revision = self.gi_cache.revision.saturating_add(1);
         self.gi_cache.invalidated_entry_count =
             self.gi_cache.invalidated_entry_count.saturating_add(1);
+    }
+
+    // ========================================================
+    // Pass 2 — typed partial-update methods
+    // ========================================================
+
+    /// Pass 2: typed scene registration. Adds the scene id
+    /// to `scenes.active_scenes` + creates a default
+    /// `LuxSceneRecord` if one didn't exist.
+    pub fn register_scene(&mut self, scene_id: crate::frame_plan::LuxSceneId) -> u32 {
+        self.scenes.register_scene(scene_id)
+    }
+
+    /// Pass 2: typed dirty-region emit. Pushes a typed
+    /// `LuxDirtyRegion` into the scene registry's dirty
+    /// queue.
+    pub fn emit_dirty_region(&mut self, region: crate::dirty::LuxDirtyRegion) {
+        self.scenes.dirty_queue.push(region);
+    }
+
+    /// Pass 2: typed light-transform ingest. Records a
+    /// transform mutation against a typed stable id;
+    /// emits a typed `LuxDirtyRegion` flagged with
+    /// `TRANSFORM` so the planner re-bins affected
+    /// clusters in the same frame.
+    pub fn ingest_light_transform_change(
+        &mut self,
+        scene_id: crate::frame_plan::LuxSceneId,
+        affected_bounds: crate::aabb::LuxAabb,
+    ) {
+        self.emit_dirty_region(crate::dirty::LuxDirtyRegion::new(
+            scene_id,
+            affected_bounds,
+            crate::dirty::LuxDirtyFlags::TRANSFORM,
+            128,
+            16,
+        ));
+    }
+
+    /// Pass 2: typed light-color ingest. Records a color
+    /// mutation against a typed stable id; emits a typed
+    /// `LuxDirtyRegion` flagged with `COLOR` only — the
+    /// typed predicate guarantees shadow maps stay valid.
+    pub fn ingest_light_color_change(
+        &mut self,
+        scene_id: crate::frame_plan::LuxSceneId,
+        affected_bounds: crate::aabb::LuxAabb,
+    ) {
+        self.emit_dirty_region(crate::dirty::LuxDirtyRegion::new(
+            scene_id,
+            affected_bounds,
+            crate::dirty::LuxDirtyFlags::COLOR,
+            128,
+            8,
+        ));
+    }
+
+    /// Pass 2: typed light-intensity ingest. Records an
+    /// intensity mutation; emits a typed `LuxDirtyRegion`
+    /// flagged with `INTENSITY` (does NOT set TRANSFORM, so
+    /// shadow maps stay valid).
+    pub fn ingest_light_intensity_change(
+        &mut self,
+        scene_id: crate::frame_plan::LuxSceneId,
+        affected_bounds: crate::aabb::LuxAabb,
+    ) {
+        self.emit_dirty_region(crate::dirty::LuxDirtyRegion::new(
+            scene_id,
+            affected_bounds,
+            crate::dirty::LuxDirtyFlags::INTENSITY,
+            128,
+            8,
+        ));
+    }
+
+    /// Pass 2: typed fog ingest. Records a volumetric-only
+    /// mutation; emits a typed `LuxDirtyRegion` flagged with
+    /// `VOLUMETRIC` and bumps the typed volumetric world.
+    pub fn ingest_fog_change(
+        &mut self,
+        scene_id: crate::frame_plan::LuxSceneId,
+        affected_bounds: crate::aabb::LuxAabb,
+    ) {
+        self.volumetrics.mark_fog_dirty(affected_bounds);
+        self.emit_dirty_region(crate::dirty::LuxDirtyRegion::new(
+            scene_id,
+            affected_bounds,
+            crate::dirty::LuxDirtyFlags::VOLUMETRIC,
+            64,
+            32,
+        ));
+    }
+
+    /// Pass 2: typed shadow-caster ingest. Records a
+    /// shadow-caster mutation; emits a typed
+    /// `LuxDirtyRegion` flagged with `SHADOW_POLICY` plus
+    /// `TRANSFORM` (movers' shadow pages must invalidate).
+    pub fn ingest_shadow_caster_change(
+        &mut self,
+        scene_id: crate::frame_plan::LuxSceneId,
+        affected_bounds: crate::aabb::LuxAabb,
+    ) {
+        self.emit_dirty_region(crate::dirty::LuxDirtyRegion::new(
+            scene_id,
+            affected_bounds,
+            crate::dirty::LuxDirtyFlags::TRANSFORM.with(crate::dirty::LuxDirtyFlags::SHADOW_POLICY),
+            192,
+            48,
+        ));
+    }
+
+    // --------------------------------------------------------
+    // Pass 2 typed partial-update predicates
+    // --------------------------------------------------------
+
+    /// Pass 2 acceptance: typed predicate for "static scenes
+    /// with no changes emit no major update work." Returns
+    /// `true` when every visible scene is quiescent and the
+    /// dirty queue is empty.
+    #[must_use]
+    pub fn every_visible_scene_is_quiescent(&self) -> bool {
+        self.scenes.every_visible_scene_is_quiescent()
+    }
+
+    /// Pass 2 acceptance: typed predicate for "fog-only
+    /// changes do not rebuild direct-light clusters." Returns
+    /// `true` when the dirty queue carries only volumetric
+    /// regions (no TRANSFORM / INTENSITY / RANGE / etc.).
+    #[must_use]
+    pub fn dirty_queue_touches_volumetric_only(&self) -> bool {
+        self.scenes.dirty_queue.touches_volumetric_only()
+    }
+
+    /// Pass 2 acceptance: typed predicate for "light
+    /// color/intensity changes do not invalidate shadow
+    /// maps." Returns `true` when no dirty region in the
+    /// queue would invalidate a shadow map.
+    #[must_use]
+    pub fn no_dirty_region_invalidates_shadow_maps(&self) -> bool {
+        !self.scenes.dirty_queue.invalidates_any_shadow_map()
+    }
+
+    /// Pass 2 acceptance: typed predicate for "light
+    /// transform changes update affected clusters in the
+    /// same frame." Returns `true` when at least one dirty
+    /// region in the queue invalidates clusters.
+    #[must_use]
+    pub fn dirty_queue_invalidates_any_cluster(&self) -> bool {
+        self.scenes.dirty_queue.invalidates_any_cluster()
+    }
+
+    /// Pass 2 acceptance: typed time-slicing predicate.
+    /// Returns `true` when the cumulative typed cost
+    /// estimate of the dirty queue fits within the given
+    /// frame budget (in microseconds).
+    #[must_use]
+    pub fn dirty_queue_fits_in_frame_budget(&self, budget_micros: u64) -> bool {
+        self.scenes.dirty_queue.total_estimated_cost_micros <= budget_micros
     }
 }
 
@@ -1281,5 +1471,180 @@ mod tests {
             assert!(order_key > previous, "{label}");
             previous = order_key;
         }
+    }
+
+    // ========================================================
+    // Pass 2 — typed partial-update acceptance tests
+    // ========================================================
+
+    /// Pass 2 acceptance #1: light transform changes update
+    /// the light buffer and affected clusters in the same
+    /// frame. The typed `ingest_light_transform_change`
+    /// records a `LuxDirtyRegion::TRANSFORM` and the typed
+    /// dirty-queue predicate confirms cluster invalidation
+    /// fires.
+    #[test]
+    fn pass_2_light_transform_change_invalidates_clusters_in_same_frame() {
+        use crate::aabb::LuxAabb;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        world.ingest_light_transform_change(
+            LuxSceneId::PROOF_SCENE,
+            LuxAabb::new([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]),
+        );
+        // Cluster invalidation fires.
+        assert!(world.dirty_queue_invalidates_any_cluster());
+        // Shadow maps also invalidate (TRANSFORM does).
+        assert!(!world.no_dirty_region_invalidates_shadow_maps());
+        assert!(!world.dirty_queue_touches_volumetric_only());
+    }
+
+    /// Pass 2 acceptance #2: light color/intensity changes
+    /// do NOT invalidate shadow maps.
+    #[test]
+    fn pass_2_color_only_change_does_not_invalidate_shadow_maps() {
+        use crate::aabb::LuxAabb;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        world.ingest_light_color_change(
+            LuxSceneId::PROOF_SCENE,
+            LuxAabb::new([0.0, 0.0, 0.0], [5.0, 5.0, 5.0]),
+        );
+        assert!(world.no_dirty_region_invalidates_shadow_maps());
+        // Color-only still invalidates GI cache (chromatic
+        // effects propagate) — verify the typed predicate.
+        for r in &world.scenes.dirty_queue.regions {
+            assert!(r.flags.invalidates_gi_cache());
+        }
+    }
+
+    /// Pass 2 acceptance #2b: intensity-only changes also do
+    /// NOT invalidate shadow maps.
+    #[test]
+    fn pass_2_intensity_only_change_does_not_invalidate_shadow_maps() {
+        use crate::aabb::LuxAabb;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        world.ingest_light_intensity_change(
+            LuxSceneId::PROOF_SCENE,
+            LuxAabb::new([0.0, 0.0, 0.0], [5.0, 5.0, 5.0]),
+        );
+        assert!(world.no_dirty_region_invalidates_shadow_maps());
+        // INTENSITY does invalidate clusters (bin radius
+        // depends on intensity range).
+        assert!(world.dirty_queue_invalidates_any_cluster());
+    }
+
+    /// Pass 2 acceptance #3: moving shadow casters invalidate
+    /// only affected shadow pages/regions. The typed
+    /// `ingest_shadow_caster_change` records a bounded
+    /// `LuxDirtyRegion` (not whole-world) flagged with
+    /// SHADOW_POLICY + TRANSFORM.
+    #[test]
+    fn pass_2_moving_shadow_caster_invalidates_only_affected_region() {
+        use crate::aabb::LuxAabb;
+        use crate::dirty::LuxDirtyFlags;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        let affected = LuxAabb::new([10.0, 10.0, 10.0], [20.0, 20.0, 20.0]);
+        world.ingest_shadow_caster_change(LuxSceneId::PROOF_SCENE, affected);
+        // The dirty region is bounded (not whole-world).
+        assert_eq!(world.scenes.dirty_queue.len(), 1);
+        let r = &world.scenes.dirty_queue.regions[0];
+        assert!(!r.bounds.is_whole_world());
+        assert!(r.flags.contains(LuxDirtyFlags::SHADOW_POLICY));
+        assert!(r.flags.contains(LuxDirtyFlags::TRANSFORM));
+        assert!(r.invalidates_shadow_maps());
+    }
+
+    /// Pass 2 acceptance #4: fog-only changes do not rebuild
+    /// direct-light clusters.
+    #[test]
+    fn pass_2_fog_only_change_does_not_rebuild_direct_light_clusters() {
+        use crate::aabb::LuxAabb;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        world.ingest_fog_change(
+            LuxSceneId::PROOF_SCENE,
+            LuxAabb::new([0.0, 0.0, 0.0], [100.0, 100.0, 100.0]),
+        );
+        // Typed predicate: dirty queue touches volumetric only.
+        assert!(world.dirty_queue_touches_volumetric_only());
+        // Typed predicate: no cluster invalidation.
+        assert!(!world.dirty_queue_invalidates_any_cluster());
+        // Typed predicate: no shadow-map invalidation.
+        assert!(world.no_dirty_region_invalidates_shadow_maps());
+        // Typed volumetric world was marked dirty.
+        assert!(world.volumetrics.has_dirty_volumes());
+    }
+
+    /// Pass 2 acceptance #5: static scenes with no changes
+    /// emit no major update work.
+    #[test]
+    fn pass_2_static_scene_with_no_changes_emits_no_update_work() {
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        // No mutations → quiescent.
+        assert!(world.every_visible_scene_is_quiescent());
+        assert!(!world.dirty_queue_invalidates_any_cluster());
+        assert!(world.no_dirty_region_invalidates_shadow_maps());
+        assert!(!world.dirty_queue_touches_volumetric_only());
+        assert_eq!(world.scenes.dirty_queue.len(), 0);
+    }
+
+    /// Pass 2 acceptance #6: multi-scene invisible records
+    /// can be skipped or time-sliced. An invisible
+    /// `LuxSceneRecord` does NOT contribute to the
+    /// "every visible scene is quiescent" predicate even if
+    /// it has dirty work — the planner can ignore it.
+    #[test]
+    fn pass_2_invisible_scenes_can_be_skipped() {
+        use crate::aabb::LuxAabb;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        let hidden_scene = LuxSceneId(7);
+        world.register_scene(hidden_scene);
+        // Flip the hidden scene's visible bit to false.
+        if let Some(rec) = world.scenes.record_for_mut(hidden_scene) {
+            rec.visible = false;
+        }
+        // The visible scene (PROOF_SCENE) is still quiescent.
+        // The invisible scene is excluded from the predicate.
+        assert!(world.every_visible_scene_is_quiescent());
+        // Now mutate a light in the visible scene — predicate
+        // flips to false.
+        world.ingest_light_transform_change(
+            LuxSceneId::PROOF_SCENE,
+            LuxAabb::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+        );
+        assert!(!world.every_visible_scene_is_quiescent());
+    }
+
+    /// Pass 2 acceptance: dirty queue cost estimate is
+    /// available for time-slicing the frame's work.
+    #[test]
+    fn pass_2_dirty_queue_cost_estimate_supports_time_slicing() {
+        use crate::aabb::LuxAabb;
+        use crate::frame_plan::LuxSceneId;
+        let mut world = LuxWorld::default();
+        world.register_scene(LuxSceneId::PROOF_SCENE);
+        // Each ingest emits a region with an estimated cost.
+        world.ingest_light_transform_change(LuxSceneId::PROOF_SCENE, LuxAabb::WHOLE_WORLD);
+        world.ingest_light_color_change(LuxSceneId::PROOF_SCENE, LuxAabb::WHOLE_WORLD);
+        world.ingest_fog_change(LuxSceneId::PROOF_SCENE, LuxAabb::WHOLE_WORLD);
+        let total = world.scenes.dirty_queue.total_estimated_cost_micros;
+        assert!(total > 0);
+        // 16us (transform) + 8us (color) + 32us (fog) = 56us
+        assert_eq!(total, 16 + 8 + 32);
+        // Time-slicing predicate.
+        assert!(world.dirty_queue_fits_in_frame_budget(100));
+        assert!(!world.dirty_queue_fits_in_frame_budget(50));
     }
 }

@@ -97,6 +97,16 @@ pub struct LuxUpdateScheduler {
     pub debug_overlay: LuxUpdateCadence,
 }
 
+impl Default for LuxUpdateScheduler {
+    /// Pass 2 default for `LuxWorld::default()`: cold —
+    /// every cadence disabled. Tests + diagnostic fallback
+    /// use the cold default; production code reads
+    /// [`LuxUpdateScheduler::PRODUCT_DEFAULT`] explicitly.
+    fn default() -> Self {
+        Self::COLD_DEFAULT
+    }
+}
+
 impl LuxUpdateScheduler {
     /// Typed product-default cadence.
     pub const PRODUCT_DEFAULT: Self = Self {
@@ -632,14 +642,33 @@ impl LuxFramePlanner {
             });
         }
 
-        // --- Dirty regions: emit a full-frame region when any
-        // signal is dirty; emit nothing when nothing changed.
-        // Renderers that want fine-grain dirty regions populate
-        // them directly through the typed
-        // `LuxSceneFramePlan::dirty_regions` field after the
-        // planner returns.
+        // --- Dirty regions: emit a typed Pass 2 world-space
+        // LuxDirtyRegion when any signal is dirty. The
+        // typed flags reflect the change signal: lights move
+        // → TRANSFORM, shadow casters change → SHADOW_POLICY,
+        // camera motion → STATIC_CACHE (re-projects), GI
+        // probes → GI_CACHE. Pass 2's typed planner
+        // (`build_frame_plan_from_world`) overrides this with
+        // a richer dirty queue when LuxWorld is available.
         if dirty {
-            scene.dirty_regions.push(LuxDirtyRegion::FULL_FRAME);
+            use crate::dirty::LuxDirtyFlags;
+            let mut flags = LuxDirtyFlags::NONE;
+            if signal.lights_changed {
+                flags.insert(LuxDirtyFlags::TRANSFORM);
+                flags.insert(LuxDirtyFlags::INTENSITY);
+            }
+            if signal.shadow_caster_set_changed {
+                flags.insert(LuxDirtyFlags::SHADOW_POLICY);
+            }
+            if signal.gi_probes_changed {
+                flags.insert(LuxDirtyFlags::GI_CACHE);
+            }
+            if signal.camera_moved {
+                flags.insert(LuxDirtyFlags::STATIC_CACHE);
+            }
+            scene
+                .dirty_regions
+                .push(LuxDirtyRegion::whole_scene(signal.scene_id, flags));
         }
 
         scene
@@ -771,10 +800,26 @@ mod tests {
         // Direct lighting fires because direct lighting is
         // not disabled.
         assert!(kinds.contains(&crate::pass::LuxPassKind::DirectLighting));
-        // Dirty region is full-frame because signal.dirty()
-        // is true.
+        // Dirty region is whole-scene because signal.dirty()
+        // is true. Pass 2's typed LuxDirtyRegion records the
+        // typed flags inferred from the change signal:
+        // lights_changed → TRANSFORM + INTENSITY,
+        // shadow_caster_set_changed → SHADOW_POLICY.
         assert_eq!(scene.dirty_regions.len(), 1);
-        assert!(scene.dirty_regions[0].is_full_frame());
+        let region = &scene.dirty_regions[0];
+        assert!(region.bounds.is_whole_world());
+        assert!(
+            region
+                .flags
+                .contains(crate::dirty::LuxDirtyFlags::TRANSFORM)
+        );
+        assert!(
+            region
+                .flags
+                .contains(crate::dirty::LuxDirtyFlags::SHADOW_POLICY)
+        );
+        assert!(region.invalidates_shadow_maps());
+        assert!(region.invalidates_direct_light_clusters());
 
         assert_eq!(plan.diagnostics.scenes_dirty, 1);
         assert!(plan.diagnostics.emitted_work());
