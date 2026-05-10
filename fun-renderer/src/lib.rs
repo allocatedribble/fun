@@ -11,6 +11,8 @@ pub mod bridge;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
 pub mod default_flip;
+#[cfg(feature = "bevy_ecs")]
+pub mod dx12_production;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
@@ -838,6 +840,8 @@ pub use backend::*;
 pub use benchmark::*;
 #[cfg(feature = "bevy_ecs")]
 pub use component_api::*;
+#[cfg(feature = "bevy_ecs")]
+pub use dx12_production::*;
 pub use dynamic_geometry::*;
 #[cfg(feature = "bevy_ecs")]
 pub use ecs::*;
