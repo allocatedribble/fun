@@ -647,7 +647,6 @@ pub fn classify_slot_status_today(
     bridge_runtime_succeeded: bool,
     actual_backend: NativeBackend,
 ) -> (Tier0ArtifactStatus, Option<Tier0ProofFrameGap>) {
-    let dx12 = matches!(actual_backend, NativeBackend::Dx12);
     match slot {
         Tier0ArtifactSlot::VisibleFrame => (
             Tier0ArtifactStatus::NotYetWired,
@@ -664,9 +663,7 @@ pub fn classify_slot_status_today(
             }
         }
         Tier0ArtifactSlot::Dx12HardeningArtifact => match actual_backend {
-            NativeBackend::Dx12 if bridge_runtime_succeeded => {
-                (Tier0ArtifactStatus::Present, None)
-            }
+            NativeBackend::Dx12 if bridge_runtime_succeeded => (Tier0ArtifactStatus::Present, None),
             NativeBackend::Vulkan | NativeBackend::Metal => (
                 Tier0ArtifactStatus::FailedToProduce,
                 Some(Tier0ProofFrameGap::BackendMismatch),
