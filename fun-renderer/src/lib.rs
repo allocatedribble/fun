@@ -39,6 +39,8 @@ pub mod queue_scheduler;
 pub mod research;
 pub mod resource;
 pub mod scene;
+#[cfg(feature = "bevy_ecs")]
+pub mod scene_streaming;
 pub mod scheduler;
 pub mod settings;
 pub mod shader;
@@ -856,6 +858,8 @@ pub use queue_scheduler::*;
 pub use research::*;
 pub use resource::*;
 pub use scene::*;
+#[cfg(feature = "bevy_ecs")]
+pub use scene_streaming::*;
 pub use scheduler::*;
 pub use settings::*;
 #[cfg(feature = "bevy_ecs")]
