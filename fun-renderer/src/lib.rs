@@ -56,6 +56,8 @@ pub mod shader;
 pub mod taa;
 pub mod ui;
 pub mod upscaling;
+#[cfg(feature = "bevy_ecs")]
+pub mod vendor_sdk_bridge;
 pub mod virtual_geometry;
 pub mod virtual_shadow;
 
@@ -881,6 +883,8 @@ pub use settings::*;
 #[cfg(feature = "bevy_ecs")]
 pub use taa::*;
 pub use ui::*;
+#[cfg(feature = "bevy_ecs")]
+pub use vendor_sdk_bridge::*;
 pub use virtual_geometry::*;
 pub use virtual_shadow::*;
 
