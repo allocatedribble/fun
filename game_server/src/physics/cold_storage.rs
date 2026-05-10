@@ -516,15 +516,14 @@ impl ColdChunkSnapshot {
     }
 }
 
+/// FCC1 cold-chunk checksum. Pass-19 audit fix #4 centralised the
+/// FNV-1a 32-bit implementation in `thunder::hash` so the four
+/// canonical containers (FRP1 / FCC1 / FSST / FCMP) all share one
+/// canonical hasher; this is now a thin alias so the rest of the
+/// module reads naturally.
+#[inline]
 fn checksum_payload(payload: &[u8]) -> u32 {
-    // Simple FNV-1a 32-bit checksum. Cheap, deterministic, sufficient
-    // for storage-validation tampering detection.
-    let mut hash = 0x811c_9dc5_u32;
-    for byte in payload {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
+    thunder::hash::fnv1a32(payload)
 }
 
 fn tier_to_u8(tier: BodyLifecycleTier) -> u8 {
@@ -739,6 +738,37 @@ mod tests {
         bytes[4] = 99;
         let result = ColdChunkSnapshot::decode(&bytes, DEFAULT_MAX_CHUNK_BYTES, None);
         assert_eq!(result, Err(ColdChunkError::UnsupportedVersion(99)));
+    }
+
+    #[test]
+    fn lying_record_count_in_header_is_rejected() {
+        // Audit fix #2: a crafted FCC1 whose `record_count` header
+        // field disagrees with the actual payload size must reject as
+        // LengthMismatch before allocating. The record_count u32 sits
+        // at offset 16 in the header (4 magic + 1 version + 3 reserved
+        // + 4 shard + 4 tick = 16).
+        let snapshot = ColdChunkSnapshot::new(ShardId(0), 7, vec![record(1, 0)]);
+        let mut bytes = snapshot.encode();
+        let lying_count = u32::MAX.to_le_bytes();
+        bytes[16..20].copy_from_slice(&lying_count);
+        let err = ColdChunkSnapshot::decode(&bytes, DEFAULT_MAX_CHUNK_BYTES, None)
+            .expect_err("oversized record_count must reject");
+        assert_eq!(err, ColdChunkError::LengthMismatch);
+    }
+
+    #[test]
+    fn truncated_payload_is_rejected_as_length_mismatch() {
+        // Audit fix #2: payload trimmed below `record_count *
+        // COLD_RECORD_BYTES` must reject as LengthMismatch — paired
+        // coverage with the lying-count case above.
+        let snapshot = ColdChunkSnapshot::new(ShardId(0), 7, vec![record(1, 0), record(2, 0)]);
+        let mut bytes = snapshot.encode();
+        // Drop the last 10 bytes of payload while keeping the header
+        // count of 2.
+        bytes.truncate(bytes.len() - 10);
+        let err = ColdChunkSnapshot::decode(&bytes, DEFAULT_MAX_CHUNK_BYTES, None)
+            .expect_err("truncated payload must reject");
+        assert_eq!(err, ColdChunkError::LengthMismatch);
     }
 
     #[test]

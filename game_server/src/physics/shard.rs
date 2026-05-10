@@ -126,6 +126,14 @@ pub enum BodyLifecycleTier {
 /// shard's body table and tracks the tier separately from the pool
 /// row so transitions can be coordinated without touching the pool's
 /// dirty-row stream.
+///
+/// Pose / velocity fields cache the most recent authoritative state
+/// produced by the active pool. They are read by Pass 18's
+/// [`replay_bridge`](super::replay_bridge) when building rollback
+/// slices and state digests; without them the digest would be
+/// position-only and two bodies that differ only in orientation or
+/// linear velocity would produce identical digests, masking real
+/// divergences.
 #[derive(Clone, Copy, Debug)]
 pub struct ShardBodyRecord {
     pub global: GlobalPhysicalEntityId,
@@ -134,6 +142,15 @@ pub struct ShardBodyRecord {
     pub tier: BodyLifecycleTier,
     pub handle: ActiveBodyHandle,
     pub last_position: Vec3,
+    /// Most-recent rotation captured from the active pool. Defaults
+    /// to [`Quat::IDENTITY`] before the first solver writeback.
+    pub last_rotation: Quat,
+    /// Most-recent linear velocity captured from the active pool
+    /// (world space, m/s).
+    pub last_linear_velocity: Vec3,
+    /// Most-recent angular velocity captured from the active pool
+    /// (world space, rad/s).
+    pub last_angular_velocity: Vec3,
     /// Shard that owns the body authoritatively. When this body lives
     /// as a ghost in this shard, `authoritative_shard` points to the
     /// neighbor that owns the canonical state.
@@ -583,6 +600,9 @@ impl ShardRegistry {
                 tier: BodyLifecycleTier::Active,
                 handle: outcome,
                 last_position: position,
+                last_rotation: Quat::IDENTITY,
+                last_linear_velocity: Vec3::ZERO,
+                last_angular_velocity: Vec3::ZERO,
                 authoritative_shard: primary,
             },
         );
@@ -620,6 +640,9 @@ impl ShardRegistry {
                         tier: BodyLifecycleTier::Ghost,
                         handle: ActiveBodyHandle::default(),
                         last_position: position,
+                        last_rotation: Quat::IDENTITY,
+                        last_linear_velocity: Vec3::ZERO,
+                        last_angular_velocity: Vec3::ZERO,
                         authoritative_shard: id_clone,
                     },
                 );
@@ -771,6 +794,9 @@ impl ShardRegistry {
                             tier: BodyLifecycleTier::Ghost,
                             handle: ActiveBodyHandle::default(),
                             last_position: position,
+                            last_rotation: Quat::IDENTITY,
+                            last_linear_velocity: Vec3::ZERO,
+                            last_angular_velocity: Vec3::ZERO,
                             authoritative_shard: source_shard,
                         },
                     );
@@ -848,6 +874,9 @@ impl ShardRegistry {
                                     tier: BodyLifecycleTier::Active,
                                     handle,
                                     last_position: position,
+                                    last_rotation: record.last_rotation,
+                                    last_linear_velocity: record.last_linear_velocity,
+                                    last_angular_velocity: record.last_angular_velocity,
                                     authoritative_shard: to,
                                 },
                             );

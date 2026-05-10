@@ -159,14 +159,18 @@ pub fn build_rollback_slice(
                 _ => authoritative_count = authoritative_count.saturating_add(1),
             }
             let pose_mm = quantize_position_mm(record.last_position);
+            let rotation_q16 = quantize_rotation_q16(record.last_rotation);
+            let linear_cm_per_s = quantize_linear_velocity_cm_per_s(record.last_linear_velocity);
+            let angular_mrad_per_s =
+                quantize_angular_velocity_mrad_per_s(record.last_angular_velocity);
             active_bodies.push(RollbackActiveBodyRow {
                 body: ReplayBodyId(global.0),
                 shard: ReplayShardId(shard_id.0),
                 tier,
                 pose_mm,
-                rotation_q16: [0, 0, 0, i16::MAX],
-                linear_cm_per_s: [0, 0, 0],
-                angular_mrad_per_s: [0, 0, 0],
+                rotation_q16,
+                linear_cm_per_s,
+                angular_mrad_per_s,
             });
         }
         shard_ownership.push(DigestShardOwnership {
@@ -221,14 +225,18 @@ pub fn build_state_digest(
                 _ => authoritative_count = authoritative_count.saturating_add(1),
             }
             let pose_mm = quantize_position_mm(record.last_position);
+            let rotation_q16 = quantize_rotation_q16(record.last_rotation);
+            let linear_cm_per_s = quantize_linear_velocity_cm_per_s(record.last_linear_velocity);
+            let angular_mrad_per_s =
+                quantize_angular_velocity_mrad_per_s(record.last_angular_velocity);
             builder.add_active_body(DigestActiveRow {
                 body: ReplayBodyId(global.0),
                 shard: ReplayShardId(shard_id.0),
                 tier,
                 pose_mm,
-                rotation_q16: [0, 0, 0, i16::MAX],
-                linear_cm_per_s: [0, 0, 0],
-                angular_mrad_per_s: [0, 0, 0],
+                rotation_q16,
+                linear_cm_per_s,
+                angular_mrad_per_s,
             });
         }
         builder.add_shard_ownership(DigestShardOwnership {
@@ -278,6 +286,73 @@ fn quantize_position_mm(position: Vec3) -> [i32; 3] {
     [to_mm(position.x), to_mm(position.y), to_mm(position.z)]
 }
 
+/// Quantize a unit quaternion to a 16-bit-packed [x, y, z, w]. Each
+/// component is scaled into [-i16::MAX, i16::MAX] so a full rotation
+/// resolves to ~6e-5 radian precision per component — comfortably
+/// finer than the cold-record format expects. Saturates on out-of-
+/// range inputs (e.g. malformed unit quaternions) so the digest stays
+/// well-defined.
+#[inline]
+fn quantize_rotation_q16(rotation: Quat) -> [i16; 4] {
+    let to_q16 = |component: f32| -> i16 {
+        let clamped = component.clamp(-1.0, 1.0);
+        let scaled = clamped * (i16::MAX as f32);
+        if scaled.is_nan() {
+            0
+        } else if scaled >= i16::MAX as f32 {
+            i16::MAX
+        } else if scaled <= i16::MIN as f32 {
+            i16::MIN
+        } else {
+            scaled as i16
+        }
+    };
+    [
+        to_q16(rotation.x),
+        to_q16(rotation.y),
+        to_q16(rotation.z),
+        to_q16(rotation.w),
+    ]
+}
+
+/// Quantize a linear velocity (m/s) to centimetres-per-second. i16 covers
+/// roughly ±327 m/s, plenty for gameplay; saturates outside that range.
+#[inline]
+fn quantize_linear_velocity_cm_per_s(velocity: Vec3) -> [i16; 3] {
+    let to_i16 = |component: f32| -> i16 {
+        let scaled = component * 100.0;
+        if scaled.is_nan() {
+            0
+        } else if scaled >= i16::MAX as f32 {
+            i16::MAX
+        } else if scaled <= i16::MIN as f32 {
+            i16::MIN
+        } else {
+            scaled as i16
+        }
+    };
+    [to_i16(velocity.x), to_i16(velocity.y), to_i16(velocity.z)]
+}
+
+/// Quantize an angular velocity (rad/s) to milliradians-per-second.
+/// i16 covers roughly ±32 rad/s, sufficient for any realistic body.
+#[inline]
+fn quantize_angular_velocity_mrad_per_s(velocity: Vec3) -> [i16; 3] {
+    let to_i16 = |component: f32| -> i16 {
+        let scaled = component * 1_000.0;
+        if scaled.is_nan() {
+            0
+        } else if scaled >= i16::MAX as f32 {
+            i16::MAX
+        } else if scaled <= i16::MIN as f32 {
+            i16::MIN
+        } else {
+            scaled as i16
+        }
+    };
+    [to_i16(velocity.x), to_i16(velocity.y), to_i16(velocity.z)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +373,32 @@ mod tests {
             tier,
             handle: super::super::active_pool::ActiveBodyHandle::default(),
             last_position: position,
+            last_rotation: Quat::IDENTITY,
+            last_linear_velocity: Vec3::ZERO,
+            last_angular_velocity: Vec3::ZERO,
+            authoritative_shard: owner,
+        }
+    }
+
+    fn make_dynamic_record(
+        global: GlobalPhysicalEntityId,
+        tier: BodyLifecycleTier,
+        position: Vec3,
+        rotation: Quat,
+        linear_velocity: Vec3,
+        angular_velocity: Vec3,
+        owner: ShardId,
+    ) -> ShardBodyRecord {
+        ShardBodyRecord {
+            global,
+            entity: Entity::from_raw_u32(global.0 as u32 + 1).expect("valid"),
+            kind: ActiveBodyKind::Dynamic,
+            tier,
+            handle: super::super::active_pool::ActiveBodyHandle::default(),
+            last_position: position,
+            last_rotation: rotation,
+            last_linear_velocity: linear_velocity,
+            last_angular_velocity: angular_velocity,
             authoritative_shard: owner,
         }
     }
@@ -429,6 +530,136 @@ mod tests {
         assert_eq!(stream.shard_transfers[0].body, ReplayBodyId(7));
         assert_eq!(stream.shard_transfers[0].from_shard, ReplayShardId(0));
         assert_eq!(stream.shard_transfers[0].to_shard, ReplayShardId(1));
+    }
+
+    #[test]
+    fn rotation_difference_produces_distinct_digests() {
+        // Audit fix #3: before this pass `replay_bridge` hard-coded
+        // rotation to [0, 0, 0, i16::MAX] and velocities to zero, so
+        // two bodies that differed only in orientation produced
+        // identical digests and the "rollback replay stable" invariant
+        // passed vacuously. Now that ShardBodyRecord carries rotation,
+        // the digest must diverge between two bodies with different
+        // orientations.
+        let mut registry_a = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_a = registry_a.add_shard(CellId::new(0, 0, 0));
+        registry_a
+            .shard_mut(shard_a)
+            .expect("shard 0")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_dynamic_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Quat::IDENTITY,
+                    Vec3::ZERO,
+                    Vec3::ZERO,
+                    shard_a,
+                ),
+            );
+        let mut registry_b = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_b = registry_b.add_shard(CellId::new(0, 0, 0));
+        registry_b
+            .shard_mut(shard_b)
+            .expect("shard 0")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_dynamic_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+                    Vec3::ZERO,
+                    Vec3::ZERO,
+                    shard_b,
+                ),
+            );
+        let digest_a = build_state_digest(&registry_a, NetworkTick(1), PolicyVersion(20));
+        let digest_b = build_state_digest(&registry_b, NetworkTick(1), PolicyVersion(20));
+        assert_ne!(
+            digest_a.active_body_digest, digest_b.active_body_digest,
+            "rotation must contribute to the active-body digest"
+        );
+    }
+
+    #[test]
+    fn linear_velocity_difference_produces_distinct_digests() {
+        // Same shape as the rotation test: changing only the linear
+        // velocity must change the digest.
+        let mut registry_a = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_a = registry_a.add_shard(CellId::new(0, 0, 0));
+        registry_a
+            .shard_mut(shard_a)
+            .expect("shard 0")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_dynamic_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::ZERO,
+                    Quat::IDENTITY,
+                    Vec3::new(2.0, 0.0, 0.0),
+                    Vec3::ZERO,
+                    shard_a,
+                ),
+            );
+        let mut registry_b = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_b = registry_b.add_shard(CellId::new(0, 0, 0));
+        registry_b
+            .shard_mut(shard_b)
+            .expect("shard 0")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_dynamic_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::ZERO,
+                    Quat::IDENTITY,
+                    Vec3::new(2.5, 0.0, 0.0),
+                    Vec3::ZERO,
+                    shard_b,
+                ),
+            );
+        let digest_a = build_state_digest(&registry_a, NetworkTick(1), PolicyVersion(20));
+        let digest_b = build_state_digest(&registry_b, NetworkTick(1), PolicyVersion(20));
+        assert_ne!(
+            digest_a.active_body_digest, digest_b.active_body_digest,
+            "linear velocity must contribute to the active-body digest"
+        );
+    }
+
+    #[test]
+    fn quantize_rotation_q16_round_trips_identity() {
+        // Identity rotation should land at [0, 0, 0, i16::MAX].
+        let q = quantize_rotation_q16(Quat::IDENTITY);
+        assert_eq!(q, [0, 0, 0, i16::MAX]);
+    }
+
+    #[test]
+    fn quantize_velocity_handles_nan_and_saturation() {
+        // NaN must produce zero so the digest stays well-defined.
+        assert_eq!(
+            quantize_linear_velocity_cm_per_s(Vec3::new(f32::NAN, 0.0, 0.0))[0],
+            0
+        );
+        // Out-of-range saturates rather than wrapping.
+        assert_eq!(
+            quantize_linear_velocity_cm_per_s(Vec3::new(1_000.0, 0.0, 0.0))[0],
+            i16::MAX
+        );
+        assert_eq!(
+            quantize_angular_velocity_mrad_per_s(Vec3::new(-1_000.0, 0.0, 0.0))[0],
+            i16::MIN
+        );
     }
 
     #[test]
