@@ -56,6 +56,8 @@ pub mod passj_clustered_lighting_live;
 pub mod passk_temporal_reconstruction_live;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub mod passl_native_ui_live;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+pub mod passm_windowed_surface_present;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -970,6 +972,8 @@ pub use passj_clustered_lighting_live::*;
 pub use passk_temporal_reconstruction_live::*;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub use passl_native_ui_live::*;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+pub use passm_windowed_surface_present::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;

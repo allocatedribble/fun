@@ -73,3 +73,11 @@ wgpu = { version = "29.0.3", default-features = false, features = [
     "metal",
     "naga-ir",
 ], optional = true }
+
+# Dev-only: the Pass M windowed surface present integration test
+# (`live_passm_runs_real_windowed_surface_present_against_winit_window`)
+# creates a real winit window + real wgpu surface to satisfy the
+# typed `IntegrationTestCategory::SurfacePresent` evidence kind. winit
+# stays out of the library proper.
+[dev-dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }

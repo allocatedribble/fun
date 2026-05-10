@@ -252,6 +252,21 @@ pub const PASS_EVIDENCE_REGISTRY: &[PassEvidenceEntry] = &[
     // batching, and atlas work"). Pass G's typed fake-renderer
     // fixture attached to four real render pipelines.
     PassEvidenceEntry::new("pass_l.native_ui_live", EvidenceKind::LiveGpuExecution),
+    // Pass M: windowed surface present (live OS surface).
+    // First real `wgpu::Surface` against a winit window in the
+    // renderer workspace; closes
+    // `gap.tier0.no_swapchain_configured` at the strict level;
+    // satisfies the typed
+    // `IntegrationTestCategory::SurfacePresent` claim
+    // (quality-audit rule 6.4). Once Pass M lands on a real
+    // DX12 host the renderer can claim "visible example scene"
+    // rather than "headless frame probe."
+    // (Recommended-next-phase Phase 1: Windowed SurfacePresent
+    // proof.)
+    PassEvidenceEntry::new(
+        "pass_m.windowed_surface_present",
+        EvidenceKind::LiveGpuExecution,
+    ),
     // Tier 0: proof frame keystone — visible frame / GPU timing
     // are planning surfaces today; bridge health + DX12 hardening
     // are typed-contract.
@@ -571,6 +586,18 @@ pub const INTEGRATION_TEST_REGISTRY: &[IntegrationTestRegistryEntry] = &[
         IntegrationTestCategory::FrameProbe,
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass M: real winit window + real `wgpu::Surface` against
+    // the window + real swapchain configure + compiled render
+    // graph + `SurfaceTexture::present` + offscreen mirror
+    // readback. This is the renderer's first
+    // `IntegrationTestCategory::SurfacePresent` entry — the
+    // only category that satisfies user-facing "visible
+    // frame" claims (quality-audit rule 6.4).
+    IntegrationTestRegistryEntry::new(
+        "live_passm_runs_real_windowed_surface_present_against_winit_window",
+        IntegrationTestCategory::SurfacePresent,
+        EvidenceKind::LiveGpuExecution,
+    ),
 ];
 
 // ============================================================================
@@ -767,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn pass_evidence_registry_covers_every_a_through_l_and_tier_0_through_8() {
+    fn pass_evidence_registry_covers_every_a_through_m_and_tier_0_through_8() {
         let ids: Vec<&str> = PASS_EVIDENCE_REGISTRY.iter().map(|e| e.stable_id).collect();
         for pass in [
             "pass_a.truth_resync_and_ui_governance",
@@ -782,6 +809,7 @@ mod tests {
             "pass_j.clustered_lighting_live",
             "pass_k.temporal_reconstruction_live",
             "pass_l.native_ui_live",
+            "pass_m.windowed_surface_present",
         ] {
             assert!(ids.contains(&pass), "missing Pass: {pass}");
         }
