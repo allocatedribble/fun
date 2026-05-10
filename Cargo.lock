@@ -3215,6 +3215,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fun-native-app"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-input",
+ "rvelte-fun-native-codegen",
+ "rvelte-fun-render-adapter",
+ "rvelte-fun-ui-core",
+]
+
+[[package]]
 name = "fun-renderer"
 version = "0.1.0"
 dependencies = [
@@ -3231,6 +3241,20 @@ dependencies = [
  "serde",
  "serde_json",
  "wgpu",
+]
+
+[[package]]
+name = "fun-rvelte-bridge"
+version = "0.1.0"
+dependencies = [
+ "fun-native-app",
+ "fun-renderer",
+ "rvelte-fun-input",
+ "rvelte-fun-native-codegen",
+ "rvelte-fun-render-adapter",
+ "rvelte-fun-ui-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4556,6 +4580,16 @@ checksum = "3c8469b4a23b962c1396b9b451dda50ef5b283e8dd309d69033475fa9b334324"
 dependencies = [
  "libc",
  "pkg-config",
+]
+
+[[package]]
+name = "libyml"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3302702afa434ffa30847a83305f0a69d6abd74293b6554c18ec85c7ef30c980"
+dependencies = [
+ "anyhow",
+ "version_check",
 ]
 
 [[package]]
@@ -6506,10 +6540,142 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvelte-codegen"
+version = "0.1.0"
+dependencies = [
+ "rvelte-core",
+ "rvelte-facade",
+ "rvelte-ir",
+ "rvelte-manifest",
+]
+
+[[package]]
+name = "rvelte-core"
+version = "0.1.0"
+
+[[package]]
+name = "rvelte-facade"
+version = "0.1.0"
+dependencies = [
+ "rvelte-core",
+ "rvelte-runtime-dom",
+]
+
+[[package]]
+name = "rvelte-fun-accessibility"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-layout",
+ "rvelte-fun-ui-core",
+ "serde",
+]
+
+[[package]]
+name = "rvelte-fun-hit"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-layout",
+ "rvelte-fun-ui-core",
+ "serde",
+]
+
+[[package]]
+name = "rvelte-fun-input"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-ui-core",
+ "serde",
+]
+
+[[package]]
+name = "rvelte-fun-layout"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-ui-core",
+ "serde",
+ "taffy",
+]
+
+[[package]]
+name = "rvelte-fun-native-codegen"
+version = "0.1.0"
+dependencies = [
+ "rvelte-codegen",
+ "rvelte-fun-accessibility",
+ "rvelte-fun-hit",
+ "rvelte-fun-input",
+ "rvelte-fun-layout",
+ "rvelte-fun-paint",
+ "rvelte-fun-text",
+ "rvelte-fun-ui-core",
+ "serde",
+ "serde_yml",
+]
+
+[[package]]
+name = "rvelte-fun-paint"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-layout",
+ "rvelte-fun-text",
+ "rvelte-fun-ui-core",
+ "serde",
+]
+
+[[package]]
+name = "rvelte-fun-render-adapter"
+version = "0.1.0"
+dependencies = [
+ "rvelte-fun-ui-core",
+ "serde",
+]
+
+[[package]]
+name = "rvelte-fun-text"
+version = "0.1.0"
+dependencies = [
+ "parley",
+ "rvelte-fun-layout",
+ "rvelte-fun-ui-core",
+ "serde",
+]
+
+[[package]]
 name = "rvelte-fun-ui-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "rvelte-ir"
+version = "0.1.0"
+dependencies = [
+ "rvelte-core",
+]
+
+[[package]]
+name = "rvelte-manifest"
+version = "0.1.0"
+dependencies = [
+ "rvelte-core",
+ "serde",
+ "serde_yml",
+]
+
+[[package]]
+name = "rvelte-runtime"
+version = "0.1.0"
+dependencies = [
+ "rvelte-core",
+]
+
+[[package]]
+name = "rvelte-runtime-dom"
+version = "0.1.0"
+dependencies = [
+ "rvelte-core",
+ "rvelte-runtime",
 ]
 
 [[package]]
@@ -6708,6 +6874,21 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_yml"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59e2dd588bf1597a252c3b920e0143eb99b0f76e4e082f4c92ce34fbc9e71ddd"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "libyml",
+ "memchr",
+ "ryu",
+ "serde",
+ "version_check",
 ]
 
 [[package]]

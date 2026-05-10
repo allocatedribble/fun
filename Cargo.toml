@@ -10,6 +10,7 @@ members = [
     "fun-renderer",
     "fun_ui_cef",
     "game_client",
+    "game_client/ui/rvelte_bridge",
     "game_launcher",
     "game_scene",
     "game_server",

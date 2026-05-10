@@ -1,0 +1,28 @@
+[package]
+name = "fun-rvelte-bridge"
+edition.workspace = true
+version.workspace = true
+description = "Pass-72 product native UI adapter skeleton. Bridges rvelte's FUN-native pipeline to the game-client process without binding to any concrete graphics backend. Implements the design pinned by rvelte/docs/project-fun-native-adapter-design.md."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Feature flag for the experimental fun-renderer-backed packet
+# consumer. Off by default so the bridge's production tree stays
+# free of bevy / wgpu / dx12 / vulkan / metal / cef / swapchain
+# until the product opts in. With the feature on, the bridge
+# imports `fun_renderer` (with its `native_ui_adapter` feature) and
+# exposes `fun_renderer_backend::FunRendererPacketConsumer`.
+fun_renderer_backend = ["dep:fun_renderer"]
+
+[dependencies]
+rvelte-fun-ui-core         = { path = "../../../../rvelte/crates/rvelte-fun-ui-core" }
+rvelte-fun-input           = { path = "../../../../rvelte/crates/rvelte-fun-input" }
+rvelte-fun-native-codegen  = { path = "../../../../rvelte/crates/rvelte-fun-native-codegen" }
+rvelte-fun-render-adapter  = { path = "../../../../rvelte/crates/rvelte-fun-render-adapter" }
+fun-native-app             = { path = "../../../../rvelte/examples/fun-native-app" }
+fun_renderer               = { workspace = true, optional = true, features = ["native_ui_adapter"] }
+serde                      = { workspace = true }
+serde_json                 = { workspace = true }
