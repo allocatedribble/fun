@@ -10,8 +10,9 @@ name = "fun_renderer"
 workspace = true
 
 [features]
-default = ["bevy_ecs", "fun_renderer_core", "wgpu_bridge"]
+default = ["bevy_ecs", "fun_renderer_core", "native_ui_adapter", "wgpu_bridge"]
 bevy_ecs = ["dep:bevy_app", "dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
+native_ui_adapter = ["bevy_ecs", "dep:rvelte-fun-ui-core"]
 cef_gpu_only = []
 dlss = []
 dx12_native_interop = []
@@ -59,6 +60,7 @@ fun_lux.workspace = true
 fun_ai_core = { workspace = true, optional = true }
 fun_scene.workspace = true
 fun_telemetry_core.workspace = true
+rvelte-fun-ui-core = { path = "../../rvelte/crates/rvelte-fun-ui-core", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 naga = { version = "29.0.3", default-features = false, features = [
