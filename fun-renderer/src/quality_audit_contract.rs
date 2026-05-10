@@ -242,6 +242,16 @@ pub const PASS_EVIDENCE_REGISTRY: &[PassEvidenceEntry] = &[
         "pass_k.temporal_reconstruction_live",
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass L: native UI rendering, batching, and atlas work
+    // (live GPU). Real shared WGSL shader module (vs_main +
+    // fs_filled + fs_image + fs_glyph + fs_rounded_rect) +
+    // four real render pipelines + real glyph atlas with
+    // typed shelf packer + real scissor stack + typed
+    // launcher route identifier + typed bleeding-edge
+    // extension surfaces (Priority 4: "Native UI rendering,
+    // batching, and atlas work"). Pass G's typed fake-renderer
+    // fixture attached to four real render pipelines.
+    PassEvidenceEntry::new("pass_l.native_ui_live", EvidenceKind::LiveGpuExecution),
     // Tier 0: proof frame keystone — visible frame / GPU timing
     // are planning surfaces today; bridge health + DX12 hardening
     // are typed-contract.
@@ -552,6 +562,15 @@ pub const INTEGRATION_TEST_REGISTRY: &[IntegrationTestRegistryEntry] = &[
         IntegrationTestCategory::AdapterDevice,
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass L: real GPU UI batch table → four real render
+    // pipelines (filled / image / glyph / rounded SDF) + real
+    // glyph atlas with shelf packer + real scissor stack +
+    // frame target readback at typed probe pixels.
+    IntegrationTestRegistryEntry::new(
+        "live_passl_runs_real_ui_batches_with_atlas_and_frame_probe",
+        IntegrationTestCategory::FrameProbe,
+        EvidenceKind::LiveGpuExecution,
+    ),
 ];
 
 // ============================================================================
@@ -748,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn pass_evidence_registry_covers_every_a_through_k_and_tier_0_through_8() {
+    fn pass_evidence_registry_covers_every_a_through_l_and_tier_0_through_8() {
         let ids: Vec<&str> = PASS_EVIDENCE_REGISTRY.iter().map(|e| e.stable_id).collect();
         for pass in [
             "pass_a.truth_resync_and_ui_governance",
@@ -762,6 +781,7 @@ mod tests {
             "pass_i.gpu_driven_compute_indirect",
             "pass_j.clustered_lighting_live",
             "pass_k.temporal_reconstruction_live",
+            "pass_l.native_ui_live",
         ] {
             assert!(ids.contains(&pass), "missing Pass: {pass}");
         }

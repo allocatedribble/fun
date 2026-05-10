@@ -54,6 +54,8 @@ pub mod passi_gpu_driven_compute_indirect;
 pub mod passj_clustered_lighting_live;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub mod passk_temporal_reconstruction_live;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+pub mod passl_native_ui_live;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -966,6 +968,8 @@ pub use passi_gpu_driven_compute_indirect::*;
 pub use passj_clustered_lighting_live::*;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub use passk_temporal_reconstruction_live::*;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+pub use passl_native_ui_live::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
