@@ -54,6 +54,8 @@ pub mod settings;
 pub mod shader;
 #[cfg(feature = "bevy_ecs")]
 pub mod taa;
+#[cfg(feature = "bevy_ecs")]
+pub mod tier0_proof_frame_gate;
 pub mod ui;
 pub mod upscaling;
 #[cfg(feature = "bevy_ecs")]
@@ -882,6 +884,8 @@ pub use scheduler::*;
 pub use settings::*;
 #[cfg(feature = "bevy_ecs")]
 pub use taa::*;
+#[cfg(feature = "bevy_ecs")]
+pub use tier0_proof_frame_gate::*;
 pub use ui::*;
 #[cfg(feature = "bevy_ecs")]
 pub use vendor_sdk_bridge::*;
