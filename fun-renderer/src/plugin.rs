@@ -1271,6 +1271,27 @@ mod tests {
                     .queue
                     .is_some()
             );
+            // Pass 16: when the DX12 production gate succeeds, the bridge
+            // health artifact must carry a DX12-native-backend health snapshot
+            // (driver report, command-list bridge probe, diagnostic hook
+            // status), and the truth gate must say the actual backend is DX12.
+            let dx12_health = artifact
+                .dx12_native_backend_health
+                .expect("dx12 native backend health must be present on dx12 success path");
+            assert_eq!(dx12_health.requested_backend, NativeBackend::Dx12);
+            assert_eq!(dx12_health.actual_backend, NativeBackend::Dx12);
+            assert!(dx12_health.product_dx12_truth_holds());
+            assert_eq!(
+                dx12_health.canonical_path,
+                crate::bridge::wgpu::DX12_BRIDGE_DIAGNOSTICS_CANONICAL_ARTIFACT_PATH
+            );
+            // The public wgpu-hal bridge does not expose ID3D12GraphicsCommandList,
+            // so the probe must report NativeCommandListUnavailable rather than
+            // claim availability that the bridge cannot back.
+            assert_eq!(
+                dx12_health.command_list_status(),
+                crate::bridge::wgpu::Dx12CommandListBridgeStatus::NativeCommandListUnavailable
+            );
         } else {
             // On hosts without DX12, the truth gate must mark a failure with the
             // BridgeRuntime* reason. The failure must be captured in
@@ -1435,6 +1456,38 @@ mod tests {
         assert_eq!(
             device_failure,
             RendererFailureReason::BridgeRuntimeDeviceCreationFailed
+        );
+    }
+
+    #[test]
+    fn dx12_production_gate_rejects_non_dx12_adapter_with_actual_backend_mismatch() {
+        // Pass 16: the DX12 production gate is a typed Dx12ProductionGateError
+        // that distinguishes "wrong bridge type" from "actual adapter is not
+        // DX12". Vulkan/Metal cannot pose as DX12, and a non-DX12 bridge
+        // cannot satisfy the DX12 gate.
+        use crate::bridge::wgpu::{Dx12ProductionGateError, dx12_production_gate_for};
+
+        let mismatch = dx12_production_gate_for::<Dx12Native>(NativeBackend::Vulkan)
+            .expect_err("Vulkan adapter must not pose as DX12");
+        assert_eq!(
+            mismatch,
+            Dx12ProductionGateError::ActualBackendMismatch {
+                requested: NativeBackend::Dx12,
+                actual: NativeBackend::Vulkan,
+            }
+        );
+
+        let wrong_bridge = dx12_production_gate_for::<VulkanNative>(NativeBackend::Vulkan)
+            .expect_err("Vulkan bridge cannot satisfy the DX12 production gate");
+        assert!(matches!(
+            wrong_bridge,
+            Dx12ProductionGateError::NotDx12Bridge { .. }
+        ));
+
+        // The successful path must accept actual DX12 unchanged.
+        assert_eq!(
+            dx12_production_gate_for::<Dx12Native>(NativeBackend::Dx12),
+            Ok(())
         );
     }
 }

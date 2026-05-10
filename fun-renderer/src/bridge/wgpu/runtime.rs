@@ -8,6 +8,7 @@ use super::{
     core::{WgpuCoreBridge, WgpuCoreBridgeSnapshot, WgpuCoreDeviceState, WgpuCoreHookSink},
     device::{WgpuAdapterInfo, WgpuFeatureSummary, WgpuLimitSummary},
     diagnostics::{WgpuBridgeHealthReport, WgpuDescriptorCache},
+    dx12_diagnostics::{Dx12NativeBackendHealth, Dx12ProductionGateError},
     hal::{NativeInteropCapabilities, WgpuHalBridgeStatus, hal_bridge_status},
     naga::WgpuNagaBridgeStatus,
 };
@@ -260,6 +261,7 @@ pub struct WgpuBridgeHealthArtifact {
     pub schema_version: u16,
     pub canonical_path: &'static str,
     pub health: OwnedWgpuBridgeHealthReport,
+    pub dx12_native_backend_health: Option<Dx12NativeBackendHealth>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -335,10 +337,21 @@ pub fn build_health_artifact_for_state<B: WgpuNativeBackend>(
         state.device_features,
         descriptor_cache.status(),
     );
+    let dx12_native_backend_health = if matches!(B::NATIVE_BACKEND, NativeBackend::Dx12) {
+        Some(Dx12NativeBackendHealth::from_runtime::<B>(
+            &adapter_info,
+            state.device_features,
+            state.device_limits,
+            ::wgpu::InstanceFlags::from_build_config(),
+        ))
+    } else {
+        None
+    };
     WgpuBridgeHealthArtifact {
         schema_version: WGPU_BRIDGE_RUNTIME_SCHEMA_VERSION,
         canonical_path: bridge_health_canonical_artifact_path(),
         health: OwnedWgpuBridgeHealthReport::from_health_report(&report),
+        dx12_native_backend_health,
     }
 }
 
@@ -354,11 +367,26 @@ pub fn build_health_artifact_for_unknown_backend<B: WgpuNativeBackend>(
         WgpuFeatureSummary::default(),
         descriptor_cache.status(),
     );
+    let dx12_native_backend_health = if matches!(B::NATIVE_BACKEND, NativeBackend::Dx12) {
+        Some(Dx12NativeBackendHealth::from_failure::<B>(
+            failure.actual_backend,
+            info,
+        ))
+    } else {
+        None
+    };
     WgpuBridgeHealthArtifact {
         schema_version: WGPU_BRIDGE_RUNTIME_SCHEMA_VERSION,
         canonical_path: bridge_health_canonical_artifact_path(),
         health: OwnedWgpuBridgeHealthReport::from_health_report(&report),
+        dx12_native_backend_health,
     }
+}
+
+pub fn dx12_production_gate_for<B: WgpuNativeBackend>(
+    actual_backend: NativeBackend,
+) -> Result<(), Dx12ProductionGateError> {
+    super::dx12_diagnostics::enforce_dx12_production_gate::<B>(actual_backend)
 }
 
 #[must_use]
