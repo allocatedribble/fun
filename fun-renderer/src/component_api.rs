@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::Component;
 
 pub const RENDERER_COMPONENT_API_SCHEMA_VERSION: u16 = 1;
-pub const PUBLIC_RENDER_COMPONENT_COUNT: usize = 46;
+pub const PUBLIC_RENDER_COMPONENT_COUNT: usize = 49;
 pub const PUBLIC_RENDER_ASSET_COUNT: usize = 7;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -821,6 +821,169 @@ impl Default for ToneMappingSettings {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExposureMeteringMode {
+    #[default]
+    AverageLuminance,
+    CenterWeighted,
+    SpotHistogram,
+    Manual,
+}
+
+impl ExposureMeteringMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AverageLuminance => "average_luminance",
+            Self::CenterWeighted => "center_weighted",
+            Self::SpotHistogram => "spot_histogram",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct ExposureSettings {
+    pub auto_exposure: bool,
+    pub metering: ExposureMeteringMode,
+    pub min_ev100: f32,
+    pub max_ev100: f32,
+    pub adaptation_speed: f32,
+    pub manual_ev100: f32,
+}
+
+impl Default for ExposureSettings {
+    fn default() -> Self {
+        Self {
+            auto_exposure: true,
+            metering: ExposureMeteringMode::AverageLuminance,
+            min_ev100: -8.0,
+            max_ev100: 16.0,
+            adaptation_speed: 1.5,
+            manual_ev100: 0.0,
+        }
+    }
+}
+
+impl ExposureSettings {
+    pub const PRODUCT_DEFAULT: Self = Self {
+        auto_exposure: true,
+        metering: ExposureMeteringMode::AverageLuminance,
+        min_ev100: -8.0,
+        max_ev100: 16.0,
+        adaptation_speed: 1.5,
+        manual_ev100: 0.0,
+    };
+
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.min_ev100.is_finite()
+            && self.max_ev100.is_finite()
+            && self.adaptation_speed.is_finite()
+            && self.manual_ev100.is_finite()
+            && self.min_ev100 <= self.max_ev100
+            && self.adaptation_speed >= 0.0
+    }
+
+    #[must_use]
+    pub const fn requires_histogram(self) -> bool {
+        matches!(
+            self.metering,
+            ExposureMeteringMode::AverageLuminance
+                | ExposureMeteringMode::CenterWeighted
+                | ExposureMeteringMode::SpotHistogram
+        ) && self.auto_exposure
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct ColorGradingSettings {
+    pub lift: RenderColor,
+    pub gamma: RenderColor,
+    pub gain: RenderColor,
+    pub saturation: f32,
+    pub contrast: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub lut_id: RenderTextureAssetId,
+    pub lut_strength: f32,
+}
+
+impl Default for ColorGradingSettings {
+    fn default() -> Self {
+        Self {
+            lift: RenderColor::WHITE,
+            gamma: RenderColor::WHITE,
+            gain: RenderColor::WHITE,
+            saturation: 1.0,
+            contrast: 1.0,
+            temperature: 0.0,
+            tint: 0.0,
+            lut_id: RenderTextureAssetId::INVALID,
+            lut_strength: 0.0,
+        }
+    }
+}
+
+impl ColorGradingSettings {
+    #[must_use]
+    pub fn uses_lut(self) -> bool {
+        self.lut_id.is_valid() && self.lut_strength > 0.0
+    }
+
+    #[must_use]
+    pub fn is_identity(self) -> bool {
+        !self.uses_lut()
+            && self.saturation == 1.0
+            && self.contrast == 1.0
+            && self.temperature == 0.0
+            && self.tint == 0.0
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SharpenAlgorithm {
+    #[default]
+    None,
+    ContrastAdaptive,
+    Unsharp,
+}
+
+impl SharpenAlgorithm {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ContrastAdaptive => "contrast_adaptive",
+            Self::Unsharp => "unsharp",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct SharpeningSettings {
+    pub algorithm: SharpenAlgorithm,
+    pub strength: f32,
+    pub denoise: f32,
+}
+
+impl Default for SharpeningSettings {
+    fn default() -> Self {
+        Self {
+            algorithm: SharpenAlgorithm::None,
+            strength: 0.0,
+            denoise: 0.0,
+        }
+    }
+}
+
+impl SharpeningSettings {
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        !matches!(self.algorithm, SharpenAlgorithm::None)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct BloomSettings {
     pub intensity: f32,
@@ -1274,6 +1437,21 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
         ChangeDetectionPolicy::BevyChanged,
     ),
     component(
+        "ExposureSettings",
+        ComponentTemperature::Cold,
+        ChangeDetectionPolicy::BevyChanged,
+    ),
+    component(
+        "ColorGradingSettings",
+        ComponentTemperature::Cold,
+        ChangeDetectionPolicy::BevyChanged,
+    ),
+    component(
+        "SharpeningSettings",
+        ComponentTemperature::Cold,
+        ChangeDetectionPolicy::BevyChanged,
+    ),
+    component(
         "BloomSettings",
         ComponentTemperature::Cold,
         ChangeDetectionPolicy::BevyChanged,
@@ -1410,6 +1588,9 @@ mod tests {
         assert_component::<CefFrameToken>();
         assert_component::<CefSurfaceHealth>();
         assert_component::<ToneMappingSettings>();
+        assert_component::<ExposureSettings>();
+        assert_component::<ColorGradingSettings>();
+        assert_component::<SharpeningSettings>();
         assert_component::<BloomSettings>();
         assert_component::<TaaSettings>();
         assert_component::<HdrOutputSettings>();
@@ -1473,6 +1654,9 @@ mod tests {
             "CefTransportMode",
             "CefSurfaceHealth",
             "ToneMappingSettings",
+            "ExposureSettings",
+            "ColorGradingSettings",
+            "SharpeningSettings",
             "BloomSettings",
             "TaaSettings",
             "HdrOutputSettings",

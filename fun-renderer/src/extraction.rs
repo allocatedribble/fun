@@ -533,6 +533,9 @@ pub struct ExtractedPostProcessVolume {
     pub view_id: RenderViewId,
     pub stable_id: RenderStableId,
     pub tone_mapping: ToneMappingSettings,
+    pub exposure: ExposureSettings,
+    pub color_grading: ColorGradingSettings,
+    pub sharpening: SharpeningSettings,
     pub bloom: BloomSettings,
     pub taa: TaaSettings,
     pub hdr_output: HdrOutputSettings,
@@ -1288,6 +1291,9 @@ pub fn extract_renderer_post_process_volumes(
             Entity,
             Option<&CameraHistory>,
             Option<&ToneMappingSettings>,
+            Option<&ExposureSettings>,
+            Option<&ColorGradingSettings>,
+            Option<&SharpeningSettings>,
             Option<&BloomSettings>,
             Option<&TaaSettings>,
             Option<&HdrOutputSettings>,
@@ -1295,16 +1301,26 @@ pub fn extract_renderer_post_process_volumes(
         ),
         (
             Or<(
-                Added<ToneMappingSettings>,
-                Changed<ToneMappingSettings>,
-                Added<BloomSettings>,
-                Changed<BloomSettings>,
-                Added<TaaSettings>,
-                Changed<TaaSettings>,
-                Added<HdrOutputSettings>,
-                Changed<HdrOutputSettings>,
-                Added<UpscalerSettings>,
-                Changed<UpscalerSettings>,
+                Or<(
+                    Added<ToneMappingSettings>,
+                    Changed<ToneMappingSettings>,
+                    Added<ExposureSettings>,
+                    Changed<ExposureSettings>,
+                    Added<ColorGradingSettings>,
+                    Changed<ColorGradingSettings>,
+                    Added<SharpeningSettings>,
+                    Changed<SharpeningSettings>,
+                )>,
+                Or<(
+                    Added<BloomSettings>,
+                    Changed<BloomSettings>,
+                    Added<TaaSettings>,
+                    Changed<TaaSettings>,
+                    Added<HdrOutputSettings>,
+                    Changed<HdrOutputSettings>,
+                    Added<UpscalerSettings>,
+                    Changed<UpscalerSettings>,
+                )>,
             )>,
             With<RenderCamera>,
         ),
@@ -1314,7 +1330,19 @@ pub fn extract_renderer_post_process_volumes(
     mut diagnostics: ResMut<RenderWorldExtractionDiagnostics>,
 ) {
     let started_at = Instant::now();
-    for (entity, history, tone_mapping, bloom, taa, hdr_output, upscaler) in query.iter() {
+    for (
+        entity,
+        history,
+        tone_mapping,
+        exposure,
+        color_grading,
+        sharpening,
+        bloom,
+        taa,
+        hdr_output,
+        upscaler,
+    ) in query.iter()
+    {
         diagnostics.queried_entities = diagnostics.queried_entities.saturating_add(1);
         diagnostics.changed_entities = diagnostics.changed_entities.saturating_add(1);
         let explicit = history.map_or(RenderStableId::INVALID, |history| history.history_id);
@@ -1327,6 +1355,9 @@ pub fn extract_renderer_post_process_volumes(
             view_id,
             stable_id,
             tone_mapping: tone_mapping.copied().unwrap_or_default(),
+            exposure: exposure.copied().unwrap_or_default(),
+            color_grading: color_grading.copied().unwrap_or_default(),
+            sharpening: sharpening.copied().unwrap_or_default(),
             bloom: bloom.copied().unwrap_or_default(),
             taa: taa.copied().unwrap_or_default(),
             hdr_output: hdr_output.copied().unwrap_or_default(),

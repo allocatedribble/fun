@@ -67,6 +67,13 @@ pub enum FrameGraphPassRole {
     UiImportPlaceholder,
     UpscaleBoundary,
     FrameGenerationBoundary,
+    PostProcessExposure,
+    PostProcessBloom,
+    PostProcessToneMapping,
+    PostProcessColorGradingLut,
+    PostProcessSharpening,
+    PostProcessDebugOverlay,
+    PostProcessFinalOutputTransform,
     Compose,
     DiagnosticsReadback,
     Present,
@@ -83,6 +90,13 @@ impl FrameGraphPassRole {
             Self::UiImportPlaceholder => "ui_import_placeholder",
             Self::UpscaleBoundary => "upscale_boundary",
             Self::FrameGenerationBoundary => "frame_generation_boundary",
+            Self::PostProcessExposure => "post_process_exposure",
+            Self::PostProcessBloom => "post_process_bloom",
+            Self::PostProcessToneMapping => "post_process_tone_mapping",
+            Self::PostProcessColorGradingLut => "post_process_color_grading_lut",
+            Self::PostProcessSharpening => "post_process_sharpening",
+            Self::PostProcessDebugOverlay => "post_process_debug_overlay",
+            Self::PostProcessFinalOutputTransform => "post_process_final_output_transform",
             Self::Compose => "compose",
             Self::DiagnosticsReadback => "diagnostics_readback",
             Self::Present => "present",
@@ -168,6 +182,7 @@ pub enum FrameGraphDiagnosticCategory {
     VirtualResources,
     Diagnostics,
     Presentation,
+    PostProcess,
 }
 
 impl FrameGraphDiagnosticCategory {
@@ -181,6 +196,7 @@ impl FrameGraphDiagnosticCategory {
             Self::VirtualResources => "virtual_resources",
             Self::Diagnostics => "diagnostics",
             Self::Presentation => "presentation",
+            Self::PostProcess => "post_process",
         }
     }
 }
@@ -196,6 +212,13 @@ pub enum FrameGraphBenchmarkCategory {
     FrameGeneration,
     VirtualResources,
     Diagnostics,
+    PostProcessExposure,
+    PostProcessBloom,
+    PostProcessToneMapping,
+    PostProcessColorGradingLut,
+    PostProcessSharpening,
+    PostProcessDebugOverlay,
+    PostProcessFinalOutputTransform,
 }
 
 impl FrameGraphBenchmarkCategory {
@@ -211,6 +234,13 @@ impl FrameGraphBenchmarkCategory {
             Self::FrameGeneration => "frame_generation",
             Self::VirtualResources => "virtual_resources",
             Self::Diagnostics => "diagnostics",
+            Self::PostProcessExposure => "post_process_exposure",
+            Self::PostProcessBloom => "post_process_bloom",
+            Self::PostProcessToneMapping => "post_process_tone_mapping",
+            Self::PostProcessColorGradingLut => "post_process_color_grading_lut",
+            Self::PostProcessSharpening => "post_process_sharpening",
+            Self::PostProcessDebugOverlay => "post_process_debug_overlay",
+            Self::PostProcessFinalOutputTransform => "post_process_final_output_transform",
         }
     }
 }
@@ -273,6 +303,48 @@ impl FrameGraphPassDescriptor {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PostProcessPassRequest {
+    pub include_exposure: bool,
+    pub include_bloom: bool,
+    pub include_tone_mapping: bool,
+    pub include_color_grading_lut: bool,
+    pub include_sharpening: bool,
+    pub include_debug_overlay: bool,
+    pub include_final_output_transform: bool,
+    pub require_history_buffer: bool,
+}
+
+impl PostProcessPassRequest {
+    pub const NONE: Self = Self {
+        include_exposure: false,
+        include_bloom: false,
+        include_tone_mapping: false,
+        include_color_grading_lut: false,
+        include_sharpening: false,
+        include_debug_overlay: false,
+        include_final_output_transform: false,
+        require_history_buffer: false,
+    };
+
+    pub const TONE_MAPPING_ONLY: Self = Self {
+        include_exposure: false,
+        include_bloom: false,
+        include_tone_mapping: true,
+        include_color_grading_lut: false,
+        include_sharpening: false,
+        include_debug_overlay: false,
+        include_final_output_transform: true,
+        require_history_buffer: false,
+    };
+}
+
+impl Default for PostProcessPassRequest {
+    fn default() -> Self {
+        Self::TONE_MAPPING_ONLY
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RendererFrameDescription {
     pub frame_index: u64,
@@ -282,6 +354,7 @@ pub struct RendererFrameDescription {
     pub include_upscaling_slot: bool,
     pub include_frame_generation_slot: bool,
     pub include_diagnostics_readback: bool,
+    pub post_process: PostProcessPassRequest,
 }
 
 impl RendererFrameDescription {
@@ -295,6 +368,7 @@ impl RendererFrameDescription {
             include_upscaling_slot: false,
             include_frame_generation_slot: false,
             include_diagnostics_readback: false,
+            post_process: PostProcessPassRequest::TONE_MAPPING_ONLY,
         }
     }
 
@@ -319,6 +393,12 @@ impl RendererFrameDescription {
     #[must_use]
     pub const fn with_diagnostics_readback(mut self, enabled: bool) -> Self {
         self.include_diagnostics_readback = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_post_process(mut self, request: PostProcessPassRequest) -> Self {
+        self.post_process = request;
         self
     }
 }
@@ -655,6 +735,113 @@ impl RendererFrameGraph {
             graph.add_pass_write(frame_generation, history);
             graph.add_pass_write(frame_generation, presentable_frames);
             graph.add_pass_write(frame_generation, pacing_diagnostics);
+        }
+
+        // Post-process passes run between upscaling/frame generation and compose.
+        // They are gated on the description.post_process flags so history buffers
+        // are only allocated when TAA/upscaling actually needs them, and the
+        // final-output-transform pass is always present so the swapchain only
+        // sees the renderer-owned post stack output.
+        let post_process = description.post_process;
+        if post_process.include_exposure {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_exposure",
+                FrameGraphPassType::Compute,
+                FrameGraphPassRole::PostProcessExposure,
+                "post_process_exposure",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessExposure),
+                "fun_renderer::frame_graph::post_process_exposure",
+            ));
+            graph.add_pass_read(pass, render_scene);
+            graph.add_pass_write(pass, exposure);
+        }
+        if post_process.include_bloom {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_bloom",
+                FrameGraphPassType::Render,
+                FrameGraphPassRole::PostProcessBloom,
+                "post_process_bloom",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessBloom),
+                "fun_renderer::frame_graph::post_process_bloom",
+            ));
+            graph.add_pass_read(pass, display_scene);
+            graph.add_pass_read(pass, exposure);
+            graph.add_pass_write(pass, display_scene);
+        }
+        if post_process.include_tone_mapping {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_tone_mapping",
+                FrameGraphPassType::Render,
+                FrameGraphPassRole::PostProcessToneMapping,
+                "post_process_tone_mapping",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessToneMapping),
+                "fun_renderer::frame_graph::post_process_tone_mapping",
+            ));
+            graph.add_pass_read(pass, display_scene);
+            graph.add_pass_read(pass, exposure);
+            graph.add_pass_read(pass, hdr_metadata);
+            if post_process.require_history_buffer {
+                graph.add_pass_read(pass, history);
+            }
+            graph.add_pass_write(pass, display_scene);
+        }
+        if post_process.include_color_grading_lut {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_color_grading_lut",
+                FrameGraphPassType::Render,
+                FrameGraphPassRole::PostProcessColorGradingLut,
+                "post_process_color_grading_lut",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessColorGradingLut),
+                "fun_renderer::frame_graph::post_process_color_grading_lut",
+            ));
+            graph.add_pass_read(pass, display_scene);
+            graph.add_pass_write(pass, display_scene);
+        }
+        if post_process.include_sharpening {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_sharpening",
+                FrameGraphPassType::Render,
+                FrameGraphPassRole::PostProcessSharpening,
+                "post_process_sharpening",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessSharpening),
+                "fun_renderer::frame_graph::post_process_sharpening",
+            ));
+            graph.add_pass_read(pass, display_scene);
+            graph.add_pass_write(pass, display_scene);
+        }
+        if post_process.include_debug_overlay {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_debug_overlay",
+                FrameGraphPassType::Render,
+                FrameGraphPassRole::PostProcessDebugOverlay,
+                "post_process_debug_overlay",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessDebugOverlay),
+                "fun_renderer::frame_graph::post_process_debug_overlay",
+            ));
+            graph.add_pass_read(pass, display_scene);
+            graph.add_pass_read(pass, depth);
+            graph.add_pass_read(pass, motion);
+            graph.add_pass_write(pass, display_scene);
+        }
+        if post_process.include_final_output_transform {
+            let pass = graph.register_pass(FrameGraphPassDescriptor::new(
+                "fun_renderer.pass.post_process_final_output_transform",
+                FrameGraphPassType::Render,
+                FrameGraphPassRole::PostProcessFinalOutputTransform,
+                "post_process_final_output_transform",
+                FrameGraphDiagnosticCategory::PostProcess,
+                Some(FrameGraphBenchmarkCategory::PostProcessFinalOutputTransform),
+                "fun_renderer::frame_graph::post_process_final_output_transform",
+            ));
+            graph.add_pass_read(pass, display_scene);
+            graph.add_pass_read(pass, hdr_metadata);
+            graph.add_pass_write(pass, display_scene);
         }
 
         let compose = graph.register_pass(FrameGraphPassDescriptor::new(
@@ -1245,7 +1432,10 @@ mod tests {
         let diagnostics = graph.execute();
 
         assert!(diagnostics.graph_valid());
-        assert_eq!(diagnostics.pass_count, 5);
+        // The default description now ships a renderer-owned post stack: tone
+        // mapping + final-output transform so the swapchain only ever sees
+        // post-process output, not raw scene color.
+        assert_eq!(diagnostics.pass_count, 7);
         assert_eq!(
             diagnostics.resource_count,
             FrameGraphResourceType::ALL.len() as u16
@@ -1262,6 +1452,8 @@ mod tests {
                 FrameGraphPassRole::Clear,
                 FrameGraphPassRole::StaticScenePlaceholder,
                 FrameGraphPassRole::CefGpuImport,
+                FrameGraphPassRole::PostProcessToneMapping,
+                FrameGraphPassRole::PostProcessFinalOutputTransform,
                 FrameGraphPassRole::Compose,
                 FrameGraphPassRole::Present,
             ]

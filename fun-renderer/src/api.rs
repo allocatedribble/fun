@@ -145,6 +145,13 @@ pub enum PassKind {
     CefGpuImport,
     UiImportPlaceholder,
     UiComposite,
+    PostProcessExposure,
+    PostProcessBloom,
+    PostProcessToneMapping,
+    PostProcessColorGradingLut,
+    PostProcessSharpening,
+    PostProcessDebugOverlay,
+    PostProcessFinalOutputTransform,
     DiagnosticsReadback,
     Present,
 }
@@ -165,6 +172,13 @@ impl PassKind {
             Self::CefGpuImport => "cef_gpu_import",
             Self::UiImportPlaceholder => "ui_import_placeholder",
             Self::UiComposite => "ui_composite",
+            Self::PostProcessExposure => "post_process_exposure",
+            Self::PostProcessBloom => "post_process_bloom",
+            Self::PostProcessToneMapping => "post_process_tone_mapping",
+            Self::PostProcessColorGradingLut => "post_process_color_grading_lut",
+            Self::PostProcessSharpening => "post_process_sharpening",
+            Self::PostProcessDebugOverlay => "post_process_debug_overlay",
+            Self::PostProcessFinalOutputTransform => "post_process_final_output_transform",
             Self::DiagnosticsReadback => "diagnostics_readback",
             Self::Present => "present",
         }
@@ -630,6 +644,15 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         FrameGraphPassRole::UiImportPlaceholder => PassKind::UiImportPlaceholder,
         FrameGraphPassRole::UpscaleBoundary => PassKind::Upscale,
         FrameGraphPassRole::FrameGenerationBoundary => PassKind::FrameGeneration,
+        FrameGraphPassRole::PostProcessExposure => PassKind::PostProcessExposure,
+        FrameGraphPassRole::PostProcessBloom => PassKind::PostProcessBloom,
+        FrameGraphPassRole::PostProcessToneMapping => PassKind::PostProcessToneMapping,
+        FrameGraphPassRole::PostProcessColorGradingLut => PassKind::PostProcessColorGradingLut,
+        FrameGraphPassRole::PostProcessSharpening => PassKind::PostProcessSharpening,
+        FrameGraphPassRole::PostProcessDebugOverlay => PassKind::PostProcessDebugOverlay,
+        FrameGraphPassRole::PostProcessFinalOutputTransform => {
+            PassKind::PostProcessFinalOutputTransform
+        }
         FrameGraphPassRole::Compose => PassKind::UiComposite,
         FrameGraphPassRole::DiagnosticsReadback => PassKind::DiagnosticsReadback,
         FrameGraphPassRole::Present => PassKind::Present,
@@ -657,7 +680,11 @@ mod tests {
 
         assert_eq!(report.runtime_backend, FunRendererRuntimeBackend::Fun);
         assert_eq!(report.backend, FunRendererBackend::Dx12);
-        assert_eq!(report.registered_passes, 5);
+        // The default frame graph now includes the renderer-owned post stack
+        // (tone mapping + final output transform) so the registered pass count
+        // reflects clear, static scene, CEF GPU import, tone mapping, final
+        // output transform, compose, and present.
+        assert_eq!(report.registered_passes, 7);
         assert!(report.produced_clear_color_frame);
         assert!(report.frame_graph_valid);
 
@@ -683,7 +710,11 @@ mod tests {
 
         let diagnostics = renderer.diagnostics();
         assert_eq!(diagnostics.lifecycle, RendererCoreLifecycle::Initialized);
-        assert_eq!(diagnostics.registered_passes, 7);
+        // After submit_frame_description with upscaling + frame generation, the
+        // graph contains: clear, static scene, CEF GPU import, upscale boundary,
+        // frame generation boundary, post-process tone mapping + final-output
+        // transform, compose, present.
+        assert_eq!(diagnostics.registered_passes, 9);
         assert!(diagnostics.frame_graph_valid);
         assert_eq!(diagnostics.frame_graph_validation_failures, 0);
 
