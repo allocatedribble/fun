@@ -483,6 +483,149 @@ impl LiveProofFrameTimestampQuerySet {
 }
 
 // ============================================================================
+// Section 5c — Per-pass timing artifact (blocker 5 closeout)
+// ============================================================================
+
+/// Typed per-graph-pass timing record. The frame-graph executor
+/// produces one record per recorded render / compute pass, with
+/// the begin / end raw timestamp ticks and the typed pass index.
+/// The diagnostic surface multiplies `end_raw - begin_raw` by the
+/// queue's `timestamp_period_nanos` (carried on
+/// [`LiveProofFrameTimingArtifact`]) to convert to nanoseconds.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LiveProofFramePerPassTimingRecord {
+    pub schema_version: u16,
+    pub pass_index: u32,
+    pub begin_raw: u64,
+    pub end_raw: u64,
+}
+
+impl LiveProofFramePerPassTimingRecord {
+    /// Saturating subtraction: `end_raw - begin_raw`. The
+    /// diagnostic surface multiplies this by
+    /// [`LiveProofFrameTimingArtifact::timestamp_period_nanos`]
+    /// to convert ticks to nanoseconds.
+    #[must_use]
+    pub const fn duration_raw(&self) -> u64 {
+        self.end_raw.saturating_sub(self.begin_raw)
+    }
+}
+
+/// Typed renderer-owned per-pass timing artifact for the graph
+/// executor. Closes Pass A's `gap.tier0.no_gpu_timestamp_queries`
+/// at the per-pass granularity the user asked for: one
+/// timestamp before / after each graph pass + resolve to
+/// readback + attach timing to the typed graph-pass artifact +
+/// feed downstream queue / timing diagnostics
+/// ([`feed_tier7_latency_markers_from_per_pass_timing_artifact`]).
+#[derive(Debug, Clone, PartialEq, Resource)]
+pub struct LiveProofFrameTimingArtifact {
+    pub schema_version: u16,
+    pub canonical_path: &'static str,
+    pub timestamp_period_nanos: f32,
+    pub records: Vec<LiveProofFramePerPassTimingRecord>,
+}
+
+impl LiveProofFrameTimingArtifact {
+    pub const CANONICAL_ARTIFACT_PATH: &'static str =
+        "fun_renderer.live_proof_frame.per_pass_timing.funpb.zst";
+
+    #[must_use]
+    pub const fn empty_cold_default() -> Self {
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            canonical_path: Self::CANONICAL_ARTIFACT_PATH,
+            timestamp_period_nanos: 0.0,
+            records: Vec::new(),
+        }
+    }
+
+    /// Total duration in nanoseconds across every recorded pass.
+    /// Returned as a `u64` of clamped fractional nanoseconds so
+    /// the predicate stays Hash + Eq friendly elsewhere.
+    #[must_use]
+    pub fn total_duration_nanos(&self) -> u64 {
+        let mut total: u64 = 0;
+        for record in &self.records {
+            let duration = record.duration_raw() as f64 * self.timestamp_period_nanos as f64;
+            total = total.saturating_add(duration as u64);
+        }
+        total
+    }
+}
+
+// ============================================================================
+// Section 5d — Multi-pass timestamp query set
+// ============================================================================
+
+/// Typed renderer-owned multi-pass timestamp query set. Holds
+/// `2 * pass_count` typed queries (begin + end per pass), a
+/// `wgpu::Buffer` resolve target, and a `wgpu::Buffer` readback
+/// target. Used by the typed
+/// [`LiveGraphExecutor::run_two_pass_timed_against_offscreen_target`]
+/// entry point to record begin / end timestamp scopes around
+/// every recorded graph pass.
+pub struct LiveProofFrameMultiPassTimestamps {
+    pub schema_version: u16,
+    pub pass_count: u32,
+    pub query_set: ::wgpu::QuerySet,
+    pub resolve_buffer: ::wgpu::Buffer,
+    pub readback_buffer: ::wgpu::Buffer,
+    pub timestamp_period_nanos: f32,
+}
+
+impl LiveProofFrameMultiPassTimestamps {
+    /// Two timestamps per typed pass: begin + end.
+    pub const QUERIES_PER_PASS: u32 = 2;
+    /// Bytes per typed timestamp (`u64`).
+    pub const QUERY_RESULT_BYTES: u64 = 8;
+
+    #[must_use]
+    pub fn create(device: &::wgpu::Device, queue: &::wgpu::Queue, pass_count: u32) -> Self {
+        let pass_count = pass_count.max(1);
+        let query_count = pass_count.saturating_mul(Self::QUERIES_PER_PASS);
+        let buffer_size = (query_count as u64) * Self::QUERY_RESULT_BYTES;
+
+        let query_set = device.create_query_set(&::wgpu::QuerySetDescriptor {
+            label: Some("fun_renderer.live_proof_frame.multi_pass_timestamps.query_set"),
+            ty: ::wgpu::QueryType::Timestamp,
+            count: query_count,
+        });
+        let resolve_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("fun_renderer.live_proof_frame.multi_pass_timestamps.resolve"),
+            size: buffer_size,
+            usage: ::wgpu::BufferUsages::QUERY_RESOLVE | ::wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("fun_renderer.live_proof_frame.multi_pass_timestamps.readback"),
+            size: buffer_size,
+            usage: ::wgpu::BufferUsages::COPY_DST | ::wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            pass_count,
+            query_set,
+            resolve_buffer,
+            readback_buffer,
+            timestamp_period_nanos: queue.get_timestamp_period(),
+        }
+    }
+
+    #[must_use]
+    pub const fn query_count(&self) -> u32 {
+        self.pass_count.saturating_mul(Self::QUERIES_PER_PASS)
+    }
+
+    #[must_use]
+    pub const fn buffer_bytes(&self) -> u64 {
+        (self.query_count() as u64) * Self::QUERY_RESULT_BYTES
+    }
+}
+
+// ============================================================================
 // Section 6 — Live graph executor
 // ============================================================================
 
@@ -939,6 +1082,228 @@ impl LiveGraphExecutor {
 
         record
     }
+
+    /// Two-pass timed executor. Records:
+    ///
+    /// 1. **Pass 0 — clear pass.** `LoadOp::Clear` on the
+    ///    offscreen target, no draws. Timestamp scopes:
+    ///    `RenderPassTimestampWrites { begin: 0, end: 1 }`.
+    /// 2. **Pass 1 — indexed-draw pass.** `LoadOp::Load` (so the
+    ///    clear from pass 0 is preserved), bind triangle pipeline,
+    ///    set index buffer, `draw_indexed`. Timestamp scopes:
+    ///    `RenderPassTimestampWrites { begin: 2, end: 3 }`.
+    /// 3. `resolve_query_set(0..4)` + `copy_buffer_to_buffer`
+    ///    into the readback buffer.
+    /// 4. `copy_texture_to_buffer` for the typed frame probe.
+    /// 5. `queue.submit` + `device.poll(wait_indefinitely)` +
+    ///    `Buffer::map_async(MapMode::Read)` for both buffers.
+    /// 6. Constructs two typed
+    ///    [`LiveProofFramePerPassTimingRecord`] entries on the
+    ///    returned [`LiveProofFrameTimingArtifact`].
+    ///
+    /// Closes Pass A `gap.tier0.no_gpu_timestamp_queries` at the
+    /// per-graph-pass granularity. Returns the typed run record +
+    /// the typed timing artifact carrying both pass records.
+    pub fn run_two_pass_timed_against_offscreen_target(
+        device: &::wgpu::Device,
+        queue: &::wgpu::Queue,
+        target: &LiveProofFrameOffscreenTarget,
+        triangle: &LiveProofFrameTrianglePipeline,
+        timestamps: &LiveProofFrameMultiPassTimestamps,
+        plan: LiveProofFrameGraphPlan,
+        frame_index: u64,
+    ) -> (LiveProofFrameRunResult, LiveProofFrameTimingArtifact) {
+        let mut record = LiveProofFrameRunResult {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            render_passes_recorded: 0,
+            draws_recorded: 0,
+            copies_recorded: 0,
+            queue_submissions: 0,
+            device_poll_completed: false,
+            readback_succeeded: false,
+            frame_probe_rgba8: [0, 0, 0, 0],
+            frame_index,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: timestamps.timestamp_period_nanos,
+        };
+        let mut artifact = LiveProofFrameTimingArtifact::empty_cold_default();
+        artifact.timestamp_period_nanos = timestamps.timestamp_period_nanos;
+
+        let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
+            label: Some("fun_renderer.live_proof_frame.two_pass_timed.encoder"),
+        });
+
+        // Pass 0 — clear pass with begin/end timestamps at slots
+        // 0 + 1.
+        {
+            let _pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                label: Some("fun_renderer.live_proof_frame.two_pass_timed.pass0_clear"),
+                color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: ::wgpu::Operations {
+                        load: ::wgpu::LoadOp::Clear(::wgpu::Color {
+                            r: plan.clear_color[0],
+                            g: plan.clear_color[1],
+                            b: plan.clear_color[2],
+                            a: plan.clear_color[3],
+                        }),
+                        store: ::wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: Some(::wgpu::RenderPassTimestampWrites {
+                    query_set: &timestamps.query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            record.render_passes_recorded = record.render_passes_recorded.saturating_add(1);
+        }
+
+        // Pass 1 — indexed-draw pass with begin/end timestamps at
+        // slots 2 + 3. Uses `LoadOp::Load` so the clear pass's
+        // output is preserved as the starting framebuffer; the
+        // triangle then paints opaque green over it.
+        {
+            let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                label: Some("fun_renderer.live_proof_frame.two_pass_timed.pass1_indexed_draw"),
+                color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: ::wgpu::Operations {
+                        load: ::wgpu::LoadOp::Load,
+                        store: ::wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: Some(::wgpu::RenderPassTimestampWrites {
+                    query_set: &timestamps.query_set,
+                    beginning_of_pass_write_index: Some(2),
+                    end_of_pass_write_index: Some(3),
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&triangle.pipeline);
+            pass.set_index_buffer(triangle.index_buffer.slice(..), ::wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..triangle.index_count, 0, 0..1);
+            record.render_passes_recorded = record.render_passes_recorded.saturating_add(1);
+            record.draws_recorded = 1;
+        }
+
+        // Resolve all timestamps + readback copies.
+        encoder.resolve_query_set(
+            &timestamps.query_set,
+            0..timestamps.query_count(),
+            &timestamps.resolve_buffer,
+            0,
+        );
+        encoder.copy_buffer_to_buffer(
+            &timestamps.resolve_buffer,
+            0,
+            &timestamps.readback_buffer,
+            0,
+            timestamps.buffer_bytes(),
+        );
+        record.copies_recorded = record.copies_recorded.saturating_add(1);
+
+        encoder.copy_texture_to_buffer(
+            ::wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: ::wgpu::Origin3d::ZERO,
+                aspect: ::wgpu::TextureAspect::All,
+            },
+            ::wgpu::TexelCopyBufferInfo {
+                buffer: &target.readback_buffer,
+                layout: ::wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.readback_row_bytes),
+                    rows_per_image: Some(target.height),
+                },
+            },
+            ::wgpu::Extent3d {
+                width: target.width,
+                height: target.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        record.copies_recorded = record.copies_recorded.saturating_add(1);
+
+        let command_buffer = encoder.finish();
+        let _submission_index = queue.submit(::core::iter::once(command_buffer));
+        record.queue_submissions = 1;
+
+        let probe_slice = target.readback_buffer.slice(..);
+        let timestamp_slice = timestamps.readback_buffer.slice(..);
+        let (probe_tx, probe_rx) = channel();
+        let (ts_tx, ts_rx) = channel();
+        probe_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = probe_tx.send(result);
+        });
+        timestamp_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = ts_tx.send(result);
+        });
+        let poll_status = device.poll(::wgpu::PollType::wait_indefinitely());
+        record.device_poll_completed = poll_status.is_ok();
+
+        if let Ok(Ok(())) = probe_rx.recv() {
+            let data = probe_slice.get_mapped_range();
+            if data.len() >= 4 {
+                record.frame_probe_rgba8 = [data[0], data[1], data[2], data[3]];
+                record.readback_succeeded = true;
+            }
+            drop(data);
+            target.readback_buffer.unmap();
+        }
+
+        if let Ok(Ok(())) = ts_rx.recv() {
+            let data = timestamp_slice.get_mapped_range();
+            let expected_bytes = timestamps.buffer_bytes() as usize;
+            if data.len() >= expected_bytes {
+                let mut ok = true;
+                for pass_index in 0..timestamps.pass_count {
+                    let begin_offset = (pass_index as usize) * 16;
+                    let end_offset = begin_offset + 8;
+                    if end_offset + 8 > data.len() {
+                        ok = false;
+                        break;
+                    }
+                    let mut begin_bytes = [0u8; 8];
+                    begin_bytes.copy_from_slice(&data[begin_offset..begin_offset + 8]);
+                    let mut end_bytes = [0u8; 8];
+                    end_bytes.copy_from_slice(&data[end_offset..end_offset + 8]);
+                    artifact.records.push(LiveProofFramePerPassTimingRecord {
+                        schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+                        pass_index,
+                        begin_raw: u64::from_le_bytes(begin_bytes),
+                        end_raw: u64::from_le_bytes(end_bytes),
+                    });
+                }
+                if ok {
+                    record.timestamp_queries_resolved = timestamps.query_count();
+                    if let Some(first) = artifact.records.first() {
+                        record.timestamp_begin_raw = first.begin_raw;
+                    }
+                    if let Some(last) = artifact.records.last() {
+                        record.timestamp_end_raw = last.end_raw;
+                    }
+                }
+            }
+            drop(data);
+            timestamps.readback_buffer.unmap();
+        }
+
+        (record, artifact)
+    }
 }
 
 // ============================================================================
@@ -1030,6 +1395,70 @@ pub fn run_proof_frame_with_indexed_draw_against_fresh_dx12_device(
         frame_index,
     );
     LiveProofFrameBootResult::Ran(Box::new(LiveProofFrameRanPayload { bridge_state, run }))
+}
+
+/// Outcome of bootstrapping a fresh DX12 wgpu device + running
+/// the two-pass timed proof frame. Carries the typed run record
+/// AND the typed per-pass timing artifact so callers can attach
+/// the timing to a graph-pass artifact + feed Tier 7 markers.
+pub enum LiveProofFrameTwoPassTimedBootResult {
+    /// Boxed payload to keep the enum's discriminant small.
+    Ran(Box<LiveProofFrameTwoPassTimedRanPayload>),
+    BridgeRuntimeFailed(WgpuBridgeRuntimeFailure),
+}
+
+#[derive(Debug)]
+pub struct LiveProofFrameTwoPassTimedRanPayload {
+    pub bridge_state: WgpuBridgeDeviceState<Dx12Native>,
+    pub run: LiveProofFrameRunResult,
+    pub timing: LiveProofFrameTimingArtifact,
+}
+
+/// Bootstrap a fresh DX12 wgpu device with `Features::TIMESTAMP_QUERY`
+/// enabled, create the typed multi-pass timestamp query set, and
+/// run two timed graph passes back-to-back. Returns the typed
+/// [`LiveProofFrameTimingArtifact`] carrying one
+/// [`LiveProofFramePerPassTimingRecord`] per pass.
+///
+/// Closes Pass A `gap.tier0.no_gpu_timestamp_queries` at the
+/// per-graph-pass granularity ("one timestamp before/after each
+/// graph pass") with the typed graph-pass timing artifact the
+/// user prompt asked for.
+#[must_use]
+pub fn run_two_pass_timed_proof_frame_against_fresh_dx12_device(
+    plan: LiveProofFrameGraphPlan,
+    frame_index: u64,
+) -> LiveProofFrameTwoPassTimedBootResult {
+    let mut options = WgpuBridgeRuntimeOptions::production_default();
+    options.required_features = ::wgpu::Features::TIMESTAMP_QUERY;
+    let bridge_state = match initialize_wgpu_bridge_runtime::<Dx12Native>(&options) {
+        Ok(state) => state,
+        Err(failure) => {
+            return LiveProofFrameTwoPassTimedBootResult::BridgeRuntimeFailed(failure);
+        }
+    };
+    let target = LiveProofFrameOffscreenTarget::allocate(
+        &bridge_state.device,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+    );
+    let triangle = LiveProofFrameTrianglePipeline::create(&bridge_state.device, target.format);
+    let timestamps =
+        LiveProofFrameMultiPassTimestamps::create(&bridge_state.device, &bridge_state.queue, 2);
+    let (run, timing) = LiveGraphExecutor::run_two_pass_timed_against_offscreen_target(
+        &bridge_state.device,
+        &bridge_state.queue,
+        &target,
+        &triangle,
+        &timestamps,
+        plan,
+        frame_index,
+    );
+    LiveProofFrameTwoPassTimedBootResult::Ran(Box::new(LiveProofFrameTwoPassTimedRanPayload {
+        bridge_state,
+        run,
+        timing,
+    }))
 }
 
 /// Bootstrap a fresh DX12 wgpu device with `Features::TIMESTAMP_QUERY`
@@ -1563,6 +1992,125 @@ mod tests {
             LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
                 eprintln!(
                     "live_executor_records_real_gpu_timestamp_queries_around_indexed_draw: \
+                     bridge runtime failed (host without DX12 adapter or missing \
+                     TIMESTAMP_QUERY support): {failure:?}",
+                );
+            }
+        }
+    }
+
+    /// Live closeout for the **per-pass** timing form of
+    /// `gap.tier0.no_gpu_timestamp_queries`. Boots a fresh DX12
+    /// wgpu device with `Features::TIMESTAMP_QUERY` enabled,
+    /// allocates a 4-slot multi-pass timestamp query set
+    /// (count = 2 passes × 2 timestamps each), and runs the
+    /// two-pass executor: pass 0 clears, pass 1 issues a real
+    /// `draw_indexed`. Each pass records its own begin / end
+    /// timestamp scope. The test asserts:
+    ///
+    /// - Both passes produced typed
+    ///   [`LiveProofFramePerPassTimingRecord`] entries.
+    /// - Each record's `end_raw > begin_raw` (forward GPU clock).
+    /// - The artifact's `timestamp_period_nanos > 0.0`.
+    /// - `total_duration_nanos() > 0`.
+    /// - The frame probe pixel is green-dominant (proves the draw
+    ///   in pass 1 ran past the clear in pass 0).
+    ///
+    /// On hosts without DX12 / `TIMESTAMP_QUERY` support, records
+    /// honestly via `BridgeRuntimeFailed` and skips the strict
+    /// assertion.
+    #[test]
+    fn live_executor_records_per_pass_timing_artifact_for_two_passes() {
+        let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
+        let outcome = run_two_pass_timed_proof_frame_against_fresh_dx12_device(plan, 4);
+        match outcome {
+            LiveProofFrameTwoPassTimedBootResult::Ran(payload) => {
+                let LiveProofFrameTwoPassTimedRanPayload {
+                    bridge_state,
+                    run,
+                    timing,
+                } = *payload;
+
+                if !ran_on_real_dx12_adapter(&bridge_state) {
+                    eprintln!(
+                        "live_executor_records_per_pass_timing_artifact_for_two_passes: \
+                         non-DX12 actual backend ({:?}); skipping strict assertion",
+                        bridge_state.actual_native_backend,
+                    );
+                    return;
+                }
+
+                // Two passes recorded → two typed timing records
+                // attached to the typed graph-pass artifact.
+                assert_eq!(
+                    run.render_passes_recorded, 2,
+                    "expected exactly 2 render passes"
+                );
+                assert_eq!(run.draws_recorded, 1, "expected one indexed draw in pass 1");
+                assert!(
+                    run.passes_full_runtime(),
+                    "two-pass run did not finish: {run:?}"
+                );
+
+                // Per-pass artifact carries one record per pass.
+                assert_eq!(
+                    timing.records.len(),
+                    2,
+                    "expected one typed per-pass timing record per render pass",
+                );
+                assert!(
+                    timing.canonical_path.ends_with(".funpb.zst"),
+                    "graph-pass timing artifact must use the canonical funpb.zst path",
+                );
+                assert!(
+                    timing.timestamp_period_nanos > 0.0,
+                    "queue must report a non-zero timestamp period; got {}",
+                    timing.timestamp_period_nanos,
+                );
+
+                // Each typed record has a forward-going GPU clock.
+                for record in &timing.records {
+                    assert!(
+                        record.end_raw > record.begin_raw,
+                        "pass {}: end_raw={} must follow begin_raw={}",
+                        record.pass_index,
+                        record.end_raw,
+                        record.begin_raw,
+                    );
+                    assert!(record.duration_raw() > 0);
+                }
+
+                // Pass indices are typed (0, 1) — not arbitrary.
+                assert_eq!(timing.records[0].pass_index, 0);
+                assert_eq!(timing.records[1].pass_index, 1);
+
+                // Total duration in nanoseconds is non-zero.
+                assert!(
+                    timing.total_duration_nanos() > 0,
+                    "timing artifact reports zero total ns; period={}, records={:?}",
+                    timing.timestamp_period_nanos,
+                    timing.records,
+                );
+
+                // Frame probe is green-dominant — proof the draw
+                // in pass 1 painted over the clear in pass 0.
+                let [r, g, b, _a] = run.frame_probe_rgba8;
+                assert!(
+                    g > 128 && g > r && g > b,
+                    "expected G dominant (draw landed past clear); got {:?}",
+                    run.frame_probe_rgba8,
+                );
+
+                // Pass B evidence flips
+                // `gpu_timestamp_observed = true` because the
+                // typed run record reports both passes' queries
+                // resolved (`timestamp_queries_resolved == 4`).
+                let evidence = compose_passb_runtime_evidence_from_run_result(&run);
+                assert!(evidence.gpu_timestamp_observed);
+            }
+            LiveProofFrameTwoPassTimedBootResult::BridgeRuntimeFailed(failure) => {
+                eprintln!(
+                    "live_executor_records_per_pass_timing_artifact_for_two_passes: \
                      bridge runtime failed (host without DX12 adapter or missing \
                      TIMESTAMP_QUERY support): {failure:?}",
                 );

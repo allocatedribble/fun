@@ -46,6 +46,8 @@ pub mod passe_clustered_lighting_virtual_shadow_mvp;
 pub mod passf_temporal_stack;
 #[cfg(feature = "bevy_ecs")]
 pub mod passg_native_ui_product_route;
+#[cfg(feature = "bevy_ecs")]
+pub mod passh_native_command_list_fail_closed;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -948,6 +950,8 @@ pub use passe_clustered_lighting_virtual_shadow_mvp::*;
 pub use passf_temporal_stack::*;
 #[cfg(feature = "bevy_ecs")]
 pub use passg_native_ui_product_route::*;
+#[cfg(feature = "bevy_ecs")]
+pub use passh_native_command_list_fail_closed::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
