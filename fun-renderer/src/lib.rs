@@ -66,6 +66,8 @@ pub mod tier3_lighting_shadows_at_scale;
 pub mod tier4_transient_memory_and_barriers;
 #[cfg(feature = "bevy_ecs")]
 pub mod tier5_temporal_reconstruction;
+#[cfg(feature = "bevy_ecs")]
+pub mod tier6_native_ui_rendering;
 pub mod ui;
 pub mod upscaling;
 #[cfg(feature = "bevy_ecs")]
@@ -906,6 +908,8 @@ pub use tier3_lighting_shadows_at_scale::*;
 pub use tier4_transient_memory_and_barriers::*;
 #[cfg(feature = "bevy_ecs")]
 pub use tier5_temporal_reconstruction::*;
+#[cfg(feature = "bevy_ecs")]
+pub use tier6_native_ui_rendering::*;
 pub use ui::*;
 #[cfg(feature = "bevy_ecs")]
 pub use vendor_sdk_bridge::*;
