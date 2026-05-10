@@ -16,6 +16,7 @@ pub mod ecs;
 pub mod extraction;
 pub mod frame_generation;
 pub mod frame_graph;
+pub mod gpu_driven;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
 pub mod ir;
@@ -828,6 +829,7 @@ pub use ecs::*;
 #[cfg(feature = "bevy_ecs")]
 pub use extraction::*;
 pub use frame_graph::*;
+pub use gpu_driven::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
 pub use ir::*;
