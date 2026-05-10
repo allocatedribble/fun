@@ -38,6 +38,8 @@ pub mod passb_proof_frame_runtime;
 pub mod passc_runtime_cache_burndown;
 #[cfg(feature = "bevy_ecs")]
 pub mod passd_gpu_scene_indirect_draw;
+#[cfg(feature = "bevy_ecs")]
+pub mod passe_clustered_lighting_virtual_shadow_mvp;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -932,6 +934,8 @@ pub use passb_proof_frame_runtime::*;
 pub use passc_runtime_cache_burndown::*;
 #[cfg(feature = "bevy_ecs")]
 pub use passd_gpu_scene_indirect_draw::*;
+#[cfg(feature = "bevy_ecs")]
+pub use passe_clustered_lighting_virtual_shadow_mvp::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
