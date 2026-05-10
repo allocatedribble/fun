@@ -212,6 +212,13 @@ pub const PASS_EVIDENCE_REGISTRY: &[PassEvidenceEntry] = &[
         "pass_h.native_command_list_fail_closed",
         EvidenceKind::TypedContractOnly,
     ),
+    // Pass I: GPU-driven compute culling + indirect draw.
+    // Real WGSL compute kernel + indirect draw + readback +
+    // CPU/direct parity comparison.
+    PassEvidenceEntry::new(
+        "pass_i.gpu_driven_compute_indirect",
+        EvidenceKind::LiveGpuExecution,
+    ),
     // Tier 0: proof frame keystone — visible frame / GPU timing
     // are planning surfaces today; bridge health + DX12 hardening
     // are typed-contract.
@@ -498,6 +505,13 @@ pub const INTEGRATION_TEST_REGISTRY: &[IntegrationTestRegistryEntry] = &[
         IntegrationTestCategory::FrameProbe,
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass I: real GPU compute cull + indirect draw with
+    // CPU-direct parity comparison.
+    IntegrationTestRegistryEntry::new(
+        "live_passi_runs_real_gpu_cull_and_indirect_draw_with_cpu_parity",
+        IntegrationTestCategory::AdapterDevice,
+        EvidenceKind::LiveGpuExecution,
+    ),
 ];
 
 // ============================================================================
@@ -694,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn pass_evidence_registry_covers_every_a_through_h_and_tier_0_through_8() {
+    fn pass_evidence_registry_covers_every_a_through_i_and_tier_0_through_8() {
         let ids: Vec<&str> = PASS_EVIDENCE_REGISTRY.iter().map(|e| e.stable_id).collect();
         for pass in [
             "pass_a.truth_resync_and_ui_governance",
@@ -705,6 +719,7 @@ mod tests {
             "pass_f.temporal_stack",
             "pass_g.native_ui_product_route",
             "pass_h.native_command_list_fail_closed",
+            "pass_i.gpu_driven_compute_indirect",
         ] {
             assert!(ids.contains(&pass), "missing Pass: {pass}");
         }
