@@ -32,6 +32,7 @@ pub mod diagnostics;
 pub mod fun_renderer_backend;
 pub mod host_transport;
 pub mod input_translator;
+pub mod renderer_sink;
 pub mod route_registry;
 pub mod runtime;
 
@@ -51,6 +52,10 @@ pub use diagnostics::{
     PRODUCT_RVELTE_ADAPTER_SCHEMA, PRODUCT_RVELTE_ADAPTER_SCHEMA_VERSION, ProductRvelteDiagnostic,
 };
 pub use input_translator::{ProductInputEvent, translate_product_input};
+pub use renderer_sink::{
+    PRODUCT_RENDERER_SINK_SCHEMA, PRODUCT_RENDERER_SINK_SCHEMA_VERSION,
+    ProductRenderer2DCommandSink, ProductRendererBackend,
+};
 pub use route_registry::{ProductRouteKind, ProductRouteRegistry};
 pub use runtime::FunNativeUiRuntime;
 
