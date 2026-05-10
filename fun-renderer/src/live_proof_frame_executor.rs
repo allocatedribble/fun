@@ -278,7 +278,137 @@ impl LiveProofFrameRunResult {
 }
 
 // ============================================================================
-// Section 5 — Live graph executor
+// Section 5 — Indexed-draw triangle pipeline
+// ============================================================================
+
+/// Inline WGSL for the typed indexed-draw test. The vertex shader
+/// uses `@builtin(vertex_index)` to expand 3 indices into a
+/// fullscreen triangle (covers the entire viewport). The fragment
+/// shader writes opaque green so the readback pixel proves the
+/// draw — not just the clear — landed on the offscreen target.
+const LIVE_PROOF_FRAME_FULLSCREEN_TRIANGLE_WGSL: &str = "\
+@vertex\n\
+fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {\n\
+    var positions = array<vec2<f32>, 3>(\n\
+        vec2<f32>(-1.0, -3.0),\n\
+        vec2<f32>(-1.0,  1.0),\n\
+        vec2<f32>( 3.0,  1.0)\n\
+    );\n\
+    return vec4<f32>(positions[idx], 0.0, 1.0);\n\
+}\n\
+\n\
+@fragment\n\
+fn fs_main() -> @location(0) vec4<f32> {\n\
+    return vec4<f32>(0.0, 1.0, 0.0, 1.0);\n\
+}\n\
+";
+
+/// Typed renderer-owned pipeline for the indexed-draw test. Holds
+/// the WGSL shader module, an empty pipeline layout (no bind
+/// groups), the render pipeline, and a 3-index `u16` index buffer
+/// (`[0, 1, 2]`).
+///
+/// The triangle covers the entire offscreen target, so the
+/// readback pixel sees the fragment shader's output green color
+/// (R=0, G=255, B=0) regardless of the clear color. This is the
+/// typed proof that `draw_indexed` actually ran — a clear alone
+/// would leave the pixel matching the clear color.
+pub struct LiveProofFrameTrianglePipeline {
+    pub schema_version: u16,
+    pub shader: ::wgpu::ShaderModule,
+    pub layout: ::wgpu::PipelineLayout,
+    pub pipeline: ::wgpu::RenderPipeline,
+    pub index_buffer: ::wgpu::Buffer,
+    pub index_count: u32,
+}
+
+impl LiveProofFrameTrianglePipeline {
+    pub const INDEX_COUNT: u32 = 3;
+    /// 3 × u16 = 6 bytes, padded to 8 to satisfy
+    /// `wgpu::COPY_BUFFER_ALIGNMENT` (4-byte alignment for
+    /// `mapped_at_creation` buffers). The extra 2 bytes are
+    /// never indexed since `draw_indexed(0..3, ..)` only reads
+    /// the first three u16 entries.
+    pub const INDEX_BUFFER_BYTES: u64 = 8;
+
+    /// Construct the typed pipeline against the live wgpu device.
+    /// `target_format` is the offscreen target's format
+    /// (`Rgba8UnormSrgb` for the headless lane). The index buffer
+    /// is `mapped_at_creation` so the typed `[0u16, 1u16, 2u16]`
+    /// indices land before the buffer is unmapped.
+    #[must_use]
+    pub fn create(device: &::wgpu::Device, target_format: ::wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(::wgpu::ShaderModuleDescriptor {
+            label: Some("fun_renderer.live_proof_frame.fullscreen_triangle.wgsl"),
+            source: ::wgpu::ShaderSource::Wgsl(LIVE_PROOF_FRAME_FULLSCREEN_TRIANGLE_WGSL.into()),
+        });
+        let layout = device.create_pipeline_layout(&::wgpu::PipelineLayoutDescriptor {
+            label: Some("fun_renderer.live_proof_frame.fullscreen_triangle.layout"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&::wgpu::RenderPipelineDescriptor {
+            label: Some("fun_renderer.live_proof_frame.fullscreen_triangle.pipeline"),
+            layout: Some(&layout),
+            vertex: ::wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: ::wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: ::wgpu::PrimitiveState {
+                topology: ::wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: ::wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: ::wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: ::wgpu::MultisampleState::default(),
+            fragment: Some(::wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: ::wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(::wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(::wgpu::BlendState::REPLACE),
+                    write_mask: ::wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let index_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("fun_renderer.live_proof_frame.triangle.index_buffer"),
+            size: Self::INDEX_BUFFER_BYTES,
+            usage: ::wgpu::BufferUsages::INDEX,
+            mapped_at_creation: true,
+        });
+        {
+            let mut view = index_buffer.slice(..).get_mapped_range_mut();
+            // Little-endian u16 layout: [0, 0, 1, 0, 2, 0]. Last
+            // two bytes pad the 8-byte aligned buffer; never
+            // indexed.
+            view.copy_from_slice(&[0u8, 0, 1, 0, 2, 0, 0, 0]);
+        }
+        index_buffer.unmap();
+
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            shader,
+            layout,
+            pipeline,
+            index_buffer,
+            index_count: Self::INDEX_COUNT,
+        }
+    }
+}
+
+// ============================================================================
+// Section 6 — Live graph executor
 // ============================================================================
 
 /// Live wgpu graph executor. Walks a typed
@@ -287,11 +417,13 @@ impl LiveProofFrameRunResult {
 /// 1. A `wgpu::CommandEncoder` named after the proof frame.
 /// 2. One render pass that clears the offscreen target to the
 ///    plan's `clear_color`.
-/// 3. (Future) draw packets when `plan.include_optional_draw` is
-///    true.
+/// 3. (When `plan.include_optional_draw` is true and a triangle
+///    pipeline is supplied) bind pipeline + bind index buffer +
+///    `draw_indexed`.
 /// 4. A copy from the offscreen texture to the readback buffer.
 /// 5. Queue submit.
-/// 6. `device.poll(PollType::Wait)` so the GPU work finishes.
+/// 6. `device.poll(PollType::wait_indefinitely())` so the GPU
+///    work finishes.
 /// 7. `Buffer::map_async(MapMode::Read)` + read first pixel.
 pub struct LiveGraphExecutor;
 
@@ -413,10 +545,144 @@ impl LiveGraphExecutor {
 
         record
     }
+
+    /// Run one proof frame against the offscreen target with a
+    /// real indexed draw. The render pass first clears to the
+    /// plan's `clear_color`, then binds the typed
+    /// `LiveProofFrameTrianglePipeline`, sets the index buffer,
+    /// and issues `draw_indexed(0..3, 0, 0..1)`. The readback
+    /// pixel reflects the fragment shader's output color (opaque
+    /// green for the canonical pipeline) — proof that the draw
+    /// actually ran past the clear.
+    ///
+    /// Closes critical blocker 3 ("no render encoder / no real
+    /// draw submission"): the encoder records a real bind +
+    /// indexed-draw + submit, and `record.draws_recorded` reflects
+    /// the actual draw count.
+    pub fn run_with_indexed_draw_against_offscreen_target(
+        device: &::wgpu::Device,
+        queue: &::wgpu::Queue,
+        target: &LiveProofFrameOffscreenTarget,
+        triangle: &LiveProofFrameTrianglePipeline,
+        plan: LiveProofFrameGraphPlan,
+        frame_index: u64,
+    ) -> LiveProofFrameRunResult {
+        let mut record = LiveProofFrameRunResult {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            render_passes_recorded: 0,
+            draws_recorded: 0,
+            copies_recorded: 0,
+            queue_submissions: 0,
+            device_poll_completed: false,
+            readback_succeeded: false,
+            frame_probe_rgba8: [0, 0, 0, 0],
+            frame_index,
+        };
+
+        let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
+            label: Some("fun_renderer.live_proof_frame.indexed_draw.encoder"),
+        });
+
+        // Step 1: render pass with clear + indexed draw.
+        {
+            let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                label: Some("fun_renderer.live_proof_frame.indexed_draw.pass"),
+                color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: ::wgpu::Operations {
+                        load: ::wgpu::LoadOp::Clear(::wgpu::Color {
+                            r: plan.clear_color[0],
+                            g: plan.clear_color[1],
+                            b: plan.clear_color[2],
+                            a: plan.clear_color[3],
+                        }),
+                        store: ::wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            record.render_passes_recorded = 1;
+
+            // Bind pipeline + index buffer, then issue the indexed
+            // draw of one triangle (3 indices). No vertex buffer
+            // is bound — the fullscreen-triangle vertex shader
+            // expands `@builtin(vertex_index)` into the typed
+            // positions array.
+            pass.set_pipeline(&triangle.pipeline);
+            pass.set_index_buffer(triangle.index_buffer.slice(..), ::wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..triangle.index_count, 0, 0..1);
+            record.draws_recorded = 1;
+        }
+
+        // Step 2: copy texture → readback buffer.
+        encoder.copy_texture_to_buffer(
+            ::wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: ::wgpu::Origin3d::ZERO,
+                aspect: ::wgpu::TextureAspect::All,
+            },
+            ::wgpu::TexelCopyBufferInfo {
+                buffer: &target.readback_buffer,
+                layout: ::wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.readback_row_bytes),
+                    rows_per_image: Some(target.height),
+                },
+            },
+            ::wgpu::Extent3d {
+                width: target.width,
+                height: target.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        record.copies_recorded = 1;
+
+        // Step 3: submit.
+        let command_buffer = encoder.finish();
+        let _submission_index = queue.submit(::core::iter::once(command_buffer));
+        record.queue_submissions = 1;
+
+        // Step 4: poll the device until the GPU work is done +
+        // map the readback buffer.
+        let buffer_slice = target.readback_buffer.slice(..);
+        let (sender, receiver) = channel();
+        buffer_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        let poll_status = device.poll(::wgpu::PollType::wait_indefinitely());
+        record.device_poll_completed = poll_status.is_ok();
+
+        // Step 5: read first pixel from the mapped buffer (tiny
+        // readback — exactly the typed Pass B `FrameProbeSample`
+        // path, ignoring alpha for the non-black classification).
+        match receiver.recv() {
+            Ok(Ok(())) => {
+                let data = buffer_slice.get_mapped_range();
+                if data.len() >= 4 {
+                    record.frame_probe_rgba8 = [data[0], data[1], data[2], data[3]];
+                    record.readback_succeeded = true;
+                }
+                drop(data);
+                target.readback_buffer.unmap();
+            }
+            _ => {
+                // Map failed — leave readback_succeeded false.
+            }
+        }
+
+        record
+    }
 }
 
 // ============================================================================
-// Section 6 — Top-level proof-frame runner
+// Section 7 — Top-level proof-frame runner
 // ============================================================================
 
 /// Outcome of bootstrapping a fresh DX12 wgpu device + running
@@ -435,9 +701,8 @@ pub enum LiveProofFrameBootResult {
 
 /// Bootstrap a fresh DX12 wgpu device through the existing bridge
 /// `initialize_wgpu_bridge_runtime` helper, allocate the headless
-/// offscreen target, run one proof frame, and return the typed
-/// outcome. This is the single entry point the Pass B live test
-/// uses to close blockers 1 + 2 in test conditions.
+/// offscreen target, run one proof frame (clear-only), and return
+/// the typed outcome. Used by the blocker 1 + 2 live tests.
 #[must_use]
 pub fn run_proof_frame_against_fresh_dx12_device(
     plan: LiveProofFrameGraphPlan,
@@ -463,6 +728,43 @@ pub fn run_proof_frame_against_fresh_dx12_device(
     LiveProofFrameBootResult::Ran { bridge_state, run }
 }
 
+/// Bootstrap a fresh DX12 wgpu device + create the indexed-draw
+/// triangle pipeline + run one proof frame that issues a real
+/// `draw_indexed` call. Used by the blocker 3 + 4 live tests.
+///
+/// Closes blocker 3 ("no render encoder / no real draw
+/// submission") and reaffirms blocker 4 ("no frame readback /
+/// frame probe") via a typed real `draw_indexed` plus the
+/// existing readback path. The frame probe sample reflects the
+/// fragment shader's output (opaque green) — proof the draw
+/// landed past the clear color.
+#[must_use]
+pub fn run_proof_frame_with_indexed_draw_against_fresh_dx12_device(
+    plan: LiveProofFrameGraphPlan,
+    frame_index: u64,
+) -> LiveProofFrameBootResult {
+    let options = WgpuBridgeRuntimeOptions::production_default();
+    let bridge_state = match initialize_wgpu_bridge_runtime::<Dx12Native>(&options) {
+        Ok(state) => state,
+        Err(failure) => return LiveProofFrameBootResult::BridgeRuntimeFailed(failure),
+    };
+    let target = LiveProofFrameOffscreenTarget::allocate(
+        &bridge_state.device,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+    );
+    let triangle = LiveProofFrameTrianglePipeline::create(&bridge_state.device, target.format);
+    let run = LiveGraphExecutor::run_with_indexed_draw_against_offscreen_target(
+        &bridge_state.device,
+        &bridge_state.queue,
+        &target,
+        &triangle,
+        plan,
+        frame_index,
+    );
+    LiveProofFrameBootResult::Ran { bridge_state, run }
+}
+
 // ============================================================================
 // Section 7 — Pass B evidence composer
 // ============================================================================
@@ -471,6 +773,14 @@ pub fn run_proof_frame_against_fresh_dx12_device(
 /// `PassBRuntimeEvidence` shape. The four runtime-wiring booleans
 /// are set from the executor's typed counters; the frame probe
 /// sample is set from the readback rgba8.
+///
+/// **Honest predicate for blocker 3 ("no render encoder / no
+/// real draw submission"):** the rule
+/// `render_encoder_recorded_at_least_one_draw` requires
+/// `draws_recorded > 0` — a typed real `draw_indexed` /
+/// `draw_indirect` / `draw` call. Copy-only paths
+/// (`copy_texture_to_buffer` for a readback) **do not** count
+/// toward this rule because they do not exercise the rasterizer.
 #[must_use]
 pub fn compose_passb_runtime_evidence_from_run_result(
     result: &LiveProofFrameRunResult,
@@ -478,8 +788,7 @@ pub fn compose_passb_runtime_evidence_from_run_result(
     PassBRuntimeEvidence {
         surface_configured: result.presentation_kind.counts_as_surface_configured(),
         graph_executor_ran_at_least_one_pass: result.render_passes_recorded > 0,
-        render_encoder_recorded_at_least_one_draw: result.copies_recorded > 0
-            || result.draws_recorded > 0,
+        render_encoder_recorded_at_least_one_draw: result.draws_recorded > 0,
         first_frame_presented: result.passes_first_frame_presented(),
         frame_probe: if result.readback_succeeded {
             Some(result.frame_probe_sample())
@@ -575,6 +884,37 @@ mod tests {
 
     #[test]
     fn passb_evidence_composer_translates_full_run_into_passing_evidence() {
+        // Indexed-draw run: `draws_recorded > 0` is the typed
+        // signal blocker 3 requires. `copies_recorded` records the
+        // typed readback copy but does *not* satisfy the
+        // render-encoder rule on its own.
+        let result = LiveProofFrameRunResult {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            render_passes_recorded: 1,
+            draws_recorded: 1,
+            copies_recorded: 1,
+            queue_submissions: 1,
+            device_poll_completed: true,
+            readback_succeeded: true,
+            frame_probe_rgba8: [0, 255, 0, 255],
+            frame_index: 1,
+        };
+        let ev = compose_passb_runtime_evidence_from_run_result(&result);
+        assert!(ev.surface_configured);
+        assert!(ev.graph_executor_ran_at_least_one_pass);
+        assert!(ev.render_encoder_recorded_at_least_one_draw);
+        assert!(ev.first_frame_presented);
+        assert!(ev.frame_probe.is_some_and(|p| p.is_non_black()));
+        // GPU timestamp queries are still a gap.
+        assert!(!ev.gpu_timestamp_observed);
+    }
+
+    #[test]
+    fn passb_evidence_composer_rejects_copy_only_run_for_render_encoder_rule() {
+        // Clear-only run with copy readback but no real draw —
+        // the typed render-encoder rule must not pass on this
+        // shape because no rasterizer work happened.
         let result = LiveProofFrameRunResult {
             schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
             presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
@@ -588,13 +928,14 @@ mod tests {
             frame_index: 1,
         };
         let ev = compose_passb_runtime_evidence_from_run_result(&result);
+        // Surface + executor + first-frame + probe still pass.
         assert!(ev.surface_configured);
         assert!(ev.graph_executor_ran_at_least_one_pass);
-        assert!(ev.render_encoder_recorded_at_least_one_draw);
         assert!(ev.first_frame_presented);
         assert!(ev.frame_probe.is_some_and(|p| p.is_non_black()));
-        // GPU timestamp queries are still a gap.
-        assert!(!ev.gpu_timestamp_observed);
+        // Render-encoder rule honestly fails because no real draw
+        // ran — only a clear + copy.
+        assert!(!ev.render_encoder_recorded_at_least_one_draw);
     }
 
     #[test]
@@ -662,7 +1003,13 @@ mod tests {
                     let evidence = compose_passb_runtime_evidence_from_run_result(&run);
                     assert!(evidence.surface_configured);
                     assert!(evidence.graph_executor_ran_at_least_one_pass);
-                    assert!(evidence.render_encoder_recorded_at_least_one_draw);
+                    // Clear-only path records ZERO draws, so the
+                    // tightened render-encoder predicate
+                    // (`draws_recorded > 0`) honestly refuses to
+                    // pass for this run. Blocker 3 closure
+                    // requires the indexed-draw lane (see
+                    // `live_executor_records_real_indexed_draw_and_readback_proves_green_pixel`).
+                    assert!(!evidence.render_encoder_recorded_at_least_one_draw);
                     assert!(evidence.first_frame_presented);
                     assert!(evidence.frame_probe.is_some_and(|p| p.is_non_black()));
                 }
@@ -673,6 +1020,96 @@ mod tests {
                 // strict assertion runs.
                 eprintln!(
                     "live_proof_frame_executor: bridge runtime failed (host without DX12 adapter): {failure:?}",
+                );
+            }
+        }
+    }
+
+    /// Live blocker-3 closing smoke gate. Boots a fresh DX12 wgpu
+    /// device, creates the typed
+    /// `LiveProofFrameTrianglePipeline`, allocates the headless
+    /// offscreen target, and runs the executor against a typed
+    /// plan that clears to black + draws a fullscreen green
+    /// triangle. The readback pixel must be green-dominant
+    /// because the draw covers the entire viewport — proof the
+    /// `draw_indexed` actually ran past the clear.
+    ///
+    /// The fragment shader writes opaque green
+    /// (`[0.0, 1.0, 0.0, 1.0]`); the linear → sRGB conversion
+    /// produces approximately `[0, 255, 0, 255]` in rgba8.
+    #[test]
+    fn live_executor_records_real_indexed_draw_and_readback_proves_green_pixel() {
+        let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
+        let outcome = run_proof_frame_with_indexed_draw_against_fresh_dx12_device(plan, 2);
+        match outcome {
+            LiveProofFrameBootResult::Ran { bridge_state, run } => {
+                if !ran_on_real_dx12_adapter(&bridge_state) {
+                    eprintln!(
+                        "live_executor_records_real_indexed_draw_and_readback_proves_green_pixel: \
+                         non-DX12 actual backend ({:?}); skipping strict assertion",
+                        bridge_state.actual_native_backend,
+                    );
+                    return;
+                }
+                // Real DX12 adapter: every step must succeed, the
+                // executor must record exactly one draw, and the
+                // readback pixel must be green-dominant.
+                assert!(
+                    run.passes_full_runtime(),
+                    "live indexed-draw run did not finish: {run:?}"
+                );
+                assert_eq!(
+                    run.render_passes_recorded, 1,
+                    "expected exactly one render pass",
+                );
+                assert_eq!(run.draws_recorded, 1, "expected exactly one indexed draw",);
+                assert_eq!(run.copies_recorded, 1);
+                assert_eq!(run.queue_submissions, 1);
+
+                // Green-dominant pixel proves the draw landed past
+                // the black clear. We assert G is the largest
+                // channel and is well above the threshold; we
+                // don't pin the exact byte because the
+                // Rgba8UnormSrgb conversion may quantize.
+                let [r, g, b, _a] = run.frame_probe_rgba8;
+                assert!(
+                    g > 128,
+                    "expected G > 128 from green triangle, got {:?}",
+                    run.frame_probe_rgba8,
+                );
+                assert!(
+                    g > r,
+                    "expected G dominant over R, got {:?}",
+                    run.frame_probe_rgba8,
+                );
+                assert!(
+                    g > b,
+                    "expected G dominant over B, got {:?}",
+                    run.frame_probe_rgba8,
+                );
+
+                // Pass B evidence composition flips both blocker
+                // 3 and blocker 4 rules.
+                let evidence = compose_passb_runtime_evidence_from_run_result(&run);
+                assert!(
+                    evidence.render_encoder_recorded_at_least_one_draw,
+                    "blocker 3 exit gate: render_encoder_recorded_at_least_one_draw must be true",
+                );
+                assert!(
+                    evidence.frame_probe.is_some_and(|p| p.is_non_black()),
+                    "blocker 4 exit gate: frame probe must be non-black via RGB",
+                );
+
+                // Confirm `is_non_black()` ignores alpha by
+                // construction — alpha-only opaque-black must not
+                // pass.
+                let opaque_black = PassBFrameProbeSample::new(0, [0, 0, 0, 255]);
+                assert!(!opaque_black.is_non_black());
+            }
+            LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
+                eprintln!(
+                    "live_executor_records_real_indexed_draw_and_readback_proves_green_pixel: \
+                     bridge runtime failed (host without DX12 adapter): {failure:?}",
                 );
             }
         }

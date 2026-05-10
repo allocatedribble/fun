@@ -995,13 +995,21 @@ mod tests {
         }
     }
 
-    /// Pass B exit-test for **critical blockers 1 + 2**. Drives a
-    /// real DX12 wgpu device through the live graph executor in
-    /// [`crate::live_proof_frame_executor`], composes the typed
-    /// `PassBRuntimeEvidence` from the executor's run record, and
-    /// asserts the typed Pass B rules
-    /// `SurfaceConfiguredAndFirstFramePresented` and
-    /// `GraphExecutorRanAtLeastOnePass` flip to passing.
+    /// Pass B exit-test for **critical blockers 1 + 2 + 3 + 4**.
+    /// Drives a real DX12 wgpu device through the indexed-draw
+    /// path of the live graph executor in
+    /// [`crate::live_proof_frame_executor`]: real
+    /// `wgpu::CommandEncoder`, real `set_pipeline` +
+    /// `set_index_buffer` + `draw_indexed`, real
+    /// `copy_texture_to_buffer` readback, real
+    /// `Buffer::map_async`. Composes the typed
+    /// `PassBRuntimeEvidence` from the executor's run record and
+    /// asserts that all four blocker rules flip to passing:
+    /// blocker 1 (`SurfaceConfiguredAndFirstFramePresented`),
+    /// blocker 2 (`GraphExecutorRanAtLeastOnePass`),
+    /// blocker 3 (`RenderEncoderRecordedAtLeastOneDraw` —
+    /// requires `draws_recorded > 0`; copy-only paths do not
+    /// pass), and blocker 4 (`FrameProbeIsNonBlack`, RGB-only).
     ///
     /// On hosts without a DX12 adapter the live boot returns
     /// `BridgeRuntimeFailed`; the test records that honestly via
@@ -1014,11 +1022,15 @@ mod tests {
         use crate::live_proof_frame_executor::{
             LiveProofFrameBootResult, LiveProofFrameGraphPlan,
             compose_passb_runtime_evidence_from_run_result, ran_on_real_dx12_adapter,
-            run_proof_frame_against_fresh_dx12_device,
+            run_proof_frame_with_indexed_draw_against_fresh_dx12_device,
         };
 
-        let plan = LiveProofFrameGraphPlan::PRODUCT_DEFAULT;
-        let outcome = run_proof_frame_against_fresh_dx12_device(plan, 1);
+        // Clear-to-black + green-triangle plan. The fragment
+        // shader paints opaque green over the entire viewport, so
+        // the readback pixel proves the draw — not just the
+        // clear — produced output.
+        let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
+        let outcome = run_proof_frame_with_indexed_draw_against_fresh_dx12_device(plan, 1);
 
         match outcome {
             LiveProofFrameBootResult::Ran { bridge_state, run } => {
@@ -1070,20 +1082,41 @@ mod tests {
                     "blocker 2 exit test failed: graph executor did not record any pass",
                 );
 
-                // The render encoder rule also passes because the
-                // copy-texture-to-buffer counts as a recorded
-                // command.
-                assert!(verdict.passes_render_encoder_recorded_at_least_one_draw);
+                // Critical blocker 3 exit test:
+                // RenderEncoderRecordedAtLeastOneDraw passes via
+                // a real `draw_indexed` of the green triangle —
+                // not a copy-only fallback.
+                assert!(
+                    verdict.passes_render_encoder_recorded_at_least_one_draw,
+                    "blocker 3 exit test failed: render encoder did not record a real draw; \
+                     draws_recorded={}, copies_recorded={}",
+                    run.draws_recorded, run.copies_recorded,
+                );
+                assert!(
+                    run.draws_recorded > 0,
+                    "blocker 3 exit test requires at least one real draw_indexed call",
+                );
 
-                // The frame probe rule passes because the readback
-                // produced a non-black pixel from the
-                // clear-to-orange render pass.
-                assert!(verdict.passes_frame_probe_is_non_black);
+                // Critical blocker 4 exit test:
+                // FrameProbeIsNonBlack passes via the RGB-only
+                // predicate (alpha ignored).
+                assert!(
+                    verdict.passes_frame_probe_is_non_black,
+                    "blocker 4 exit test failed: frame probe is black or missing",
+                );
+                let probe = bundle
+                    .frame_probe
+                    .expect("blocker 4: frame probe sample must be present");
+                assert!(
+                    probe.is_non_black(),
+                    "blocker 4 exit test failed: probe rgba8={:?} is RGB-black",
+                    probe.rgba8,
+                );
 
-                // The remaining open rules are
+                // The remaining open rule is
                 // NoFatalDx12ProductionViolation (cold-default
                 // hardening report) — that's a separate gap from
-                // blockers 1 + 2 and stays as-is for this exit
+                // blockers 1-4 and stays as-is for this exit
                 // test.
             }
             LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
