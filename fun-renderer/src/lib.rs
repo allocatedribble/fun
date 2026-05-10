@@ -22,6 +22,8 @@ pub mod gpu_driven;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
 pub mod ir;
+#[cfg(feature = "bevy_ecs")]
+pub mod lighting_stack;
 #[cfg(feature = "experimental_renderer_ml")]
 pub mod ml;
 pub mod page;
@@ -844,6 +846,8 @@ pub use gpu_driven::*;
 #[cfg(feature = "bevy_ecs")]
 pub use heuristics::*;
 pub use ir::*;
+#[cfg(feature = "bevy_ecs")]
+pub use lighting_stack::*;
 #[cfg(feature = "experimental_renderer_ml")]
 pub use ml::*;
 pub use page::*;
