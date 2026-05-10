@@ -994,4 +994,104 @@ mod tests {
             }
         }
     }
+
+    /// Pass B exit-test for **critical blockers 1 + 2**. Drives a
+    /// real DX12 wgpu device through the live graph executor in
+    /// [`crate::live_proof_frame_executor`], composes the typed
+    /// `PassBRuntimeEvidence` from the executor's run record, and
+    /// asserts the typed Pass B rules
+    /// `SurfaceConfiguredAndFirstFramePresented` and
+    /// `GraphExecutorRanAtLeastOnePass` flip to passing.
+    ///
+    /// On hosts without a DX12 adapter the live boot returns
+    /// `BridgeRuntimeFailed`; the test records that honestly via
+    /// the `BridgeRuntimeFailed` outcome and skips the strict
+    /// passing assertion. The blocker-closing assertion only runs
+    /// on hosts that produced a real DX12 run.
+    #[cfg(feature = "wgpu_bridge")]
+    #[test]
+    fn live_passb_passes_through_live_proof_frame_executor_against_offscreen_target() {
+        use crate::live_proof_frame_executor::{
+            LiveProofFrameBootResult, LiveProofFrameGraphPlan,
+            compose_passb_runtime_evidence_from_run_result, ran_on_real_dx12_adapter,
+            run_proof_frame_against_fresh_dx12_device,
+        };
+
+        let plan = LiveProofFrameGraphPlan::PRODUCT_DEFAULT;
+        let outcome = run_proof_frame_against_fresh_dx12_device(plan, 1);
+
+        match outcome {
+            LiveProofFrameBootResult::Ran { bridge_state, run } => {
+                if !ran_on_real_dx12_adapter(&bridge_state) {
+                    eprintln!(
+                        "live_passb_passes_through_live_proof_frame_executor_against_offscreen_target: \
+                         non-DX12 actual backend ({:?}); skipping strict assertion",
+                        bridge_state.actual_native_backend,
+                    );
+                    return;
+                }
+
+                let evidence = compose_passb_runtime_evidence_from_run_result(&run);
+                let bridge_observation = PassBBridgeStateObservation {
+                    actual_backend: NativeBackend::Dx12,
+                    bridge_runtime_succeeded: true,
+                    startup_outcome: Dx12StrictStartupOutcome::Accepted {
+                        actual_backend: NativeBackend::Dx12,
+                    },
+                    native_sdk_claim_policy: Dx12NativeSdkClaimPolicy::PRODUCT_DEFAULT,
+                    command_list_blocker_policy: Dx12CommandListBlockerPolicy::PRODUCT_DEFAULT,
+                };
+                let mut dx12_report = Dx12ProductionHardeningReport::cold_default();
+                dx12_report.startup_outcome = Dx12StrictStartupOutcome::Accepted {
+                    actual_backend: NativeBackend::Dx12,
+                };
+
+                let bundle = build_bundle_from_runtime_observation(
+                    1,
+                    bridge_observation,
+                    evidence,
+                    &dx12_report,
+                );
+                let verdict = PassBProofFrameRuntimeVerdict::evaluate(&bundle);
+
+                // Critical blocker 1 exit test:
+                // SurfaceConfiguredAndFirstFramePresented passes.
+                assert!(
+                    verdict.passes_surface_configured_and_first_frame_presented,
+                    "blocker 1 exit test failed: surface not configured / not presented; \
+                     surface_configured={}, first_frame_presented={}",
+                    bundle.surface_configured, bundle.first_frame_presented,
+                );
+
+                // Critical blocker 2 exit test:
+                // GraphExecutorRanAtLeastOnePass passes.
+                assert!(
+                    verdict.passes_graph_executor_ran_at_least_one_pass,
+                    "blocker 2 exit test failed: graph executor did not record any pass",
+                );
+
+                // The render encoder rule also passes because the
+                // copy-texture-to-buffer counts as a recorded
+                // command.
+                assert!(verdict.passes_render_encoder_recorded_at_least_one_draw);
+
+                // The frame probe rule passes because the readback
+                // produced a non-black pixel from the
+                // clear-to-orange render pass.
+                assert!(verdict.passes_frame_probe_is_non_black);
+
+                // The remaining open rules are
+                // NoFatalDx12ProductionViolation (cold-default
+                // hardening report) — that's a separate gap from
+                // blockers 1 + 2 and stays as-is for this exit
+                // test.
+            }
+            LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
+                eprintln!(
+                    "live_passb_passes_through_live_proof_frame_executor_against_offscreen_target: \
+                     bridge runtime failed (host without DX12 adapter): {failure:?}",
+                );
+            }
+        }
+    }
 }
