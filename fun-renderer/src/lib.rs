@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+#[cfg(feature = "bevy_ecs")]
+pub mod asset_prep;
 pub mod backend;
 pub mod benchmark;
 pub mod binding;
@@ -822,6 +824,8 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
 };
 
 pub use api::*;
+#[cfg(feature = "bevy_ecs")]
+pub use asset_prep::*;
 pub use backend::*;
 pub use benchmark::*;
 #[cfg(feature = "bevy_ecs")]
