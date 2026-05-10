@@ -47,7 +47,9 @@ use bevy_ecs::prelude::Resource;
 
 use crate::component_api::RenderViewId;
 use crate::gpu_driven_runtime::GpuDrivenParityVerdict;
-use crate::scene_streaming::{RendererCameraInput, RendererCullingFrustum, RendererVisibilityConfig};
+use crate::scene_streaming::{
+    RendererCameraInput, RendererCullingFrustum, RendererVisibilityConfig,
+};
 use crate::tier2_gpu_driven_proof::{
     Tier2FrustumCullParityRun, Tier2FrustumCullPathOutcome, Tier2FrustumCullScene,
     run_direct_frustum_cull, run_gpu_driven_frustum_cull,

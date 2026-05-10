@@ -995,17 +995,29 @@ mod tests {
         }
     }
 
-    /// Pass B exit-test for **all six rules** (every critical
-    /// blocker called out in the user prompts is closed). Drives
-    /// a real DX12 wgpu device through the
-    /// `run_proof_frame_with_full_observations_against_fresh_dx12_device`
-    /// helper in [`crate::live_proof_frame_executor`]: real
-    /// `wgpu::CommandEncoder`, real `set_pipeline` +
-    /// `set_index_buffer` + `draw_indexed`, real begin/end GPU
-    /// timestamp scopes around the render pass, real
-    /// `resolve_query_set` + buffer→buffer copy + readback, real
-    /// `copy_texture_to_buffer` readback, real
-    /// `Buffer::map_async` for both readbacks. Composes the typed
+    /// Pass B canonical CI proof. The user's minimum plan
+    /// ("Pass 6: Promote Pass B to the main CI proof") names this
+    /// the canonical command:
+    ///
+    /// ```text
+    /// cargo test -p fun-renderer --lib live_passb_runs_one_update_and_records_passes
+    /// ```
+    ///
+    /// Drives a real DX12 wgpu device through the typed
+    /// compiled render graph
+    /// ([`crate::live_proof_frame_executor::CompiledRenderGraph::product_default`])
+    /// — Clear → OpaqueProofMesh → UiOverlayPlaceholder →
+    /// FinalOutput — via the
+    /// `run_compiled_render_graph_against_fresh_dx12_device`
+    /// runner. Every typed surface is exercised end to end:
+    /// real `wgpu::CommandEncoder`, real `set_pipeline` +
+    /// `set_index_buffer` + `draw_indexed`, real per-pass
+    /// begin/end GPU timestamp scopes (one pair per render
+    /// pass), real `resolve_query_set` + buffer→buffer copy +
+    /// readback, real `copy_texture_to_buffer` readback, real
+    /// `Buffer::map_async` for both readbacks, and the typed
+    /// `RendererSurfaceResource` is populated from the typed
+    /// offscreen target. Composes the typed
     /// `PassBRuntimeEvidence` and asserts every rule passes:
     ///
     /// - rule 1 (`ActualBackendIsDx12`)
@@ -1028,35 +1040,70 @@ mod tests {
     /// `BridgeRuntimeFailed` and the test records honestly.
     #[cfg(feature = "wgpu_bridge")]
     #[test]
-    fn live_passb_passes_through_live_proof_frame_executor_against_offscreen_target() {
+    fn live_passb_runs_one_update_and_records_passes() {
         use crate::live_proof_frame_executor::{
-            LiveProofFrameBootResult, LiveProofFrameGraphPlan,
+            LiveProofFrameCompiledGraphBootResult, LiveProofFrameGraphPlan,
             compose_passb_runtime_evidence_from_run_result, ran_on_real_dx12_adapter,
-            run_proof_frame_with_full_observations_against_fresh_dx12_device,
+            run_compiled_render_graph_against_fresh_dx12_device,
         };
 
-        // Clear-to-black + green-triangle + GPU-timestamp plan.
-        // The fragment shader paints opaque green over the entire
-        // viewport so the readback pixel proves the draw landed
-        // past the clear; the timestamp queries prove the GPU
-        // observed begin / end scopes around the render pass.
+        // Clear-to-black + green-triangle + per-pass timestamp
+        // plan. The compiled graph walks Clear → OpaqueProofMesh
+        // → UiOverlayPlaceholder → FinalOutput; the fragment
+        // shader paints opaque green so the readback pixel proves
+        // the draw in the OpaqueProofMesh pass landed; per-pass
+        // timestamps prove the GPU observed begin/end scopes
+        // around every render pass.
         let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
-        let outcome = run_proof_frame_with_full_observations_against_fresh_dx12_device(plan, 1);
+        let outcome = run_compiled_render_graph_against_fresh_dx12_device(plan, 1);
 
         match outcome {
-            LiveProofFrameBootResult::Ran(payload) => {
-                let crate::live_proof_frame_executor::LiveProofFrameRanPayload {
+            LiveProofFrameCompiledGraphBootResult::Ran(payload) => {
+                let crate::live_proof_frame_executor::LiveProofFrameCompiledGraphRanPayload {
                     bridge_state,
                     run,
+                    timing,
+                    counters,
+                    surface_resource,
                 } = *payload;
                 if !ran_on_real_dx12_adapter(&bridge_state) {
                     eprintln!(
-                        "live_passb_passes_through_live_proof_frame_executor_against_offscreen_target: \
+                        "live_passb_runs_one_update_and_records_passes: \
                          non-DX12 actual backend ({:?}); skipping strict assertion",
                         bridge_state.actual_native_backend,
                     );
                     return;
                 }
+
+                // Typed compiled-graph counters cover every kind:
+                // Clear + OpaqueProofMesh + UiOverlayPlaceholder
+                // + FinalOutput each at least once.
+                assert!(
+                    counters.covers_every_kind_at_least_once(),
+                    "compiled-graph counters must cover every typed kind; got {:?}",
+                    counters,
+                );
+                assert_eq!(counters.clear_passes, 1);
+                assert_eq!(counters.opaque_proof_mesh_passes, 1);
+                assert_eq!(counters.ui_overlay_placeholder_passes, 1);
+                assert_eq!(counters.final_output_passes, 1);
+
+                // Typed RendererSurfaceResource (Pass 1 contract)
+                // reports both surface_configured and
+                // first_frame_presented under the headless lane.
+                assert!(surface_resource.surface_configured);
+                assert!(surface_resource.first_frame_presented);
+
+                // Typed graph-pass timing artifact carries one
+                // record per render pass (3 render passes:
+                // Clear + OpaqueProofMesh + UiOverlayPlaceholder).
+                assert_eq!(
+                    timing.records.len(),
+                    3,
+                    "expected one per-pass timing record per render pass",
+                );
+                assert!(timing.timestamp_period_nanos > 0.0);
+                assert!(timing.total_duration_nanos() > 0);
 
                 let evidence = compose_passb_runtime_evidence_from_run_result(&run);
                 let bridge_observation = PassBBridgeStateObservation {
@@ -1175,10 +1222,11 @@ mod tests {
                     bundle.gaps,
                 );
             }
-            LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
+            LiveProofFrameCompiledGraphBootResult::BridgeRuntimeFailed(failure) => {
                 eprintln!(
-                    "live_passb_passes_through_live_proof_frame_executor_against_offscreen_target: \
-                     bridge runtime failed (host without DX12 adapter): {failure:?}",
+                    "live_passb_runs_one_update_and_records_passes: \
+                     bridge runtime failed (host without DX12 adapter or missing \
+                     TIMESTAMP_QUERY support): {failure:?}",
                 );
             }
         }

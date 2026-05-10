@@ -52,12 +52,12 @@
 
 use bevy_ecs::prelude::Resource;
 
+use crate::UpscalerKind;
 use crate::dx12_production::Dx12NativeSdkClaimPolicy;
 use crate::tier5_temporal_reconstruction::{
     Tier5MotionVectorClassification, Tier5TaaAcceptance, Tier5TaaDebugView,
     Tier5TaaDisocclusionRule, Tier5TaaResolveStep, Tier5TaaResolveStrategy, Tier5UpscalerRoute,
 };
-use crate::UpscalerKind;
 
 pub const PASSF_TEMPORAL_STACK_SCHEMA_VERSION: u16 = 1;
 pub const PASSF_TEMPORAL_STACK_RULE_COUNT: usize = 8;

@@ -626,6 +626,247 @@ impl LiveProofFrameMultiPassTimestamps {
 }
 
 // ============================================================================
+// Section 5e — Compiled render graph IR (Pass-1/2/3/4/5 plan)
+// ============================================================================
+
+/// Typed kind for one compiled-render-graph pass. Covers the four
+/// "first pass types" called out in the user's minimum plan to
+/// unblock rendering example scenes:
+///
+/// - **clear** — `LoadOp::Clear` only, no draws.
+/// - **opaque proof mesh** — `LoadOp::Load`, bind triangle
+///   pipeline + index buffer + `draw_indexed` (the proof mesh).
+/// - **UI overlay placeholder** — `LoadOp::Load` with no draws.
+///   The placeholder slot exists so the typed taxonomy carries
+///   the late-UI composition stage even before native UI is
+///   wired against the live runtime.
+/// - **final output / present** — `copy_texture_to_buffer` for
+///   the headless lane (the typed equivalent of present in the
+///   `OsSurfaceWindowed` lane).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompiledRenderGraphPassKind {
+    #[default]
+    Clear,
+    OpaqueProofMesh,
+    UiOverlayPlaceholder,
+    FinalOutput,
+}
+
+impl CompiledRenderGraphPassKind {
+    pub const ALL: [Self; 4] = [
+        Self::Clear,
+        Self::OpaqueProofMesh,
+        Self::UiOverlayPlaceholder,
+        Self::FinalOutput,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::OpaqueProofMesh => "opaque_proof_mesh",
+            Self::UiOverlayPlaceholder => "ui_overlay_placeholder",
+            Self::FinalOutput => "final_output",
+        }
+    }
+
+    /// True when this kind is a real GPU-recorded render pass
+    /// (so it can carry begin/end timestamps). The typed
+    /// `FinalOutput` kind is a copy-only step in the headless
+    /// lane.
+    #[must_use]
+    pub const fn is_render_pass(self) -> bool {
+        matches!(
+            self,
+            Self::Clear | Self::OpaqueProofMesh | Self::UiOverlayPlaceholder
+        )
+    }
+
+    /// Map the typed compiled-graph kind to its canonical
+    /// [`crate::frame_graph::FrameGraphPassRole`].
+    #[must_use]
+    pub const fn frame_graph_role(self) -> crate::frame_graph::FrameGraphPassRole {
+        use crate::frame_graph::FrameGraphPassRole;
+        match self {
+            Self::Clear => FrameGraphPassRole::Clear,
+            Self::OpaqueProofMesh => FrameGraphPassRole::StaticScenePlaceholder,
+            Self::UiOverlayPlaceholder => FrameGraphPassRole::UiImportPlaceholder,
+            Self::FinalOutput => FrameGraphPassRole::Present,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompiledRenderGraphPassDescriptor {
+    pub schema_version: u16,
+    pub pass_index: u32,
+    pub kind: CompiledRenderGraphPassKind,
+}
+
+impl CompiledRenderGraphPassDescriptor {
+    #[must_use]
+    pub const fn new(pass_index: u32, kind: CompiledRenderGraphPassKind) -> Self {
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            pass_index,
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Resource)]
+pub struct CompiledRenderGraph {
+    pub schema_version: u16,
+    pub canonical_path: &'static str,
+    pub passes: Vec<CompiledRenderGraphPassDescriptor>,
+}
+
+impl CompiledRenderGraph {
+    pub const CANONICAL_ARTIFACT_PATH: &'static str =
+        "fun_renderer.live_proof_frame.compiled_render_graph.funpb.zst";
+
+    /// Product-default graph: Clear → OpaqueProofMesh →
+    /// UiOverlayPlaceholder → FinalOutput.
+    #[must_use]
+    pub fn product_default() -> Self {
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            canonical_path: Self::CANONICAL_ARTIFACT_PATH,
+            passes: vec![
+                CompiledRenderGraphPassDescriptor::new(0, CompiledRenderGraphPassKind::Clear),
+                CompiledRenderGraphPassDescriptor::new(
+                    1,
+                    CompiledRenderGraphPassKind::OpaqueProofMesh,
+                ),
+                CompiledRenderGraphPassDescriptor::new(
+                    2,
+                    CompiledRenderGraphPassKind::UiOverlayPlaceholder,
+                ),
+                CompiledRenderGraphPassDescriptor::new(3, CompiledRenderGraphPassKind::FinalOutput),
+            ],
+        }
+    }
+
+    /// Number of typed passes that count as render passes (i.e.,
+    /// will carry begin/end GPU timestamps).
+    #[must_use]
+    pub fn render_pass_count(&self) -> u32 {
+        self.passes
+            .iter()
+            .filter(|p| p.kind.is_render_pass())
+            .count() as u32
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LiveGraphExecutorPassKindCounters {
+    pub schema_version: u16,
+    pub clear_passes: u32,
+    pub opaque_proof_mesh_passes: u32,
+    pub ui_overlay_placeholder_passes: u32,
+    pub final_output_passes: u32,
+}
+
+impl LiveGraphExecutorPassKindCounters {
+    pub fn record(&mut self, kind: CompiledRenderGraphPassKind) {
+        self.schema_version = LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION;
+        match kind {
+            CompiledRenderGraphPassKind::Clear => {
+                self.clear_passes = self.clear_passes.saturating_add(1);
+            }
+            CompiledRenderGraphPassKind::OpaqueProofMesh => {
+                self.opaque_proof_mesh_passes = self.opaque_proof_mesh_passes.saturating_add(1);
+            }
+            CompiledRenderGraphPassKind::UiOverlayPlaceholder => {
+                self.ui_overlay_placeholder_passes =
+                    self.ui_overlay_placeholder_passes.saturating_add(1);
+            }
+            CompiledRenderGraphPassKind::FinalOutput => {
+                self.final_output_passes = self.final_output_passes.saturating_add(1);
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn covers_every_kind_at_least_once(&self) -> bool {
+        self.clear_passes > 0
+            && self.opaque_proof_mesh_passes > 0
+            && self.ui_overlay_placeholder_passes > 0
+            && self.final_output_passes > 0
+    }
+
+    #[must_use]
+    pub const fn total_passes(&self) -> u32 {
+        self.clear_passes
+            .saturating_add(self.opaque_proof_mesh_passes)
+            .saturating_add(self.ui_overlay_placeholder_passes)
+            .saturating_add(self.final_output_passes)
+    }
+}
+
+// ============================================================================
+// Section 5f — RendererSurfaceResource (Pass 1's typed contract)
+// ============================================================================
+
+/// Typed `RendererSurfaceResource` Bevy Resource. The user's
+/// minimum plan ("Pass 1: Configure visible surface and present
+/// path") asks for a `RendererSurfaceResource` that records the
+/// typed surface configuration. The headless lane sets the typed
+/// fields from the offscreen target; the windowed lane (deferred
+/// to a binary-layer winit closeout) sets them from the live
+/// `wgpu::Surface` configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Resource)]
+pub struct RendererSurfaceResource {
+    pub schema_version: u16,
+    pub presentation_kind: LiveProofFramePresentationKind,
+    pub surface_configured: bool,
+    pub first_frame_presented: bool,
+    pub format_label: &'static str,
+    pub present_mode_label: &'static str,
+    pub extent_width: u32,
+    pub extent_height: u32,
+}
+
+impl RendererSurfaceResource {
+    #[must_use]
+    pub const fn cold_default() -> Self {
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            surface_configured: false,
+            first_frame_presented: false,
+            format_label: "rgba8_unorm_srgb",
+            present_mode_label: "headless_poll",
+            extent_width: 0,
+            extent_height: 0,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_headless_run(
+        target: &LiveProofFrameOffscreenTarget,
+        first_frame_presented: bool,
+    ) -> Self {
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            surface_configured: true,
+            first_frame_presented,
+            format_label: "rgba8_unorm_srgb",
+            present_mode_label: "headless_poll",
+            extent_width: target.width,
+            extent_height: target.height,
+        }
+    }
+}
+
+impl Default for RendererSurfaceResource {
+    fn default() -> Self {
+        Self::cold_default()
+    }
+}
+
+// ============================================================================
 // Section 6 — Live graph executor
 // ============================================================================
 
@@ -1304,6 +1545,301 @@ impl LiveGraphExecutor {
 
         (record, artifact)
     }
+
+    /// Walk a typed [`CompiledRenderGraph`] end-to-end and record
+    /// real wgpu commands per pass kind. Closes the user's
+    /// "Pass 2: Add minimal graph executor" objective by walking
+    /// the typed graph and emitting:
+    ///
+    /// - `Clear` → render pass with `LoadOp::Clear`, no draws.
+    /// - `OpaqueProofMesh` → render pass with `LoadOp::Load`,
+    ///   bind triangle pipeline + index buffer + `draw_indexed`.
+    /// - `UiOverlayPlaceholder` → render pass with
+    ///   `LoadOp::Load`, no draws (placeholder slot).
+    /// - `FinalOutput` → `copy_texture_to_buffer` (the typed
+    ///   present in the headless lane).
+    ///
+    /// Each render-pass kind gets begin/end timestamp scopes
+    /// from `timestamps`. The typed
+    /// [`LiveGraphExecutorPassKindCounters`] records one
+    /// increment per pass walked. The typed
+    /// [`LiveProofFrameTimingArtifact`] carries one
+    /// [`LiveProofFramePerPassTimingRecord`] per render pass.
+    ///
+    /// Requires `timestamps.pass_count >= graph.render_pass_count()`
+    /// so every render-pass kind has typed timestamp slots.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_compiled_graph_against_offscreen_target(
+        device: &::wgpu::Device,
+        queue: &::wgpu::Queue,
+        target: &LiveProofFrameOffscreenTarget,
+        triangle: &LiveProofFrameTrianglePipeline,
+        timestamps: &LiveProofFrameMultiPassTimestamps,
+        graph: &CompiledRenderGraph,
+        plan: LiveProofFrameGraphPlan,
+        frame_index: u64,
+    ) -> (
+        LiveProofFrameRunResult,
+        LiveProofFrameTimingArtifact,
+        LiveGraphExecutorPassKindCounters,
+    ) {
+        let mut record = LiveProofFrameRunResult {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            render_passes_recorded: 0,
+            draws_recorded: 0,
+            copies_recorded: 0,
+            queue_submissions: 0,
+            device_poll_completed: false,
+            readback_succeeded: false,
+            frame_probe_rgba8: [0, 0, 0, 0],
+            frame_index,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: timestamps.timestamp_period_nanos,
+        };
+        let mut artifact = LiveProofFrameTimingArtifact::empty_cold_default();
+        artifact.timestamp_period_nanos = timestamps.timestamp_period_nanos;
+        let mut counters = LiveGraphExecutorPassKindCounters::default();
+
+        let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
+            label: Some("fun_renderer.live_proof_frame.compiled_graph.encoder"),
+        });
+
+        // Walk the typed graph. The first render pass uses
+        // `LoadOp::Clear`; subsequent render passes use
+        // `LoadOp::Load` so they composite onto the prior pass's
+        // output. The first pass's load color comes from the
+        // plan's `clear_color`. Render-pass kinds get begin/end
+        // timestamps; `FinalOutput` is a copy step.
+        let mut render_pass_slot = 0u32;
+        let mut first_render_pass_seen = false;
+        for descriptor in &graph.passes {
+            counters.record(descriptor.kind);
+            match descriptor.kind {
+                CompiledRenderGraphPassKind::Clear => {
+                    let begin_index = render_pass_slot * 2;
+                    let end_index = begin_index + 1;
+                    let _pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                        label: Some("fun_renderer.live_proof_frame.compiled_graph.clear"),
+                        color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                            view: &target.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: ::wgpu::Operations {
+                                load: if first_render_pass_seen {
+                                    ::wgpu::LoadOp::Load
+                                } else {
+                                    ::wgpu::LoadOp::Clear(::wgpu::Color {
+                                        r: plan.clear_color[0],
+                                        g: plan.clear_color[1],
+                                        b: plan.clear_color[2],
+                                        a: plan.clear_color[3],
+                                    })
+                                },
+                                store: ::wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: Some(::wgpu::RenderPassTimestampWrites {
+                            query_set: &timestamps.query_set,
+                            beginning_of_pass_write_index: Some(begin_index),
+                            end_of_pass_write_index: Some(end_index),
+                        }),
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    record.render_passes_recorded = record.render_passes_recorded.saturating_add(1);
+                    first_render_pass_seen = true;
+                    render_pass_slot += 1;
+                }
+                CompiledRenderGraphPassKind::OpaqueProofMesh => {
+                    let begin_index = render_pass_slot * 2;
+                    let end_index = begin_index + 1;
+                    let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                        label: Some(
+                            "fun_renderer.live_proof_frame.compiled_graph.opaque_proof_mesh",
+                        ),
+                        color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                            view: &target.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: ::wgpu::Operations {
+                                load: if first_render_pass_seen {
+                                    ::wgpu::LoadOp::Load
+                                } else {
+                                    ::wgpu::LoadOp::Clear(::wgpu::Color {
+                                        r: plan.clear_color[0],
+                                        g: plan.clear_color[1],
+                                        b: plan.clear_color[2],
+                                        a: plan.clear_color[3],
+                                    })
+                                },
+                                store: ::wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: Some(::wgpu::RenderPassTimestampWrites {
+                            query_set: &timestamps.query_set,
+                            beginning_of_pass_write_index: Some(begin_index),
+                            end_of_pass_write_index: Some(end_index),
+                        }),
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&triangle.pipeline);
+                    pass.set_index_buffer(
+                        triangle.index_buffer.slice(..),
+                        ::wgpu::IndexFormat::Uint16,
+                    );
+                    pass.draw_indexed(0..triangle.index_count, 0, 0..1);
+                    record.render_passes_recorded = record.render_passes_recorded.saturating_add(1);
+                    record.draws_recorded = record.draws_recorded.saturating_add(1);
+                    first_render_pass_seen = true;
+                    render_pass_slot += 1;
+                }
+                CompiledRenderGraphPassKind::UiOverlayPlaceholder => {
+                    let begin_index = render_pass_slot * 2;
+                    let end_index = begin_index + 1;
+                    let _pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                        label: Some(
+                            "fun_renderer.live_proof_frame.compiled_graph.ui_overlay_placeholder",
+                        ),
+                        color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                            view: &target.view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: ::wgpu::Operations {
+                                load: ::wgpu::LoadOp::Load,
+                                store: ::wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: Some(::wgpu::RenderPassTimestampWrites {
+                            query_set: &timestamps.query_set,
+                            beginning_of_pass_write_index: Some(begin_index),
+                            end_of_pass_write_index: Some(end_index),
+                        }),
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    record.render_passes_recorded = record.render_passes_recorded.saturating_add(1);
+                    first_render_pass_seen = true;
+                    render_pass_slot += 1;
+                }
+                CompiledRenderGraphPassKind::FinalOutput => {
+                    encoder.copy_texture_to_buffer(
+                        ::wgpu::TexelCopyTextureInfo {
+                            texture: &target.texture,
+                            mip_level: 0,
+                            origin: ::wgpu::Origin3d::ZERO,
+                            aspect: ::wgpu::TextureAspect::All,
+                        },
+                        ::wgpu::TexelCopyBufferInfo {
+                            buffer: &target.readback_buffer,
+                            layout: ::wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(target.readback_row_bytes),
+                                rows_per_image: Some(target.height),
+                            },
+                        },
+                        ::wgpu::Extent3d {
+                            width: target.width,
+                            height: target.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    record.copies_recorded = record.copies_recorded.saturating_add(1);
+                }
+            }
+        }
+
+        // Resolve every recorded render pass's timestamp pair +
+        // copy resolve buffer to readback. Resolve range is
+        // strictly the slots we used (`render_pass_slot * 2`).
+        let resolved_query_count = render_pass_slot * 2;
+        if resolved_query_count > 0 {
+            encoder.resolve_query_set(
+                &timestamps.query_set,
+                0..resolved_query_count,
+                &timestamps.resolve_buffer,
+                0,
+            );
+            let resolved_bytes = (resolved_query_count as u64)
+                * LiveProofFrameMultiPassTimestamps::QUERY_RESULT_BYTES;
+            encoder.copy_buffer_to_buffer(
+                &timestamps.resolve_buffer,
+                0,
+                &timestamps.readback_buffer,
+                0,
+                resolved_bytes,
+            );
+            record.copies_recorded = record.copies_recorded.saturating_add(1);
+        }
+
+        let command_buffer = encoder.finish();
+        let _submission_index = queue.submit(::core::iter::once(command_buffer));
+        record.queue_submissions = 1;
+
+        // Map both readbacks, poll, read.
+        let probe_slice = target.readback_buffer.slice(..);
+        let timestamp_slice = timestamps.readback_buffer.slice(..);
+        let (probe_tx, probe_rx) = channel();
+        let (ts_tx, ts_rx) = channel();
+        probe_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = probe_tx.send(result);
+        });
+        timestamp_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = ts_tx.send(result);
+        });
+        let poll_status = device.poll(::wgpu::PollType::wait_indefinitely());
+        record.device_poll_completed = poll_status.is_ok();
+
+        if let Ok(Ok(())) = probe_rx.recv() {
+            let data = probe_slice.get_mapped_range();
+            if data.len() >= 4 {
+                record.frame_probe_rgba8 = [data[0], data[1], data[2], data[3]];
+                record.readback_succeeded = true;
+            }
+            drop(data);
+            target.readback_buffer.unmap();
+        }
+
+        if let Ok(Ok(())) = ts_rx.recv() {
+            let data = timestamp_slice.get_mapped_range();
+            for pass_index in 0..render_pass_slot {
+                let begin_offset = (pass_index as usize) * 16;
+                let end_offset = begin_offset + 8;
+                if end_offset + 8 > data.len() {
+                    break;
+                }
+                let mut begin_bytes = [0u8; 8];
+                begin_bytes.copy_from_slice(&data[begin_offset..begin_offset + 8]);
+                let mut end_bytes = [0u8; 8];
+                end_bytes.copy_from_slice(&data[end_offset..end_offset + 8]);
+                artifact.records.push(LiveProofFramePerPassTimingRecord {
+                    schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+                    pass_index,
+                    begin_raw: u64::from_le_bytes(begin_bytes),
+                    end_raw: u64::from_le_bytes(end_bytes),
+                });
+            }
+            if !artifact.records.is_empty() {
+                record.timestamp_queries_resolved = resolved_query_count;
+                if let Some(first) = artifact.records.first() {
+                    record.timestamp_begin_raw = first.begin_raw;
+                }
+                if let Some(last) = artifact.records.last() {
+                    record.timestamp_end_raw = last.end_raw;
+                }
+            }
+            drop(data);
+            timestamps.readback_buffer.unmap();
+        }
+
+        (record, artifact, counters)
+    }
 }
 
 // ============================================================================
@@ -1458,6 +1994,87 @@ pub fn run_two_pass_timed_proof_frame_against_fresh_dx12_device(
         bridge_state,
         run,
         timing,
+    }))
+}
+
+/// Outcome of bootstrapping a fresh DX12 wgpu device + running
+/// the typed compiled-render-graph end to end. Carries every
+/// typed surface produced by the runner so callers can attach
+/// each artifact to the canonical Pass B exit test:
+/// [`LiveProofFrameRunResult`] (Pass B evidence input),
+/// [`LiveProofFrameTimingArtifact`] (per-pass timing),
+/// [`LiveGraphExecutorPassKindCounters`] (per-kind counters), and
+/// [`RendererSurfaceResource`] (Pass 1's typed contract).
+pub enum LiveProofFrameCompiledGraphBootResult {
+    Ran(Box<LiveProofFrameCompiledGraphRanPayload>),
+    BridgeRuntimeFailed(WgpuBridgeRuntimeFailure),
+}
+
+#[derive(Debug)]
+pub struct LiveProofFrameCompiledGraphRanPayload {
+    pub bridge_state: WgpuBridgeDeviceState<Dx12Native>,
+    pub run: LiveProofFrameRunResult,
+    pub timing: LiveProofFrameTimingArtifact,
+    pub counters: LiveGraphExecutorPassKindCounters,
+    pub surface_resource: RendererSurfaceResource,
+}
+
+/// Bootstrap a fresh DX12 wgpu device with
+/// `Features::TIMESTAMP_QUERY` enabled, allocate every typed
+/// runner surface (offscreen target + triangle pipeline +
+/// multi-pass timestamps), build the typed product-default
+/// [`CompiledRenderGraph`], walk the graph end to end, and
+/// return the typed
+/// [`LiveProofFrameCompiledGraphBootResult`].
+///
+/// Closes the user's "Pass 6: Promote Pass B to the main CI
+/// proof" command at the typed-contract layer: Pass B's
+/// canonical exit test
+/// [`live_passb_runs_one_update_and_records_passes`] uses this
+/// helper to produce the typed `Passes` outcome end to end.
+#[must_use]
+pub fn run_compiled_render_graph_against_fresh_dx12_device(
+    plan: LiveProofFrameGraphPlan,
+    frame_index: u64,
+) -> LiveProofFrameCompiledGraphBootResult {
+    let mut options = WgpuBridgeRuntimeOptions::production_default();
+    options.required_features = ::wgpu::Features::TIMESTAMP_QUERY;
+    let bridge_state = match initialize_wgpu_bridge_runtime::<Dx12Native>(&options) {
+        Ok(state) => state,
+        Err(failure) => {
+            return LiveProofFrameCompiledGraphBootResult::BridgeRuntimeFailed(failure);
+        }
+    };
+    let target = LiveProofFrameOffscreenTarget::allocate(
+        &bridge_state.device,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+    );
+    let triangle = LiveProofFrameTrianglePipeline::create(&bridge_state.device, target.format);
+    let graph = CompiledRenderGraph::product_default();
+    let timestamps = LiveProofFrameMultiPassTimestamps::create(
+        &bridge_state.device,
+        &bridge_state.queue,
+        graph.render_pass_count(),
+    );
+    let (run, timing, counters) = LiveGraphExecutor::run_compiled_graph_against_offscreen_target(
+        &bridge_state.device,
+        &bridge_state.queue,
+        &target,
+        &triangle,
+        &timestamps,
+        &graph,
+        plan,
+        frame_index,
+    );
+    let surface_resource =
+        RendererSurfaceResource::from_headless_run(&target, run.passes_first_frame_presented());
+    LiveProofFrameCompiledGraphBootResult::Ran(Box::new(LiveProofFrameCompiledGraphRanPayload {
+        bridge_state,
+        run,
+        timing,
+        counters,
+        surface_resource,
     }))
 }
 
