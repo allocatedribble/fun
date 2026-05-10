@@ -34,6 +34,7 @@ use thunder::prelude::*;
 use tracing::{error, info};
 
 mod ai;
+mod physics;
 mod telemetry_gate;
 
 const GAME_PROTOCOL_VERSION: u32 = 2;
