@@ -34,6 +34,8 @@ pub mod page;
 pub mod parity;
 #[cfg(feature = "bevy_ecs")]
 pub mod passb_proof_frame_runtime;
+#[cfg(feature = "bevy_ecs")]
+pub mod passc_runtime_cache_burndown;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -924,6 +926,8 @@ pub use ml::*;
 pub use page::*;
 #[cfg(feature = "bevy_ecs")]
 pub use passb_proof_frame_runtime::*;
+#[cfg(feature = "bevy_ecs")]
+pub use passc_runtime_cache_burndown::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
