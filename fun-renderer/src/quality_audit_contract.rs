@@ -229,6 +229,19 @@ pub const PASS_EVIDENCE_REGISTRY: &[PassEvidenceEntry] = &[
         "pass_j.clustered_lighting_live",
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass K: temporal reconstruction as rendered image
+    // processing (live GPU). Real WGSL motion-vector compute
+    // kernel + real WGSL TAA resolve compute kernel + real
+    // history / disocclusion / debug storage textures + typed
+    // FSR2/XeSS input validation + typed DLSS/Reflex
+    // fail-closed policy + typed comparative image artifact
+    // (Priority 3: "temporal reconstruction as rendered image
+    // processing"). Pass F's CPU algorithm attached to real
+    // textures.
+    PassEvidenceEntry::new(
+        "pass_k.temporal_reconstruction_live",
+        EvidenceKind::LiveGpuExecution,
+    ),
     // Tier 0: proof frame keystone — visible frame / GPU timing
     // are planning surfaces today; bridge health + DX12 hardening
     // are typed-contract.
@@ -530,6 +543,15 @@ pub const INTEGRATION_TEST_REGISTRY: &[IntegrationTestRegistryEntry] = &[
         IntegrationTestCategory::AdapterDevice,
         EvidenceKind::LiveGpuExecution,
     ),
+    // Pass K: real GPU motion-vector compute pass + real GPU
+    // TAA resolve compute pass + real history / disocclusion /
+    // debug storage textures + readback that drives the typed
+    // comparative image artifact.
+    IntegrationTestRegistryEntry::new(
+        "live_passk_runs_real_temporal_reconstruction_with_taa_resolve_and_comparative_image",
+        IntegrationTestCategory::AdapterDevice,
+        EvidenceKind::LiveGpuExecution,
+    ),
 ];
 
 // ============================================================================
@@ -726,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn pass_evidence_registry_covers_every_a_through_j_and_tier_0_through_8() {
+    fn pass_evidence_registry_covers_every_a_through_k_and_tier_0_through_8() {
         let ids: Vec<&str> = PASS_EVIDENCE_REGISTRY.iter().map(|e| e.stable_id).collect();
         for pass in [
             "pass_a.truth_resync_and_ui_governance",
@@ -739,6 +761,7 @@ mod tests {
             "pass_h.native_command_list_fail_closed",
             "pass_i.gpu_driven_compute_indirect",
             "pass_j.clustered_lighting_live",
+            "pass_k.temporal_reconstruction_live",
         ] {
             assert!(ids.contains(&pass), "missing Pass: {pass}");
         }
