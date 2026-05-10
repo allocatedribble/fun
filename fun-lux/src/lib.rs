@@ -1,6 +1,66 @@
 #![forbid(unsafe_code)]
+//! # fun-lux crate doctrine
+//!
+//! Pass 0 ("Lock the crate ownership and backend contract")
+//! locks the architecture so the renderer / lux split is
+//! impossible to accidentally route through the wrong backend.
+//! The doctrine below is enforced by typed contract +
+//! per-crate tests; the durable narrative version lives at
+//! [`docs/renderer_ownership.md`](../../docs/renderer_ownership.md)
+//! and
+//! [`docs/rendering/fun-render-migration.md`](../../docs/rendering/fun-render-migration.md).
+//!
+//! 1. **`fun-lux` owns lighting policy.** Every typed
+//!    lighting decision — direct lighting mode, shadow
+//!    policy, GI mode, reflection mode, reconstruction hook,
+//!    reservoir reuse policy, virtual shadow demand-page
+//!    policy, denoiser policy, quality tier — lives in this
+//!    crate. `fun-renderer` reads these typed records; it
+//!    never invents them.
+//! 2. **`fun-renderer` is the only production executor.**
+//!    Lighting plans land on the GPU through `fun-renderer`'s
+//!    typed live executors (Pass B / Pass I / Pass J / Pass K /
+//!    Pass L / Pass M). No other crate is permitted to drive
+//!    a production lighting frame.
+//! 3. **`fun-lux` emits backend-neutral lighting frame
+//!    plans.** The typed [`LuxFramePlan`] / [`LuxPassRequest`]
+//!    / [`LuxResourceIntent`] / [`LuxGpuBufferIntent`] /
+//!    [`LuxTextureIntent`] / [`LuxPassDependency`] /
+//!    [`LuxQualityTier`] / [`LuxBackendContract`] records
+//!    describe *what the renderer should do* without naming
+//!    any backend handle. `fun-renderer` translates the
+//!    intents into actual `wgpu` resources + dispatches.
+//! 4. **Legacy / Bevy / wgpu product lighting paths are
+//!    invalid.** Any module that boots
+//!    [`NoopLuxCore`](api::NoopLuxCore) under a production
+//!    route is a regression; the typed
+//!    [`LuxBackendContract::PRODUCT_DEFAULT`] is the audit
+//!    handle.
+//!
+//! ## Dependency rule
+//!
+//! `fun-lux` MUST NOT import `wgpu`, `wgpu-core`, `wgpu-hal`,
+//! `naga`, `raw_window_handle`, `ash`, `metal`, `d3d12`,
+//! `windows-rs`, or any other native graphics handle.
+//! `fun-lux` MUST NOT take a normal `fun-renderer`
+//! dependency. If a cycle ever appears, introduce a thin
+//! `fun-renderer-lux-api` crate carrying the shared
+//! descriptor types and have both crates depend on it; never
+//! resolve the cycle by relaxing fun-lux's backend
+//! neutrality.
+//!
+//! ## Test enforcement
+//!
+//! The typed [`LuxBackendContract::PRODUCT_DEFAULT`]
+//! re-asserts the doctrine at the type-system level. The
+//! `fun_lux_remains_backend_neutral_by_dependency_contract`
+//! test exercises the predicate. The
+//! `noop_lux_core_is_typed_non_production_only` test
+//! confirms that `NoopLuxCore` is reserved for tests /
+//! diagnostics / early fallback.
 
 pub mod api;
+pub mod frame_plan;
 pub mod gi;
 pub mod many_light;
 pub mod research;
@@ -15,6 +75,7 @@ use bevy_ecs::{
 };
 
 pub use api::*;
+pub use frame_plan::*;
 pub use gi::*;
 pub use many_light::*;
 pub use research::*;

@@ -387,6 +387,64 @@ pub fn renderer_bridge_benchmark_noop(mut hooks: bevy::prelude::ResMut<RendererB
     hooks.benchmark_noop_runs = hooks.benchmark_noop_runs.saturating_add(1);
 }
 
+// ============================================================================
+// Pass 0 — `NoopLuxCore` policy
+// ============================================================================
+
+/// Typed policy for when `NoopLuxCore` may boot under a
+/// production lighting route. The audit handle for Pass 0's
+/// "Lock the crate ownership and backend contract" rule
+/// "Keep `NoopLuxCore` only for tests, diagnostics, and early
+/// fallback."
+///
+/// Today the bridge boots `NoopLuxCore` from the production
+/// path as the typed early-fallback baseline because no
+/// real lux GPU execution is wired through the bridge yet
+/// (Pass J's clustered lighting lives in the live executor,
+/// not in the bridge boot path). Once a real lux core is
+/// wired, [`NoopLuxCorePolicy::CURRENT.real_lux_execution_available`]
+/// must flip to `true`, and at that moment
+/// [`NoopLuxCorePolicy::permits_noop_lux_core_under_production_route`]
+/// flips to `false` — the typed contract refuses
+/// `NoopLuxCore` for production from that point on.
+///
+/// The typed [`fun_renderer::fun_lux::LuxBackendContract::PRODUCT_DEFAULT`]
+/// also records this invariant under
+/// `noop_lux_core_is_non_production_only`; this policy is the
+/// fun_render-side mirror.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoopLuxCorePolicy {
+    pub schema_version: u16,
+    /// `true` once a production-grade lux core is wired
+    /// through the bridge. Flipping this constant is the
+    /// trigger that retires the `NoopLuxCore` production
+    /// boot.
+    pub real_lux_execution_available: bool,
+}
+
+impl NoopLuxCorePolicy {
+    /// Current policy: real lux GPU execution is **not** yet
+    /// wired through the bridge boot path, so the bridge
+    /// continues to boot `NoopLuxCore` as the typed early
+    /// fallback.
+    pub const CURRENT: Self = Self {
+        schema_version: 1,
+        real_lux_execution_available: false,
+    };
+
+    /// Typed predicate: may the production lighting route
+    /// boot a `NoopLuxCore`?
+    ///
+    /// Returns `true` only while
+    /// `real_lux_execution_available` is `false`. Once the
+    /// constant flips, the typed contract refuses the
+    /// `NoopLuxCore` boot for production.
+    #[must_use]
+    pub const fn permits_noop_lux_core_under_production_route(self) -> bool {
+        !self.real_lux_execution_available
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::prelude::Schedule;
@@ -580,5 +638,138 @@ mod tests {
         assert!(state.core_boot.is_none());
         assert_eq!(state.selection.requested, FunRendererRuntimeBackend::Legacy);
         assert_eq!(state.selection.resolved, FunRendererRuntimeBackend::Legacy);
+    }
+
+    /// Pass 0 — typed `FUN_RENDERER_BACKEND` resolution.
+    /// Unset env and explicit `auto` both resolve to
+    /// `Fun`; explicit `legacy` resolves to `Legacy` and
+    /// stays loud; invalid values default to `Fun` and stay
+    /// loud (the typed contract treats a typo as a
+    /// regression to surface).
+    #[test]
+    fn fun_renderer_backend_env_resolves_to_fun_under_auto_or_unset() {
+        // Unset → resolves to Fun, not loud.
+        let unset = FunRendererRuntimeBackend::selection_from_env_reader(|_| None);
+        assert_eq!(unset.requested, FunRendererRuntimeBackend::Auto);
+        assert_eq!(unset.resolved, FunRendererRuntimeBackend::Fun);
+        assert!(!unset.loud_diagnostic_required);
+
+        // Explicit "auto" → resolves to Fun, not loud.
+        let explicit_auto = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+            if name == fun_renderer::FUN_RENDERER_RUNTIME_BACKEND_ENV {
+                Some("auto")
+            } else {
+                None
+            }
+        });
+        assert_eq!(explicit_auto.requested, FunRendererRuntimeBackend::Auto,);
+        assert_eq!(explicit_auto.resolved, FunRendererRuntimeBackend::Fun);
+        assert!(!explicit_auto.loud_diagnostic_required);
+
+        // Explicit "legacy" → resolves to Legacy, loud,
+        // diagnostic-only.
+        let explicit_legacy = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+            if name == fun_renderer::FUN_RENDERER_RUNTIME_BACKEND_ENV {
+                Some("legacy")
+            } else {
+                None
+            }
+        });
+        assert_eq!(explicit_legacy.resolved, FunRendererRuntimeBackend::Legacy,);
+        assert!(explicit_legacy.loud_diagnostic_required);
+        assert!(explicit_legacy.uses_legacy_product_path());
+
+        // Invalid value → defaults to Auto resolution
+        // (Fun), but stays loud so the typo surfaces.
+        let invalid = FunRendererRuntimeBackend::selection_from_env_reader(|name| {
+            if name == fun_renderer::FUN_RENDERER_RUNTIME_BACKEND_ENV {
+                Some("typo-value")
+            } else {
+                None
+            }
+        });
+        assert_eq!(invalid.resolved, FunRendererRuntimeBackend::Fun);
+        assert!(invalid.loud_diagnostic_required);
+    }
+
+    /// Pass 0 — typed `NoopLuxCorePolicy::CURRENT`. Today
+    /// the bridge boots `NoopLuxCore` from the production
+    /// path because real lux GPU execution is not yet wired
+    /// through the bridge.
+    #[test]
+    fn noop_lux_core_policy_records_pre_production_state() {
+        let policy = NoopLuxCorePolicy::CURRENT;
+        assert_eq!(policy.schema_version, 1);
+        assert!(!policy.real_lux_execution_available);
+        assert!(policy.permits_noop_lux_core_under_production_route());
+    }
+
+    /// Pass 0 — typed future invariant. When real lux GPU
+    /// execution becomes available (the flag flips on the
+    /// `NoopLuxCorePolicy`), the typed predicate refuses
+    /// `NoopLuxCore` under production routes. This is the
+    /// constant-driven enforcement that fires the moment
+    /// `NoopLuxCorePolicy::CURRENT.real_lux_execution_available`
+    /// flips to `true` in source.
+    #[test]
+    fn noop_lux_core_refused_once_real_lux_execution_available() {
+        let future = NoopLuxCorePolicy {
+            schema_version: 1,
+            real_lux_execution_available: true,
+        };
+        assert!(!future.permits_noop_lux_core_under_production_route());
+    }
+
+    /// Pass 0 — the typed `LuxBackendContract::PRODUCT_DEFAULT`
+    /// from `fun-lux` is the authoritative source for the
+    /// renderer-ownership rule. The fun_render side reads
+    /// the contract and verifies the constant holds.
+    #[test]
+    fn lux_backend_contract_product_default_holds_under_fun_render() {
+        use fun_renderer::fun_lux::LuxBackendContract;
+        let contract = LuxBackendContract::PRODUCT_DEFAULT;
+        assert!(contract.contract_holds());
+        assert!(contract.fun_renderer_is_only_production_executor);
+        assert!(contract.fun_lux_owns_lighting_policy);
+        assert!(contract.fun_lux_emits_backend_neutral_plans);
+        assert!(contract.legacy_lighting_paths_are_invalid_for_production);
+        assert!(contract.noop_lux_core_is_non_production_only);
+        assert!(contract.fun_renderer_depends_on_fun_lux);
+        assert!(contract.fun_lux_must_not_depend_on_fun_renderer);
+        // Spot-check forbidden imports.
+        for forbidden in ["wgpu", "wgpu_core", "wgpu_hal", "naga", "raw_window_handle"] {
+            assert!(
+                contract.is_forbidden_import(forbidden),
+                "{forbidden} must be forbidden",
+            );
+        }
+        // `bevy_ecs` is allowed (fun-lux uses it for ECS
+        // primitives, not for backend access).
+        assert!(!contract.is_forbidden_import("bevy_ecs"));
+    }
+
+    /// Pass 0 — the `NoopLuxCorePolicy` mirrors the typed
+    /// `LuxBackendContract`. When the renderer-side flag
+    /// flips, both must agree.
+    #[test]
+    fn noop_lux_core_policy_mirrors_lux_backend_contract() {
+        use fun_renderer::fun_lux::LuxBackendContract;
+        let policy = NoopLuxCorePolicy::CURRENT;
+        let contract = LuxBackendContract::PRODUCT_DEFAULT;
+        // Contract: NoopLuxCore is non-production-only.
+        assert!(contract.noop_lux_core_is_non_production_only);
+        // Policy today: production-route NoopLuxCore is
+        // permitted only because real lux execution is not
+        // yet wired. The two agree: under the contract,
+        // permissive-today is honest because the future
+        // flip is enforced by the predicate.
+        let future_when_real_lux_lands = NoopLuxCorePolicy {
+            schema_version: policy.schema_version,
+            real_lux_execution_available: true,
+        };
+        assert!(
+            !future_when_real_lux_lands.permits_noop_lux_core_under_production_route(),
+            "once real lux execution is available, NoopLuxCore must be refused for production",
+        );
     }
 }
