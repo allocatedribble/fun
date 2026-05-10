@@ -31,6 +31,7 @@ pub mod plugin;
 pub mod post_process;
 #[cfg(feature = "bevy_ecs")]
 pub mod presentation;
+pub mod queue_scheduler;
 pub mod research;
 pub mod resource;
 pub mod scene;
@@ -843,6 +844,7 @@ pub use plugin::*;
 pub use post_process::*;
 #[cfg(feature = "bevy_ecs")]
 pub use presentation::*;
+pub use queue_scheduler::*;
 pub use research::*;
 pub use resource::*;
 pub use scene::*;
