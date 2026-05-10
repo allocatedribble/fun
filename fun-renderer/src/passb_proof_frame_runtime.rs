@@ -995,45 +995,60 @@ mod tests {
         }
     }
 
-    /// Pass B exit-test for **critical blockers 1 + 2 + 3 + 4**.
-    /// Drives a real DX12 wgpu device through the indexed-draw
-    /// path of the live graph executor in
-    /// [`crate::live_proof_frame_executor`]: real
+    /// Pass B exit-test for **all six rules** (every critical
+    /// blocker called out in the user prompts is closed). Drives
+    /// a real DX12 wgpu device through the
+    /// `run_proof_frame_with_full_observations_against_fresh_dx12_device`
+    /// helper in [`crate::live_proof_frame_executor`]: real
     /// `wgpu::CommandEncoder`, real `set_pipeline` +
-    /// `set_index_buffer` + `draw_indexed`, real
+    /// `set_index_buffer` + `draw_indexed`, real begin/end GPU
+    /// timestamp scopes around the render pass, real
+    /// `resolve_query_set` + buffer→buffer copy + readback, real
     /// `copy_texture_to_buffer` readback, real
-    /// `Buffer::map_async`. Composes the typed
-    /// `PassBRuntimeEvidence` from the executor's run record and
-    /// asserts that all four blocker rules flip to passing:
-    /// blocker 1 (`SurfaceConfiguredAndFirstFramePresented`),
-    /// blocker 2 (`GraphExecutorRanAtLeastOnePass`),
-    /// blocker 3 (`RenderEncoderRecordedAtLeastOneDraw` —
-    /// requires `draws_recorded > 0`; copy-only paths do not
-    /// pass), and blocker 4 (`FrameProbeIsNonBlack`, RGB-only).
+    /// `Buffer::map_async` for both readbacks. Composes the typed
+    /// `PassBRuntimeEvidence` and asserts every rule passes:
     ///
-    /// On hosts without a DX12 adapter the live boot returns
-    /// `BridgeRuntimeFailed`; the test records that honestly via
-    /// the `BridgeRuntimeFailed` outcome and skips the strict
-    /// passing assertion. The blocker-closing assertion only runs
-    /// on hosts that produced a real DX12 run.
+    /// - rule 1 (`ActualBackendIsDx12`)
+    /// - rule 2 (`NoFatalDx12ProductionViolation`) — the live
+    ///   `Dx12ProductionHardeningReport` is populated with the
+    ///   accepted startup outcome.
+    /// - rule 3 (`SurfaceConfiguredAndFirstFramePresented`)
+    /// - rule 4 (`GraphExecutorRanAtLeastOnePass`)
+    /// - rule 5 (`RenderEncoderRecordedAtLeastOneDraw`) —
+    ///   requires `draws_recorded > 0`; copy-only paths do not
+    ///   pass.
+    /// - rule 6 (`FrameProbeIsNonBlack`) — RGB-only predicate.
+    ///
+    /// Plus the typed `gpu_timestamp_observed` evidence flips
+    /// true and the typed bundle outcome is
+    /// `PassBProofFrameRuntimeOutcome::Passes`.
+    ///
+    /// On hosts without a DX12 adapter or without
+    /// `Features::TIMESTAMP_QUERY` support, the live boot returns
+    /// `BridgeRuntimeFailed` and the test records honestly.
     #[cfg(feature = "wgpu_bridge")]
     #[test]
     fn live_passb_passes_through_live_proof_frame_executor_against_offscreen_target() {
         use crate::live_proof_frame_executor::{
             LiveProofFrameBootResult, LiveProofFrameGraphPlan,
             compose_passb_runtime_evidence_from_run_result, ran_on_real_dx12_adapter,
-            run_proof_frame_with_indexed_draw_against_fresh_dx12_device,
+            run_proof_frame_with_full_observations_against_fresh_dx12_device,
         };
 
-        // Clear-to-black + green-triangle plan. The fragment
-        // shader paints opaque green over the entire viewport, so
-        // the readback pixel proves the draw — not just the
-        // clear — produced output.
+        // Clear-to-black + green-triangle + GPU-timestamp plan.
+        // The fragment shader paints opaque green over the entire
+        // viewport so the readback pixel proves the draw landed
+        // past the clear; the timestamp queries prove the GPU
+        // observed begin / end scopes around the render pass.
         let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
-        let outcome = run_proof_frame_with_indexed_draw_against_fresh_dx12_device(plan, 1);
+        let outcome = run_proof_frame_with_full_observations_against_fresh_dx12_device(plan, 1);
 
         match outcome {
-            LiveProofFrameBootResult::Ran { bridge_state, run } => {
+            LiveProofFrameBootResult::Ran(payload) => {
+                let crate::live_proof_frame_executor::LiveProofFrameRanPayload {
+                    bridge_state,
+                    run,
+                } = *payload;
                 if !ran_on_real_dx12_adapter(&bridge_state) {
                     eprintln!(
                         "live_passb_passes_through_live_proof_frame_executor_against_offscreen_target: \
@@ -1113,11 +1128,52 @@ mod tests {
                     probe.rgba8,
                 );
 
-                // The remaining open rule is
-                // NoFatalDx12ProductionViolation (cold-default
-                // hardening report) — that's a separate gap from
-                // blockers 1-4 and stays as-is for this exit
-                // test.
+                // Rule 1: ActualBackendIsDx12.
+                assert!(
+                    verdict.passes_actual_backend_is_dx12,
+                    "rule 1 failed: actual backend must be DX12",
+                );
+
+                // Rule 2: NoFatalDx12ProductionViolation. The
+                // hardening report is populated with the accepted
+                // startup outcome; the cold-default device-lost
+                // state and zero-violation gate report carry the
+                // remaining truth.
+                assert!(
+                    verdict.passes_no_fatal_dx12_production_violation,
+                    "rule 2 failed: DX12 production truth predicate",
+                );
+
+                // GPU timestamp queries: typed evidence flipped
+                // true via the live executor's
+                // `resolve_query_set` + readback path.
+                assert!(
+                    bundle.gpu_timestamp_observed,
+                    "gap.tier0.no_gpu_timestamp_queries closeout: typed \
+                     evidence must record timestamps observed",
+                );
+
+                // Every rule passed → bundle outcome is the typed
+                // `Passes` variant. The full Pass B exit gate is
+                // satisfied; no rules remain open under the
+                // populated hardening report + indexed-draw +
+                // timestamp-query lane.
+                assert!(
+                    verdict.passes(),
+                    "Pass B full verdict must pass; first_failed = {:?}",
+                    verdict.first_failed(),
+                );
+                assert_eq!(
+                    bundle.outcome,
+                    PassBProofFrameRuntimeOutcome::Passes,
+                    "Pass B bundle outcome must be Passes when every rule holds",
+                );
+                assert!(
+                    bundle.gaps.is_empty(),
+                    "Pass B bundle must record zero typed gaps under the full \
+                     passing run; gaps = {:?}",
+                    bundle.gaps,
+                );
             }
             LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
                 eprintln!(

@@ -232,7 +232,7 @@ impl LiveProofFrameOffscreenTarget {
 /// Typed evidence the live executor produced after one frame.
 /// Every field carries observable numeric or pixel evidence that
 /// flows into Pass B's verdict.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Resource)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Resource)]
 pub struct LiveProofFrameRunResult {
     pub schema_version: u16,
     pub presentation_kind: LiveProofFramePresentationKind,
@@ -244,6 +244,10 @@ pub struct LiveProofFrameRunResult {
     pub readback_succeeded: bool,
     pub frame_probe_rgba8: [u8; 4],
     pub frame_index: u64,
+    pub timestamp_queries_resolved: u32,
+    pub timestamp_begin_raw: u64,
+    pub timestamp_end_raw: u64,
+    pub timestamp_period_nanos: f32,
 }
 
 impl LiveProofFrameRunResult {
@@ -408,6 +412,77 @@ impl LiveProofFrameTrianglePipeline {
 }
 
 // ============================================================================
+// Section 5b — GPU timestamp query set
+// ============================================================================
+
+/// Typed renderer-owned timestamp query set. Records begin / end
+/// timestamps around the render pass; resolves them into a buffer;
+/// copies the resolve buffer into a readback buffer; then maps it
+/// to read back the raw `u64` values.
+///
+/// Closes Pass A's `gap.tier0.no_gpu_timestamp_queries`.
+///
+/// The frame-graph executor records typed timestamp scopes
+/// around every recorded pass once this set is allocated, and
+/// the typed `LiveProofFrameRunResult` carries the raw
+/// begin/end timestamps plus the queue's
+/// `get_timestamp_period()` so the diagnostics surface can
+/// convert ticks to nanoseconds.
+///
+/// The query set holds 2 slots: `0` for the
+/// `beginning_of_pass_write_index` and `1` for the
+/// `end_of_pass_write_index`. The resolve buffer is 16 bytes
+/// (2 × `u64`); the readback buffer is the same size with
+/// `MAP_READ | COPY_DST`.
+pub struct LiveProofFrameTimestampQuerySet {
+    pub schema_version: u16,
+    pub query_set: ::wgpu::QuerySet,
+    pub resolve_buffer: ::wgpu::Buffer,
+    pub readback_buffer: ::wgpu::Buffer,
+    pub timestamp_period_nanos: f32,
+}
+
+impl LiveProofFrameTimestampQuerySet {
+    pub const QUERY_COUNT: u32 = 2;
+    pub const QUERY_BUFFER_BYTES: u64 = (Self::QUERY_COUNT as u64) * 8;
+
+    /// Construct the typed query set against the live wgpu
+    /// device + queue. The device must have been created with
+    /// `Features::TIMESTAMP_QUERY` enabled; the typed
+    /// [`run_proof_frame_with_full_observations_against_fresh_dx12_device`]
+    /// helper handles that. `Queue::get_timestamp_period()`
+    /// is recorded so the diagnostic surface can convert raw
+    /// ticks to nanoseconds offline.
+    #[must_use]
+    pub fn create(device: &::wgpu::Device, queue: &::wgpu::Queue) -> Self {
+        let query_set = device.create_query_set(&::wgpu::QuerySetDescriptor {
+            label: Some("fun_renderer.live_proof_frame.timestamp_query_set"),
+            ty: ::wgpu::QueryType::Timestamp,
+            count: Self::QUERY_COUNT,
+        });
+        let resolve_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("fun_renderer.live_proof_frame.timestamp_resolve"),
+            size: Self::QUERY_BUFFER_BYTES,
+            usage: ::wgpu::BufferUsages::QUERY_RESOLVE | ::wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback_buffer = device.create_buffer(&::wgpu::BufferDescriptor {
+            label: Some("fun_renderer.live_proof_frame.timestamp_readback"),
+            size: Self::QUERY_BUFFER_BYTES,
+            usage: ::wgpu::BufferUsages::COPY_DST | ::wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            query_set,
+            resolve_buffer,
+            readback_buffer,
+            timestamp_period_nanos: queue.get_timestamp_period(),
+        }
+    }
+}
+
+// ============================================================================
 // Section 6 — Live graph executor
 // ============================================================================
 
@@ -449,6 +524,10 @@ impl LiveGraphExecutor {
             readback_succeeded: false,
             frame_probe_rgba8: [0, 0, 0, 0],
             frame_index,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: 0.0,
         };
 
         let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
@@ -578,6 +657,10 @@ impl LiveGraphExecutor {
             readback_succeeded: false,
             frame_probe_rgba8: [0, 0, 0, 0],
             frame_index,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: 0.0,
         };
 
         let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
@@ -679,6 +762,183 @@ impl LiveGraphExecutor {
 
         record
     }
+
+    /// Run one proof frame with a real indexed draw **and** GPU
+    /// timestamp queries. Records:
+    ///
+    /// 1. `wgpu::CommandEncoder`.
+    /// 2. Render pass with `timestamp_writes = Some(...)` so the
+    ///    GPU writes begin/end timestamps into the typed
+    ///    `LiveProofFrameTimestampQuerySet::query_set`.
+    /// 3. `set_pipeline` + `set_index_buffer` + `draw_indexed`.
+    /// 4. End of render pass implicitly writes the end-of-pass
+    ///    timestamp.
+    /// 5. `resolve_query_set` into the resolve buffer.
+    /// 6. `copy_buffer_to_buffer` from resolve buffer → readback
+    ///    buffer (the resolve buffer is not `MAP_READ`-capable).
+    /// 7. `copy_texture_to_buffer` for the frame probe.
+    /// 8. `queue.submit` + `device.poll(wait_indefinitely)`.
+    /// 9. `Buffer::map_async(MapMode::Read)` for both the frame
+    ///    probe and the timestamp readback.
+    ///
+    /// Closes `gap.tier0.no_gpu_timestamp_queries`.
+    pub fn run_with_indexed_draw_and_timestamps_against_offscreen_target(
+        device: &::wgpu::Device,
+        queue: &::wgpu::Queue,
+        target: &LiveProofFrameOffscreenTarget,
+        triangle: &LiveProofFrameTrianglePipeline,
+        timestamps: &LiveProofFrameTimestampQuerySet,
+        plan: LiveProofFrameGraphPlan,
+        frame_index: u64,
+    ) -> LiveProofFrameRunResult {
+        let mut record = LiveProofFrameRunResult {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            render_passes_recorded: 0,
+            draws_recorded: 0,
+            copies_recorded: 0,
+            queue_submissions: 0,
+            device_poll_completed: false,
+            readback_succeeded: false,
+            frame_probe_rgba8: [0, 0, 0, 0],
+            frame_index,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: timestamps.timestamp_period_nanos,
+        };
+
+        let mut encoder = device.create_command_encoder(&::wgpu::CommandEncoderDescriptor {
+            label: Some("fun_renderer.live_proof_frame.indexed_draw_with_timestamps.encoder"),
+        });
+
+        // Step 1: render pass with clear + indexed draw + typed
+        // begin/end timestamp writes.
+        {
+            let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
+                label: Some("fun_renderer.live_proof_frame.indexed_draw_with_timestamps.pass"),
+                color_attachments: &[Some(::wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: ::wgpu::Operations {
+                        load: ::wgpu::LoadOp::Clear(::wgpu::Color {
+                            r: plan.clear_color[0],
+                            g: plan.clear_color[1],
+                            b: plan.clear_color[2],
+                            a: plan.clear_color[3],
+                        }),
+                        store: ::wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: Some(::wgpu::RenderPassTimestampWrites {
+                    query_set: &timestamps.query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            record.render_passes_recorded = 1;
+
+            pass.set_pipeline(&triangle.pipeline);
+            pass.set_index_buffer(triangle.index_buffer.slice(..), ::wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..triangle.index_count, 0, 0..1);
+            record.draws_recorded = 1;
+        }
+
+        // Step 2: resolve the query set into the resolve buffer
+        // (typed `BufferUsages::QUERY_RESOLVE | COPY_SRC`), then
+        // copy resolve → readback (`COPY_DST | MAP_READ`).
+        encoder.resolve_query_set(
+            &timestamps.query_set,
+            0..LiveProofFrameTimestampQuerySet::QUERY_COUNT,
+            &timestamps.resolve_buffer,
+            0,
+        );
+        encoder.copy_buffer_to_buffer(
+            &timestamps.resolve_buffer,
+            0,
+            &timestamps.readback_buffer,
+            0,
+            LiveProofFrameTimestampQuerySet::QUERY_BUFFER_BYTES,
+        );
+        record.copies_recorded = record.copies_recorded.saturating_add(1);
+
+        // Step 3: copy texture → readback buffer (the typed
+        // frame-probe path).
+        encoder.copy_texture_to_buffer(
+            ::wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: ::wgpu::Origin3d::ZERO,
+                aspect: ::wgpu::TextureAspect::All,
+            },
+            ::wgpu::TexelCopyBufferInfo {
+                buffer: &target.readback_buffer,
+                layout: ::wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.readback_row_bytes),
+                    rows_per_image: Some(target.height),
+                },
+            },
+            ::wgpu::Extent3d {
+                width: target.width,
+                height: target.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        record.copies_recorded = record.copies_recorded.saturating_add(1);
+
+        // Step 4: submit.
+        let command_buffer = encoder.finish();
+        let _submission_index = queue.submit(::core::iter::once(command_buffer));
+        record.queue_submissions = 1;
+
+        // Step 5: map both readback buffers, poll, read.
+        let probe_slice = target.readback_buffer.slice(..);
+        let timestamp_slice = timestamps.readback_buffer.slice(..);
+        let (probe_tx, probe_rx) = channel();
+        let (ts_tx, ts_rx) = channel();
+        probe_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = probe_tx.send(result);
+        });
+        timestamp_slice.map_async(::wgpu::MapMode::Read, move |result| {
+            let _ = ts_tx.send(result);
+        });
+        let poll_status = device.poll(::wgpu::PollType::wait_indefinitely());
+        record.device_poll_completed = poll_status.is_ok();
+
+        // Step 6: read frame probe.
+        if let Ok(Ok(())) = probe_rx.recv() {
+            let data = probe_slice.get_mapped_range();
+            if data.len() >= 4 {
+                record.frame_probe_rgba8 = [data[0], data[1], data[2], data[3]];
+                record.readback_succeeded = true;
+            }
+            drop(data);
+            target.readback_buffer.unmap();
+        }
+
+        // Step 7: read GPU timestamps.
+        if let Ok(Ok(())) = ts_rx.recv() {
+            let data = timestamp_slice.get_mapped_range();
+            if data.len() >= 16 {
+                let mut begin_bytes = [0u8; 8];
+                begin_bytes.copy_from_slice(&data[0..8]);
+                let mut end_bytes = [0u8; 8];
+                end_bytes.copy_from_slice(&data[8..16]);
+                record.timestamp_begin_raw = u64::from_le_bytes(begin_bytes);
+                record.timestamp_end_raw = u64::from_le_bytes(end_bytes);
+                record.timestamp_queries_resolved = LiveProofFrameTimestampQuerySet::QUERY_COUNT;
+            }
+            drop(data);
+            timestamps.readback_buffer.unmap();
+        }
+
+        record
+    }
 }
 
 // ============================================================================
@@ -692,11 +952,18 @@ impl LiveGraphExecutor {
 /// Pass B test can record `BridgeRuntimeFailed` honestly on
 /// hosts without a DX12 adapter.
 pub enum LiveProofFrameBootResult {
-    Ran {
-        bridge_state: WgpuBridgeDeviceState<Dx12Native>,
-        run: LiveProofFrameRunResult,
-    },
+    /// Boxed to keep the enum's discriminant small;
+    /// `WgpuBridgeDeviceState<Dx12Native>` carries multiple
+    /// `Arc<wgpu::*>` plus typed feature/limit summaries that
+    /// would otherwise dominate the enum's size.
+    Ran(Box<LiveProofFrameRanPayload>),
     BridgeRuntimeFailed(WgpuBridgeRuntimeFailure),
+}
+
+#[derive(Debug)]
+pub struct LiveProofFrameRanPayload {
+    pub bridge_state: WgpuBridgeDeviceState<Dx12Native>,
+    pub run: LiveProofFrameRunResult,
 }
 
 /// Bootstrap a fresh DX12 wgpu device through the existing bridge
@@ -725,7 +992,7 @@ pub fn run_proof_frame_against_fresh_dx12_device(
         plan,
         frame_index,
     );
-    LiveProofFrameBootResult::Ran { bridge_state, run }
+    LiveProofFrameBootResult::Ran(Box::new(LiveProofFrameRanPayload { bridge_state, run }))
 }
 
 /// Bootstrap a fresh DX12 wgpu device + create the indexed-draw
@@ -762,7 +1029,50 @@ pub fn run_proof_frame_with_indexed_draw_against_fresh_dx12_device(
         plan,
         frame_index,
     );
-    LiveProofFrameBootResult::Ran { bridge_state, run }
+    LiveProofFrameBootResult::Ran(Box::new(LiveProofFrameRanPayload { bridge_state, run }))
+}
+
+/// Bootstrap a fresh DX12 wgpu device with `Features::TIMESTAMP_QUERY`
+/// enabled, create the indexed-draw triangle pipeline + the typed
+/// timestamp query set, and run one proof frame that records:
+/// real `draw_indexed`, real `copy_texture_to_buffer` readback,
+/// real begin / end GPU timestamp scopes, real `resolve_query_set`
+/// + buffer-to-buffer copy + readback.
+///
+/// Closes Pass A's `gap.tier0.no_gpu_timestamp_queries` in
+/// addition to the four blockers the indexed-draw helper already
+/// closes. On hosts whose adapter does not support
+/// `TIMESTAMP_QUERY`, the bridge initialization fails closed and
+/// returns `BridgeRuntimeFailed` honestly.
+#[must_use]
+pub fn run_proof_frame_with_full_observations_against_fresh_dx12_device(
+    plan: LiveProofFrameGraphPlan,
+    frame_index: u64,
+) -> LiveProofFrameBootResult {
+    let mut options = WgpuBridgeRuntimeOptions::production_default();
+    options.required_features = ::wgpu::Features::TIMESTAMP_QUERY;
+    let bridge_state = match initialize_wgpu_bridge_runtime::<Dx12Native>(&options) {
+        Ok(state) => state,
+        Err(failure) => return LiveProofFrameBootResult::BridgeRuntimeFailed(failure),
+    };
+    let target = LiveProofFrameOffscreenTarget::allocate(
+        &bridge_state.device,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+        LIVE_PROOF_FRAME_OFFSCREEN_EXTENT,
+    );
+    let triangle = LiveProofFrameTrianglePipeline::create(&bridge_state.device, target.format);
+    let timestamps =
+        LiveProofFrameTimestampQuerySet::create(&bridge_state.device, &bridge_state.queue);
+    let run = LiveGraphExecutor::run_with_indexed_draw_and_timestamps_against_offscreen_target(
+        &bridge_state.device,
+        &bridge_state.queue,
+        &target,
+        &triangle,
+        &timestamps,
+        plan,
+        frame_index,
+    );
+    LiveProofFrameBootResult::Ran(Box::new(LiveProofFrameRanPayload { bridge_state, run }))
 }
 
 // ============================================================================
@@ -795,10 +1105,16 @@ pub fn compose_passb_runtime_evidence_from_run_result(
         } else {
             None
         },
-        // GPU timestamp queries remain a separate gap — the
-        // executor's typed counters do not yet wire timestamp
-        // scope creation. Future closeout flips this true.
-        gpu_timestamp_observed: false,
+        // GPU timestamp queries: true when the executor recorded
+        // begin/end timestamp writes, resolved them into the
+        // resolve buffer, copied them to the readback buffer, and
+        // mapped + read both u64 values. The
+        // `timestamps`-aware executor entry point sets
+        // `timestamp_queries_resolved` to
+        // `LiveProofFrameTimestampQuerySet::QUERY_COUNT` (= 2)
+        // when this succeeded.
+        gpu_timestamp_observed: result.timestamp_queries_resolved
+            >= LiveProofFrameTimestampQuerySet::QUERY_COUNT,
     }
 }
 
@@ -863,6 +1179,10 @@ mod tests {
             readback_succeeded: true,
             frame_probe_rgba8: [255, 128, 51, 255],
             frame_index: 1,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: 0.0,
         };
         assert!(r.passes_full_runtime());
         assert!(r.passes_first_frame_presented());
@@ -899,6 +1219,10 @@ mod tests {
             readback_succeeded: true,
             frame_probe_rgba8: [0, 255, 0, 255],
             frame_index: 1,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: 0.0,
         };
         let ev = compose_passb_runtime_evidence_from_run_result(&result);
         assert!(ev.surface_configured);
@@ -906,8 +1230,39 @@ mod tests {
         assert!(ev.render_encoder_recorded_at_least_one_draw);
         assert!(ev.first_frame_presented);
         assert!(ev.frame_probe.is_some_and(|p| p.is_non_black()));
-        // GPU timestamp queries are still a gap.
+        // No timestamp queries resolved on this synthetic run, so
+        // the rule honestly stays open.
         assert!(!ev.gpu_timestamp_observed);
+    }
+
+    #[test]
+    fn passb_evidence_composer_flips_gpu_timestamp_observed_when_queries_resolved() {
+        let result = LiveProofFrameRunResult {
+            schema_version: LIVE_PROOF_FRAME_EXECUTOR_SCHEMA_VERSION,
+            presentation_kind: LiveProofFramePresentationKind::HeadlessOffscreenTarget,
+            render_passes_recorded: 1,
+            draws_recorded: 1,
+            copies_recorded: 2,
+            queue_submissions: 1,
+            device_poll_completed: true,
+            readback_succeeded: true,
+            frame_probe_rgba8: [0, 255, 0, 255],
+            frame_index: 1,
+            timestamp_queries_resolved: LiveProofFrameTimestampQuerySet::QUERY_COUNT,
+            timestamp_begin_raw: 1_000,
+            timestamp_end_raw: 2_500,
+            timestamp_period_nanos: 1.0,
+        };
+        let ev = compose_passb_runtime_evidence_from_run_result(&result);
+        // All Pass B runtime-wiring rules pass under this fully-
+        // populated run — including the previously-open
+        // `gpu_timestamp_observed` predicate.
+        assert!(ev.surface_configured);
+        assert!(ev.graph_executor_ran_at_least_one_pass);
+        assert!(ev.render_encoder_recorded_at_least_one_draw);
+        assert!(ev.first_frame_presented);
+        assert!(ev.frame_probe.is_some_and(|p| p.is_non_black()));
+        assert!(ev.gpu_timestamp_observed);
     }
 
     #[test]
@@ -926,6 +1281,10 @@ mod tests {
             readback_succeeded: true,
             frame_probe_rgba8: [255, 128, 51, 255],
             frame_index: 1,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: 0.0,
         };
         let ev = compose_passb_runtime_evidence_from_run_result(&result);
         // Surface + executor + first-frame + probe still pass.
@@ -951,6 +1310,10 @@ mod tests {
             readback_succeeded: false,
             frame_probe_rgba8: [0, 0, 0, 0],
             frame_index: 1,
+            timestamp_queries_resolved: 0,
+            timestamp_begin_raw: 0,
+            timestamp_end_raw: 0,
+            timestamp_period_nanos: 0.0,
         };
         let ev = compose_passb_runtime_evidence_from_run_result(&result);
         assert!(ev.frame_probe.is_none());
@@ -970,7 +1333,8 @@ mod tests {
         let plan = LiveProofFrameGraphPlan::PRODUCT_DEFAULT;
         let outcome = run_proof_frame_against_fresh_dx12_device(plan, 1);
         match outcome {
-            LiveProofFrameBootResult::Ran { bridge_state, run } => {
+            LiveProofFrameBootResult::Ran(payload) => {
+                let LiveProofFrameRanPayload { bridge_state, run } = *payload;
                 // Real DX12 adapter ran the proof frame: every
                 // typed counter is populated, the readback
                 // succeeded, and the pixel proves the clear color
@@ -1042,7 +1406,8 @@ mod tests {
         let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
         let outcome = run_proof_frame_with_indexed_draw_against_fresh_dx12_device(plan, 2);
         match outcome {
-            LiveProofFrameBootResult::Ran { bridge_state, run } => {
+            LiveProofFrameBootResult::Ran(payload) => {
+                let LiveProofFrameRanPayload { bridge_state, run } = *payload;
                 if !ran_on_real_dx12_adapter(&bridge_state) {
                     eprintln!(
                         "live_executor_records_real_indexed_draw_and_readback_proves_green_pixel: \
@@ -1110,6 +1475,96 @@ mod tests {
                 eprintln!(
                     "live_executor_records_real_indexed_draw_and_readback_proves_green_pixel: \
                      bridge runtime failed (host without DX12 adapter): {failure:?}",
+                );
+            }
+        }
+    }
+
+    /// Live closeout for `gap.tier0.no_gpu_timestamp_queries`.
+    /// Boots a fresh DX12 wgpu device with
+    /// `Features::TIMESTAMP_QUERY` enabled, creates the typed
+    /// triangle pipeline + timestamp query set, and runs the
+    /// indexed-draw frame with begin/end timestamp scopes around
+    /// the render pass. The readback path resolves the query set
+    /// into a buffer, copies the resolve buffer into a readback
+    /// buffer, maps it, and reads two `u64` raw timestamps. The
+    /// test asserts:
+    ///
+    /// - `timestamp_queries_resolved == 2` (both begin + end).
+    /// - `timestamp_end_raw > timestamp_begin_raw` (forward-
+    ///   going GPU clock).
+    /// - `timestamp_period_nanos > 0.0` (queue reported a
+    ///   non-zero conversion factor).
+    /// - The composed Pass B evidence flips
+    ///   `gpu_timestamp_observed = true`.
+    ///
+    /// On hosts whose adapter does not support
+    /// `Features::TIMESTAMP_QUERY`, the bridge initialization
+    /// fails closed and the test records the typed
+    /// `BridgeRuntimeFailed` outcome honestly without a strict
+    /// assertion.
+    #[test]
+    fn live_executor_records_real_gpu_timestamp_queries_around_indexed_draw() {
+        let plan = LiveProofFrameGraphPlan::with_clear_color([0.0, 0.0, 0.0, 1.0]);
+        let outcome = run_proof_frame_with_full_observations_against_fresh_dx12_device(plan, 3);
+        match outcome {
+            LiveProofFrameBootResult::Ran(payload) => {
+                let LiveProofFrameRanPayload { bridge_state, run } = *payload;
+                if !ran_on_real_dx12_adapter(&bridge_state) {
+                    eprintln!(
+                        "live_executor_records_real_gpu_timestamp_queries_around_indexed_draw: \
+                         non-DX12 actual backend ({:?}); skipping strict assertion",
+                        bridge_state.actual_native_backend,
+                    );
+                    return;
+                }
+
+                // Real DX12 adapter that supports TIMESTAMP_QUERY:
+                // every typed evidence step succeeded.
+                assert!(
+                    run.passes_full_runtime(),
+                    "live timestamp run did not finish: {run:?}"
+                );
+                assert_eq!(
+                    run.timestamp_queries_resolved,
+                    LiveProofFrameTimestampQuerySet::QUERY_COUNT,
+                    "expected both begin + end timestamps to resolve",
+                );
+                assert!(
+                    run.timestamp_end_raw > run.timestamp_begin_raw,
+                    "expected end timestamp ({}) to follow begin timestamp ({})",
+                    run.timestamp_end_raw,
+                    run.timestamp_begin_raw,
+                );
+                assert!(
+                    run.timestamp_period_nanos > 0.0,
+                    "queue must report a non-zero timestamp period; got {}",
+                    run.timestamp_period_nanos,
+                );
+
+                // Pass B evidence composer flips
+                // `gpu_timestamp_observed` true under this run.
+                let evidence = compose_passb_runtime_evidence_from_run_result(&run);
+                assert!(
+                    evidence.gpu_timestamp_observed,
+                    "blocker `gap.tier0.no_gpu_timestamp_queries` is closed only when \
+                     `evidence.gpu_timestamp_observed` flips to true",
+                );
+
+                // Two copies recorded: typed timestamp resolve →
+                // readback (copy_buffer_to_buffer) and frame
+                // probe (copy_texture_to_buffer).
+                assert!(
+                    run.copies_recorded >= 2,
+                    "expected ≥2 typed copies (timestamp + frame probe), got {}",
+                    run.copies_recorded,
+                );
+            }
+            LiveProofFrameBootResult::BridgeRuntimeFailed(failure) => {
+                eprintln!(
+                    "live_executor_records_real_gpu_timestamp_queries_around_indexed_draw: \
+                     bridge runtime failed (host without DX12 adapter or missing \
+                     TIMESTAMP_QUERY support): {failure:?}",
                 );
             }
         }
