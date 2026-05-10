@@ -42,6 +42,8 @@ pub mod passd_gpu_scene_indirect_draw;
 pub mod passe_clustered_lighting_virtual_shadow_mvp;
 #[cfg(feature = "bevy_ecs")]
 pub mod passf_temporal_stack;
+#[cfg(feature = "bevy_ecs")]
+pub mod passg_native_ui_product_route;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -940,6 +942,8 @@ pub use passd_gpu_scene_indirect_draw::*;
 pub use passe_clustered_lighting_virtual_shadow_mvp::*;
 #[cfg(feature = "bevy_ecs")]
 pub use passf_temporal_stack::*;
+#[cfg(feature = "bevy_ecs")]
+pub use passg_native_ui_product_route::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
