@@ -32,6 +32,8 @@ pub mod lighting_stack;
 pub mod ml;
 pub mod page;
 pub mod parity;
+#[cfg(feature = "bevy_ecs")]
+pub mod passb_proof_frame_runtime;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -920,6 +922,8 @@ pub use lighting_stack::*;
 #[cfg(feature = "experimental_renderer_ml")]
 pub use ml::*;
 pub use page::*;
+#[cfg(feature = "bevy_ecs")]
+pub use passb_proof_frame_runtime::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
