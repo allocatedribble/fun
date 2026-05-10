@@ -36,6 +36,8 @@ pub mod parity;
 pub mod passb_proof_frame_runtime;
 #[cfg(feature = "bevy_ecs")]
 pub mod passc_runtime_cache_burndown;
+#[cfg(feature = "bevy_ecs")]
+pub mod passd_gpu_scene_indirect_draw;
 pub mod pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod plugin;
@@ -928,6 +930,8 @@ pub use page::*;
 pub use passb_proof_frame_runtime::*;
 #[cfg(feature = "bevy_ecs")]
 pub use passc_runtime_cache_burndown::*;
+#[cfg(feature = "bevy_ecs")]
+pub use passd_gpu_scene_indirect_draw::*;
 pub use pipeline::*;
 #[cfg(feature = "bevy_ecs")]
 pub use plugin::*;
