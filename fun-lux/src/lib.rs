@@ -60,11 +60,17 @@
 //! diagnostics / early fallback.
 
 pub mod api;
+pub mod diagnostics;
 pub mod frame_plan;
 pub mod gi;
+pub mod look;
 pub mod many_light;
+pub mod pass;
+pub mod quality;
 pub mod research;
+pub mod runtime;
 pub mod shadow;
+pub mod volumetric;
 
 use bevy_ecs::{
     entity::Entity,
@@ -75,11 +81,17 @@ use bevy_ecs::{
 };
 
 pub use api::*;
+pub use diagnostics::*;
 pub use frame_plan::*;
 pub use gi::*;
+pub use look::*;
 pub use many_light::*;
+pub use pass::*;
+pub use quality::*;
 pub use research::*;
+pub use runtime::*;
 pub use shadow::*;
+pub use volumetric::*;
 
 pub const FUN_LUX_SCHEMA_VERSION: u16 = 1;
 pub const FUN_LUX_PACKAGE_NAME: &str = "fun-lux";

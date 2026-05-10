@@ -12,529 +12,487 @@
 //! ownership contract. The audit handle is
 //! [`LuxBackendContract::PRODUCT_DEFAULT`].
 
-use crate::api::{DirectLightingMode, GiMode, ReconstructionHook, ReflectionMode, ShadowMode};
+use crate::api::{DirectLightingMode, GiMode, ReflectionMode, ShadowMode};
+use crate::diagnostics::LuxFramePlanDiagnostics;
+use crate::look::FunLuxLookProfile;
+use crate::pass::LuxPassRequest;
+use crate::quality::{LuxQualitySettings, LuxQualityTier};
+use crate::volumetric::FunLuxVolumetricSettings;
 
 pub const FUN_LUX_FRAME_PLAN_SCHEMA_VERSION: u16 = 1;
-pub const LUX_QUALITY_TIER_COUNT: usize = 4;
-pub const LUX_GPU_BUFFER_INTENT_KIND_COUNT: usize = 8;
-pub const LUX_TEXTURE_INTENT_KIND_COUNT: usize = 6;
-pub const LUX_TEXTURE_FORMAT_HINT_COUNT: usize = 7;
-pub const LUX_PASS_KIND_COUNT: usize = 8;
+pub const LUX_RESOURCE_INTENT_KIND_COUNT: usize = 17;
 
 // ============================================================================
-// Section 1 — Quality tier
+// Section 1 — Scene plan (per-scene record)
 // ============================================================================
 
-/// Typed lighting quality tier. The renderer consumes this as
-/// the dominant knob driving cluster bin counts, reservoir
-/// pool size, virtual shadow page headroom, GI ray counts, and
-/// denoiser strength.
+/// Typed scene identifier. The renderer maps the typed id to
+/// its own scene registry; the typed id itself is opaque to
+/// the renderer.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LuxQualityTier {
-    #[default]
-    Low,
-    Medium,
-    High,
-    Ultra,
+pub struct LuxSceneId(pub u64);
+
+impl LuxSceneId {
+    pub const PROOF_SCENE: Self = Self(0);
+
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
-impl LuxQualityTier {
-    pub const ALL: [Self; LUX_QUALITY_TIER_COUNT] =
-        [Self::Low, Self::Medium, Self::High, Self::Ultra];
+/// Typed scene priority — drives the renderer's dispatch
+/// order when multiple scenes share the same frame.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LuxScenePriority {
+    Background,
+    #[default]
+    World,
+    Hud,
+    DebugOverlay,
+}
+
+impl LuxScenePriority {
+    pub const ALL: [Self; 4] = [Self::Background, Self::World, Self::Hud, Self::DebugOverlay];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Ultra => "ultra",
+            Self::Background => "background",
+            Self::World => "world",
+            Self::Hud => "hud",
+            Self::DebugOverlay => "debug_overlay",
         }
     }
 
-    /// Typed ordering key. `Low = 0`, `Ultra = 3`.
     #[must_use]
     pub const fn order_key(self) -> u8 {
         match self {
-            Self::Low => 0,
-            Self::Medium => 1,
-            Self::High => 2,
-            Self::Ultra => 3,
+            Self::Background => 0,
+            Self::World => 1,
+            Self::Hud => 2,
+            Self::DebugOverlay => 3,
         }
-    }
-
-    /// Typed predicate: does this tier permit per-pixel
-    /// reservoir reuse? `Medium+` does.
-    #[must_use]
-    pub const fn permits_reservoir_reuse(self) -> bool {
-        self.order_key() >= 1
-    }
-
-    /// Typed predicate: does this tier permit virtual shadow
-    /// demand-page residency tracking? `High+` does.
-    #[must_use]
-    pub const fn permits_virtual_shadow_demand_pages(self) -> bool {
-        self.order_key() >= 2
     }
 }
 
-// ============================================================================
-// Section 2 — Typed GPU buffer intent
-// ============================================================================
-
-/// Typed kind for a lux-emitted GPU buffer intent. The
-/// renderer maps each kind to a concrete `wgpu::Buffer`
-/// allocation; the intent itself names no backend.
+/// Typed dirty region in framebuffer-pixel coordinates. A
+/// non-empty list signals the renderer that only the typed
+/// regions need re-shaded this frame.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LuxGpuBufferIntentKind {
-    #[default]
-    LightTable,
-    LightIndexList,
-    ClusterAssignment,
-    ClusterAssignmentReadback,
-    ShadowMetadata,
-    ProbeMetadata,
-    GiResource,
-    DenoiseIntermediate,
-}
-
-impl LuxGpuBufferIntentKind {
-    pub const ALL: [Self; LUX_GPU_BUFFER_INTENT_KIND_COUNT] = [
-        Self::LightTable,
-        Self::LightIndexList,
-        Self::ClusterAssignment,
-        Self::ClusterAssignmentReadback,
-        Self::ShadowMetadata,
-        Self::ProbeMetadata,
-        Self::GiResource,
-        Self::DenoiseIntermediate,
-    ];
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LightTable => "light_table",
-            Self::LightIndexList => "light_index_list",
-            Self::ClusterAssignment => "cluster_assignment",
-            Self::ClusterAssignmentReadback => "cluster_assignment_readback",
-            Self::ShadowMetadata => "shadow_metadata",
-            Self::ProbeMetadata => "probe_metadata",
-            Self::GiResource => "gi_resource",
-            Self::DenoiseIntermediate => "denoise_intermediate",
-        }
-    }
-
-    /// Typed predicate: does this buffer kind ever require
-    /// CPU readback? Set by the renderer when it allocates
-    /// `BufferUsages::MAP_READ`.
-    #[must_use]
-    pub const fn allow_cpu_readback_by_default(self) -> bool {
-        matches!(self, Self::ClusterAssignmentReadback)
-    }
-}
-
-/// Typed GPU buffer intent record. fun-renderer reads this
-/// and allocates a real `wgpu::Buffer`. The intent names no
-/// backend handle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LuxGpuBufferIntent {
+pub struct LuxDirtyRegion {
     pub schema_version: u16,
-    pub kind: LuxGpuBufferIntentKind,
-    pub stable_id: &'static str,
-    pub byte_size: u64,
-    pub allow_cpu_readback: bool,
+    pub min_x: u32,
+    pub min_y: u32,
+    pub max_x: u32,
+    pub max_y: u32,
 }
 
-impl LuxGpuBufferIntent {
+impl LuxDirtyRegion {
+    pub const FULL_FRAME: Self = Self {
+        schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
+        min_x: 0,
+        min_y: 0,
+        max_x: u32::MAX,
+        max_y: u32::MAX,
+    };
+
     #[must_use]
-    pub const fn new(
-        kind: LuxGpuBufferIntentKind,
-        stable_id: &'static str,
-        byte_size: u64,
-    ) -> Self {
+    pub const fn new(min_x: u32, min_y: u32, max_x: u32, max_y: u32) -> Self {
         Self {
             schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
-            kind,
-            stable_id,
-            byte_size,
-            allow_cpu_readback: kind.allow_cpu_readback_by_default(),
-        }
-    }
-}
-
-// ============================================================================
-// Section 3 — Typed texture intent
-// ============================================================================
-
-/// Typed kind for a lux-emitted texture intent.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LuxTextureIntentKind {
-    #[default]
-    ShadowAtlasPage,
-    VirtualShadowDemandPage,
-    VarianceMap,
-    DenoiseHistory,
-    ProbeIrradiance,
-    GiHistory,
-}
-
-impl LuxTextureIntentKind {
-    pub const ALL: [Self; LUX_TEXTURE_INTENT_KIND_COUNT] = [
-        Self::ShadowAtlasPage,
-        Self::VirtualShadowDemandPage,
-        Self::VarianceMap,
-        Self::DenoiseHistory,
-        Self::ProbeIrradiance,
-        Self::GiHistory,
-    ];
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ShadowAtlasPage => "shadow_atlas_page",
-            Self::VirtualShadowDemandPage => "virtual_shadow_demand_page",
-            Self::VarianceMap => "variance_map",
-            Self::DenoiseHistory => "denoise_history",
-            Self::ProbeIrradiance => "probe_irradiance",
-            Self::GiHistory => "gi_history",
-        }
-    }
-}
-
-/// Typed format hint for a texture intent. fun-renderer maps
-/// the hint to a concrete `wgpu::TextureFormat`; the hint
-/// itself names no backend.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LuxTextureFormatHint {
-    #[default]
-    HdrFloat16Rgba,
-    HdrFloat16Rg,
-    Depth32Float,
-    Unorm8R,
-    Unorm8Rg,
-    Unorm8Rgba,
-    PageBookkeepingU32,
-}
-
-impl LuxTextureFormatHint {
-    pub const ALL: [Self; LUX_TEXTURE_FORMAT_HINT_COUNT] = [
-        Self::HdrFloat16Rgba,
-        Self::HdrFloat16Rg,
-        Self::Depth32Float,
-        Self::Unorm8R,
-        Self::Unorm8Rg,
-        Self::Unorm8Rgba,
-        Self::PageBookkeepingU32,
-    ];
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::HdrFloat16Rgba => "hdr_float16_rgba",
-            Self::HdrFloat16Rg => "hdr_float16_rg",
-            Self::Depth32Float => "depth32_float",
-            Self::Unorm8R => "unorm8_r",
-            Self::Unorm8Rg => "unorm8_rg",
-            Self::Unorm8Rgba => "unorm8_rgba",
-            Self::PageBookkeepingU32 => "page_bookkeeping_u32",
+            min_x,
+            min_y,
+            max_x,
+            max_y,
         }
     }
 
-    /// Typed predicate: HDR-capable formats.
     #[must_use]
-    pub const fn is_hdr_capable(self) -> bool {
-        matches!(self, Self::HdrFloat16Rgba | Self::HdrFloat16Rg)
+    pub const fn covers_any_pixel(self) -> bool {
+        self.max_x > self.min_x && self.max_y > self.min_y
+    }
+
+    #[must_use]
+    pub const fn is_full_frame(self) -> bool {
+        self.min_x == 0 && self.min_y == 0 && self.max_x == u32::MAX && self.max_y == u32::MAX
+    }
+
+    /// Typed pixel area (clamped at `u64::MAX`).
+    #[must_use]
+    pub const fn pixel_area(self) -> u64 {
+        if !self.covers_any_pixel() {
+            return 0;
+        }
+        let width = self.max_x.saturating_sub(self.min_x) as u64;
+        let height = self.max_y.saturating_sub(self.min_y) as u64;
+        width.saturating_mul(height)
     }
 }
 
-/// Typed texture intent record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LuxTextureIntent {
+/// Typed per-scene frame plan. `LuxFramePlan` aggregates one
+/// `LuxSceneFramePlan` per scene.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LuxSceneFramePlan {
     pub schema_version: u16,
-    pub kind: LuxTextureIntentKind,
-    pub stable_id: &'static str,
-    pub width: u32,
-    pub height: u32,
-    pub format_hint: LuxTextureFormatHint,
+    pub scene_id: LuxSceneId,
+    pub scene_revision: u64,
+    pub visible: bool,
+    pub priority: LuxScenePriority,
+    pub passes: Vec<LuxPassRequest>,
+    pub resources: Vec<LuxResourceIntent>,
+    pub dirty_regions: Vec<LuxDirtyRegion>,
 }
 
-impl LuxTextureIntent {
+impl LuxSceneFramePlan {
+    /// Typed cold-default scene plan: invisible, no work.
     #[must_use]
-    pub const fn new(
-        kind: LuxTextureIntentKind,
+    pub fn cold_default(scene_id: LuxSceneId) -> Self {
+        Self {
+            schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
+            scene_id,
+            scene_revision: 0,
+            visible: false,
+            priority: LuxScenePriority::default(),
+            passes: Vec::new(),
+            resources: Vec::new(),
+            dirty_regions: Vec::new(),
+        }
+    }
+
+    /// Typed predicate: minimal scene plan (no passes, no
+    /// resources, no dirty regions).
+    #[must_use]
+    pub fn is_minimal(&self) -> bool {
+        self.passes.is_empty() && self.resources.is_empty() && self.dirty_regions.is_empty()
+    }
+
+    /// Typed predicate: scene plan emitted at least one
+    /// pass dispatch.
+    #[must_use]
+    pub fn emitted_work(&self) -> bool {
+        !self.passes.is_empty()
+    }
+}
+
+// ============================================================================
+// Section 2 — 17-variant LuxResourceIntent
+// ============================================================================
+
+/// Typed lux resource intent. The renderer reads the variant
+/// and allocates / binds the appropriate concrete `wgpu`
+/// resource; the intent itself names no backend handle.
+///
+/// Every variant carries a stable id so the renderer-side
+/// resource cache can match repeat allocations across
+/// frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LuxResourceIntent {
+    LightBuffer {
+        stable_id: &'static str,
+        max_light_count: u32,
+        bytes_per_light: u32,
+    },
+    LightIndexBuffer {
+        stable_id: &'static str,
+        max_cluster_count: u32,
+        max_lights_per_cluster: u32,
+    },
+    ClusterGrid {
+        stable_id: &'static str,
+        clusters_x: u32,
+        clusters_y: u32,
+        clusters_z: u32,
+    },
+    ReservoirBuffer {
+        stable_id: &'static str,
+        sample_count: u32,
+    },
+    ShadowRequestBuffer {
+        stable_id: &'static str,
+        max_request_count: u32,
+    },
+    ShadowAtlas {
+        stable_id: &'static str,
+        atlas_extent: u32,
+        slot_count: u32,
+    },
+    VirtualShadowPageTable {
+        stable_id: &'static str,
+        page_count: u32,
+    },
+    SurfaceCache {
+        stable_id: &'static str,
+        surface_count: u32,
+    },
+    RadianceCache {
+        stable_id: &'static str,
+        voxel_count: u64,
+    },
+    ProbeCache {
+        stable_id: &'static str,
+        probe_count: u32,
+    },
+    ReflectionTraceBuffer {
+        stable_id: &'static str,
+        ray_count: u32,
+    },
+    DenoiseHistory {
         stable_id: &'static str,
         width: u32,
         height: u32,
-        format_hint: LuxTextureFormatHint,
-    ) -> Self {
-        Self {
-            schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
-            kind,
-            stable_id,
-            width,
-            height,
-            format_hint,
-        }
-    }
+    },
+    VolumetricFroxelDensity {
+        stable_id: &'static str,
+        width: u32,
+        height: u32,
+        depth: u32,
+    },
+    VolumetricFroxelScattering {
+        stable_id: &'static str,
+        width: u32,
+        height: u32,
+        depth: u32,
+    },
+    VolumetricHistory {
+        stable_id: &'static str,
+        width: u32,
+        height: u32,
+        depth: u32,
+    },
+    IntegratedFog {
+        stable_id: &'static str,
+        width: u32,
+        height: u32,
+    },
+    LuxDebugBuffer {
+        stable_id: &'static str,
+        byte_size: u64,
+    },
 }
 
-// ============================================================================
-// Section 4 — Unified resource intent
-// ============================================================================
-
-/// Typed lux resource intent. Either a GPU buffer or a
-/// texture; the renderer dispatches on the variant.
+/// Typed kind tag for [`LuxResourceIntent`]. Used by
+/// observability / audit harnesses to histogram resources
+/// without unpacking variant payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LuxResourceIntent {
-    GpuBuffer(LuxGpuBufferIntent),
-    Texture(LuxTextureIntent),
+pub enum LuxResourceIntentKind {
+    LightBuffer,
+    LightIndexBuffer,
+    ClusterGrid,
+    ReservoirBuffer,
+    ShadowRequestBuffer,
+    ShadowAtlas,
+    VirtualShadowPageTable,
+    SurfaceCache,
+    RadianceCache,
+    ProbeCache,
+    ReflectionTraceBuffer,
+    DenoiseHistory,
+    VolumetricFroxelDensity,
+    VolumetricFroxelScattering,
+    VolumetricHistory,
+    IntegratedFog,
+    LuxDebugBuffer,
 }
 
-impl LuxResourceIntent {
-    #[must_use]
-    pub const fn stable_id(&self) -> &'static str {
-        match self {
-            Self::GpuBuffer(b) => b.stable_id,
-            Self::Texture(t) => t.stable_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::GpuBuffer(_) => "gpu_buffer",
-            Self::Texture(_) => "texture",
-        }
-    }
-}
-
-// ============================================================================
-// Section 5 — Pass kind + dependency + request
-// ============================================================================
-
-/// Typed lighting pass kind. Each kind names a logical lux
-/// pass the renderer must dispatch. fun-renderer chooses the
-/// concrete pipeline (compute / render) and the WGSL source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LuxPassKind {
-    LightingClusterAssignment,
-    DirectLightingShade,
-    ManyLightReservoirReuse,
-    VirtualShadowPolicyUpdate,
-    GiProbeUpdate,
-    GiTraceAccumulation,
-    DenoiseReconstruction,
-    RadianceCacheUpdate,
-}
-
-impl LuxPassKind {
-    pub const ALL: [Self; LUX_PASS_KIND_COUNT] = [
-        Self::LightingClusterAssignment,
-        Self::DirectLightingShade,
-        Self::ManyLightReservoirReuse,
-        Self::VirtualShadowPolicyUpdate,
-        Self::GiProbeUpdate,
-        Self::GiTraceAccumulation,
-        Self::DenoiseReconstruction,
-        Self::RadianceCacheUpdate,
+impl LuxResourceIntentKind {
+    pub const ALL: [Self; LUX_RESOURCE_INTENT_KIND_COUNT] = [
+        Self::LightBuffer,
+        Self::LightIndexBuffer,
+        Self::ClusterGrid,
+        Self::ReservoirBuffer,
+        Self::ShadowRequestBuffer,
+        Self::ShadowAtlas,
+        Self::VirtualShadowPageTable,
+        Self::SurfaceCache,
+        Self::RadianceCache,
+        Self::ProbeCache,
+        Self::ReflectionTraceBuffer,
+        Self::DenoiseHistory,
+        Self::VolumetricFroxelDensity,
+        Self::VolumetricFroxelScattering,
+        Self::VolumetricHistory,
+        Self::IntegratedFog,
+        Self::LuxDebugBuffer,
     ];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::LightingClusterAssignment => "lighting_cluster_assignment",
-            Self::DirectLightingShade => "direct_lighting_shade",
-            Self::ManyLightReservoirReuse => "many_light_reservoir_reuse",
-            Self::VirtualShadowPolicyUpdate => "virtual_shadow_policy_update",
-            Self::GiProbeUpdate => "gi_probe_update",
-            Self::GiTraceAccumulation => "gi_trace_accumulation",
-            Self::DenoiseReconstruction => "denoise_reconstruction",
-            Self::RadianceCacheUpdate => "radiance_cache_update",
+            Self::LightBuffer => "light_buffer",
+            Self::LightIndexBuffer => "light_index_buffer",
+            Self::ClusterGrid => "cluster_grid",
+            Self::ReservoirBuffer => "reservoir_buffer",
+            Self::ShadowRequestBuffer => "shadow_request_buffer",
+            Self::ShadowAtlas => "shadow_atlas",
+            Self::VirtualShadowPageTable => "virtual_shadow_page_table",
+            Self::SurfaceCache => "surface_cache",
+            Self::RadianceCache => "radiance_cache",
+            Self::ProbeCache => "probe_cache",
+            Self::ReflectionTraceBuffer => "reflection_trace_buffer",
+            Self::DenoiseHistory => "denoise_history",
+            Self::VolumetricFroxelDensity => "volumetric_froxel_density",
+            Self::VolumetricFroxelScattering => "volumetric_froxel_scattering",
+            Self::VolumetricHistory => "volumetric_history",
+            Self::IntegratedFog => "integrated_fog",
+            Self::LuxDebugBuffer => "lux_debug_buffer",
         }
     }
 }
 
-/// Typed dependency edge between two lux passes. The
-/// renderer uses the typed `upstream_stable_id` to order
-/// `wgpu::RenderPass` / `wgpu::ComputePass` recording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LuxPassDependency {
-    pub schema_version: u16,
-    pub upstream_stable_id: &'static str,
-}
-
-impl LuxPassDependency {
+impl LuxResourceIntent {
+    /// Typed convenience accessor: the resource's stable id.
     #[must_use]
-    pub const fn new(upstream_stable_id: &'static str) -> Self {
-        Self {
-            schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
-            upstream_stable_id,
+    pub const fn stable_id(&self) -> &'static str {
+        match self {
+            Self::LightBuffer { stable_id, .. }
+            | Self::LightIndexBuffer { stable_id, .. }
+            | Self::ClusterGrid { stable_id, .. }
+            | Self::ReservoirBuffer { stable_id, .. }
+            | Self::ShadowRequestBuffer { stable_id, .. }
+            | Self::ShadowAtlas { stable_id, .. }
+            | Self::VirtualShadowPageTable { stable_id, .. }
+            | Self::SurfaceCache { stable_id, .. }
+            | Self::RadianceCache { stable_id, .. }
+            | Self::ProbeCache { stable_id, .. }
+            | Self::ReflectionTraceBuffer { stable_id, .. }
+            | Self::DenoiseHistory { stable_id, .. }
+            | Self::VolumetricFroxelDensity { stable_id, .. }
+            | Self::VolumetricFroxelScattering { stable_id, .. }
+            | Self::VolumetricHistory { stable_id, .. }
+            | Self::IntegratedFog { stable_id, .. }
+            | Self::LuxDebugBuffer { stable_id, .. } => stable_id,
         }
     }
-}
 
-/// Typed lighting pass request. The renderer maps the typed
-/// fields to a concrete pipeline + bind groups. Reads and
-/// writes are typed resource intents — the renderer is
-/// responsible for inferring barriers + transitions.
-///
-/// `LuxPassRequest` intentionally does not derive `Hash`
-/// because [`LuxResourceIntent`] aggregates the
-/// per-resource intent enums and the lighting policy never
-/// uses a frame plan as a hash key; tests compare equality
-/// only.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LuxPassRequest {
-    pub schema_version: u16,
-    pub kind: LuxPassKind,
-    pub stable_id: &'static str,
-    pub quality_tier: LuxQualityTier,
-    pub depends_on: Vec<LuxPassDependency>,
-    pub reads: Vec<LuxResourceIntent>,
-    pub writes: Vec<LuxResourceIntent>,
-}
-
-impl LuxPassRequest {
+    /// Typed kind tag.
     #[must_use]
-    pub fn new(kind: LuxPassKind, stable_id: &'static str, quality_tier: LuxQualityTier) -> Self {
-        Self {
-            schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
-            kind,
-            stable_id,
-            quality_tier,
-            depends_on: Vec::new(),
-            reads: Vec::new(),
-            writes: Vec::new(),
+    pub const fn kind(&self) -> LuxResourceIntentKind {
+        match self {
+            Self::LightBuffer { .. } => LuxResourceIntentKind::LightBuffer,
+            Self::LightIndexBuffer { .. } => LuxResourceIntentKind::LightIndexBuffer,
+            Self::ClusterGrid { .. } => LuxResourceIntentKind::ClusterGrid,
+            Self::ReservoirBuffer { .. } => LuxResourceIntentKind::ReservoirBuffer,
+            Self::ShadowRequestBuffer { .. } => LuxResourceIntentKind::ShadowRequestBuffer,
+            Self::ShadowAtlas { .. } => LuxResourceIntentKind::ShadowAtlas,
+            Self::VirtualShadowPageTable { .. } => LuxResourceIntentKind::VirtualShadowPageTable,
+            Self::SurfaceCache { .. } => LuxResourceIntentKind::SurfaceCache,
+            Self::RadianceCache { .. } => LuxResourceIntentKind::RadianceCache,
+            Self::ProbeCache { .. } => LuxResourceIntentKind::ProbeCache,
+            Self::ReflectionTraceBuffer { .. } => LuxResourceIntentKind::ReflectionTraceBuffer,
+            Self::DenoiseHistory { .. } => LuxResourceIntentKind::DenoiseHistory,
+            Self::VolumetricFroxelDensity { .. } => LuxResourceIntentKind::VolumetricFroxelDensity,
+            Self::VolumetricFroxelScattering { .. } => {
+                LuxResourceIntentKind::VolumetricFroxelScattering
+            }
+            Self::VolumetricHistory { .. } => LuxResourceIntentKind::VolumetricHistory,
+            Self::IntegratedFog { .. } => LuxResourceIntentKind::IntegratedFog,
+            Self::LuxDebugBuffer { .. } => LuxResourceIntentKind::LuxDebugBuffer,
         }
-    }
-
-    /// Add a typed upstream dependency.
-    pub fn depends_on(mut self, upstream_stable_id: &'static str) -> Self {
-        self.depends_on
-            .push(LuxPassDependency::new(upstream_stable_id));
-        self
-    }
-
-    /// Add a typed read resource.
-    pub fn reads(mut self, intent: LuxResourceIntent) -> Self {
-        self.reads.push(intent);
-        self
-    }
-
-    /// Add a typed write resource.
-    pub fn writes(mut self, intent: LuxResourceIntent) -> Self {
-        self.writes.push(intent);
-        self
     }
 }
 
 // ============================================================================
-// Section 6 — Frame plan
+// Section 3 — Frame plan
 // ============================================================================
 
-/// Typed backend-neutral lighting frame plan. fun-lux builds
-/// the plan from its current policy + light database;
-/// fun-renderer consumes the plan and dispatches against the
-/// real GPU.
-///
-/// `LuxFramePlan` intentionally does not derive `Hash`
-/// because [`ReconstructionHook`] (and the embedded
-/// resource-intent enums) are pass-by-value records, not
-/// hash keys.
+/// Typed backend-neutral lighting frame plan. The audit
+/// handle for Pass 1's "Replace `NoopLuxCore` with a real
+/// `LuxFramePlan`" goal. `fun-renderer` consumes the plan
+/// and dispatches against the real GPU.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LuxFramePlan {
     pub schema_version: u16,
     pub frame_index: u64,
-    pub quality_tier: LuxQualityTier,
+    pub scene_plans: Vec<LuxSceneFramePlan>,
+    pub global_quality: LuxQualitySettings,
+    pub look_profile: FunLuxLookProfile,
+    pub volumetric: FunLuxVolumetricSettings,
+    pub diagnostics: LuxFramePlanDiagnostics,
     pub direct_lighting: DirectLightingMode,
     pub shadows: ShadowMode,
     pub gi: GiMode,
     pub reflections: ReflectionMode,
-    pub reconstruction: ReconstructionHook,
-    pub passes: Vec<LuxPassRequest>,
 }
 
 impl LuxFramePlan {
-    /// Stable id for the cold-default zero-work
-    /// `ReconstructionHook`.
-    pub const COLD_DEFAULT_RECONSTRUCTION_STABLE_ID: &'static str =
-        "fun_lux.frame_plan.cold_default.reconstruction";
-
-    /// A typed cold-default plan: zero passes, low quality
-    /// tier, every policy at its disabled default. Useful for
-    /// the `NoopLuxCore` fallback path + tests.
+    /// Typed cold-default plan: no scenes, no passes, no
+    /// resources. Equivalent to the `NoopLuxCore` baseline
+    /// frame and reserved for tests / diagnostics / early
+    /// fallback.
     #[must_use]
     pub fn cold_default() -> Self {
-        use crate::LuxDenoiseReconstructionPath;
         Self {
             schema_version: FUN_LUX_FRAME_PLAN_SCHEMA_VERSION,
             frame_index: 0,
-            quality_tier: LuxQualityTier::Low,
+            scene_plans: Vec::new(),
+            global_quality: LuxQualitySettings::PRODUCT_DEFAULT,
+            look_profile: FunLuxLookProfile::COLD_DEFAULT,
+            volumetric: FunLuxVolumetricSettings::COLD_DEFAULT,
+            diagnostics: LuxFramePlanDiagnostics::COLD_DEFAULT,
             direct_lighting: DirectLightingMode::Disabled,
             shadows: ShadowMode::Disabled,
             gi: GiMode::Disabled,
             reflections: ReflectionMode::Disabled,
-            reconstruction: ReconstructionHook::new(
-                Self::COLD_DEFAULT_RECONSTRUCTION_STABLE_ID,
-                LuxDenoiseReconstructionPath::HeuristicFallback,
-            ),
-            passes: Vec::new(),
         }
     }
 
-    /// Typed predicate: this frame plan is the zero-work
-    /// `NoopLuxCore` fallback path, not a production-frame
-    /// plan. Used by [`LuxBackendContract`] to enforce that
-    /// no production route boots a `NoopLuxCore`.
+    /// Typed predicate: minimal plan (no scene work).
+    #[must_use]
+    pub fn is_minimal(&self) -> bool {
+        self.scene_plans.iter().all(|s| s.is_minimal())
+    }
+
+    /// Typed predicate: zero scenes, zero passes, zero
+    /// resources, zero dirty regions — the strictest minimal
+    /// plan, equivalent to the `NoopLuxCore` baseline.
     #[must_use]
     pub fn is_noop_baseline(&self) -> bool {
-        self.passes.is_empty()
+        self.scene_plans.is_empty()
             && matches!(self.direct_lighting, DirectLightingMode::Disabled)
             && matches!(self.shadows, ShadowMode::Disabled)
+    }
+
+    /// Typed convenience: aggregate the typed quality tier
+    /// from `global_quality.default_tier`.
+    #[must_use]
+    pub const fn aggregate_quality_tier(&self) -> LuxQualityTier {
+        self.global_quality.default_tier
+    }
+
+    /// Typed convenience: aggregate pass count across every
+    /// scene plan (used by diagnostics).
+    #[must_use]
+    pub fn aggregate_pass_count(&self) -> u32 {
+        self.scene_plans.iter().map(|s| s.passes.len() as u32).sum()
+    }
+
+    /// Typed convenience: aggregate resource count across
+    /// every scene plan.
+    #[must_use]
+    pub fn aggregate_resource_count(&self) -> u32 {
+        self.scene_plans
+            .iter()
+            .map(|s| s.resources.len() as u32)
+            .sum()
     }
 }
 
 // ============================================================================
-// Section 7 — Backend contract
+// Section 4 — Backend contract (Pass 0 audit handle, preserved)
 // ============================================================================
 
-/// Typed backend contract record. The audit handle for Pass
-/// 0's "Lock the crate ownership and backend contract" goal.
-///
-/// The `PRODUCT_DEFAULT` constant is the source of truth for
-/// the renderer / lux ownership split; every test in the
-/// workspace that touches lighting routing should read this
-/// record rather than re-implementing the policy.
+/// Typed backend contract record (Pass 0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LuxBackendContract {
     pub schema_version: u16,
-    /// Lighting policy ownership: `fun-lux` owns it.
     pub fun_lux_owns_lighting_policy: bool,
-    /// Production executor: `fun-renderer` is the only one.
     pub fun_renderer_is_only_production_executor: bool,
-    /// Plan emission: `fun-lux` emits backend-neutral plans
-    /// (no `wgpu`, `wgpu-core`, `wgpu-hal`, `naga`,
-    /// `raw_window_handle`, or native backend handles).
     pub fun_lux_emits_backend_neutral_plans: bool,
-    /// Legacy lighting: every legacy path is invalid for
-    /// production. Diagnostic-only callers stay loud.
     pub legacy_lighting_paths_are_invalid_for_production: bool,
-    /// `NoopLuxCore`: reserved for tests, diagnostics, and
-    /// early-boot fallback. Never boots under a production
-    /// lighting route.
     pub noop_lux_core_is_non_production_only: bool,
-    /// Typed list of crate names `fun-lux` MUST NOT import.
-    /// Audited by the
-    /// `fun_lux_remains_backend_neutral_by_dependency_contract`
-    /// test.
     pub forbidden_fun_lux_imports: &'static [&'static str],
-    /// `fun-renderer` is permitted to depend on `fun-lux`,
-    /// not the other way around. The cycle-break crate
-    /// `fun-renderer-lux-api` is reserved for the alternative
-    /// split-crate structure documented in
-    /// `docs/renderer_ownership.md`.
     pub fun_renderer_depends_on_fun_lux: bool,
-    /// `fun-lux` MUST NOT depend on `fun-renderer` directly.
     pub fun_lux_must_not_depend_on_fun_renderer: bool,
 }
 
@@ -565,9 +523,6 @@ impl LuxBackendContract {
         fun_lux_must_not_depend_on_fun_renderer: true,
     };
 
-    /// Typed predicate: the contract holds end-to-end. All
-    /// 7 boolean fields must be `true` and the forbidden
-    /// list must be non-empty.
     #[must_use]
     pub const fn contract_holds(&self) -> bool {
         self.fun_lux_owns_lighting_policy
@@ -580,8 +535,6 @@ impl LuxBackendContract {
             && self.fun_lux_must_not_depend_on_fun_renderer
     }
 
-    /// Typed predicate: is the named crate forbidden as a
-    /// `fun-lux` import?
     #[must_use]
     pub fn is_forbidden_import(&self, crate_name: &str) -> bool {
         self.forbidden_fun_lux_imports
@@ -601,156 +554,193 @@ mod tests {
     #[test]
     fn schema_versions_are_stable() {
         assert_eq!(FUN_LUX_FRAME_PLAN_SCHEMA_VERSION, 1);
-        assert_eq!(LUX_QUALITY_TIER_COUNT, 4);
-        assert_eq!(LuxQualityTier::ALL.len(), LUX_QUALITY_TIER_COUNT);
-        assert_eq!(LUX_GPU_BUFFER_INTENT_KIND_COUNT, 8);
+        assert_eq!(LUX_RESOURCE_INTENT_KIND_COUNT, 17);
         assert_eq!(
-            LuxGpuBufferIntentKind::ALL.len(),
-            LUX_GPU_BUFFER_INTENT_KIND_COUNT
+            LuxResourceIntentKind::ALL.len(),
+            LUX_RESOURCE_INTENT_KIND_COUNT,
         );
-        assert_eq!(LUX_TEXTURE_INTENT_KIND_COUNT, 6);
-        assert_eq!(
-            LuxTextureIntentKind::ALL.len(),
-            LUX_TEXTURE_INTENT_KIND_COUNT
-        );
-        assert_eq!(LUX_TEXTURE_FORMAT_HINT_COUNT, 7);
-        assert_eq!(
-            LuxTextureFormatHint::ALL.len(),
-            LUX_TEXTURE_FORMAT_HINT_COUNT
-        );
-        assert_eq!(LUX_PASS_KIND_COUNT, 8);
-        assert_eq!(LuxPassKind::ALL.len(), LUX_PASS_KIND_COUNT);
     }
 
     #[test]
-    fn quality_tier_ordering_is_monotonic() {
-        assert_eq!(LuxQualityTier::Low.order_key(), 0);
-        assert_eq!(LuxQualityTier::Medium.order_key(), 1);
-        assert_eq!(LuxQualityTier::High.order_key(), 2);
-        assert_eq!(LuxQualityTier::Ultra.order_key(), 3);
-        // Reservoir reuse: Medium+.
-        assert!(!LuxQualityTier::Low.permits_reservoir_reuse());
-        assert!(LuxQualityTier::Medium.permits_reservoir_reuse());
-        assert!(LuxQualityTier::High.permits_reservoir_reuse());
-        assert!(LuxQualityTier::Ultra.permits_reservoir_reuse());
-        // Virtual shadow demand pages: High+.
-        assert!(!LuxQualityTier::Low.permits_virtual_shadow_demand_pages());
-        assert!(!LuxQualityTier::Medium.permits_virtual_shadow_demand_pages());
-        assert!(LuxQualityTier::High.permits_virtual_shadow_demand_pages());
-        assert!(LuxQualityTier::Ultra.permits_virtual_shadow_demand_pages());
-    }
-
-    #[test]
-    fn gpu_buffer_intent_kind_strings_are_unique() {
+    fn scene_priority_taxonomy() {
         let mut seen = std::collections::HashSet::new();
-        for kind in LuxGpuBufferIntentKind::ALL {
+        for p in LuxScenePriority::ALL {
+            assert!(seen.insert(p.as_str()), "duplicate: {}", p.as_str());
+        }
+        assert!(LuxScenePriority::Background.order_key() < LuxScenePriority::World.order_key());
+        assert!(LuxScenePriority::World.order_key() < LuxScenePriority::Hud.order_key());
+        assert!(LuxScenePriority::Hud.order_key() < LuxScenePriority::DebugOverlay.order_key());
+    }
+
+    #[test]
+    fn dirty_region_predicates() {
+        let r = LuxDirtyRegion::new(0, 0, 10, 10);
+        assert!(r.covers_any_pixel());
+        assert!(!r.is_full_frame());
+        assert_eq!(r.pixel_area(), 100);
+        let empty = LuxDirtyRegion::new(5, 5, 5, 5);
+        assert!(!empty.covers_any_pixel());
+        assert_eq!(empty.pixel_area(), 0);
+        let full = LuxDirtyRegion::FULL_FRAME;
+        assert!(full.is_full_frame());
+        assert!(full.covers_any_pixel());
+    }
+
+    #[test]
+    fn scene_plan_minimal_and_emitted_work_predicates() {
+        let scene = LuxSceneFramePlan::cold_default(LuxSceneId::PROOF_SCENE);
+        assert!(scene.is_minimal());
+        assert!(!scene.emitted_work());
+        assert!(!scene.visible);
+    }
+
+    #[test]
+    fn resource_intent_kind_taxonomy_strings_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for kind in LuxResourceIntentKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }
     }
 
     #[test]
-    fn cluster_assignment_readback_is_only_default_readback_buffer() {
-        for kind in LuxGpuBufferIntentKind::ALL {
-            let expect = matches!(kind, LuxGpuBufferIntentKind::ClusterAssignmentReadback);
-            assert_eq!(
-                kind.allow_cpu_readback_by_default(),
-                expect,
-                "{}",
-                kind.as_str()
-            );
+    fn resource_intent_kind_tag_matches_variant() {
+        let probes: Vec<LuxResourceIntent> = vec![
+            LuxResourceIntent::LightBuffer {
+                stable_id: "lights",
+                max_light_count: 64,
+                bytes_per_light: 32,
+            },
+            LuxResourceIntent::LightIndexBuffer {
+                stable_id: "light_index",
+                max_cluster_count: 16,
+                max_lights_per_cluster: 4,
+            },
+            LuxResourceIntent::ClusterGrid {
+                stable_id: "cluster_grid",
+                clusters_x: 16,
+                clusters_y: 8,
+                clusters_z: 24,
+            },
+            LuxResourceIntent::ReservoirBuffer {
+                stable_id: "reservoir",
+                sample_count: 4,
+            },
+            LuxResourceIntent::ShadowRequestBuffer {
+                stable_id: "shadow_requests",
+                max_request_count: 256,
+            },
+            LuxResourceIntent::ShadowAtlas {
+                stable_id: "shadow_atlas",
+                atlas_extent: 256,
+                slot_count: 4,
+            },
+            LuxResourceIntent::VirtualShadowPageTable {
+                stable_id: "vshadow_page_table",
+                page_count: 1024,
+            },
+            LuxResourceIntent::SurfaceCache {
+                stable_id: "surface_cache",
+                surface_count: 256,
+            },
+            LuxResourceIntent::RadianceCache {
+                stable_id: "radiance_cache",
+                voxel_count: 1_000_000,
+            },
+            LuxResourceIntent::ProbeCache {
+                stable_id: "probe_cache",
+                probe_count: 4096,
+            },
+            LuxResourceIntent::ReflectionTraceBuffer {
+                stable_id: "reflection_trace",
+                ray_count: 1024,
+            },
+            LuxResourceIntent::DenoiseHistory {
+                stable_id: "denoise_history",
+                width: 1920,
+                height: 1080,
+            },
+            LuxResourceIntent::VolumetricFroxelDensity {
+                stable_id: "froxel_density",
+                width: 160,
+                height: 90,
+                depth: 64,
+            },
+            LuxResourceIntent::VolumetricFroxelScattering {
+                stable_id: "froxel_scattering",
+                width: 160,
+                height: 90,
+                depth: 64,
+            },
+            LuxResourceIntent::VolumetricHistory {
+                stable_id: "froxel_history",
+                width: 160,
+                height: 90,
+                depth: 64,
+            },
+            LuxResourceIntent::IntegratedFog {
+                stable_id: "integrated_fog",
+                width: 1920,
+                height: 1080,
+            },
+            LuxResourceIntent::LuxDebugBuffer {
+                stable_id: "lux_debug",
+                byte_size: 4096,
+            },
+        ];
+        assert_eq!(probes.len(), LUX_RESOURCE_INTENT_KIND_COUNT);
+        let kinds: Vec<LuxResourceIntentKind> = probes.iter().map(|r| r.kind()).collect();
+        assert_eq!(kinds, LuxResourceIntentKind::ALL.to_vec());
+        // Stable id accessor smoke test.
+        for p in &probes {
+            let id = p.stable_id();
+            assert!(!id.is_empty());
         }
-    }
-
-    #[test]
-    fn texture_intent_kind_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for kind in LuxTextureIntentKind::ALL {
-            assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
-        }
-    }
-
-    #[test]
-    fn texture_format_hint_hdr_predicate() {
-        for hint in LuxTextureFormatHint::ALL {
-            let expect = matches!(
-                hint,
-                LuxTextureFormatHint::HdrFloat16Rgba | LuxTextureFormatHint::HdrFloat16Rg
-            );
-            assert_eq!(hint.is_hdr_capable(), expect, "{}", hint.as_str());
-        }
-    }
-
-    #[test]
-    fn pass_kind_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for kind in LuxPassKind::ALL {
-            assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
-        }
-    }
-
-    #[test]
-    fn pass_request_builder_chains_reads_writes_deps() {
-        let req = LuxPassRequest::new(
-            LuxPassKind::LightingClusterAssignment,
-            "lux.lighting.cluster_assignment.demo",
-            LuxQualityTier::Medium,
-        )
-        .depends_on("upstream.light_table_upload")
-        .reads(LuxResourceIntent::GpuBuffer(LuxGpuBufferIntent::new(
-            LuxGpuBufferIntentKind::LightTable,
-            "lux.light_table",
-            1024,
-        )))
-        .writes(LuxResourceIntent::GpuBuffer(LuxGpuBufferIntent::new(
-            LuxGpuBufferIntentKind::ClusterAssignment,
-            "lux.cluster_assignment",
-            2048,
-        )));
-        assert_eq!(req.kind, LuxPassKind::LightingClusterAssignment);
-        assert_eq!(req.depends_on.len(), 1);
-        assert_eq!(
-            req.depends_on[0].upstream_stable_id,
-            "upstream.light_table_upload"
-        );
-        assert_eq!(req.reads.len(), 1);
-        assert_eq!(req.writes.len(), 1);
-        assert_eq!(req.reads[0].as_str(), "gpu_buffer");
-        assert_eq!(req.writes[0].stable_id(), "lux.cluster_assignment");
     }
 
     #[test]
     fn cold_default_frame_plan_is_noop_baseline() {
         let plan = LuxFramePlan::cold_default();
         assert!(plan.is_noop_baseline());
-        assert_eq!(plan.passes.len(), 0);
-        assert_eq!(plan.frame_index, 0);
-        assert_eq!(plan.quality_tier, LuxQualityTier::Low);
+        assert!(plan.is_minimal());
+        assert_eq!(plan.aggregate_pass_count(), 0);
+        assert_eq!(plan.aggregate_resource_count(), 0);
+        assert!(plan.diagnostics.minimal_plan_no_scene_work);
     }
 
     #[test]
-    fn populated_frame_plan_is_not_noop_baseline() {
+    fn frame_plan_aggregate_counts_walk_every_scene_plan() {
+        use crate::pass::{LuxPassCommon, LuxPassRequest, UploadLightBuffersPass};
         let mut plan = LuxFramePlan::cold_default();
-        plan.passes.push(LuxPassRequest::new(
-            LuxPassKind::LightingClusterAssignment,
-            "lux.lighting.cluster_assignment",
-            LuxQualityTier::High,
-        ));
-        plan.direct_lighting = DirectLightingMode::TiledClustered;
-        assert!(!plan.is_noop_baseline());
+        let mut scene = LuxSceneFramePlan::cold_default(LuxSceneId::PROOF_SCENE);
+        scene
+            .passes
+            .push(LuxPassRequest::UploadLightBuffers(UploadLightBuffersPass {
+                common: LuxPassCommon::new("fun_lux.upload", LuxQualityTier::Medium),
+                light_count: 4,
+                bytes_per_light: 32,
+            }));
+        scene.resources.push(LuxResourceIntent::LightBuffer {
+            stable_id: "fun_lux.lights",
+            max_light_count: 32,
+            bytes_per_light: 32,
+        });
+        plan.scene_plans.push(scene);
+        assert_eq!(plan.aggregate_pass_count(), 1);
+        assert_eq!(plan.aggregate_resource_count(), 1);
+        assert!(!plan.is_minimal());
     }
 
     #[test]
     fn backend_contract_product_default_holds() {
         let contract = LuxBackendContract::PRODUCT_DEFAULT;
         assert!(contract.contract_holds());
-        assert!(contract.fun_lux_owns_lighting_policy);
         assert!(contract.fun_renderer_is_only_production_executor);
+        assert!(contract.fun_lux_owns_lighting_policy);
         assert!(contract.fun_lux_emits_backend_neutral_plans);
         assert!(contract.legacy_lighting_paths_are_invalid_for_production);
         assert!(contract.noop_lux_core_is_non_production_only);
         assert!(contract.fun_renderer_depends_on_fun_lux);
         assert!(contract.fun_lux_must_not_depend_on_fun_renderer);
-        assert!(!contract.forbidden_fun_lux_imports.is_empty());
     }
 
     #[test]
@@ -776,21 +766,13 @@ mod tests {
                 "forbidden list must include {forbidden}",
             );
         }
-        // A whitelisted crate is not forbidden.
         assert!(!contract.is_forbidden_import("bevy_ecs"));
         assert!(!contract.is_forbidden_import("fun_scene"));
     }
 
-    /// Pass 0 source-of-truth test. Reads every file under
-    /// `fun-lux/src/` and asserts the doctrine: no public
-    /// module imports any forbidden crate. The typed
-    /// `LuxBackendContract::PRODUCT_DEFAULT` carries the
-    /// forbidden list.
-    ///
-    /// This is the durable per-crate enforcement of the
-    /// fun-lux backend-neutrality rule. A regression that
-    /// adds `use wgpu::...` anywhere in fun-lux fails this
-    /// test immediately.
+    /// Pass 0 source-of-truth test, carried forward to Pass 1.
+    /// Reads every file under `fun-lux/src/` and asserts that
+    /// no public module imports any forbidden crate.
     #[test]
     fn fun_lux_remains_backend_neutral_by_dependency_contract() {
         use std::fs;
@@ -809,12 +791,6 @@ mod tests {
                     continue;
                 }
                 for forbidden in contract.forbidden_fun_lux_imports {
-                    // Only flag exact crate-name prefix matches
-                    // like `use wgpu::...` or
-                    // `use wgpu;` — not substrings of unrelated
-                    // identifiers. Replace dashes with
-                    // underscores so `raw-window-handle` matches
-                    // `use raw_window_handle::...`.
                     let normalized = forbidden.replace('-', "_");
                     let with_colon = format!("{normalized}::");
                     let with_semi = format!("{normalized};");
@@ -856,21 +832,15 @@ mod tests {
         }
     }
 
-    /// Pass 0 source-of-truth test. The typed `NoopLuxCore`
-    /// type is reserved for tests / diagnostics / early-boot
-    /// fallback. The typed `LuxFramePlan::cold_default` is
-    /// the canonical zero-work frame plan; it returns
-    /// `is_noop_baseline() == true`. A production lighting
-    /// route must build a plan with at least one pass, with
-    /// `is_noop_baseline() == false`.
+    /// Pass 1: the cold-default plan is the `NoopLuxCore`
+    /// baseline. Production lighting routes must build a plan
+    /// with at least one scene plan + passes.
     #[test]
-    fn noop_lux_core_is_typed_non_production_only() {
-        let contract = LuxBackendContract::PRODUCT_DEFAULT;
-        assert!(contract.noop_lux_core_is_non_production_only);
+    fn cold_default_plan_classifies_as_noop_baseline() {
         let cold = LuxFramePlan::cold_default();
         assert!(
             cold.is_noop_baseline(),
-            "cold_default plan must classify as noop baseline; production routes must populate passes",
+            "cold_default plan must classify as noop baseline; production routes must populate scene_plans",
         );
     }
 }

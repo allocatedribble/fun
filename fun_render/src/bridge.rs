@@ -5,7 +5,10 @@ use fun_renderer::{
     Presentation, RendererCoreBootReport, RendererCoreDiagnostics, RendererCoreSettings,
     RendererCoreShutdownReport, RendererFeatureToggles, RendererFrameDescription,
     RendererFrameGraphDebugArtifact, RendererFrameGraphDiagnostics,
-    fun_lux::{LuxBootReport, LuxFrameReport, LuxSettings, LuxShutdownReport, NoopLuxCore},
+    fun_lux::{
+        LuxBootReport, LuxFramePlan, LuxFramePlanner, LuxFrameReport, LuxSceneChangeSignal,
+        LuxSceneId, LuxShutdownReport,
+    },
 };
 use tracing::{info, warn};
 
@@ -224,7 +227,7 @@ impl Default for RendererBridgeHooks {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Resource)]
+#[derive(Debug, Clone, PartialEq, Resource)]
 pub struct RendererBridgeRuntimeState {
     pub selection: FunRendererBackendSelection,
     pub initialized_once: bool,
@@ -240,11 +243,18 @@ pub struct RendererBridgeRuntimeState {
     pub lux_boot: Option<LuxBootReport>,
     pub lux_frame: Option<LuxFrameReport>,
     pub lux_shutdown: Option<LuxShutdownReport>,
+    /// Pass 1: the typed `LuxFramePlan` produced by
+    /// `LuxFramePlanner::build_frame_plan`. This field
+    /// replaces the production use of
+    /// `NoopLuxCore::baseline_frame`; the typed
+    /// `NoopLuxCorePolicy::CURRENT.real_lux_execution_available`
+    /// flag flips to `true` to enforce the contract.
+    pub lux_frame_plan: Option<LuxFramePlan>,
 }
 
 impl RendererBridgeRuntimeState {
     #[must_use]
-    pub const fn from_settings(settings: RendererBridgeSettings) -> Self {
+    pub fn from_settings(settings: RendererBridgeSettings) -> Self {
         Self {
             selection: settings.backend_selection,
             initialized_once: false,
@@ -260,6 +270,7 @@ impl RendererBridgeRuntimeState {
             lux_boot: None,
             lux_frame: None,
             lux_shutdown: None,
+            lux_frame_plan: None,
         }
     }
 }
@@ -313,9 +324,31 @@ pub fn renderer_bridge_initialize_runtime(
         let core_diagnostics = core.diagnostics();
         let core_shutdown = core.shutdown();
 
-        let (lux_core, lux_boot) = NoopLuxCore::boot(LuxSettings::default());
-        let lux_frame = lux_core.baseline_frame();
-        let lux_shutdown = lux_core.shutdown();
+        // Pass 1: replace production NoopLuxCore::boot →
+        // baseline_frame with the typed LuxFramePlanner.
+        // The renderer-side `NoopLuxCorePolicy::CURRENT.real_lux_execution_available`
+        // flag is `true` from Pass 1 onward; production
+        // routes that still want a NoopLuxCore report use
+        // the typed early-fallback path below.
+        let planner = LuxFramePlanner::product_default();
+        // Pass 1 minimal-plan path: no scene signals on the
+        // very first boot frame, so the planner emits a
+        // typed minimal `LuxFramePlan`. Subsequent frames
+        // would pass in real `LuxSceneChangeSignal`s from
+        // the renderer's extraction phase.
+        let lux_plan = planner.build_frame_plan(
+            clear_color_frame.frame_index,
+            &[LuxSceneChangeSignal::unchanged_visible(
+                LuxSceneId::PROOF_SCENE,
+                0,
+            )],
+        );
+
+        // Legacy `lux_boot` / `lux_frame` / `lux_shutdown`
+        // reports remain `None` under the Pass 1 production
+        // path. They stay reserved for the diagnostic
+        // fallback lane (see the `NoopLuxCorePolicy::CURRENT`
+        // contract).
 
         state.fun_core_initialized = true;
         state.backend_capabilities = Some(backend_capabilities);
@@ -324,9 +357,10 @@ pub fn renderer_bridge_initialize_runtime(
         state.clear_color_frame = Some(clear_color_frame);
         state.present_result = Some(present_result);
         state.core_shutdown = Some(core_shutdown);
-        state.lux_boot = Some(lux_boot);
-        state.lux_frame = Some(lux_frame);
-        state.lux_shutdown = Some(lux_shutdown);
+        state.lux_boot = None;
+        state.lux_frame = None;
+        state.lux_shutdown = None;
+        state.lux_frame_plan = Some(lux_plan.clone());
         frame_graph_report.submitted_once = true;
         frame_graph_report.frame_description = Some(frame_description);
         frame_graph_report.diagnostics = Some(frame_graph_diagnostics.clone());
@@ -342,7 +376,12 @@ pub fn renderer_bridge_initialize_runtime(
             frame_graph_passes = frame_graph_diagnostics.pass_count,
             frame_graph_validation_failures = frame_graph_diagnostics.validation_failure_count(),
             clear_color_frame = boot_report.produced_clear_color_frame,
-            lux_direct_lighting = lux_boot.direct_lighting.as_str(),
+            lux_frame_plan_scenes = lux_plan.scene_plans.len(),
+            lux_frame_plan_passes = lux_plan.aggregate_pass_count(),
+            lux_frame_plan_resources = lux_plan.aggregate_resource_count(),
+            lux_frame_plan_minimal_no_scene_work = lux_plan
+                .diagnostics
+                .minimal_plan_no_scene_work,
             "fun-renderer core initialized through fun_render bridge frame submission"
         );
     } else {
@@ -423,13 +462,20 @@ pub struct NoopLuxCorePolicy {
 }
 
 impl NoopLuxCorePolicy {
-    /// Current policy: real lux GPU execution is **not** yet
-    /// wired through the bridge boot path, so the bridge
-    /// continues to boot `NoopLuxCore` as the typed early
-    /// fallback.
+    /// Pass 1 policy: real lux execution is wired through
+    /// the bridge boot path. `renderer_bridge_initialize_runtime`
+    /// now calls `LuxFramePlanner::build_frame_plan` and
+    /// records a typed `LuxFramePlan` in
+    /// `RendererBridgeRuntimeState::lux_frame_plan`. The
+    /// typed contract refuses `NoopLuxCore` under
+    /// production routes from this point on; the bridge
+    /// keeps `state.lux_boot` / `state.lux_frame` /
+    /// `state.lux_shutdown` as `None` for the production
+    /// path. `NoopLuxCore::boot` is still permitted in
+    /// tests + the typed diagnostic-fallback lane.
     pub const CURRENT: Self = Self {
         schema_version: 1,
-        real_lux_execution_available: false,
+        real_lux_execution_available: true,
     };
 
     /// Typed predicate: may the production lighting route
@@ -535,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_fun_backend_initializes_noop_core_and_lux() {
+    fn explicit_fun_backend_initializes_real_lux_frame_plan() {
         let mut app = App::new();
         install_renderer_bridge_api(
             &mut app,
@@ -564,12 +610,35 @@ mod tests {
                 .frame_index,
             1
         );
+        // Pass 1: NoopLuxCore is retired from production; the
+        // bridge now records a typed `LuxFramePlan` instead of
+        // a `LuxFrameReport`. The legacy `lux_frame` /
+        // `lux_boot` / `lux_shutdown` fields are reserved for
+        // the diagnostic fallback lane and stay `None` under
+        // the production path.
         assert!(
-            state
-                .lux_frame
-                .expect("fun-lux should produce baseline no-op lighting")
-                .baseline_noop
+            state.lux_frame.is_none(),
+            "production must not surface NoopLuxCore::baseline_frame report",
         );
+        assert!(
+            state.lux_boot.is_none(),
+            "production must not surface NoopLuxCore::boot report",
+        );
+        assert!(
+            state.lux_shutdown.is_none(),
+            "production must not surface NoopLuxCore::shutdown report",
+        );
+        let frame_plan = state
+            .lux_frame_plan
+            .as_ref()
+            .expect("Pass 1: production bridge must record a typed LuxFramePlan");
+        // Production boot emits one scene plan (the typed
+        // proof-scene unchanged-visible signal).
+        assert_eq!(frame_plan.scene_plans.len(), 1);
+        // The proof-scene boot signal is unchanged, so the
+        // typed planner emits a minimal-plan (no targeted
+        // light / cluster / shadow updates).
+        assert!(frame_plan.diagnostics.minimal_plan_no_scene_work);
         assert!(
             state
                 .core_shutdown
@@ -692,16 +761,23 @@ mod tests {
         assert!(invalid.loud_diagnostic_required);
     }
 
-    /// Pass 0 — typed `NoopLuxCorePolicy::CURRENT`. Today
-    /// the bridge boots `NoopLuxCore` from the production
-    /// path because real lux GPU execution is not yet wired
-    /// through the bridge.
+    /// Pass 1 — typed `NoopLuxCorePolicy::CURRENT` flipped.
+    /// The bridge now wires `LuxFramePlanner::build_frame_plan`
+    /// into the production boot path; the typed predicate
+    /// refuses `NoopLuxCore` under production routes from
+    /// this point on.
     #[test]
-    fn noop_lux_core_policy_records_pre_production_state() {
+    fn noop_lux_core_policy_records_pass_1_real_lux_state() {
         let policy = NoopLuxCorePolicy::CURRENT;
         assert_eq!(policy.schema_version, 1);
-        assert!(!policy.real_lux_execution_available);
-        assert!(policy.permits_noop_lux_core_under_production_route());
+        assert!(
+            policy.real_lux_execution_available,
+            "Pass 1 wires real lux execution; the flag must be true",
+        );
+        assert!(
+            !policy.permits_noop_lux_core_under_production_route(),
+            "Pass 1: NoopLuxCore is refused under production routes",
+        );
     }
 
     /// Pass 0 — typed future invariant. When real lux GPU
@@ -748,9 +824,11 @@ mod tests {
         assert!(!contract.is_forbidden_import("bevy_ecs"));
     }
 
-    /// Pass 0 — the `NoopLuxCorePolicy` mirrors the typed
-    /// `LuxBackendContract`. When the renderer-side flag
-    /// flips, both must agree.
+    /// Pass 1 — the `NoopLuxCorePolicy` mirrors the typed
+    /// `LuxBackendContract`. With Pass 1's flip the two
+    /// agree: the contract demands NoopLuxCore stay
+    /// non-production-only, and the policy now actively
+    /// refuses it under production routes.
     #[test]
     fn noop_lux_core_policy_mirrors_lux_backend_contract() {
         use fun_renderer::fun_lux::LuxBackendContract;
@@ -758,18 +836,49 @@ mod tests {
         let contract = LuxBackendContract::PRODUCT_DEFAULT;
         // Contract: NoopLuxCore is non-production-only.
         assert!(contract.noop_lux_core_is_non_production_only);
-        // Policy today: production-route NoopLuxCore is
-        // permitted only because real lux execution is not
-        // yet wired. The two agree: under the contract,
-        // permissive-today is honest because the future
-        // flip is enforced by the predicate.
-        let future_when_real_lux_lands = NoopLuxCorePolicy {
-            schema_version: policy.schema_version,
-            real_lux_execution_available: true,
+        // Pass 1: production-route NoopLuxCore is now
+        // refused (the bridge wires LuxFramePlanner).
+        assert!(policy.real_lux_execution_available);
+        assert!(!policy.permits_noop_lux_core_under_production_route());
+    }
+
+    /// Pass 1 — typed acceptance: `LuxFramePlanner::build_frame_plan`
+    /// produces a typed `LuxFramePlan` for an empty signal
+    /// set, and the typed `LuxFramePlanner::product_default`
+    /// is the renderer-facing constructor.
+    #[test]
+    fn lux_frame_planner_product_default_builds_typed_frame_plan() {
+        use fun_renderer::fun_lux::LuxFramePlanner;
+        let planner = LuxFramePlanner::product_default();
+        let plan = planner.build_frame_plan(0, &[]);
+        assert_eq!(plan.frame_index, 0);
+        assert_eq!(plan.scene_plans.len(), 0);
+        assert!(plan.is_minimal());
+        assert!(plan.diagnostics.minimal_plan_no_scene_work);
+    }
+
+    /// Pass 1 — typed acceptance: a change signal flagging
+    /// `lights_changed` produces targeted light / cluster /
+    /// shadow updates.
+    #[test]
+    fn lux_frame_planner_emits_light_cluster_shadow_updates_on_light_change() {
+        use fun_renderer::fun_lux::{
+            LuxFramePlanner, LuxPassKind, LuxSceneChangeSignal, LuxSceneId,
         };
-        assert!(
-            !future_when_real_lux_lands.permits_noop_lux_core_under_production_route(),
-            "once real lux execution is available, NoopLuxCore must be refused for production",
-        );
+        let mut planner = LuxFramePlanner::product_default();
+        planner.current_light_count = 16;
+        let dirty = LuxSceneChangeSignal::light_changed(LuxSceneId::PROOF_SCENE, 1);
+        let plan = planner.build_frame_plan(1, &[dirty]);
+        assert_eq!(plan.scene_plans.len(), 1);
+        let scene = &plan.scene_plans[0];
+        assert!(scene.emitted_work());
+        let kinds: Vec<LuxPassKind> = scene.passes.iter().map(|p| p.kind()).collect();
+        assert!(kinds.contains(&LuxPassKind::UploadLightBuffers));
+        assert!(kinds.contains(&LuxPassKind::ClusterLights));
+        assert!(kinds.contains(&LuxPassKind::BuildShadowRequests));
+        assert!(kinds.contains(&LuxPassKind::DirectLighting));
+        // Targeted resources confirm "lights changed" drove
+        // the typed light / cluster / shadow resource emits.
+        assert!(scene.lights_changed_resources_emitted());
     }
 }
