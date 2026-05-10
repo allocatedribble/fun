@@ -77,6 +77,29 @@ pub enum FrameGraphPassRole {
     Compose,
     DiagnosticsReadback,
     Present,
+    // Pass 3 — typed Lux roles. The renderer's
+    // `LuxGraphCompiler` (in `lux_graph.rs`) translates
+    // every `fun_lux::LuxPassRequest` variant into one of
+    // these typed roles; the renderer-side scheduler reads
+    // the typed role to pick the live pipeline.
+    LuxUploadLightBuffers,
+    LuxClusterLights,
+    LuxReservoirTemporalReuse,
+    LuxReservoirSpatialReuse,
+    LuxShadowRequests,
+    LuxVirtualShadowPages,
+    LuxVirtualShadowFilter,
+    LuxDirectLighting,
+    LuxGiTrace,
+    LuxGiCacheUpdate,
+    LuxReflectionTrace,
+    LuxDenoise,
+    LuxVolumetricFogInject,
+    LuxVolumetricLightInject,
+    LuxVolumetricTemporalReproject,
+    LuxVolumetricIntegrate,
+    LuxVolumetricComposite,
+    LuxDebugOverlay,
 }
 
 impl FrameGraphPassRole {
@@ -100,7 +123,82 @@ impl FrameGraphPassRole {
             Self::Compose => "compose",
             Self::DiagnosticsReadback => "diagnostics_readback",
             Self::Present => "present",
+            Self::LuxUploadLightBuffers => "lux_upload_light_buffers",
+            Self::LuxClusterLights => "lux_cluster_lights",
+            Self::LuxReservoirTemporalReuse => "lux_reservoir_temporal_reuse",
+            Self::LuxReservoirSpatialReuse => "lux_reservoir_spatial_reuse",
+            Self::LuxShadowRequests => "lux_shadow_requests",
+            Self::LuxVirtualShadowPages => "lux_virtual_shadow_pages",
+            Self::LuxVirtualShadowFilter => "lux_virtual_shadow_filter",
+            Self::LuxDirectLighting => "lux_direct_lighting",
+            Self::LuxGiTrace => "lux_gi_trace",
+            Self::LuxGiCacheUpdate => "lux_gi_cache_update",
+            Self::LuxReflectionTrace => "lux_reflection_trace",
+            Self::LuxDenoise => "lux_denoise",
+            Self::LuxVolumetricFogInject => "lux_volumetric_fog_inject",
+            Self::LuxVolumetricLightInject => "lux_volumetric_light_inject",
+            Self::LuxVolumetricTemporalReproject => "lux_volumetric_temporal_reproject",
+            Self::LuxVolumetricIntegrate => "lux_volumetric_integrate",
+            Self::LuxVolumetricComposite => "lux_volumetric_composite",
+            Self::LuxDebugOverlay => "lux_debug_overlay",
         }
+    }
+
+    /// Typed predicate: is this role a Pass 3 Lux role?
+    /// `LuxGraphCompiler` uses this to filter passes the
+    /// renderer schedules through the lux scheduling lane.
+    #[must_use]
+    pub const fn is_lux(self) -> bool {
+        matches!(
+            self,
+            Self::LuxUploadLightBuffers
+                | Self::LuxClusterLights
+                | Self::LuxReservoirTemporalReuse
+                | Self::LuxReservoirSpatialReuse
+                | Self::LuxShadowRequests
+                | Self::LuxVirtualShadowPages
+                | Self::LuxVirtualShadowFilter
+                | Self::LuxDirectLighting
+                | Self::LuxGiTrace
+                | Self::LuxGiCacheUpdate
+                | Self::LuxReflectionTrace
+                | Self::LuxDenoise
+                | Self::LuxVolumetricFogInject
+                | Self::LuxVolumetricLightInject
+                | Self::LuxVolumetricTemporalReproject
+                | Self::LuxVolumetricIntegrate
+                | Self::LuxVolumetricComposite
+                | Self::LuxDebugOverlay
+        )
+    }
+
+    /// Pass 3 typed ordering key for Lux passes. Roles outside
+    /// the Lux lane return `None`; the typed key positions Lux
+    /// passes between scene/depth (≤ 50) and post-processing
+    /// (≥ 500).
+    #[must_use]
+    pub const fn lux_order_key(self) -> Option<u16> {
+        Some(match self {
+            Self::LuxUploadLightBuffers => 100,
+            Self::LuxClusterLights => 110,
+            Self::LuxReservoirTemporalReuse => 115,
+            Self::LuxReservoirSpatialReuse => 116,
+            Self::LuxShadowRequests => 120,
+            Self::LuxVirtualShadowPages => 130,
+            Self::LuxVirtualShadowFilter => 135,
+            Self::LuxDirectLighting => 200,
+            Self::LuxGiTrace => 210,
+            Self::LuxGiCacheUpdate => 215,
+            Self::LuxReflectionTrace => 220,
+            Self::LuxDenoise => 230,
+            Self::LuxVolumetricFogInject => 300,
+            Self::LuxVolumetricLightInject => 310,
+            Self::LuxVolumetricTemporalReproject => 320,
+            Self::LuxVolumetricIntegrate => 330,
+            Self::LuxVolumetricComposite => 340,
+            Self::LuxDebugOverlay => 900,
+            _ => return None,
+        })
     }
 }
 
@@ -124,10 +222,32 @@ pub enum FrameGraphResourceType {
     FinalComposedOutput,
     TransientScratch,
     HistoryBuffer,
+    // Pass 3 — typed Lux resource types. The renderer's
+    // `LuxGraphCompiler` maps every `fun_lux::LuxResourceIntent`
+    // variant onto one of these typed resource types; the
+    // renderer-side allocator reads the typed type + the
+    // typed `lux_resources::LuxResourceLifetime` classifier
+    // to pick the right `wgpu` allocation.
+    LuxLightBuffer,
+    LuxLightIndexBuffer,
+    LuxClusterGrid,
+    LuxReservoirBuffer,
+    LuxShadowRequestBuffer,
+    LuxShadowAtlas,
+    LuxVirtualShadowPages,
+    LuxSurfaceCache,
+    LuxRadianceCache,
+    LuxProbeCache,
+    LuxReflectionBuffer,
+    LuxDenoiseHistory,
+    LuxVolumetricFroxelDensity,
+    LuxVolumetricFroxelScattering,
+    LuxVolumetricIntegratedFog,
+    LuxVolumetricHistory,
 }
 
 impl FrameGraphResourceType {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 34] = [
         Self::RenderResolutionSceneColor,
         Self::DisplayResolutionSceneColor,
         Self::Depth,
@@ -146,6 +266,22 @@ impl FrameGraphResourceType {
         Self::FinalComposedOutput,
         Self::TransientScratch,
         Self::HistoryBuffer,
+        Self::LuxLightBuffer,
+        Self::LuxLightIndexBuffer,
+        Self::LuxClusterGrid,
+        Self::LuxReservoirBuffer,
+        Self::LuxShadowRequestBuffer,
+        Self::LuxShadowAtlas,
+        Self::LuxVirtualShadowPages,
+        Self::LuxSurfaceCache,
+        Self::LuxRadianceCache,
+        Self::LuxProbeCache,
+        Self::LuxReflectionBuffer,
+        Self::LuxDenoiseHistory,
+        Self::LuxVolumetricFroxelDensity,
+        Self::LuxVolumetricFroxelScattering,
+        Self::LuxVolumetricIntegratedFog,
+        Self::LuxVolumetricHistory,
     ];
 
     #[must_use]
@@ -169,7 +305,48 @@ impl FrameGraphResourceType {
             Self::FinalComposedOutput => "final_composed_output",
             Self::TransientScratch => "transient_scratch",
             Self::HistoryBuffer => "history_buffer",
+            Self::LuxLightBuffer => "lux_light_buffer",
+            Self::LuxLightIndexBuffer => "lux_light_index_buffer",
+            Self::LuxClusterGrid => "lux_cluster_grid",
+            Self::LuxReservoirBuffer => "lux_reservoir_buffer",
+            Self::LuxShadowRequestBuffer => "lux_shadow_request_buffer",
+            Self::LuxShadowAtlas => "lux_shadow_atlas",
+            Self::LuxVirtualShadowPages => "lux_virtual_shadow_pages",
+            Self::LuxSurfaceCache => "lux_surface_cache",
+            Self::LuxRadianceCache => "lux_radiance_cache",
+            Self::LuxProbeCache => "lux_probe_cache",
+            Self::LuxReflectionBuffer => "lux_reflection_buffer",
+            Self::LuxDenoiseHistory => "lux_denoise_history",
+            Self::LuxVolumetricFroxelDensity => "lux_volumetric_froxel_density",
+            Self::LuxVolumetricFroxelScattering => "lux_volumetric_froxel_scattering",
+            Self::LuxVolumetricIntegratedFog => "lux_volumetric_integrated_fog",
+            Self::LuxVolumetricHistory => "lux_volumetric_history",
         }
+    }
+
+    /// Typed predicate: is this resource type a Pass 3 Lux
+    /// resource type?
+    #[must_use]
+    pub const fn is_lux(self) -> bool {
+        matches!(
+            self,
+            Self::LuxLightBuffer
+                | Self::LuxLightIndexBuffer
+                | Self::LuxClusterGrid
+                | Self::LuxReservoirBuffer
+                | Self::LuxShadowRequestBuffer
+                | Self::LuxShadowAtlas
+                | Self::LuxVirtualShadowPages
+                | Self::LuxSurfaceCache
+                | Self::LuxRadianceCache
+                | Self::LuxProbeCache
+                | Self::LuxReflectionBuffer
+                | Self::LuxDenoiseHistory
+                | Self::LuxVolumetricFroxelDensity
+                | Self::LuxVolumetricFroxelScattering
+                | Self::LuxVolumetricIntegratedFog
+                | Self::LuxVolumetricHistory
+        )
     }
 }
 
@@ -433,6 +610,17 @@ pub enum FrameGraphValidationFailureCode {
     UpscaleContractBroken,
     FrameGenerationContractBroken,
     InvalidResourceHandle,
+    /// Pass 3 — a Lux pass reads a resource that no
+    /// upstream pass writes (the typed contract demands
+    /// every read be backed by a typed write).
+    LuxPassReadsUnwrittenResource,
+    /// Pass 3 — a Lux pass appears out of order against
+    /// its typed `lux_order_key`.
+    LuxPassOrderViolation,
+    /// Pass 3 — a Lux pass declared neither reads nor
+    /// writes (every typed Lux pass MUST declare at least
+    /// one resource interaction).
+    LuxPassDeclaresNoReadsOrWrites,
 }
 
 impl FrameGraphValidationFailureCode {
@@ -447,6 +635,9 @@ impl FrameGraphValidationFailureCode {
             Self::UpscaleContractBroken => "upscale_contract_broken",
             Self::FrameGenerationContractBroken => "frame_generation_contract_broken",
             Self::InvalidResourceHandle => "invalid_resource_handle",
+            Self::LuxPassReadsUnwrittenResource => "lux_pass_reads_unwritten_resource",
+            Self::LuxPassOrderViolation => "lux_pass_order_violation",
+            Self::LuxPassDeclaresNoReadsOrWrites => "lux_pass_declares_no_reads_or_writes",
         }
     }
 }

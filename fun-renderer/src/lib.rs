@@ -30,6 +30,14 @@ pub mod ir;
 pub mod lighting_stack;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub mod live_proof_frame_executor;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_diagnostics;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_graph;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_passes;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_resources;
 #[cfg(feature = "experimental_renderer_ml")]
 pub mod ml;
 pub mod page;
@@ -947,6 +955,14 @@ pub use ir::*;
 pub use lighting_stack::*;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub use live_proof_frame_executor::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_diagnostics::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_graph::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_passes::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_resources::*;
 #[cfg(feature = "experimental_renderer_ml")]
 pub use ml::*;
 pub use page::*;
