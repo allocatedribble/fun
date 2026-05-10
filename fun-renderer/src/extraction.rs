@@ -515,6 +515,8 @@ pub struct ExtractedUiSurface {
     pub composite_order: UiCompositeOrder,
     pub opacity: UiOpacity,
     pub color_space: UiColorSpace,
+    pub target_rect: UiTargetRect,
+    pub debug_border: UiDebugBorder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -523,6 +525,7 @@ pub struct ExtractedCefSurface {
     pub surface: CefSurface,
     pub producer: CefFrameProducer,
     pub health: CefSurfaceHealth,
+    pub latest_frame_token: CefFrameToken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1167,6 +1170,8 @@ pub fn extract_renderer_ui_surfaces(
             Option<&UiCompositeOrder>,
             Option<&UiOpacity>,
             Option<&UiColorSpace>,
+            Option<&UiTargetRect>,
+            Option<&UiDebugBorder>,
         ),
         Or<(
             Added<UiSurface>,
@@ -1175,6 +1180,8 @@ pub fn extract_renderer_ui_surfaces(
             Changed<UiCompositeOrder>,
             Changed<UiOpacity>,
             Changed<UiColorSpace>,
+            Changed<UiTargetRect>,
+            Changed<UiDebugBorder>,
         )>,
     >,
     mut removed: RemovedComponents<UiSurface>,
@@ -1183,7 +1190,17 @@ pub fn extract_renderer_ui_surfaces(
     mut diagnostics: ResMut<RenderWorldExtractionDiagnostics>,
 ) {
     let started_at = Instant::now();
-    for (entity, surface, layer, composite_order, opacity, color_space) in query.iter() {
+    for (
+        entity,
+        surface,
+        layer,
+        composite_order,
+        opacity,
+        color_space,
+        target_rect,
+        debug_border,
+    ) in query.iter()
+    {
         diagnostics.queried_entities = diagnostics.queried_entities.saturating_add(1);
         diagnostics.changed_entities = diagnostics.changed_entities.saturating_add(1);
         let (stable_id, _) =
@@ -1197,6 +1214,8 @@ pub fn extract_renderer_ui_surfaces(
             composite_order: composite_order.copied().unwrap_or_default(),
             opacity: opacity.copied().unwrap_or_default(),
             color_space: color_space.copied().unwrap_or_default(),
+            target_rect: target_rect.copied().unwrap_or(UiTargetRect::FULL_WINDOW),
+            debug_border: debug_border.copied().unwrap_or(UiDebugBorder::OFF),
         });
         diagnostics.extracted_ui_surfaces = diagnostics.extracted_ui_surfaces.saturating_add(1);
     }
@@ -1219,12 +1238,14 @@ pub fn extract_renderer_cef_surfaces(
             &CefSurface,
             Option<&CefFrameProducer>,
             Option<&CefSurfaceHealth>,
+            Option<&CefFrameToken>,
         ),
         Or<(
             Added<CefSurface>,
             Changed<CefSurface>,
             Changed<CefFrameProducer>,
             Changed<CefSurfaceHealth>,
+            Changed<CefFrameToken>,
         )>,
     >,
     mut removed: RemovedComponents<CefSurface>,
@@ -1233,7 +1254,7 @@ pub fn extract_renderer_cef_surfaces(
     mut diagnostics: ResMut<RenderWorldExtractionDiagnostics>,
 ) {
     let started_at = Instant::now();
-    for (entity, surface, producer, health) in query.iter() {
+    for (entity, surface, producer, health, token) in query.iter() {
         diagnostics.queried_entities = diagnostics.queried_entities.saturating_add(1);
         diagnostics.changed_entities = diagnostics.changed_entities.saturating_add(1);
         let (stable_id, _) =
@@ -1245,6 +1266,7 @@ pub fn extract_renderer_cef_surfaces(
             surface: *surface,
             producer: producer.copied().unwrap_or_default(),
             health: health.copied().unwrap_or_default(),
+            latest_frame_token: token.copied().unwrap_or(CefFrameToken::INVALID),
         });
         diagnostics.extracted_cef_surfaces = diagnostics.extracted_cef_surfaces.saturating_add(1);
     }

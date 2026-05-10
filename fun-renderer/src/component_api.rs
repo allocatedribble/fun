@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::Component;
 
 pub const RENDERER_COMPONENT_API_SCHEMA_VERSION: u16 = 1;
-pub const PUBLIC_RENDER_COMPONENT_COUNT: usize = 43;
+pub const PUBLIC_RENDER_COMPONENT_COUNT: usize = 46;
 pub const PUBLIC_RENDER_ASSET_COUNT: usize = 7;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -635,6 +635,85 @@ pub enum UiColorSpace {
     Hdr10,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Component)]
+pub struct UiTargetRect {
+    pub origin_x: f32,
+    pub origin_y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl UiTargetRect {
+    pub const FULL_WINDOW: Self = Self {
+        origin_x: 0.0,
+        origin_y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    #[must_use]
+    pub const fn new(origin_x: f32, origin_y: f32, width: f32, height: f32) -> Self {
+        Self {
+            origin_x,
+            origin_y,
+            width,
+            height,
+        }
+    }
+
+    #[must_use]
+    pub fn is_full_window(self) -> bool {
+        self == Self::FULL_WINDOW
+    }
+
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.width > 0.0
+            && self.height > 0.0
+            && self.origin_x.is_finite()
+            && self.origin_y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Component)]
+pub enum UiDebugBorderStyle {
+    #[default]
+    Off,
+    Hairline,
+    Filled,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Component)]
+pub struct UiDebugBorder {
+    pub style: UiDebugBorderStyle,
+    pub color: RenderColor,
+    pub thickness_px: f32,
+}
+
+impl UiDebugBorder {
+    pub const OFF: Self = Self {
+        style: UiDebugBorderStyle::Off,
+        color: RenderColor::WHITE,
+        thickness_px: 0.0,
+    };
+
+    #[must_use]
+    pub const fn hairline(color: RenderColor) -> Self {
+        Self {
+            style: UiDebugBorderStyle::Hairline,
+            color,
+            thickness_px: 1.0,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        !matches!(self.style, UiDebugBorderStyle::Off)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
 pub enum CefTransportMode {
     GpuSharedTexture,
@@ -663,6 +742,40 @@ impl Default for CefSurface {
 pub struct CefFrameProducer {
     pub producer_id: RenderStableId,
     pub max_frame_rate_hz: u16,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
+pub struct CefFrameToken {
+    pub frame_index: u64,
+    pub fence_value: u64,
+    pub producer: RenderStableId,
+}
+
+impl CefFrameToken {
+    pub const INVALID: Self = Self {
+        frame_index: 0,
+        fence_value: 0,
+        producer: RenderStableId::INVALID,
+    };
+
+    #[must_use]
+    pub const fn new(producer: RenderStableId, frame_index: u64, fence_value: u64) -> Self {
+        Self {
+            frame_index,
+            fence_value,
+            producer,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.producer.is_valid() && self.frame_index != 0
+    }
+
+    #[must_use]
+    pub const fn newer_than(self, other: Self) -> bool {
+        self.frame_index > other.frame_index
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1121,6 +1234,16 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
         ChangeDetectionPolicy::BevyChanged,
     ),
     component(
+        "UiTargetRect",
+        ComponentTemperature::Hot,
+        ChangeDetectionPolicy::BevyChanged,
+    ),
+    component(
+        "UiDebugBorder",
+        ComponentTemperature::Cold,
+        ChangeDetectionPolicy::BevyChanged,
+    ),
+    component(
         "CefSurface",
         ComponentTemperature::Cold,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
@@ -1128,6 +1251,11 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "CefFrameProducer",
         ComponentTemperature::Cold,
+        ChangeDetectionPolicy::DirtyBitsOrEvents,
+    ),
+    component(
+        "CefFrameToken",
+        ComponentTemperature::Hot,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
     ),
     component(
@@ -1274,9 +1402,12 @@ mod tests {
         assert_component::<UiCompositeOrder>();
         assert_component::<UiOpacity>();
         assert_component::<UiColorSpace>();
+        assert_component::<UiTargetRect>();
+        assert_component::<UiDebugBorder>();
         assert_component::<CefTransportMode>();
         assert_component::<CefSurface>();
         assert_component::<CefFrameProducer>();
+        assert_component::<CefFrameToken>();
         assert_component::<CefSurfaceHealth>();
         assert_component::<ToneMappingSettings>();
         assert_component::<BloomSettings>();
@@ -1334,8 +1465,11 @@ mod tests {
             "UiCompositeOrder",
             "UiOpacity",
             "UiColorSpace",
+            "UiTargetRect",
+            "UiDebugBorder",
             "CefSurface",
             "CefFrameProducer",
+            "CefFrameToken",
             "CefTransportMode",
             "CefSurfaceHealth",
             "ToneMappingSettings",
