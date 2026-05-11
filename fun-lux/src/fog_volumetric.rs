@@ -473,7 +473,13 @@ impl LuxQ16Vec3 {
 
 /// Typed fog-volume parameters.  Encodes the 13 user-spec
 /// fields plus a typed `shape` + `schema_version`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Derives `Default` so the typed sub-bundles
+/// (`LuxGlobalFogSettings`, `LuxHeightFogSettings`) can
+/// derive `Default` cleanly; every field is itself
+/// `Default` (primitives + typed enums with `#[default]`
+/// + the typed Q16 primitives).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LuxFogVolumeParameters {
     pub schema_version: u16,
     pub shape: LuxFogVolumeShape,

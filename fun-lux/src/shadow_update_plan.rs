@@ -401,7 +401,10 @@ impl LuxShadowUpdateDecision {
         let base = (self.base.priority as u32) << 8;
         let salience = self.receiver_salience_q8 as u32;
         // Cost penalty: subtract the high byte of cost.
-        let penalty = (self.estimated_update_cost_us_q8 >> 16).min(255);
+        // `<u32 as Ord>::min` is not yet const, so we
+        // inline the clamp.
+        let cost_high = self.estimated_update_cost_us_q8 >> 16;
+        let penalty = if cost_high < 255 { cost_high } else { 255 };
         base.saturating_add(salience).saturating_sub(penalty)
     }
 

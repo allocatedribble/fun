@@ -202,10 +202,14 @@ impl LuxManyLightOverflowCounters {
         if self.total_candidates == 0 {
             return 0;
         }
-        let scaled = self
-            .overflowed_candidates
-            .saturating_mul(65_536)
-            .min(u32::MAX as u64);
+        let mul = self.overflowed_candidates.saturating_mul(65_536);
+        // `<u64 as Ord>::min` is not yet const, so we
+        // inline the clamp.
+        let scaled = if mul < u32::MAX as u64 {
+            mul
+        } else {
+            u32::MAX as u64
+        };
         let ratio = scaled / self.total_candidates;
         if ratio > u32::MAX as u64 {
             u32::MAX
