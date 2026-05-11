@@ -11,6 +11,8 @@ pub mod binding;
 // the typed `fun_render::sky` module stays as a typed
 // bridge / migration donor that extracts settings,
 // weather, and signals from the typed Bevy app world.
+#[cfg(feature = "wgpu_bridge")]
+pub mod bridge;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
@@ -24,9 +26,9 @@ pub mod cloud_shaders;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shadow_passes;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod clouds;
-#[cfg(feature = "wgpu_bridge")]
-pub mod bridge;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
 pub mod default_flip;
@@ -57,7 +59,11 @@ pub mod live_proof_frame_executor;
 pub mod lux_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_graph;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge", feature = "fun_renderer_core"))]
+#[cfg(all(
+    feature = "bevy_ecs",
+    feature = "wgpu_bridge",
+    feature = "fun_renderer_core"
+))]
 pub mod lux_live_lighting;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_passes;
@@ -117,8 +123,6 @@ pub mod settings;
 pub mod shader;
 #[cfg(feature = "bevy_ecs")]
 pub mod taa;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub mod tonemap_pass;
 #[cfg(feature = "bevy_ecs")]
 pub mod tier0_proof_frame_gate;
 #[cfg(feature = "bevy_ecs")]
@@ -137,6 +141,8 @@ pub mod tier6_native_ui_rendering;
 pub mod tier7_vendor_sdks_and_frame_generation;
 #[cfg(feature = "bevy_ecs")]
 pub mod tier8_direct_backend_experiments;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod tonemap_pass;
 pub mod ui;
 pub mod upscaling;
 #[cfg(feature = "bevy_ecs")]
@@ -978,6 +984,8 @@ pub use cloud_shaders::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shadow_passes::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use clouds::*;
 #[cfg(feature = "bevy_ecs")]
 pub use component_api::*;
@@ -1005,12 +1013,14 @@ pub use exposure_pass::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use hdr_pipeline::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub use tonemap_pass::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_diagnostics::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_graph::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge", feature = "fun_renderer_core"))]
+#[cfg(all(
+    feature = "bevy_ecs",
+    feature = "wgpu_bridge",
+    feature = "fun_renderer_core"
+))]
 pub use lux_live_lighting::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_passes::*;
@@ -1086,6 +1096,8 @@ pub use tier6_native_ui_rendering::*;
 pub use tier7_vendor_sdks_and_frame_generation::*;
 #[cfg(feature = "bevy_ecs")]
 pub use tier8_direct_backend_experiments::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use tonemap_pass::*;
 pub use ui::*;
 #[cfg(feature = "bevy_ecs")]
 pub use vendor_sdk_bridge::*;

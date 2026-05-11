@@ -316,10 +316,24 @@ pub enum FrameGraphResourceType {
     CloudWorldShadowTransmittance,
     CloudWorldShadowFiltered,
     CloudShadowProjectionConstants,
+    // Pass C7.4.5 — typed cloud shadow input + aux-layer
+    // resources.  The typed `LuxCloudShadowProject` pass
+    // reads the typed `CloudWeatherMap` + `CloudShapeNoise`
+    // (sourced from the typed cloud raymarch's persistent
+    // texture set) and writes the typed projected
+    // transmittance.  The typed `LuxCloudShadowRegisterLayer`
+    // pass writes the typed `CloudShadowAuxLayer` metadata
+    // resource the typed `LuxDirectLighting` pass will read
+    // in a typed later sub-pass to sample the typed filtered
+    // cloud shadow alongside the typed Lux virtual shadow
+    // pages.
+    CloudWeatherMap,
+    CloudShapeNoise,
+    CloudShadowAuxLayer,
 }
 
 impl FrameGraphResourceType {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 40] = [
         Self::RenderResolutionSceneColor,
         Self::DisplayResolutionSceneColor,
         Self::Depth,
@@ -358,6 +372,12 @@ impl FrameGraphResourceType {
         Self::CloudWorldShadowTransmittance,
         Self::CloudWorldShadowFiltered,
         Self::CloudShadowProjectionConstants,
+        // Pass C7.4.5 — typed cloud shadow input + aux-layer
+        // resources (project pass reads + register-layer pass
+        // writes).
+        Self::CloudWeatherMap,
+        Self::CloudShapeNoise,
+        Self::CloudShadowAuxLayer,
     ];
 
     #[must_use]
@@ -400,6 +420,9 @@ impl FrameGraphResourceType {
             Self::CloudWorldShadowTransmittance => "cloud_world_shadow_transmittance",
             Self::CloudWorldShadowFiltered => "cloud_world_shadow_filtered",
             Self::CloudShadowProjectionConstants => "cloud_shadow_projection_constants",
+            Self::CloudWeatherMap => "cloud_weather_map",
+            Self::CloudShapeNoise => "cloud_shape_noise",
+            Self::CloudShadowAuxLayer => "cloud_shadow_aux_layer",
         }
     }
 

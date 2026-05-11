@@ -197,6 +197,17 @@ impl From<FrameGraphResourceType> for Tier4ResourceTypeOption {
             FrameGraphResourceType::CloudWorldShadowFiltered => Self::LuxPersistent,
             FrameGraphResourceType::CloudWorldShadowTransmittance
             | FrameGraphResourceType::CloudShadowProjectionConstants => Self::LuxFrameLocal,
+            // Pass C7.4.5 — typed cloud-shadow input + aux-layer
+            // resources.  The typed `CloudWeatherMap` +
+            // `CloudShapeNoise` textures are typed persistent
+            // (loaded at boot, sampled every frame, advected
+            // via the typed wind history but never recreated).
+            // The typed `CloudShadowAuxLayer` is typed persistent
+            // because the typed one-frame-delayed mode reads the
+            // typed PREVIOUS frame's aux-layer metadata.
+            FrameGraphResourceType::CloudWeatherMap
+            | FrameGraphResourceType::CloudShapeNoise
+            | FrameGraphResourceType::CloudShadowAuxLayer => Self::LuxPersistent,
         }
     }
 }
