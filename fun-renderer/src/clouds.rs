@@ -301,6 +301,26 @@ impl CloudWeatherProfileId {
     pub const fn is_builtin(self) -> bool {
         !matches!(self, Self::Custom)
     }
+
+    /// Typed Pass C7.4 cloud slab — typed `(base, top)`
+    /// altitudes in meters where the typed profile's cloud
+    /// volume sits.  Drives the typed
+    /// `CloudShadowProjectionConstants::cloud_base_meters` +
+    /// `cloud_top_meters` fields.  Every typed profile
+    /// returns a typed non-empty slab (`top > base`) — an
+    /// invalid slab is reserved for the typed `DISABLED`
+    /// projection constant.
+    #[must_use]
+    pub const fn cloud_slab_meters(self) -> (u32, u32) {
+        match self {
+            Self::Clear => (2_500, 4_500),
+            Self::Scattered => (1_500, 3_500),
+            Self::Overcast => (1_200, 4_000),
+            Self::StormFront => (800, 8_000),
+            Self::CinematicSunset => (2_000, 5_500),
+            Self::Custom => (1_500, 3_500),
+        }
+    }
 }
 
 // ============================================================================
@@ -559,6 +579,25 @@ mod tests {
         }
         assert_eq!(builtin_count, 5);
         assert!(!CloudWeatherProfileId::Custom.is_builtin());
+    }
+
+    /// Pass C7.4 acceptance — every typed weather profile
+    /// returns a typed non-empty cloud slab.  Drives the
+    /// typed `CloudShadowProjectionConstants::has_valid_cloud_slab`
+    /// predicate downstream.
+    #[test]
+    fn cloud_weather_profile_id_cloud_slabs_are_non_empty() {
+        for p in CloudWeatherProfileId::ALL {
+            let (base, top) = p.cloud_slab_meters();
+            assert!(
+                top > base,
+                "{:?} reports invalid slab base={} top={}",
+                p,
+                base,
+                top,
+            );
+            assert!(base > 0, "{:?} reports zero base altitude", p);
+        }
     }
 
     /// Pass C1 acceptance — typed Lux-lighting product

@@ -15,7 +15,9 @@
 //! The actual GPU shadow projection pass lives in a later
 //! cloud pass.
 
+use crate::clouds::{CloudQuality, CloudRenderSettings, CloudWeatherProfileId};
 use crate::frame_graph::{FrameGraphPassRole, FrameGraphResourceType};
+use fun_lux::LuxLightId;
 
 pub const FUN_RENDERER_CLOUD_SHADOW_SCHEMA_VERSION: u16 = 1;
 
@@ -233,6 +235,39 @@ impl CloudShadowStorageFormat {
     #[must_use]
     pub const fn is_cheap(self) -> bool {
         matches!(self, Self::R8Unorm)
+    }
+
+    /// Typed Pass C7.4 selector — derive the typed storage
+    /// format from a typed `CloudQuality` tier + a typed
+    /// `debug_readback_active` flag.  Matches the typed
+    /// C7.3 storage defaults:
+    ///
+    ///     Cheap      -> R8Unorm
+    ///     Balanced   -> R16Float
+    ///     Cinematic  -> R16Float, or Rgba16FloatPacked
+    ///                   when the typed debug-readback path
+    ///                   is active (the typed packed format
+    ///                   carries the typed full
+    ///                   `CloudShadowSample` payload).
+    ///
+    /// `CloudQuality::Off` returns `R8Unorm` — the typed
+    /// cheap fallback — but the typed cloud shadow pass
+    /// MUST NOT register at all when quality is `Off`
+    /// (gated by `CloudRenderSettings::registers_world_shadow_pass`).
+    #[must_use]
+    pub const fn for_quality(quality: CloudQuality, debug_readback_active: bool) -> Self {
+        match quality {
+            CloudQuality::Off => Self::R8Unorm,
+            CloudQuality::Cheap => Self::R8Unorm,
+            CloudQuality::Balanced => Self::R16Float,
+            CloudQuality::Cinematic => {
+                if debug_readback_active {
+                    Self::Rgba16FloatPacked
+                } else {
+                    Self::R16Float
+                }
+            }
+        }
     }
 }
 
@@ -564,6 +599,351 @@ pub const CLOUD_SHADOW_PASS_ROLES: &[FrameGraphPassRole] = &[
     FrameGraphPassRole::LuxCloudShadowRegisterLayer,
 ];
 
+// ============================================================================
+// Pass C7.4 — typed cloud shadow projection model + resource diagnostics
+// ============================================================================
+
+/// Typed Pass C7.4 cloud shadow projection mode.  Drives
+/// the typed world → shadow-UV projection strategy the
+/// typed `LuxCloudShadowProject` pass picks.
+///
+/// - `CameraCenteredPlane` — typed initial production
+///   default.  Projects every typed world sample along the
+///   typed sun direction onto a typed horizontal plane at
+///   the typed camera's altitude.  Cheap, stable, hits the
+///   typed product target without cascading.
+/// - `DirectionalLightClipRegion` — fits a typed single
+///   orthographic clip volume to the typed camera frustum
+///   slice up to `max_distance_meters`.  Reserved for a
+///   future tier that wants the typed shadow UV to track
+///   the typed view frustum tightly.
+/// - `CascadedDirectionalRegions` — reserved for the typed
+///   cinematic tier; splits the typed shadow region into
+///   typed multiple cascades.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CloudShadowProjectionMode {
+    #[default]
+    CameraCenteredPlane,
+    DirectionalLightClipRegion,
+    CascadedDirectionalRegions,
+}
+
+impl CloudShadowProjectionMode {
+    pub const ALL: [Self; 3] = [
+        Self::CameraCenteredPlane,
+        Self::DirectionalLightClipRegion,
+        Self::CascadedDirectionalRegions,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CameraCenteredPlane => "camera_centered_plane",
+            Self::DirectionalLightClipRegion => "directional_light_clip_region",
+            Self::CascadedDirectionalRegions => "cascaded_directional_regions",
+        }
+    }
+
+    /// Typed predicate: is this typed mode the typed initial
+    /// production default?
+    #[must_use]
+    pub const fn is_initial_production_default(self) -> bool {
+        matches!(self, Self::CameraCenteredPlane)
+    }
+}
+
+/// Typed Pass C7.4 cloud shadow projection constants.  CPU
+/// builder for the typed GPU uniform consumed by the typed
+/// `LuxCloudShadowProject` + `LuxCloudShadowFilter` passes.
+///
+/// The typed `world_from_shadow_uv` + `shadow_uv_from_world`
+/// matrices encode the typed world ↔ shadow-UV transform
+/// (row-major `[row][col]`).  The typed `sun_direction_ws`
+/// is the typed normalized sun direction in world space;
+/// the typed cloud raymarch projects samples along this
+/// vector onto the typed shadow plane.
+///
+/// `Eq + Hash` are intentionally NOT derived — the typed
+/// struct carries `f32` fields which are not `Eq`.  This
+/// is a CPU-side builder shape; the typed GPU uniform
+/// layout is responsible for its own padding + alignment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct CloudShadowProjectionConstants {
+    pub schema_version: u16,
+    pub mode: CloudShadowProjectionMode,
+    pub light_id: LuxLightId,
+    pub world_from_shadow_uv: [[f32; 4]; 4],
+    pub shadow_uv_from_world: [[f32; 4]; 4],
+    pub sun_direction_ws: [f32; 3],
+    pub cloud_base_meters: f32,
+    pub cloud_top_meters: f32,
+    pub max_distance_meters: f32,
+    pub opacity_scale: f32,
+    pub softness: f32,
+    pub frame_index: u32,
+}
+
+impl CloudShadowProjectionConstants {
+    /// Typed disabled projection.  Every typed predicate
+    /// returns `false`; downstream passes that consume the
+    /// typed constants gate cleanly on the typed predicates.
+    pub const DISABLED: Self = Self {
+        schema_version: FUN_RENDERER_CLOUD_SHADOW_SCHEMA_VERSION,
+        mode: CloudShadowProjectionMode::CameraCenteredPlane,
+        light_id: LuxLightId::INVALID,
+        world_from_shadow_uv: [[0.0; 4]; 4],
+        shadow_uv_from_world: [[0.0; 4]; 4],
+        sun_direction_ws: [0.0, 0.0, 0.0],
+        cloud_base_meters: 0.0,
+        cloud_top_meters: 0.0,
+        max_distance_meters: 0.0,
+        opacity_scale: 0.0,
+        softness: 0.0,
+        frame_index: 0,
+    };
+
+    /// Typed Pass C7.4 builder.  Derives typed projection
+    /// constants from the typed inputs:
+    ///
+    /// - `settings` — typed `CloudRenderSettings` (gates the
+    ///   pass via `registers_world_shadow_pass()` + supplies
+    ///   the typed opacity / softness / max-distance fields).
+    /// - `profile` — typed weather profile id (supplies the
+    ///   typed cloud slab altitudes).
+    /// - `light_id` — typed primary Lux directional light id
+    ///   that owns the typed shadow layer (`INVALID` →
+    ///   `DISABLED`).
+    /// - `sun_direction_ws` — typed normalized sun direction
+    ///   in world space.  Caller-supplied; a typed zero
+    ///   vector → `DISABLED`.
+    /// - `frame_index` — typed frame index used for the
+    ///   typed temporal jitter / cache invalidation.
+    ///
+    /// Returns the typed `DISABLED` constants when:
+    /// 1. `settings.registers_world_shadow_pass()` is false.
+    /// 2. The typed `light_id` is `INVALID`.
+    /// 3. The typed `sun_direction_ws` is the zero vector.
+    /// 4. The typed weather profile reports an invalid slab.
+    #[must_use]
+    pub fn from_inputs(
+        settings: &CloudRenderSettings,
+        profile: CloudWeatherProfileId,
+        light_id: LuxLightId,
+        sun_direction_ws: [f32; 3],
+        frame_index: u32,
+    ) -> Self {
+        if !settings.registers_world_shadow_pass() {
+            return Self::DISABLED;
+        }
+        if !light_id.is_valid() {
+            return Self::DISABLED;
+        }
+        let [sx, sy, sz] = sun_direction_ws;
+        let sun_norm_sq = sx * sx + sy * sy + sz * sz;
+        if sun_norm_sq <= f32::EPSILON {
+            return Self::DISABLED;
+        }
+        let (base_u32, top_u32) = profile.cloud_slab_meters();
+        if base_u32 >= top_u32 {
+            return Self::DISABLED;
+        }
+        let cloud_base_meters = base_u32 as f32;
+        let cloud_top_meters = top_u32 as f32;
+        let max_distance_meters = settings.world_shadows.max_distance_meters as f32;
+        let opacity_scale = (settings.world_shadows.opacity_scale_q16 as f32) / 65_535.0;
+        let softness = (settings.world_shadows.softness_q16 as f32) / 65_535.0;
+
+        // Typed `CameraCenteredPlane` scaffold projection:
+        // the typed shadow UV space covers a typed
+        // `2 * max_distance_meters` square on the typed
+        // horizontal plane at `cloud_base_meters` altitude,
+        // centered on the world origin (camera will be
+        // re-centered when the typed live camera lands).
+        //
+        //   u = x / (2D) + 0.5
+        //   v = z / (2D) + 0.5
+        //
+        // Stored row-major.  GPU upload reshapes to the
+        // shader-native layout as needed.
+        let d = max_distance_meters.max(1.0);
+        let inv_2d = 1.0 / (2.0 * d);
+        let shadow_uv_from_world = [
+            [inv_2d, 0.0, 0.0, 0.5],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, inv_2d, 0.5],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let world_from_shadow_uv = [
+            [2.0 * d, 0.0, 0.0, -d],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 2.0 * d, -d],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+
+        Self {
+            schema_version: FUN_RENDERER_CLOUD_SHADOW_SCHEMA_VERSION,
+            mode: CloudShadowProjectionMode::CameraCenteredPlane,
+            light_id,
+            world_from_shadow_uv,
+            shadow_uv_from_world,
+            sun_direction_ws,
+            cloud_base_meters,
+            cloud_top_meters,
+            max_distance_meters,
+            opacity_scale,
+            softness,
+            frame_index,
+        }
+    }
+
+    /// Typed predicate: do these typed constants project a
+    /// typed valid directional Lux light?  Requires a typed
+    /// valid `light_id` AND a typed non-zero opacity scale
+    /// (otherwise the typed projection contributes nothing
+    /// to the typed final direct visibility).
+    #[must_use]
+    pub fn projects_directional_lux_light(&self) -> bool {
+        self.light_id.is_valid() && self.opacity_scale > 0.0
+    }
+
+    /// Typed predicate: is the typed cloud slab valid?
+    /// Requires `cloud_top_meters > cloud_base_meters` AND
+    /// `cloud_base_meters >= 0.0`.
+    #[must_use]
+    pub fn has_valid_cloud_slab(&self) -> bool {
+        self.cloud_base_meters >= 0.0
+            && self.cloud_top_meters > self.cloud_base_meters
+    }
+
+    /// Typed predicate: do these typed constants describe a
+    /// typed non-zero shadow region?  Requires a typed
+    /// positive `max_distance_meters` AND a typed positive
+    /// `opacity_scale`.  Softness alone is not sufficient —
+    /// a typed softened zero region is still zero.
+    #[must_use]
+    pub fn has_nonzero_shadow_region(&self) -> bool {
+        self.max_distance_meters > 0.0 && self.opacity_scale > 0.0
+    }
+
+    /// Typed predicate: does this typed constants record
+    /// describe a typed fully-live projection?  Composes
+    /// every typed sub-predicate.
+    #[must_use]
+    pub fn projects_world_shadow(&self) -> bool {
+        self.projects_directional_lux_light()
+            && self.has_valid_cloud_slab()
+            && self.has_nonzero_shadow_region()
+    }
+}
+
+impl Default for CloudShadowProjectionConstants {
+    fn default() -> Self {
+        Self::DISABLED
+    }
+}
+
+/// Typed Pass C7.4 — typed byte size of the typed CPU-side
+/// `CloudShadowProjectionConstants` record.  Drives the
+/// typed `constants_bytes` field in
+/// `CloudShadowResourceDiagnostics`.  GPU upload may pad
+/// or re-pack; this is the typed CPU footprint.
+pub const CLOUD_SHADOW_PROJECTION_CONSTANTS_CPU_BYTES: u64 =
+    core::mem::size_of::<CloudShadowProjectionConstants>() as u64;
+
+/// Typed Pass C7.4 cloud shadow resource diagnostics.  The
+/// typed renderer fills this typed record after it
+/// allocates (or skips) the typed cloud shadow GPU
+/// resources for the frame.  Drives the typed cloud
+/// pipeline debug section + the typed quality-audit gate.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CloudShadowResourceDiagnostics {
+    pub enabled: bool,
+    pub transmittance_format: CloudShadowStorageFormat,
+    pub filtered_format: CloudShadowStorageFormat,
+    pub extent: [u32; 2],
+    pub transmittance_bytes: u64,
+    pub filtered_bytes: u64,
+    pub constants_bytes: u64,
+    pub reallocated_this_frame: bool,
+}
+
+impl CloudShadowResourceDiagnostics {
+    /// Typed cold default — typed pass not registered, no
+    /// typed GPU bytes allocated.
+    pub const COLD_DEFAULT: Self = Self {
+        enabled: false,
+        transmittance_format: CloudShadowStorageFormat::R16Float,
+        filtered_format: CloudShadowStorageFormat::R16Float,
+        extent: [0, 0],
+        transmittance_bytes: 0,
+        filtered_bytes: 0,
+        constants_bytes: 0,
+        reallocated_this_frame: false,
+    };
+
+    /// Typed Pass C7.4 builder.  Derives typed resource
+    /// diagnostics from the typed `CloudRenderSettings` +
+    /// the typed `reallocated_this_frame` flag.  The typed
+    /// `debug_readback_active` flag selects the typed
+    /// `Rgba16FloatPacked` storage format on the typed
+    /// cinematic tier (otherwise stays on `R16Float`).
+    ///
+    /// Returns `COLD_DEFAULT` (with `reallocated_this_frame`
+    /// preserved) when
+    /// `settings.registers_world_shadow_pass()` is false —
+    /// the typed cloud shadow GPU resources MUST NOT be
+    /// allocated when the typed pass is gated off.
+    #[must_use]
+    pub fn from_settings(
+        settings: &CloudRenderSettings,
+        debug_readback_active: bool,
+        reallocated_this_frame: bool,
+    ) -> Self {
+        if !settings.registers_world_shadow_pass() {
+            return Self {
+                reallocated_this_frame,
+                ..Self::COLD_DEFAULT
+            };
+        }
+        let format =
+            CloudShadowStorageFormat::for_quality(settings.quality, debug_readback_active);
+        let (width, height) = settings.world_shadows.resolution.pixel_extent();
+        let extent = [width, height];
+        let pixel_count = (width as u64).saturating_mul(height as u64);
+        let format_bytes = pixel_count.saturating_mul(format.bytes_per_pixel() as u64);
+        Self {
+            enabled: true,
+            transmittance_format: format,
+            filtered_format: format,
+            extent,
+            transmittance_bytes: format_bytes,
+            filtered_bytes: format_bytes,
+            constants_bytes: CLOUD_SHADOW_PROJECTION_CONSTANTS_CPU_BYTES,
+            reallocated_this_frame,
+        }
+    }
+
+    /// Typed predicate: did the typed renderer allocate any
+    /// typed cloud shadow GPU bytes this frame?
+    #[must_use]
+    pub const fn allocated_any_gpu_bytes(&self) -> bool {
+        self.transmittance_bytes > 0
+            || self.filtered_bytes > 0
+            || self.constants_bytes > 0
+    }
+
+    /// Typed total typed GPU bytes the typed cloud shadow
+    /// resources occupy this frame.  Sum of the typed
+    /// transmittance + filtered + constants byte counts.
+    #[must_use]
+    pub const fn total_gpu_bytes(&self) -> u64 {
+        self.transmittance_bytes
+            .saturating_add(self.filtered_bytes)
+            .saturating_add(self.constants_bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,5 +1236,344 @@ mod tests {
             let previous = mode.samples_previous_frame_filtered_shadow();
             assert!(current ^ previous, "{:?} ambiguous", mode);
         }
+    }
+
+    // ========================================================
+    // Pass C7.4 acceptance — typed projection model + typed
+    // resource diagnostics.
+    // ========================================================
+
+    /// Pass C7.4 acceptance — typed `CloudShadowProjectionMode`
+    /// taxonomy is dense; the typed
+    /// `CameraCenteredPlane` variant is the typed initial
+    /// production default.
+    #[test]
+    fn cloud_shadow_projection_mode_taxonomy_walks_user_spec() {
+        assert_eq!(CloudShadowProjectionMode::ALL.len(), 3);
+        let mut seen = std::collections::HashSet::new();
+        for mode in CloudShadowProjectionMode::ALL {
+            assert!(seen.insert(mode.as_str()), "duplicate: {}", mode.as_str());
+        }
+        // Typed initial production default — only the typed
+        // `CameraCenteredPlane` returns `true`.
+        for mode in CloudShadowProjectionMode::ALL {
+            let is_default = mode.is_initial_production_default();
+            assert_eq!(
+                is_default,
+                matches!(mode, CloudShadowProjectionMode::CameraCenteredPlane),
+                "{:?} unexpected default flag",
+                mode,
+            );
+        }
+        // Typed `Default` instance is the typed initial
+        // production default.
+        assert_eq!(
+            CloudShadowProjectionMode::default(),
+            CloudShadowProjectionMode::CameraCenteredPlane,
+        );
+    }
+
+    /// Pass C7.4 acceptance — projection constants can be
+    /// built from `CloudRenderSettings`, weather profile,
+    /// and primary Lux directional light.  Projection
+    /// constants name the Lux light ID that owns the
+    /// shadow layer.
+    #[test]
+    fn cloud_shadow_projection_constants_built_from_inputs() {
+        let settings = CloudRenderSettings::PRODUCT_DEFAULT;
+        let profile = CloudWeatherProfileId::Scattered;
+        let light_id = LuxLightId::new(42);
+        let sun = [0.3, 0.8, 0.5];
+        let frame = 17;
+
+        let cs = CloudShadowProjectionConstants::from_inputs(
+            &settings, profile, light_id, sun, frame,
+        );
+        // Typed constants name the Lux light id.
+        assert_eq!(cs.light_id, light_id);
+        // Typed projection mode defaults to the typed
+        // initial production default.
+        assert_eq!(cs.mode, CloudShadowProjectionMode::CameraCenteredPlane);
+        // Typed cloud slab is the typed profile's slab.
+        let (base, top) = profile.cloud_slab_meters();
+        assert_eq!(cs.cloud_base_meters, base as f32);
+        assert_eq!(cs.cloud_top_meters, top as f32);
+        assert_eq!(cs.frame_index, frame);
+        // Typed sun direction carries through.
+        assert_eq!(cs.sun_direction_ws, sun);
+        // Typed max-distance + opacity-scale + softness
+        // derived from settings.
+        assert_eq!(
+            cs.max_distance_meters,
+            settings.world_shadows.max_distance_meters as f32,
+        );
+        let expected_opacity = (settings.world_shadows.opacity_scale_q16 as f32) / 65_535.0;
+        assert!((cs.opacity_scale - expected_opacity).abs() < 1e-6);
+        let expected_softness = (settings.world_shadows.softness_q16 as f32) / 65_535.0;
+        assert!((cs.softness - expected_softness).abs() < 1e-6);
+        // Typed predicates report a typed fully-live
+        // projection.
+        assert!(cs.projects_directional_lux_light());
+        assert!(cs.has_valid_cloud_slab());
+        assert!(cs.has_nonzero_shadow_region());
+        assert!(cs.projects_world_shadow());
+        // Typed transform matrices round-trip the typed
+        // shadow-UV origin (0.5, 0.5) back to the typed
+        // world origin (within scaffold precision).
+        let d = cs.max_distance_meters;
+        // shadow_uv_from_world applied to world (0,_,0) =
+        // (0.5, _, 0.5, 1) — typed UV center.
+        let u =
+            cs.shadow_uv_from_world[0][0] * 0.0 + cs.shadow_uv_from_world[0][3];
+        let v =
+            cs.shadow_uv_from_world[2][2] * 0.0 + cs.shadow_uv_from_world[2][3];
+        assert!((u - 0.5).abs() < 1e-6);
+        assert!((v - 0.5).abs() < 1e-6);
+        // world_from_shadow_uv applied to UV (0,_,0,1) =
+        // (-D, _, -D, 1) — typed UV (0,0) maps to the
+        // typed `(-max_distance, _, -max_distance)`
+        // corner.
+        let wx =
+            cs.world_from_shadow_uv[0][0] * 0.0 + cs.world_from_shadow_uv[0][3];
+        let wz =
+            cs.world_from_shadow_uv[2][2] * 0.0 + cs.world_from_shadow_uv[2][3];
+        assert!((wx - -d).abs() < 1e-3);
+        assert!((wz - -d).abs() < 1e-3);
+    }
+
+    /// Pass C7.4 acceptance — invalid cloud slab disables
+    /// projection cleanly.  Tested via the typed `DISABLED`
+    /// constant + via a hand-constructed invalid-slab
+    /// instance.
+    #[test]
+    fn cloud_shadow_projection_invalid_slab_disables_cleanly() {
+        // Typed `DISABLED` constant — every typed predicate
+        // returns `false`.
+        let d = CloudShadowProjectionConstants::DISABLED;
+        assert!(!d.projects_directional_lux_light());
+        assert!(!d.has_valid_cloud_slab());
+        assert!(!d.has_nonzero_shadow_region());
+        assert!(!d.projects_world_shadow());
+        assert_eq!(d.light_id, LuxLightId::INVALID);
+        // Typed `Default` is the typed `DISABLED` constant.
+        assert_eq!(CloudShadowProjectionConstants::default(), d);
+
+        // Typed hand-constructed invalid-slab instance —
+        // base >= top → `has_valid_cloud_slab` is false,
+        // but the typed light id + opacity scale + max
+        // distance can still report `true`.  This is the
+        // typed audit precedent for the typed downstream
+        // gate.
+        let mut invalid = CloudShadowProjectionConstants::from_inputs(
+            &CloudRenderSettings::PRODUCT_DEFAULT,
+            CloudWeatherProfileId::Scattered,
+            LuxLightId::new(7),
+            [0.0, 1.0, 0.0],
+            0,
+        );
+        invalid.cloud_base_meters = 5_000.0;
+        invalid.cloud_top_meters = 5_000.0;
+        assert!(!invalid.has_valid_cloud_slab());
+        assert!(!invalid.projects_world_shadow());
+
+        // Typed settings that gate the pass off → typed
+        // `DISABLED` constants.
+        let off = CloudShadowProjectionConstants::from_inputs(
+            &CloudRenderSettings::DISABLED,
+            CloudWeatherProfileId::Scattered,
+            LuxLightId::new(7),
+            [0.0, 1.0, 0.0],
+            0,
+        );
+        assert_eq!(off, CloudShadowProjectionConstants::DISABLED);
+
+        // Typed invalid light id → typed `DISABLED`.
+        let no_light = CloudShadowProjectionConstants::from_inputs(
+            &CloudRenderSettings::PRODUCT_DEFAULT,
+            CloudWeatherProfileId::Scattered,
+            LuxLightId::INVALID,
+            [0.0, 1.0, 0.0],
+            0,
+        );
+        assert_eq!(no_light, CloudShadowProjectionConstants::DISABLED);
+
+        // Typed zero sun direction → typed `DISABLED`.
+        let no_sun = CloudShadowProjectionConstants::from_inputs(
+            &CloudRenderSettings::PRODUCT_DEFAULT,
+            CloudWeatherProfileId::Scattered,
+            LuxLightId::new(7),
+            [0.0, 0.0, 0.0],
+            0,
+        );
+        assert_eq!(no_sun, CloudShadowProjectionConstants::DISABLED);
+    }
+
+    /// Pass C7.4 acceptance — every typed weather profile
+    /// produces a typed valid cloud slab when fed to
+    /// `from_inputs`.
+    #[test]
+    fn cloud_shadow_projection_every_profile_builds_valid_slab() {
+        let settings = CloudRenderSettings::PRODUCT_DEFAULT;
+        let light_id = LuxLightId::new(1);
+        let sun = [0.0, 1.0, 0.0];
+        for profile in CloudWeatherProfileId::ALL {
+            let cs = CloudShadowProjectionConstants::from_inputs(
+                &settings, profile, light_id, sun, 0,
+            );
+            assert!(
+                cs.has_valid_cloud_slab(),
+                "{:?} produced an invalid slab",
+                profile,
+            );
+            assert!(cs.projects_world_shadow(), "{:?} did not project", profile);
+        }
+    }
+
+    /// Pass C7.4 acceptance — typed
+    /// `CloudShadowStorageFormat::for_quality` walks the
+    /// user-spec table:
+    ///   Cheap     -> R8Unorm
+    ///   Balanced  -> R16Float
+    ///   Cinematic -> R16Float | Rgba16FloatPacked (debug)
+    #[test]
+    fn cloud_shadow_storage_format_for_quality_walks_user_spec() {
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Cheap, false),
+            CloudShadowStorageFormat::R8Unorm,
+        );
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Cheap, true),
+            CloudShadowStorageFormat::R8Unorm,
+        );
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Balanced, false),
+            CloudShadowStorageFormat::R16Float,
+        );
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Balanced, true),
+            CloudShadowStorageFormat::R16Float,
+        );
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Cinematic, false),
+            CloudShadowStorageFormat::R16Float,
+        );
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Cinematic, true),
+            CloudShadowStorageFormat::Rgba16FloatPacked,
+        );
+        // Typed `Off` tier returns the typed cheap
+        // fallback; the typed gate happens at
+        // `registers_world_shadow_pass`.
+        assert_eq!(
+            CloudShadowStorageFormat::for_quality(CloudQuality::Off, false),
+            CloudShadowStorageFormat::R8Unorm,
+        );
+    }
+
+    /// Pass C7.4 acceptance — typed cloud shadow resources
+    /// are allocated only when
+    /// `CloudRenderSettings::registers_world_shadow_pass()`
+    /// is true.  Resource allocation respects quality tier.
+    #[test]
+    fn cloud_shadow_resource_diagnostics_gate_on_registers_pass() {
+        // Typed product default → typed allocation runs.
+        let settings = CloudRenderSettings::PRODUCT_DEFAULT;
+        let d = CloudShadowResourceDiagnostics::from_settings(&settings, false, true);
+        assert!(d.enabled);
+        assert_eq!(d.extent, [2048, 2048]);
+        assert_eq!(d.transmittance_format, CloudShadowStorageFormat::R16Float);
+        assert_eq!(d.filtered_format, CloudShadowStorageFormat::R16Float);
+        // 2048 * 2048 * 2 bytes/pixel = 8,388,608 bytes per
+        // typed R16Float target.
+        assert_eq!(d.transmittance_bytes, 2048 * 2048 * 2);
+        assert_eq!(d.filtered_bytes, 2048 * 2048 * 2);
+        assert!(d.constants_bytes > 0);
+        assert!(d.reallocated_this_frame);
+        assert!(d.allocated_any_gpu_bytes());
+
+        // Typed disabled settings → no typed allocation.
+        let off = CloudShadowResourceDiagnostics::from_settings(
+            &CloudRenderSettings::DISABLED,
+            false,
+            true,
+        );
+        assert!(!off.enabled);
+        assert_eq!(off.extent, [0, 0]);
+        assert_eq!(off.transmittance_bytes, 0);
+        assert_eq!(off.filtered_bytes, 0);
+        assert_eq!(off.constants_bytes, 0);
+        assert!(!off.allocated_any_gpu_bytes());
+        // Typed `reallocated_this_frame` preserved through
+        // the typed gate (the typed renderer still records
+        // whether it ran an allocation cycle).
+        assert!(off.reallocated_this_frame);
+
+        // Typed Off quality cascade-disables the pass.
+        let mut off_quality = CloudRenderSettings::PRODUCT_DEFAULT;
+        off_quality.quality = CloudQuality::Off;
+        let d_off = CloudShadowResourceDiagnostics::from_settings(
+            &off_quality, false, false,
+        );
+        assert!(!d_off.enabled);
+        assert!(!d_off.allocated_any_gpu_bytes());
+
+        // Typed Cheap quality → typed R8Unorm + typed
+        // 1024x1024.
+        let mut cheap = CloudRenderSettings::PRODUCT_DEFAULT;
+        cheap.quality = CloudQuality::Cheap;
+        cheap.world_shadows.resolution = CloudShadowResolution::Cheap1024;
+        let d_cheap = CloudShadowResourceDiagnostics::from_settings(&cheap, false, false);
+        assert!(d_cheap.enabled);
+        assert_eq!(d_cheap.extent, [1024, 1024]);
+        assert_eq!(d_cheap.transmittance_format, CloudShadowStorageFormat::R8Unorm);
+        // 1024 * 1024 * 1 byte/pixel = 1,048,576 bytes.
+        assert_eq!(d_cheap.transmittance_bytes, 1024 * 1024);
+
+        // Typed Cinematic + typed debug readback → typed
+        // `Rgba16FloatPacked` + typed 4096x4096.
+        let mut cine = CloudRenderSettings::PRODUCT_DEFAULT;
+        cine.quality = CloudQuality::Cinematic;
+        cine.world_shadows.resolution = CloudShadowResolution::Cinematic4096;
+        let d_cine = CloudShadowResourceDiagnostics::from_settings(&cine, true, false);
+        assert!(d_cine.enabled);
+        assert_eq!(d_cine.extent, [4096, 4096]);
+        assert_eq!(
+            d_cine.transmittance_format,
+            CloudShadowStorageFormat::Rgba16FloatPacked,
+        );
+        // 4096 * 4096 * 8 bytes/pixel = 134,217,728 bytes
+        // per target.
+        assert_eq!(d_cine.transmittance_bytes, 4096u64 * 4096 * 8);
+        assert_eq!(d_cine.filtered_bytes, 4096u64 * 4096 * 8);
+
+        // Typed total GPU bytes sums the typed three
+        // resource byte counts.
+        assert_eq!(
+            d_cine.total_gpu_bytes(),
+            d_cine.transmittance_bytes
+                + d_cine.filtered_bytes
+                + d_cine.constants_bytes,
+        );
+    }
+
+    /// Pass C7.4 acceptance — typed cold default reports
+    /// zero allocation; typed
+    /// `CLOUD_SHADOW_PROJECTION_CONSTANTS_CPU_BYTES` is
+    /// non-zero (the typed struct has a non-empty layout).
+    #[test]
+    fn cloud_shadow_resource_diagnostics_cold_default_reports_zero() {
+        let cold = CloudShadowResourceDiagnostics::COLD_DEFAULT;
+        assert!(!cold.enabled);
+        assert_eq!(cold.extent, [0, 0]);
+        assert_eq!(cold.transmittance_bytes, 0);
+        assert_eq!(cold.filtered_bytes, 0);
+        assert_eq!(cold.constants_bytes, 0);
+        assert!(!cold.reallocated_this_frame);
+        assert!(!cold.allocated_any_gpu_bytes());
+        assert_eq!(cold.total_gpu_bytes(), 0);
+
+        // Typed CPU footprint is non-zero (sanity check
+        // the typed `size_of` is wired).
+        assert!(CLOUD_SHADOW_PROJECTION_CONSTANTS_CPU_BYTES > 0);
     }
 }
