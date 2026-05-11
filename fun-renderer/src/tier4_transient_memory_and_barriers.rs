@@ -327,8 +327,9 @@ impl Tier4ResourceAliasability {
             Tier4ResourceTypeOption::LuxPersistent => {
                 Self::Excluded(Tier4AliasingExclusionReason::HistoryResource)
             }
-            Tier4ResourceTypeOption::LuxFrameLocal
-            | Tier4ResourceTypeOption::LuxGraphTransient => Self::Aliasable,
+            Tier4ResourceTypeOption::LuxFrameLocal | Tier4ResourceTypeOption::LuxGraphTransient => {
+                Self::Aliasable
+            }
         }
     }
 

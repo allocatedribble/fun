@@ -589,6 +589,32 @@ impl FrameGraphSubmission for NoopRendererCore {
     }
 }
 
+impl NoopRendererCore {
+    /// Pass V2.1 — typed entry point that accepts a
+    /// prebuilt `RendererFrameGraph` (e.g. one already
+    /// extended by `LuxGraphCompiler::compile_lux_plan`)
+    /// rather than building a fresh one from a typed
+    /// `RendererFrameDescription`.  The caller owns the
+    /// pre-compile pipeline; this method just runs the
+    /// typed graph + returns the diagnostics.
+    ///
+    /// Keeps `fun_render` out of the pass-ordering business:
+    /// the bridge builds the graph + compiles Lux into it +
+    /// hands the typed graph here; the core owns execution +
+    /// the legacy pass-descriptor sync.
+    pub fn submit_prebuilt_frame_graph(
+        &mut self,
+        graph: RendererFrameGraph,
+    ) -> RendererFrameGraphDiagnostics {
+        self.frame_index = self.frame_index.max(graph.frame_index());
+        self.frame_graph = graph;
+        let diagnostics = self.frame_graph.execute();
+        self.last_frame_graph_diagnostics = Some(diagnostics.clone());
+        self.sync_legacy_pass_descriptors_from_frame_graph();
+        diagnostics
+    }
+}
+
 impl DeviceBackend for NoopRendererCore {
     fn backend(&self) -> FunRendererBackend {
         self.settings.backend
@@ -845,7 +871,10 @@ mod tests {
     fn every_lux_frame_graph_pass_role_maps_to_pass_kind() {
         use crate::frame_graph::FrameGraphPassRole;
         let table: &[(FrameGraphPassRole, PassKind)] = &[
-            (FrameGraphPassRole::LuxUploadLightBuffers, PassKind::LuxUpload),
+            (
+                FrameGraphPassRole::LuxUploadLightBuffers,
+                PassKind::LuxUpload,
+            ),
             (FrameGraphPassRole::LuxClusterLights, PassKind::LuxCluster),
             (
                 FrameGraphPassRole::LuxReservoirTemporalReuse,
