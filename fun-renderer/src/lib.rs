@@ -29,6 +29,8 @@ pub mod cloud_shadow;
 pub mod cloud_shadow_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod clouds;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_shadow_aux_layer;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
 pub mod default_flip;
@@ -987,6 +989,8 @@ pub use cloud_shadow::*;
 pub use cloud_shadow_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use clouds::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_shadow_aux_layer::*;
 #[cfg(feature = "bevy_ecs")]
 pub use component_api::*;
 #[cfg(feature = "bevy_ecs")]
