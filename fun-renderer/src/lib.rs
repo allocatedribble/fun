@@ -28,7 +28,11 @@ pub mod cloud_shadow;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shadow_pipelines;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod clouds;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_direct_lighting_cloud_layer;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_shadow_aux_layer;
 #[cfg(feature = "bevy_ecs")]
@@ -988,7 +992,11 @@ pub use cloud_shadow::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shadow_pipelines::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use clouds::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_direct_lighting_cloud_layer::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_shadow_aux_layer::*;
 #[cfg(feature = "bevy_ecs")]
