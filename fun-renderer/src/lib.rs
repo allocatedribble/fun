@@ -35,6 +35,8 @@ pub mod clouds;
 pub mod lux_direct_lighting_cloud_layer;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_shadow_aux_layer;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_volumetric_cloud_layer;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
 pub mod default_flip;
@@ -999,6 +1001,8 @@ pub use clouds::*;
 pub use lux_direct_lighting_cloud_layer::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_shadow_aux_layer::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_volumetric_cloud_layer::*;
 #[cfg(feature = "bevy_ecs")]
 pub use component_api::*;
 #[cfg(feature = "bevy_ecs")]
