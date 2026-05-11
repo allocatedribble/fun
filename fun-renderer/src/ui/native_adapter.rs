@@ -709,6 +709,16 @@ pub enum CefRenderRoleStatus {
 }
 
 impl CefRenderRoleStatus {
+    /// Typed roster of every CEF render-role status variant.  Used by
+    /// quality-audit predicates that must enumerate all non-product roles.
+    pub const ALL: [Self; 5] = [
+        Self::DemotedToLegacyDiagnostic,
+        Self::ArchivedReferenceOnly,
+        Self::StagedRemoval,
+        Self::LegacyComparisonOnly,
+        Self::TemporaryMigrationBridge,
+    ];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

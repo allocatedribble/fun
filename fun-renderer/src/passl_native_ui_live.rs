@@ -480,7 +480,7 @@ impl PassLDamageRectKind {
 
 /// Typed per-route UI render budget. Caps the typed cost of a
 /// single route's draw pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PassLPerRouteRenderBudget {
     pub schema_version: u16,
     pub route_stable_id: &'static str,
