@@ -76,6 +76,8 @@ pub mod lux_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_direct_lighting_cloud_layer;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_direct_lighting_cloud_shader;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_graph;
 #[cfg(all(
     feature = "bevy_ecs",
@@ -1049,6 +1051,8 @@ pub use lighting_stack::*;
 pub use live_proof_frame_executor::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_direct_lighting_cloud_layer::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_direct_lighting_cloud_shader::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_material_cloud_layer::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
