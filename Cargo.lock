@@ -3234,6 +3234,7 @@ dependencies = [
  "bevy_transform",
  "fun-lux",
  "fun-scene",
+ "fun-scheduler-types",
  "fun-telemetry-core",
  "fun_ai_core",
  "naga",
@@ -3275,6 +3276,10 @@ dependencies = [
 
 [[package]]
 name = "fun-scene-macros"
+version = "0.1.0"
+
+[[package]]
+name = "fun-scheduler-types"
 version = "0.1.0"
 
 [[package]]
@@ -3404,6 +3409,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "fun-renderer",
+ "fun-scene",
  "fun_dx12_dlss",
  "game_shared",
  "serde",

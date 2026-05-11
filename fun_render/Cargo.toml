@@ -59,6 +59,12 @@ winit_presentation = []
 bevy.workspace = true
 fun_dx12_dlss = { path = "../fun_dx12_dlss", optional = true }
 fun_renderer.workspace = true
+# Pass V2.3 — the typed `lux_extraction` system reads
+# fun-scene's typed lighting components (LuxLight,
+# LuxEmissive, VirtualShadowCaster, VirtualShadowReceiver,
+# LuxGiParticipant) and emits typed `LuxSceneChangeSignal`s
+# the bridge feeds to `LuxFramePlanner`.
+fun-scene = { path = "../fun-scene" }
 game_shared = { path = "../game_shared" }
 serde.workspace = true
 serde_json.workspace = true

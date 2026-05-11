@@ -714,6 +714,17 @@ pub struct RendererFrameGraph {
     frame_index: u64,
     passes: Vec<FrameGraphPass>,
     resources: Vec<FrameGraphResource>,
+    /// Pass V2.2 — typed validation failures pushed by
+    /// external compilers (notably
+    /// [`crate::lux_graph::LuxGraphCompiler`]).  These get
+    /// merged into the typed validation_failures list at
+    /// `execute()` so the typed graph diagnostics surface
+    /// them alongside the graph's intrinsic validations.
+    /// Without this buffer, Lux compile failures would
+    /// remain invisible to the typed renderer diagnostics
+    /// and the typed bridge could silently present a
+    /// successful state.
+    external_validation_failures: Vec<FrameGraphValidationFailure>,
 }
 
 impl RendererFrameGraph {
@@ -723,6 +734,7 @@ impl RendererFrameGraph {
             frame_index: description.frame_index,
             passes: Vec::new(),
             resources: Vec::new(),
+            external_validation_failures: Vec::new(),
         };
 
         let render_scene = graph.declare_resource(FrameGraphResourceDescriptor::new(
@@ -1236,7 +1248,28 @@ impl RendererFrameGraph {
         self.validate_present_contract(&mut failures);
         self.validate_upscale_contract(&mut failures);
         self.validate_frame_generation_contract(&mut failures);
+        // Pass V2.2 — merge typed externally-pushed
+        // validation failures (Lux compile failures, etc.)
+        // so the typed diagnostics surface them too.
+        failures.extend(self.external_validation_failures.iter().copied());
         failures
+    }
+
+    /// Pass V2.2 — push a typed externally-detected
+    /// validation failure (typically from
+    /// [`crate::lux_graph::LuxGraphCompiler`]) into the
+    /// typed graph state.  The failure is merged into the
+    /// graph's intrinsic validations at
+    /// [`Self::execute`].
+    pub fn push_external_validation_failure(&mut self, failure: FrameGraphValidationFailure) {
+        self.external_validation_failures.push(failure);
+    }
+
+    /// Pass V2.2 — typed predicate: does the graph carry
+    /// any externally-pushed validation failures?
+    #[must_use]
+    pub fn has_external_validation_failures(&self) -> bool {
+        !self.external_validation_failures.is_empty()
     }
 
     #[must_use]

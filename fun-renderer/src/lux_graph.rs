@@ -34,7 +34,7 @@ use fun_lux::{LuxFramePlan, LuxPassRequest, LuxResourceIntent};
 use crate::frame_graph::{
     FrameGraphDiagnosticCategory, FrameGraphPassDescriptor, FrameGraphPassHandle,
     FrameGraphPassRole, FrameGraphPassType, FrameGraphResourceDescriptor, FrameGraphResourceHandle,
-    FrameGraphResourceType, RendererFrameGraph,
+    FrameGraphResourceType, FrameGraphValidationFailure, RendererFrameGraph,
 };
 use crate::lux_diagnostics::{LuxGraphCompileFailure, LuxGraphCompileReport};
 use crate::lux_passes::{lux_role_for, typed_resource_inputs, typed_resource_outputs};
@@ -223,6 +223,24 @@ impl LuxGraphCompiler {
                     report.frame_graph_writes_added =
                         report.frame_graph_writes_added.saturating_add(1);
                 }
+            }
+        }
+
+        // ============================================
+        // Phase 4 (Pass V2.2) — propagate typed compile
+        // failures into the typed frame graph's validation
+        // failure list so the typed renderer diagnostics
+        // surface them.  Without this, the typed
+        // `RendererFrameGraphDiagnostics::graph_valid()`
+        // would silently return `true` despite Lux compile
+        // failures.
+        for failure in &report.failures {
+            if let Some(code) = failure.frame_graph_validation_code() {
+                graph.push_external_validation_failure(FrameGraphValidationFailure {
+                    code,
+                    pass: None,
+                    resource: None,
+                });
             }
         }
 

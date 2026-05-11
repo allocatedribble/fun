@@ -74,6 +74,31 @@ impl LuxGraphCompileFailure {
     pub const fn is_acceptance_violation(self) -> bool {
         true
     }
+
+    /// Pass V2.2 — typed translation into the typed
+    /// [`crate::frame_graph::FrameGraphValidationFailureCode`].
+    /// Returns `None` for failure kinds that the frame
+    /// graph layer does not yet model (handle-space
+    /// exhaustion is an allocator concern, not a graph
+    /// validation concern).
+    #[must_use]
+    pub const fn frame_graph_validation_code(
+        self,
+    ) -> Option<crate::frame_graph::FrameGraphValidationFailureCode> {
+        use crate::frame_graph::FrameGraphValidationFailureCode;
+        match self {
+            Self::UnwrittenResourceRead { .. } => {
+                Some(FrameGraphValidationFailureCode::LuxPassReadsUnwrittenResource)
+            }
+            Self::PassOrderViolation { .. } => {
+                Some(FrameGraphValidationFailureCode::LuxPassOrderViolation)
+            }
+            Self::PassDeclaresNoReadsOrWrites { .. } => {
+                Some(FrameGraphValidationFailureCode::LuxPassDeclaresNoReadsOrWrites)
+            }
+            Self::PassRegistrationFailed { .. } | Self::ResourceDeclarationFailed { .. } => None,
+        }
+    }
 }
 
 /// Typed report returned by
@@ -178,6 +203,44 @@ impl LuxGraphCompileReport {
         }
         self.failures.push(failure);
     }
+
+    /// Pass V2.2 — typed Lux Graph debug-artifact section.
+    /// Returns a multi-line `String` matching the user spec
+    /// section layout, ready to append to the typed
+    /// [`crate::frame_graph::RendererFrameGraphDebugArtifact::content`].
+    ///
+    /// `plan_scenes` is passed in by the caller (the bridge
+    /// has the typed `LuxFramePlan` handy; the report
+    /// doesn't track scene count separately).
+    #[must_use]
+    pub fn debug_section(&self, plan_scenes: usize) -> String {
+        use core::fmt::Write as _;
+        let mut content = String::new();
+        let _ = writeln!(content, "Lux Graph");
+        let _ = writeln!(content, "---------");
+        let _ = writeln!(content, "plan_scenes: {}", plan_scenes);
+        let _ = writeln!(content, "plan_passes: {}", self.lux_pass_requests_walked);
+        let _ = writeln!(
+            content,
+            "plan_resources: {}",
+            self.lux_resource_intents_walked,
+        );
+        let _ = writeln!(
+            content,
+            "compiled_lux_passes: {}",
+            self.frame_graph_passes_registered,
+        );
+        let _ = writeln!(
+            content,
+            "compiled_lux_resources: {}",
+            self.frame_graph_resources_declared,
+        );
+        let _ = writeln!(content, "failures: {}", self.failures.len());
+        for failure in &self.failures {
+            let _ = writeln!(content, "  {}", failure.as_str());
+        }
+        content
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +314,107 @@ mod tests {
         assert_eq!(report.empty_pass_violation_count, 1);
         assert!(!report.compile_succeeded());
         assert!(!report.every_pass_declares_reads_or_writes());
+    }
+
+    /// Pass V2.2 acceptance — `UnwrittenResourceRead`
+    /// translates to the typed
+    /// `LuxPassReadsUnwrittenResource` frame-graph
+    /// validation code.
+    #[test]
+    fn lux_unwritten_resource_read_becomes_frame_graph_validation_failure() {
+        use crate::frame_graph::FrameGraphValidationFailureCode;
+        let failure = LuxGraphCompileFailure::UnwrittenResourceRead {
+            role: FrameGraphPassRole::LuxDirectLighting,
+            resource_type: FrameGraphResourceType::LuxLightBuffer,
+        };
+        assert_eq!(
+            failure.frame_graph_validation_code(),
+            Some(FrameGraphValidationFailureCode::LuxPassReadsUnwrittenResource),
+        );
+    }
+
+    /// Pass V2.2 acceptance — `PassOrderViolation`
+    /// translates to the typed `LuxPassOrderViolation`
+    /// frame-graph validation code.
+    #[test]
+    fn lux_pass_order_violation_becomes_frame_graph_validation_failure() {
+        use crate::frame_graph::FrameGraphValidationFailureCode;
+        let failure = LuxGraphCompileFailure::PassOrderViolation {
+            role: FrameGraphPassRole::LuxClusterLights,
+            expected_order_key: 110,
+            actual_index: 0,
+        };
+        assert_eq!(
+            failure.frame_graph_validation_code(),
+            Some(FrameGraphValidationFailureCode::LuxPassOrderViolation),
+        );
+    }
+
+    /// Pass V2.2 acceptance — `PassDeclaresNoReadsOrWrites`
+    /// translates to the typed
+    /// `LuxPassDeclaresNoReadsOrWrites` frame-graph
+    /// validation code.
+    #[test]
+    fn lux_empty_pass_becomes_frame_graph_validation_failure() {
+        use crate::frame_graph::FrameGraphValidationFailureCode;
+        let failure = LuxGraphCompileFailure::PassDeclaresNoReadsOrWrites {
+            role: FrameGraphPassRole::LuxDebugOverlay,
+        };
+        assert_eq!(
+            failure.frame_graph_validation_code(),
+            Some(FrameGraphValidationFailureCode::LuxPassDeclaresNoReadsOrWrites),
+        );
+    }
+
+    /// Pass V2.2 acceptance — handle-space exhaustion
+    /// failures (`PassRegistrationFailed`,
+    /// `ResourceDeclarationFailed`) intentionally have no
+    /// frame-graph validation mapping — they are allocator
+    /// concerns, not graph contract violations.  The
+    /// `failure_kinds_have_distinct_strings` test confirms
+    /// they remain typed acceptance violations on the
+    /// compile report side.
+    #[test]
+    fn handle_space_exhaustion_failures_have_no_frame_graph_code() {
+        assert_eq!(
+            LuxGraphCompileFailure::PassRegistrationFailed {
+                role: FrameGraphPassRole::LuxDenoise,
+            }
+            .frame_graph_validation_code(),
+            None,
+        );
+        assert_eq!(
+            LuxGraphCompileFailure::ResourceDeclarationFailed {
+                resource_type: FrameGraphResourceType::LuxLightBuffer,
+            }
+            .frame_graph_validation_code(),
+            None,
+        );
+    }
+
+    /// Pass V2.2 acceptance — the typed debug section
+    /// emits every user-spec field (plan_scenes,
+    /// plan_passes, plan_resources, compiled_lux_passes,
+    /// compiled_lux_resources, failures).
+    #[test]
+    fn debug_section_emits_typed_lux_graph_layout() {
+        let mut report = LuxGraphCompileReport::new(7);
+        report.lux_pass_requests_walked = 5;
+        report.lux_resource_intents_walked = 4;
+        report.frame_graph_passes_registered = 5;
+        report.frame_graph_resources_declared = 4;
+        report.record_failure(LuxGraphCompileFailure::UnwrittenResourceRead {
+            role: FrameGraphPassRole::LuxDirectLighting,
+            resource_type: FrameGraphResourceType::LuxLightBuffer,
+        });
+        let section = report.debug_section(2);
+        assert!(section.contains("Lux Graph"));
+        assert!(section.contains("plan_scenes: 2"));
+        assert!(section.contains("plan_passes: 5"));
+        assert!(section.contains("plan_resources: 4"));
+        assert!(section.contains("compiled_lux_passes: 5"));
+        assert!(section.contains("compiled_lux_resources: 4"));
+        assert!(section.contains("failures: 1"));
+        assert!(section.contains("unwritten_resource_read"));
     }
 }

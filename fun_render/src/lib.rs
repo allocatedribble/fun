@@ -23,6 +23,7 @@ pub mod hiz_occlusion;
 pub mod indirect_draw;
 pub mod instance_tables;
 pub mod lighting;
+pub mod lux_extraction;
 pub mod material_pipeline;
 #[cfg(feature = "offscreen")]
 pub mod offscreen;
@@ -50,6 +51,11 @@ pub use bridge::{
     renderer_bridge_benchmark_noop, renderer_bridge_debug_overlay_noop,
     renderer_bridge_extract_noop, renderer_bridge_frame_description_from_settings,
     renderer_bridge_initialize_runtime,
+};
+pub use lux_extraction::{
+    FUN_RENDER_LUX_EXTRACTION_SCHEMA_VERSION, FunRenderLuxExtractionBridge,
+    FunRenderLuxExtractionReport, fun_render_lux_extraction_system,
+    install_renderer_bridge_lux_extraction,
 };
 pub use capabilities::{
     BevyBackendCapabilityReport, BridgeFeatureFlagReport, RENDERER_CAPABILITY_REPORT_PATH_ENV,

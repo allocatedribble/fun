@@ -13,6 +13,8 @@ use fun_renderer::{
 };
 use tracing::{info, warn};
 
+use crate::lux_extraction::FunRenderLuxExtractionBridge;
+
 use crate::renderer_settings_ui_model_from_bridge;
 
 pub const FUN_RENDER_BRIDGE_API_SCHEMA_VERSION: u16 = 1;
@@ -315,13 +317,19 @@ pub fn install_renderer_bridge_api(app: &mut App, settings: RendererBridgeSettin
         .insert_resource(renderer_settings_ui_model_from_bridge(settings))
         .insert_resource(RendererBridgeRuntimeState::from_settings(settings))
         .init_resource::<RendererBridgeFrameGraphReport>()
-        .init_resource::<RendererBridgeHooks>();
+        .init_resource::<RendererBridgeHooks>()
+        // Pass V2.3 — register the typed extraction
+        // resources so the bridge can read typed scene
+        // signals when it builds the typed Lux frame plan.
+        .init_resource::<FunRenderLuxExtractionBridge>()
+        .init_resource::<crate::lux_extraction::FunRenderLuxExtractionReport>();
 }
 
 pub fn renderer_bridge_initialize_runtime(
     settings: Res<RendererBridgeSettings>,
     mut state: ResMut<RendererBridgeRuntimeState>,
     mut frame_graph_report: ResMut<RendererBridgeFrameGraphReport>,
+    extraction_bridge: Option<Res<FunRenderLuxExtractionBridge>>,
 ) {
     if state.initialized_once {
         return;
@@ -355,19 +363,37 @@ pub fn renderer_bridge_initialize_runtime(
         let mut resource_registry = RendererResourceRegistry::default();
 
         let planner = LuxFramePlanner::product_default();
-        let lux_plan = planner.build_frame_plan(
-            clear_color_frame.frame_index,
-            &[LuxSceneChangeSignal::unchanged_visible(
-                LuxSceneId::PROOF_SCENE,
-                0,
-            )],
-        );
+        // Pass V2.3 — typed scene signals come from the
+        // typed `FunRenderLuxExtractionBridge` resource when
+        // it carries any signals; otherwise the typed boot
+        // path falls back to a single typed
+        // `unchanged_visible(PROOF_SCENE)` signal so the
+        // legacy bridge tests + cold-boot path continue to
+        // work.
+        let fallback_signal =
+            [LuxSceneChangeSignal::unchanged_visible(LuxSceneId::PROOF_SCENE, 0)];
+        let extracted_signals: &[LuxSceneChangeSignal] = match extraction_bridge.as_deref() {
+            Some(b) if b.has_signals() => b.signals(),
+            _ => &fallback_signal,
+        };
+        let lux_plan =
+            planner.build_frame_plan(clear_color_frame.frame_index, extracted_signals);
 
         let lux_compile_report =
             LuxGraphCompiler::compile_lux_plan(&mut graph, &mut resource_registry, &lux_plan);
 
         let frame_graph_diagnostics = core.submit_prebuilt_frame_graph(graph);
-        let frame_graph_debug_artifact = core.frame_graph_debug_artifact();
+        // Pass V2.2 — append the typed "Lux Graph" section
+        // to the typed frame graph debug artifact so the
+        // typed renderer artifact carries the typed Lux
+        // plan + compile + failure counts (rule #2 of the
+        // V2.2 acceptance set).
+        let frame_graph_debug_artifact = core.frame_graph_debug_artifact().map(|mut artifact| {
+            artifact
+                .content
+                .push_str(&lux_compile_report.debug_section(lux_plan.scene_plans.len()));
+            artifact
+        });
         let present_result = core.present_clear_color(clear_color_frame);
         let core_diagnostics = core.diagnostics();
         let core_shutdown = core.shutdown();
@@ -1163,5 +1189,64 @@ mod tests {
             .expect("frame graph report must mirror the compile report");
         assert_eq!(mirror.failures.len(), report.failures.len());
         assert_eq!(mirror.frame_index, report.frame_index);
+    }
+
+    /// Pass V2.2 acceptance — when the typed
+    /// `LuxGraphCompiler` records a compile failure, the
+    /// typed frame graph's `validation_failures` carry the
+    /// converted `FrameGraphValidationFailureCode`, so the
+    /// renderer-side `graph_valid()` predicate flips to
+    /// `false`.  The bridge state must NOT silently
+    /// present a successful renderer state when typed Lux
+    /// compile failures exist.
+    ///
+    /// Tests this end-to-end by:
+    /// 1. Constructing a typed `RendererFrameGraph` directly.
+    /// 2. Pushing a typed `LuxPassReadsUnwrittenResource`
+    ///    validation failure via the new
+    ///    `push_external_validation_failure` API.
+    /// 3. Asserting `graph_valid()` returns `false` and
+    ///    the typed failure code appears in the typed
+    ///    diagnostics + debug artifact.
+    #[test]
+    fn bridge_marks_lux_compile_failure_as_renderer_failure() {
+        use fun_renderer::{
+            FrameGraphValidationFailure, FrameGraphValidationFailureCode, RendererFrameDescription,
+        };
+        let mut graph = RendererFrameGraph::from_frame_description(
+            RendererFrameDescription::static_scene_with_ui(0),
+        );
+        // Push a typed Lux validation failure as if the
+        // compiler had detected an unwritten resource read.
+        graph.push_external_validation_failure(FrameGraphValidationFailure {
+            code: FrameGraphValidationFailureCode::LuxPassReadsUnwrittenResource,
+            pass: None,
+            resource: None,
+        });
+        assert!(graph.has_external_validation_failures());
+
+        // Execute the typed graph.  The typed diagnostics
+        // MUST surface the externally-pushed failure.
+        let diagnostics = graph.execute();
+        assert!(
+            !diagnostics.graph_valid(),
+            "graph_valid must flip to false when Lux compile failures are pushed",
+        );
+        assert!(
+            diagnostics.validation_failures.iter().any(|f| matches!(
+                f.code,
+                FrameGraphValidationFailureCode::LuxPassReadsUnwrittenResource
+            )),
+            "diagnostics must carry the typed Lux validation code: {:?}",
+            diagnostics.validation_failures,
+        );
+        // And the typed debug artifact echoes the typed
+        // code via its as_str() rendering.
+        let artifact = graph.debug_artifact(&diagnostics);
+        assert!(
+            artifact.content.contains("lux_pass_reads_unwritten_resource"),
+            "debug artifact must surface the typed Lux failure: {}",
+            artifact.content,
+        );
     }
 }

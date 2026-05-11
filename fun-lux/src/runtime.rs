@@ -150,6 +150,16 @@ impl LuxUpdateScheduler {
 /// Typed change signal a scene emits to the planner. The
 /// planner walks the signals each frame; an absent signal
 /// means "nothing changed for this scene."
+///
+/// Pass V2.3 extends the typed signal with three additional
+/// dirty bits the extraction phase populates: `fog_changed`
+/// (fog volumes / global fog settings dirty),
+/// `volumetric_changed` (volumetric scattering settings
+/// dirty), and `look_profile_changed` (artistic look /
+/// godray dial dirty).  These mirror the typed Pass 8 / 9
+/// surfaces and let the typed planner gate fog / volumetric
+/// / look-profile passes the same way it gates light /
+/// shadow / GI passes today.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LuxSceneChangeSignal {
     pub schema_version: u16,
@@ -161,6 +171,18 @@ pub struct LuxSceneChangeSignal {
     pub shadow_caster_set_changed: bool,
     pub gi_probes_changed: bool,
     pub camera_moved: bool,
+    /// Pass V2.3: fog volume / global fog settings changed
+    /// (typed `crate::fog_volumetric::LuxFogVolumeParameters`
+    /// or `crate::fog_volumetric::LuxGlobalFogSettings` dirty).
+    pub fog_changed: bool,
+    /// Pass V2.3: volumetric scattering settings changed
+    /// (typed `crate::fog_volumetric::LuxVolumetricSettings`
+    /// dirty).
+    pub volumetric_changed: bool,
+    /// Pass V2.3: artistic look profile / godray dials
+    /// changed (typed `crate::look::FunLuxLookProfile` or
+    /// `crate::godrays::LuxGodraySettings` dirty).
+    pub look_profile_changed: bool,
 }
 
 impl LuxSceneChangeSignal {
@@ -176,6 +198,9 @@ impl LuxSceneChangeSignal {
             shadow_caster_set_changed: false,
             gi_probes_changed: false,
             camera_moved: false,
+            fog_changed: false,
+            volumetric_changed: false,
+            look_profile_changed: false,
         }
     }
 
@@ -191,6 +216,9 @@ impl LuxSceneChangeSignal {
             shadow_caster_set_changed: true,
             gi_probes_changed: false,
             camera_moved: false,
+            fog_changed: false,
+            volumetric_changed: false,
+            look_profile_changed: false,
         }
     }
 
@@ -200,6 +228,9 @@ impl LuxSceneChangeSignal {
             || self.shadow_caster_set_changed
             || self.gi_probes_changed
             || self.camera_moved
+            || self.fog_changed
+            || self.volumetric_changed
+            || self.look_profile_changed
     }
 }
 
