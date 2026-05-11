@@ -97,6 +97,8 @@ pub mod lux_shadow_aux_layer;
 pub mod lux_volumetric_cloud_layer;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_volumetric_executor;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_volumetric_light_inject_cloud_shader;
 #[cfg(feature = "experimental_renderer_ml")]
 pub mod ml;
 pub mod page;
@@ -1059,6 +1061,8 @@ pub use lux_material_cloud_layer::*;
 pub use lux_shadow_aux_layer::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_volumetric_cloud_layer::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_volumetric_light_inject_cloud_shader::*;
 // Pass V2.5 typed renderer-side HDR-post modules.
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use exposure_pass::*;
