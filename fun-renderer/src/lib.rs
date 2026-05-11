@@ -20,6 +20,8 @@ pub mod cloud_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_resources;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shaders;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod clouds;
@@ -971,6 +973,8 @@ pub use cloud_executor::*;
 pub use cloud_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_resources::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shaders::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
