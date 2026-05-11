@@ -20,6 +20,8 @@ pub mod cloud_executor;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_receive_lux_lighting;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_resources;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shaders;
@@ -28,6 +30,8 @@ pub mod cloud_shadow;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_director;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shadow_golden_scenes;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_pipelines;
@@ -35,12 +39,6 @@ pub mod cloud_shadow_pipelines;
 pub mod cloud_shadow_runtime_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod clouds;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub mod lux_direct_lighting_cloud_layer;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub mod lux_shadow_aux_layer;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub mod lux_volumetric_cloud_layer;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
 pub mod default_flip;
@@ -55,6 +53,8 @@ pub mod exposure_pass;
 pub mod extraction;
 pub mod frame_generation;
 pub mod frame_graph;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod fun_render_cloud_retirement;
 pub mod gpu_driven;
 #[cfg(feature = "bevy_ecs")]
 pub mod gpu_driven_runtime;
@@ -70,6 +70,8 @@ pub mod live_proof_frame_executor;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_direct_lighting_cloud_layer;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_graph;
 #[cfg(all(
     feature = "bevy_ecs",
@@ -78,9 +80,15 @@ pub mod lux_graph;
 ))]
 pub mod lux_live_lighting;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_material_cloud_layer;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_resources;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_shadow_aux_layer;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod lux_volumetric_cloud_layer;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_volumetric_executor;
 #[cfg(feature = "experimental_renderer_ml")]
@@ -990,6 +998,8 @@ pub use cloud_executor::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_receive_lux_lighting::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_resources::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shaders::*;
@@ -998,6 +1008,8 @@ pub use cloud_shadow::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_director::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shadow_golden_scenes::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_pipelines::*;
@@ -1005,12 +1017,6 @@ pub use cloud_shadow_pipelines::*;
 pub use cloud_shadow_runtime_diagnostics::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use clouds::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub use lux_direct_lighting_cloud_layer::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub use lux_shadow_aux_layer::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
-pub use lux_volumetric_cloud_layer::*;
 #[cfg(feature = "bevy_ecs")]
 pub use component_api::*;
 #[cfg(feature = "bevy_ecs")]
@@ -1021,6 +1027,8 @@ pub use ecs::*;
 #[cfg(feature = "bevy_ecs")]
 pub use extraction::*;
 pub use frame_graph::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use fun_render_cloud_retirement::*;
 pub use gpu_driven::*;
 #[cfg(feature = "bevy_ecs")]
 pub use gpu_driven_runtime::*;
@@ -1031,6 +1039,14 @@ pub use ir::*;
 pub use lighting_stack::*;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub use live_proof_frame_executor::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_direct_lighting_cloud_layer::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_material_cloud_layer::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_shadow_aux_layer::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use lux_volumetric_cloud_layer::*;
 // Pass V2.5 typed renderer-side HDR-post modules.
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use exposure_pass::*;
