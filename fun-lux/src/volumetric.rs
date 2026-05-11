@@ -5,6 +5,35 @@
 //! reproject alpha, integration mode. `fun-renderer` reads
 //! these typed records and allocates the actual froxel
 //! textures + dispatches the volumetric compute passes.
+//!
+//! Pass V2.6 — compatibility shim
+//! ------------------------------
+//! The typed canonical home for product-facing fog +
+//! volumetric policy moves to [`crate::fog_volumetric`]
+//! (`LuxVolumetricSettings`, `LuxFroxelGridSettings`,
+//! `LuxVolumetricPassRole`, `LuxVolumetricResourceIntent`).
+//! This module stays as a typed compatibility shim because
+//! existing runtime code (`crate::runtime::LuxFramePlanner`)
+//! and the typed frame-plan (`crate::frame_plan::LuxFramePlan`)
+//! still consume the legacy `FunLuxVolumetricSettings` shape.
+//!
+//! Callers SHOULD prefer the typed canonical names — they
+//! are re-exported at the crate root via `pub use
+//! fog_volumetric::*` in `lib.rs`.  The legacy `FunLux*`
+//! types remain so the existing typed planner + frame-plan
+//! tests + the renderer's compatibility callers continue to
+//! work without a single sweeping refactor.
+
+// Pass V2.6 migration aliases — typed canonical re-exports
+// from `fog_volumetric` for callers that import directly
+// from this typed module.  The typed canonical surface
+// always wins; the typed legacy `FunLuxVolumetricSettings`
+// stays defined below for the typed runtime + frame-plan
+// callers that depend on its concrete shape today.
+pub use crate::fog_volumetric::{
+    LuxFroxelGridSettings, LuxVolumetricPassRole, LuxVolumetricResourceIntent,
+    LuxVolumetricSettings,
+};
 
 pub const FUN_LUX_VOLUMETRIC_SCHEMA_VERSION: u16 = 1;
 

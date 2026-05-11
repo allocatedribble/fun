@@ -48,9 +48,10 @@ pub use avis_rigid_mvp::{
 #[allow(unused_imports)]
 pub use cold_storage::{
     AggregateBody, COLD_CHUNK_MAGIC, COLD_CHUNK_VERSION, COLD_RECORD_BYTES, ColdBodyClass,
-    ColdChunkError, ColdChunkHeader, ColdChunkSnapshot, ColdColliderClass, ColdRecord,
-    ColdStorageDiagnostics, DEFAULT_MAX_CHUNK_BYTES, LifecycleTransition, demote_to_cold,
-    promote_to_active,
+    ColdChunkError, ColdChunkHeader, ColdChunkSchemaVersion, ColdChunkSnapshot, ColdColliderClass,
+    ColdEncodingStats, ColdRecord, ColdRecordEncoding, ColdStorageDiagnostics,
+    DEFAULT_MAX_CHUNK_BYTES, LifecycleTransition, decode_records_with, demote_to_cold,
+    encode_records_with, promote_to_active,
 };
 #[allow(unused_imports)]
 pub use physical_lod::{
@@ -60,8 +61,9 @@ pub use physical_lod::{
 };
 #[allow(unused_imports)]
 pub use replay_bridge::{
-    MappedCommand, build_command_stream, build_rollback_slice, build_state_digest, map_command,
-    map_tier,
+    EvidenceBundleDiff, MappedCommand, ReplayContactEvidence, ReplayEvidenceBundle,
+    ShardOwnershipDivergence, build_command_stream, build_evidence_bundle, build_rollback_slice,
+    build_state_digest, compare_evidence_bundles, contact_digest, map_command, map_tier,
 };
 #[allow(unused_imports)]
 pub use shard::{

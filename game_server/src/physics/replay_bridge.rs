@@ -353,6 +353,261 @@ fn quantize_angular_velocity_mrad_per_s(velocity: Vec3) -> [i16; 3] {
     [to_i16(velocity.x), to_i16(velocity.y), to_i16(velocity.z)]
 }
 
+// ============================================================================
+// V2-P6: Replay evidence bundle + diff comparison
+// ----------------------------------------------------------------------------
+// Compact, comparable summary of one tick's replay-relevant state. Used
+// by the rollback / desync detector to localise *where* two replays
+// diverged: a digest mismatch alone says "they diverged"; an evidence
+// bundle diff says "shard 3 has 12 active bodies on side A and 11 on
+// side B, and the lifecycle ghost count differs by 1".
+//
+// The bundle is intentionally narrow:
+// - Active body count and digest (whole-active-body bucket only).
+// - Contact count and digest (filled by callers; this module does not
+//   walk avian's contact store directly).
+// - Lifecycle counts (cold/warm/active/ghost/aggregate).
+// - Per-shard ownership counts (authoritative + ghost).
+//
+// Particles + destruction land in follow-up passes per the V2-P6 spec
+// task list ("particles later, destruction later").
+// ============================================================================
+
+use thunder::hash::fnv1a64;
+
+/// Summary of a tick's contact state. Filled by the caller so the
+/// evidence bundle does not have to know about avian's contact store
+/// shape. The digest is FNV-1a 64 over the canonicalised contact byte
+/// stream; equal `(count, digest)` means the contacts agree.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct ReplayContactEvidence {
+    /// Number of active contacts the caller observed this tick.
+    pub active_contact_count: u32,
+    /// Number of sleeping contacts the caller observed this tick.
+    pub sleeping_contact_count: u32,
+    /// Caller-supplied digest of the canonical contact byte stream.
+    pub contact_digest: u64,
+}
+
+/// Tick-scoped evidence bundle. Two bundles produced from the same
+/// `(registry, tick, contacts)` triple compare equal; a non-empty
+/// [`EvidenceBundleDiff`] from [`compare_evidence_bundles`] localises
+/// the divergence.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReplayEvidenceBundle {
+    /// Tick the bundle was captured at.
+    pub tick: NetworkTick,
+    /// Policy-version snapshot the bundle was captured against.
+    pub policy_version: PolicyVersion,
+    /// Total number of active bodies (across all shards).
+    pub active_body_count: u32,
+    /// FNV-1a 64 over the canonicalised active-body byte stream.
+    pub active_body_digest: u64,
+    /// Aggregate lifecycle counts (cold / warm / active / ghost /
+    /// aggregate).
+    pub lifecycle_counts: LifecycleCounts,
+    /// Per-shard ownership rows in shard-id order.
+    pub shard_ownership: Vec<DigestShardOwnership>,
+    /// Caller-supplied contact evidence (this module does not walk
+    /// the contact store directly — see [`ReplayContactEvidence`]).
+    pub contact_evidence: ReplayContactEvidence,
+}
+
+impl ReplayEvidenceBundle {
+    /// Total bodies across every lifecycle tier. Convenience accessor
+    /// so callers do not have to round-trip through
+    /// [`LifecycleCounts::total`].
+    pub fn total_bodies(&self) -> u32 {
+        self.lifecycle_counts.total()
+    }
+}
+
+/// Build a [`ReplayEvidenceBundle`] from a `(registry, tick,
+/// policy_version, contacts)` quad. Walks the registry once, building
+/// the bundle's lifecycle counts + shard ownership rows + active-body
+/// digest in the same canonical order as
+/// [`build_state_digest`] so two bundles produced from the same input
+/// are byte-for-byte equal.
+#[must_use]
+pub fn build_evidence_bundle(
+    registry: &ShardRegistry,
+    tick: NetworkTick,
+    policy_version: PolicyVersion,
+    contact_evidence: ReplayContactEvidence,
+) -> ReplayEvidenceBundle {
+    // Reuse the canonical state digest so the active-body digest
+    // matches what the rollback slice publishes — there must be one
+    // canonical hash per bucket.
+    let digest = build_state_digest(registry, tick, policy_version);
+    let mut shard_ids: Vec<ShardId> = registry.iter_shards().map(|s| s.identity.id).collect();
+    shard_ids.sort_unstable_by_key(|id| id.0);
+
+    let mut shard_ownership = Vec::with_capacity(shard_ids.len());
+    let mut counts = LifecycleCounts::default();
+    let mut active_body_count = 0_u32;
+    for shard_id in &shard_ids {
+        let Some(shard) = registry.shard(*shard_id) else {
+            continue;
+        };
+        let mut authoritative_count = 0_u32;
+        let mut ghost_count = 0_u32;
+        let mut bodies: Vec<(GlobalPhysicalEntityId, &ShardBodyRecord)> =
+            shard.physics.bodies.iter().map(|(g, r)| (*g, r)).collect();
+        bodies.sort_unstable_by_key(|(g, _)| g.0);
+        for (_global, record) in bodies {
+            let tier = map_tier(record.tier);
+            counts.add(tier);
+            active_body_count = active_body_count.saturating_add(1);
+            match tier {
+                BodyTierKind::Ghost => ghost_count = ghost_count.saturating_add(1),
+                _ => authoritative_count = authoritative_count.saturating_add(1),
+            }
+        }
+        shard_ownership.push(DigestShardOwnership {
+            shard: ReplayShardId(shard_id.0),
+            authoritative_count,
+            ghost_count,
+        });
+    }
+
+    ReplayEvidenceBundle {
+        tick,
+        policy_version,
+        active_body_count,
+        active_body_digest: digest.active_body_digest,
+        lifecycle_counts: counts,
+        shard_ownership,
+        contact_evidence,
+    }
+}
+
+/// Per-bucket diff between two [`ReplayEvidenceBundle`]s. Each field
+/// is `Some(_)` when the two sides disagree on that bucket. A bundle
+/// where every field is `None` means the two replays are bit-for-bit
+/// consistent on the V2-P6 surface.
+///
+/// The diff is intentionally narrow — it carries the buckets a
+/// caller needs to localise the divergence, not the whole replay
+/// state. Particles + destruction are reserved for follow-up passes
+/// per the V2-P6 spec task list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EvidenceBundleDiff {
+    /// Active-body count divergence, `(left, right)`.
+    pub active_body_count: Option<(u32, u32)>,
+    /// Active-body digest divergence, `(left, right)`.
+    pub active_body_digest: Option<(u64, u64)>,
+    /// Lifecycle-counts divergence, `(left, right)`.
+    pub lifecycle_counts: Option<(LifecycleCounts, LifecycleCounts)>,
+    /// Per-shard ownership rows that disagree, in shard-id order.
+    /// Each entry is `(shard_id, left, right)` where `left` /
+    /// `right` are `Option<DigestShardOwnership>` so the caller can
+    /// distinguish "shard exists on left only" from "row contents
+    /// differ".
+    pub shard_ownership_divergences: Vec<ShardOwnershipDivergence>,
+    /// Contact-evidence divergence, `(left, right)`.
+    pub contact_evidence: Option<(ReplayContactEvidence, ReplayContactEvidence)>,
+    /// Tick divergence, `(left, right)`. Set when the bundles were
+    /// captured at different ticks (caller error in most flows).
+    pub tick: Option<(NetworkTick, NetworkTick)>,
+    /// Policy-version divergence, `(left, right)`. Set when the
+    /// bundles were captured against different policy versions.
+    pub policy_version: Option<(PolicyVersion, PolicyVersion)>,
+}
+
+impl EvidenceBundleDiff {
+    /// True if every bucket compared equal — the two replays are
+    /// V2-P6-consistent.
+    pub fn is_empty(&self) -> bool {
+        self.active_body_count.is_none()
+            && self.active_body_digest.is_none()
+            && self.lifecycle_counts.is_none()
+            && self.shard_ownership_divergences.is_empty()
+            && self.contact_evidence.is_none()
+            && self.tick.is_none()
+            && self.policy_version.is_none()
+    }
+}
+
+/// One per-shard ownership row that differs between two evidence
+/// bundles. `left` / `right` are `Option<_>` so a caller can tell
+/// "shard present on one side only" apart from "row contents differ".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShardOwnershipDivergence {
+    pub shard: ReplayShardId,
+    pub left: Option<DigestShardOwnership>,
+    pub right: Option<DigestShardOwnership>,
+}
+
+/// Pure comparison: walks both bundles, returns the bucket-localised
+/// diff. Both bundles must be produced by [`build_evidence_bundle`];
+/// the function does not re-canonicalise anything.
+#[must_use]
+pub fn compare_evidence_bundles(
+    left: &ReplayEvidenceBundle,
+    right: &ReplayEvidenceBundle,
+) -> EvidenceBundleDiff {
+    let mut diff = EvidenceBundleDiff::default();
+    if left.tick != right.tick {
+        diff.tick = Some((left.tick, right.tick));
+    }
+    if left.policy_version != right.policy_version {
+        diff.policy_version = Some((left.policy_version, right.policy_version));
+    }
+    if left.active_body_count != right.active_body_count {
+        diff.active_body_count = Some((left.active_body_count, right.active_body_count));
+    }
+    if left.active_body_digest != right.active_body_digest {
+        diff.active_body_digest = Some((left.active_body_digest, right.active_body_digest));
+    }
+    if left.lifecycle_counts != right.lifecycle_counts {
+        diff.lifecycle_counts = Some((left.lifecycle_counts, right.lifecycle_counts));
+    }
+    if left.contact_evidence != right.contact_evidence {
+        diff.contact_evidence = Some((left.contact_evidence, right.contact_evidence));
+    }
+
+    // Shard ownership diff: walk a sorted union of shard ids.
+    let mut shards: Vec<ReplayShardId> = left
+        .shard_ownership
+        .iter()
+        .map(|row| row.shard)
+        .chain(right.shard_ownership.iter().map(|row| row.shard))
+        .collect();
+    shards.sort_unstable_by_key(|s| s.0);
+    shards.dedup();
+    for shard in shards {
+        let l = left
+            .shard_ownership
+            .iter()
+            .find(|row| row.shard == shard)
+            .copied();
+        let r = right
+            .shard_ownership
+            .iter()
+            .find(|row| row.shard == shard)
+            .copied();
+        if l != r {
+            diff.shard_ownership_divergences
+                .push(ShardOwnershipDivergence {
+                    shard,
+                    left: l,
+                    right: r,
+                });
+        }
+    }
+    diff
+}
+
+/// Convenience: hash an arbitrary contact byte stream into a
+/// `contact_digest`. Callers serialise their contact state in
+/// canonical order then call this so [`ReplayEvidenceBundle`]s
+/// generated by different code paths agree on the hashing
+/// convention.
+#[must_use]
+pub fn contact_digest(canonical_bytes: &[u8]) -> u64 {
+    fnv1a64(canonical_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,5 +952,287 @@ mod tests {
         // The active-body digest of an empty bucket is the FNV-1a
         // offset basis since no bytes are fed.
         assert_eq!(digest.active_body_digest, 0xcbf29ce484222325);
+    }
+
+    // ---- V2-P6 replay evidence bundle tests --------------------------
+
+    fn empty_contact_evidence() -> ReplayContactEvidence {
+        ReplayContactEvidence::default()
+    }
+
+    #[test]
+    fn evidence_bundle_two_runs_over_same_input_compare_equal() {
+        // V2-P6 spec: the bundle's whole point is "two replays
+        // produce identical bundles iff the V2-P6 surfaces agree".
+        let registry = build_two_shard_registry();
+        let a = build_evidence_bundle(
+            &registry,
+            NetworkTick(7),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let b = build_evidence_bundle(
+            &registry,
+            NetworkTick(7),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let diff = compare_evidence_bundles(&a, &b);
+        assert!(diff.is_empty(), "identical inputs must compare equal");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn evidence_bundle_active_body_digest_matches_state_digest() {
+        // The bundle's `active_body_digest` must equal the canonical
+        // state-digest's active-body bucket — there is one canonical
+        // hash per bucket, not two.
+        let registry = build_two_shard_registry();
+        let bundle = build_evidence_bundle(
+            &registry,
+            NetworkTick(3),
+            PolicyVersion(22),
+            empty_contact_evidence(),
+        );
+        let digest = build_state_digest(&registry, NetworkTick(3), PolicyVersion(22));
+        assert_eq!(bundle.active_body_digest, digest.active_body_digest);
+    }
+
+    #[test]
+    fn evidence_bundle_diff_localises_active_body_drift() {
+        // Two registries differing only in one body's pose: the
+        // bundle's active-body digest must diverge while lifecycle
+        // counts + shard ownership agree.
+        let mut registry_a = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_a = registry_a.add_shard(CellId::new(0, 0, 0));
+        registry_a
+            .shard_mut(shard_a)
+            .expect("shard 0")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_dynamic_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Quat::IDENTITY,
+                    Vec3::ZERO,
+                    Vec3::ZERO,
+                    shard_a,
+                ),
+            );
+        let mut registry_b = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_b = registry_b.add_shard(CellId::new(0, 0, 0));
+        registry_b
+            .shard_mut(shard_b)
+            .expect("shard 0")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_dynamic_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::new(1.5, 0.0, 0.0), // different pose
+                    Quat::IDENTITY,
+                    Vec3::ZERO,
+                    Vec3::ZERO,
+                    shard_b,
+                ),
+            );
+        let a = build_evidence_bundle(
+            &registry_a,
+            NetworkTick(5),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let b = build_evidence_bundle(
+            &registry_b,
+            NetworkTick(5),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let diff = compare_evidence_bundles(&a, &b);
+        assert!(!diff.is_empty(), "different poses must drive a diff");
+        assert!(
+            diff.active_body_digest.is_some(),
+            "pose drift must surface as an active-body digest divergence"
+        );
+        assert!(
+            diff.active_body_count.is_none(),
+            "the body count is the same — no count divergence"
+        );
+        assert!(
+            diff.lifecycle_counts.is_none(),
+            "the lifecycle ladder is the same — no count divergence"
+        );
+        assert!(
+            diff.shard_ownership_divergences.is_empty(),
+            "ownership rows are the same — no ownership divergence"
+        );
+    }
+
+    #[test]
+    fn evidence_bundle_diff_localises_lifecycle_drift() {
+        // Same body in both registries but in different tiers:
+        // lifecycle counts diverge, body count stays the same.
+        let mut registry_a = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_a = registry_a.add_shard(CellId::new(0, 0, 0));
+        registry_a
+            .shard_mut(shard_a)
+            .expect("shard")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Active,
+                    Vec3::ZERO,
+                    shard_a,
+                ),
+            );
+        let mut registry_b = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_b = registry_b.add_shard(CellId::new(0, 0, 0));
+        registry_b
+            .shard_mut(shard_b)
+            .expect("shard")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(1),
+                make_record(
+                    GlobalPhysicalEntityId(1),
+                    BodyLifecycleTier::Warm, // different tier
+                    Vec3::ZERO,
+                    shard_b,
+                ),
+            );
+        let a = build_evidence_bundle(
+            &registry_a,
+            NetworkTick(5),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let b = build_evidence_bundle(
+            &registry_b,
+            NetworkTick(5),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let diff = compare_evidence_bundles(&a, &b);
+        assert!(
+            diff.lifecycle_counts.is_some(),
+            "lifecycle drift must surface"
+        );
+        // Active-body digest also diverges because the tier byte
+        // contributes to the per-body hash.
+        assert!(diff.active_body_digest.is_some());
+    }
+
+    #[test]
+    fn evidence_bundle_diff_localises_shard_ownership_drift() {
+        // Two registries identical except registry_b has a body that
+        // registry_a doesn't — the shard ownership counts diverge,
+        // and the per-shard divergence is reported with both sides.
+        let mut registry_a = ShardRegistry::with_cell_size(100.0, 5.0);
+        let _shard_a = registry_a.add_shard(CellId::new(0, 0, 0));
+        let mut registry_b = ShardRegistry::with_cell_size(100.0, 5.0);
+        let shard_b = registry_b.add_shard(CellId::new(0, 0, 0));
+        registry_b
+            .shard_mut(shard_b)
+            .expect("shard")
+            .physics
+            .bodies
+            .insert(
+                GlobalPhysicalEntityId(99),
+                make_record(
+                    GlobalPhysicalEntityId(99),
+                    BodyLifecycleTier::Active,
+                    Vec3::ZERO,
+                    shard_b,
+                ),
+            );
+        let a = build_evidence_bundle(
+            &registry_a,
+            NetworkTick(1),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let b = build_evidence_bundle(
+            &registry_b,
+            NetworkTick(1),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        let diff = compare_evidence_bundles(&a, &b);
+        assert!(!diff.is_empty());
+        assert_eq!(diff.shard_ownership_divergences.len(), 1);
+        let row = diff.shard_ownership_divergences[0];
+        assert_eq!(row.shard, ReplayShardId(0));
+        assert_eq!(row.left.expect("left present").authoritative_count, 0);
+        assert_eq!(row.right.expect("right present").authoritative_count, 1);
+    }
+
+    #[test]
+    fn evidence_bundle_diff_localises_contact_drift() {
+        // Same registry, different contact evidence → contacts
+        // bucket diverges only.
+        let registry = build_two_shard_registry();
+        let contacts_a = ReplayContactEvidence {
+            active_contact_count: 4,
+            sleeping_contact_count: 0,
+            contact_digest: contact_digest(b"a"),
+        };
+        let contacts_b = ReplayContactEvidence {
+            active_contact_count: 5, // different
+            sleeping_contact_count: 0,
+            contact_digest: contact_digest(b"b"),
+        };
+        let a = build_evidence_bundle(&registry, NetworkTick(2), PolicyVersion(20), contacts_a);
+        let b = build_evidence_bundle(&registry, NetworkTick(2), PolicyVersion(20), contacts_b);
+        let diff = compare_evidence_bundles(&a, &b);
+        assert!(
+            diff.contact_evidence.is_some(),
+            "contact divergence must surface"
+        );
+        assert!(
+            diff.active_body_digest.is_none(),
+            "registry is the same — bodies must agree"
+        );
+    }
+
+    #[test]
+    fn evidence_bundle_total_bodies_matches_lifecycle_total() {
+        let registry = build_two_shard_registry();
+        let bundle = build_evidence_bundle(
+            &registry,
+            NetworkTick(0),
+            PolicyVersion(20),
+            empty_contact_evidence(),
+        );
+        // Two-shard fixture has 4 bodies (2 active + 1 warm + 1 ghost).
+        assert_eq!(bundle.total_bodies(), 4);
+        assert_eq!(bundle.active_body_count, 4);
+        assert_eq!(bundle.lifecycle_counts.total(), bundle.total_bodies());
+    }
+
+    #[test]
+    fn contact_digest_uses_thunder_canonical_hash() {
+        // V2-P6 dedupe gate: there is one FNV-1a 64 implementation
+        // (thunder::hash::fnv1a64). Pin this through the convenience
+        // wrapper.
+        assert_eq!(contact_digest(b"a"), thunder::hash::fnv1a64(b"a"));
+        assert_eq!(contact_digest(b""), thunder::hash::FNV_OFFSET_64);
+    }
+
+    #[test]
+    fn empty_evidence_bundle_diff_is_empty() {
+        // Default-constructed bundles are equal trivially.
+        let a = ReplayEvidenceBundle::default();
+        let b = ReplayEvidenceBundle::default();
+        let diff = compare_evidence_bundles(&a, &b);
+        assert!(diff.is_empty());
     }
 }
