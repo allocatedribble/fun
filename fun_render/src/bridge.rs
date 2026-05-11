@@ -370,14 +370,15 @@ pub fn renderer_bridge_initialize_runtime(
         // `unchanged_visible(PROOF_SCENE)` signal so the
         // legacy bridge tests + cold-boot path continue to
         // work.
-        let fallback_signal =
-            [LuxSceneChangeSignal::unchanged_visible(LuxSceneId::PROOF_SCENE, 0)];
+        let fallback_signal = [LuxSceneChangeSignal::unchanged_visible(
+            LuxSceneId::PROOF_SCENE,
+            0,
+        )];
         let extracted_signals: &[LuxSceneChangeSignal] = match extraction_bridge.as_deref() {
             Some(b) if b.has_signals() => b.signals(),
             _ => &fallback_signal,
         };
-        let lux_plan =
-            planner.build_frame_plan(clear_color_frame.frame_index, extracted_signals);
+        let lux_plan = planner.build_frame_plan(clear_color_frame.frame_index, extracted_signals);
 
         let lux_compile_report =
             LuxGraphCompiler::compile_lux_plan(&mut graph, &mut resource_registry, &lux_plan);
@@ -1244,7 +1245,9 @@ mod tests {
         // code via its as_str() rendering.
         let artifact = graph.debug_artifact(&diagnostics);
         assert!(
-            artifact.content.contains("lux_pass_reads_unwritten_resource"),
+            artifact
+                .content
+                .contains("lux_pass_reads_unwritten_resource"),
             "debug artifact must surface the typed Lux failure: {}",
             artifact.content,
         );

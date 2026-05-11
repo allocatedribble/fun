@@ -298,7 +298,11 @@ mod tests {
         let bridge = app.world().resource::<FunRenderLuxExtractionBridge>();
         assert_eq!(bridge.signals.len(), 1);
         let signal = &bridge.signals[0];
-        assert!(!signal.dirty(), "minimal signal must not be dirty: {:?}", signal);
+        assert!(
+            !signal.dirty(),
+            "minimal signal must not be dirty: {:?}",
+            signal
+        );
         let report = app.world().resource::<FunRenderLuxExtractionReport>();
         assert!(!report.saw_scene_work());
     }
@@ -313,9 +317,7 @@ mod tests {
         // shows added_lights >= 1.
         run_extraction(&mut app);
         // Remove the component.
-        app.world_mut()
-            .entity_mut(entity)
-            .remove::<LuxLight>();
+        app.world_mut().entity_mut(entity).remove::<LuxLight>();
         run_extraction(&mut app);
         let bridge = app.world().resource::<FunRenderLuxExtractionBridge>();
         let signal = &bridge.signals[0];
@@ -344,17 +346,16 @@ mod tests {
         let mut bridge = FunRenderLuxExtractionBridge::COLD_DEFAULT;
         assert!(!bridge.has_signals());
         assert!(bridge.is_minimal()); // empty iter = all-true
-        bridge
-            .signals
-            .push(LuxSceneChangeSignal::unchanged_visible(
-                LuxSceneId::PROOF_SCENE,
-                0,
-            ));
+        bridge.signals.push(LuxSceneChangeSignal::unchanged_visible(
+            LuxSceneId::PROOF_SCENE,
+            0,
+        ));
         assert!(bridge.has_signals());
         assert!(bridge.is_minimal());
-        bridge
-            .signals
-            .push(LuxSceneChangeSignal::light_changed(LuxSceneId::PROOF_SCENE, 1));
+        bridge.signals.push(LuxSceneChangeSignal::light_changed(
+            LuxSceneId::PROOF_SCENE,
+            1,
+        ));
         assert!(!bridge.is_minimal());
         bridge.reset();
         assert!(!bridge.has_signals());

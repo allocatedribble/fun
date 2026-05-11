@@ -52,11 +52,6 @@ pub use bridge::{
     renderer_bridge_extract_noop, renderer_bridge_frame_description_from_settings,
     renderer_bridge_initialize_runtime,
 };
-pub use lux_extraction::{
-    FUN_RENDER_LUX_EXTRACTION_SCHEMA_VERSION, FunRenderLuxExtractionBridge,
-    FunRenderLuxExtractionReport, fun_render_lux_extraction_system,
-    install_renderer_bridge_lux_extraction,
-};
 pub use capabilities::{
     BevyBackendCapabilityReport, BridgeFeatureFlagReport, RENDERER_CAPABILITY_REPORT_PATH_ENV,
     RENDERER_CAPABILITY_REPORT_SCHEMA, RendererCapabilityReport, emit_renderer_capability_report,
@@ -256,6 +251,11 @@ pub use instance_tables::{
     InstanceTableArenaWriteRequest, InstanceTableKind, InstanceUploadPath, InstanceUploadPlan,
     StaticInstanceAllocation, StaticInstanceAllocationRecord, StaticInstanceTable,
     write_instance_range_with_existing_encoder,
+};
+pub use lux_extraction::{
+    FUN_RENDER_LUX_EXTRACTION_SCHEMA_VERSION, FunRenderLuxExtractionBridge,
+    FunRenderLuxExtractionReport, fun_render_lux_extraction_system,
+    install_renderer_bridge_lux_extraction,
 };
 pub use material_pipeline::{
     DATA_FLAG_CLEARCOAT, DATA_FLAG_EMISSIVE_BOOST, DATA_FLAG_PARALLAX_MAPPING,
