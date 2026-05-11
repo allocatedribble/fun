@@ -6,6 +6,23 @@ pub mod asset_prep;
 pub mod backend;
 pub mod benchmark;
 pub mod binding;
+// Pass C0 / C1 — typed cloud renderer ownership.  The
+// typed product cloud renderer is owned by `fun-renderer`;
+// the typed `fun_render::sky` module stays as a typed
+// bridge / migration donor that extracts settings,
+// weather, and signals from the typed Bevy app world.
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_diagnostics;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_executor;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_passes;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_resources;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shadow;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod clouds;
 #[cfg(feature = "wgpu_bridge")]
 pub mod bridge;
 #[cfg(feature = "bevy_ecs")]
@@ -945,6 +962,19 @@ pub use api::*;
 pub use asset_prep::*;
 pub use backend::*;
 pub use benchmark::*;
+// Pass C0 / C1 typed cloud renderer re-exports.
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_diagnostics::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_executor::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_passes::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_resources::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shadow::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use clouds::*;
 #[cfg(feature = "bevy_ecs")]
 pub use component_api::*;
 #[cfg(feature = "bevy_ecs")]
