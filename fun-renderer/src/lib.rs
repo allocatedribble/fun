@@ -42,6 +42,8 @@ pub mod cloud_shadow_pipelines;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_runtime_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shadow_runtime_probe;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod clouds;
 #[cfg(feature = "bevy_ecs")]
 pub mod component_api;
@@ -1029,6 +1031,8 @@ pub use cloud_shadow_passes::*;
 pub use cloud_shadow_pipelines::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_runtime_diagnostics::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shadow_runtime_probe::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use clouds::*;
 #[cfg(feature = "bevy_ecs")]
