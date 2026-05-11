@@ -34,6 +34,8 @@ pub mod live_proof_frame_executor;
 pub mod lux_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_graph;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge", feature = "fun_renderer_core"))]
+pub mod lux_live_lighting;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod lux_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
@@ -959,6 +961,8 @@ pub use live_proof_frame_executor::*;
 pub use lux_diagnostics::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_graph::*;
+#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge", feature = "fun_renderer_core"))]
+pub use lux_live_lighting::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]

@@ -172,6 +172,18 @@ impl PhysicalClassPolicy {
 }
 
 impl PhysicalClass {
+    /// True when bodies of this class are gameplay-critical under the
+    /// spec-default policy table — i.e., they must never be demoted
+    /// in response to shard / budget pressure. Mirrors
+    /// [`PhysicalClassPolicy::gameplay_critical`] for the default
+    /// policy and is the predicate the V2-P5 shard runtime consults
+    /// before scheduling demotion actions.
+    pub const fn is_gameplay_critical(self) -> bool {
+        self.default_policy().gameplay_critical
+    }
+}
+
+impl PhysicalClass {
     /// Spec-default LOD policy. Tuned so that:
     /// - Players, vehicles, projectiles, and door/platforms are
     ///   gameplay-critical and can never demote under pressure.

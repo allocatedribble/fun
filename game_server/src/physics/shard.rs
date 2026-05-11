@@ -964,6 +964,869 @@ fn upsert_in_pool(
     );
 }
 
+// ============================================================================
+// V2-P5: Shard runtime productionization
+// ----------------------------------------------------------------------------
+// Adds typed surface for shard runtime mode + per-shard work scheduling +
+// transfer-window state machine + overload policy + overload actions on top
+// of the existing prototype. Default behaviour is unchanged: the prototype
+// shard continues to operate on `ShardRuntimeMode::SingleProcessFixedGrid`,
+// which mirrors today's behaviour. Distributed and dynamic-grid modes ship
+// as typed surfaces only — actual implementations land in follow-up passes.
+// ============================================================================
+
+use super::physical_lod::PhysicalClass;
+
+/// Top-level shard runtime mode selecting how the host distributes shard
+/// work across processes and grid topology.
+///
+/// Default = [`Self::SingleProcessFixedGrid`] (current production behaviour).
+/// The other two variants ship as typed shapes for V2-P5; their actual
+/// implementations land in later passes.
+#[derive(Resource, Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Reflect)]
+#[reflect(Debug, PartialEq, Hash)]
+pub enum ShardRuntimeMode {
+    /// **Production default.** All shards live in one process on a
+    /// fixed grid layout; shard work scheduling is single-process,
+    /// deterministic across independent shards in authoritative mode.
+    #[default]
+    SingleProcessFixedGrid,
+    /// Single-process, with the shard grid rebalancing dynamically
+    /// based on load. Typed surface only in V2-P5; the rebalancing
+    /// scheduler lands in a follow-up pass.
+    SingleProcessDynamicGrid,
+    /// Distributed across multiple processes (or hosts). Typed
+    /// surface only in V2-P5; the cross-process transfer transport
+    /// lands when the Thunder bridge wires up.
+    DistributedExperimental,
+}
+
+impl ShardRuntimeMode {
+    /// Stable diagnostic name for telemetry / config bundles.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SingleProcessFixedGrid => "single_process_fixed_grid",
+            Self::SingleProcessDynamicGrid => "single_process_dynamic_grid",
+            Self::DistributedExperimental => "distributed_experimental",
+        }
+    }
+
+    /// True if the mode runs all shards in one process.
+    pub const fn is_single_process(self) -> bool {
+        matches!(
+            self,
+            Self::SingleProcessFixedGrid | Self::SingleProcessDynamicGrid
+        )
+    }
+
+    /// True if the grid topology may rebalance at runtime.
+    pub const fn allows_dynamic_grid(self) -> bool {
+        matches!(
+            self,
+            Self::SingleProcessDynamicGrid | Self::DistributedExperimental
+        )
+    }
+}
+
+/// Per-shard work item the scheduler hands out. One item per active
+/// shard per tick; ordered deterministically when the active mode
+/// requires authoritative semantics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ShardWorkItem {
+    /// Which shard this work item is for.
+    pub shard: ShardId,
+    /// Cell the shard occupies (deterministic order key).
+    pub cell: CellId,
+    /// Tick the work item runs on.
+    pub tick: u32,
+}
+
+impl ShardWorkItem {
+    /// Convenience constructor.
+    pub const fn new(shard: ShardId, cell: CellId, tick: u32) -> Self {
+        Self { shard, cell, tick }
+    }
+}
+
+/// Per-shard work scheduler.
+///
+/// Walks the [`ShardRegistry`] to emit one [`ShardWorkItem`] per
+/// active shard. In authoritative mode the items are sorted by
+/// (cell, shard) so the cross-shard solve order is deterministic;
+/// independent shards may execute concurrently because the
+/// boundary contract guarantees no double solve.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShardWorkScheduler {
+    /// Mode that gates determinism + parallelism.
+    pub mode: ShardRuntimeMode,
+}
+
+impl ShardWorkScheduler {
+    /// New scheduler in `mode`.
+    pub const fn new(mode: ShardRuntimeMode) -> Self {
+        Self { mode }
+    }
+
+    /// Build the per-tick work queue from `registry`. Items are
+    /// **always** sorted by (cell row-major, shard) for
+    /// deterministic ordering — the V2-P5 contract requires
+    /// determinism in authoritative mode and the cost of sorting a
+    /// shard-count-sized vector is negligible.
+    pub fn build(&self, registry: &ShardRegistry, tick: u32) -> Vec<ShardWorkItem> {
+        let mut items: Vec<ShardWorkItem> = registry
+            .iter_shards()
+            .map(|shard| ShardWorkItem::new(shard.identity.id, shard.identity.cell, tick))
+            .collect();
+        // Cross-shard order is z-major then y, then x, then shard id —
+        // matches the existing determinism contract documented at
+        // the head of this file. The (z, y, x) sort key keeps
+        // neighbouring rows of the grid contiguous in iteration order.
+        items.sort_by(|a, b| {
+            (a.cell.z, a.cell.y, a.cell.x, a.shard.0)
+                .cmp(&(b.cell.z, b.cell.y, b.cell.x, b.shard.0))
+        });
+        items
+    }
+
+    /// True if the scheduler is allowed to dispatch work items in
+    /// parallel across independent shards. Always `true` for
+    /// `SingleProcessFixedGrid` because the boundary contract
+    /// guarantees no double solve; `SingleProcessDynamicGrid` and
+    /// `DistributedExperimental` opt in to parallelism per tick.
+    pub const fn allows_parallel_independent_shards(&self) -> bool {
+        true
+    }
+}
+
+/// Per-shard hard limits used by [`evaluate_shard_overload`].
+///
+/// Cross-cutting V2-P5 budget covering active rigid bodies, particles,
+/// contacts, dirty bytes, solver wall-time, and wakeup count. Mirrors
+/// the existing [`ShardBudget`] but adds the new fields the V2-P5 spec
+/// calls out (particles, contacts, dirty bytes, solver_ns,
+/// wakeups_per_tick). Leaves the existing `ShardBudget` in place —
+/// the V2-P5 wide budget is opt-in via [`ShardOverloadPolicy`].
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct ShardOverloadPolicy {
+    /// Maximum active rigid bodies in this shard.
+    pub max_active_rigid_bodies: u32,
+    /// Maximum live particles (any kind) in this shard.
+    pub max_active_particles: u32,
+    /// Maximum live contacts (active + sensor) in this shard.
+    pub max_active_contacts: u32,
+    /// Maximum dirty-output bytes published per tick.
+    pub max_dirty_bytes_per_tick: u32,
+    /// Maximum wall-clock nanoseconds the solver may spend per tick.
+    pub max_solver_ns_per_tick: u64,
+    /// Maximum wakeup commands applied per tick. Excess defers to
+    /// the next tick.
+    pub max_wakeups_per_tick: u32,
+    /// Soft fraction (0.0..=1.0) at which the runtime emits a
+    /// pressure diagnostic.
+    pub soft_pressure_fraction: f32,
+}
+
+impl Default for ShardOverloadPolicy {
+    fn default() -> Self {
+        Self {
+            max_active_rigid_bodies: 16_384,
+            max_active_particles: 1_000_000,
+            max_active_contacts: 65_536,
+            max_dirty_bytes_per_tick: 1_048_576,
+            max_solver_ns_per_tick: 8_000_000,
+            max_wakeups_per_tick: 1_024,
+            soft_pressure_fraction: 0.75,
+        }
+    }
+}
+
+/// Coarse pressure level reported by [`evaluate_shard_overload`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[repr(u8)]
+pub enum ShardPressureLevel {
+    /// Under all soft thresholds.
+    #[default]
+    None = 0,
+    /// Past at least one soft threshold but no hard breach.
+    Soft = 1,
+    /// Past at least one hard threshold — overload action required.
+    Hard = 2,
+}
+
+/// Action the runtime may take in response to budget pressure.
+///
+/// V2-P5 spec set: defer wake, demote eligible body, aggregate
+/// debris, reduce non-critical fidelity, emit diagnostic. Each is a
+/// typed enum variant; the runtime's chosen actions land in
+/// [`ShardOverloadReport::actions`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ShardOverloadAction {
+    /// Defer one or more wakeup commands to the next tick.
+    DeferWake,
+    /// Demote one or more eligible (non-gameplay-critical) bodies
+    /// back to warm.
+    DemoteEligibleBody,
+    /// Aggregate debris into a single combined body to free slots.
+    AggregateDebris,
+    /// Reduce solver fidelity for non-critical bodies (lower
+    /// iteration count, simpler contact resolution).
+    ReduceNonCriticalFidelity,
+    /// Emit a diagnostic without taking a state-changing action
+    /// (used at soft pressure).
+    EmitDiagnostic,
+}
+
+/// Result of one [`evaluate_shard_overload`] call.
+#[derive(Clone, Debug, Default)]
+pub struct ShardOverloadReport {
+    /// Aggregate pressure level.
+    pub pressure: ShardPressureLevel,
+    /// Actions the runtime should take this tick.
+    pub actions: Vec<ShardOverloadAction>,
+    /// True if the active-body cap was breached.
+    pub bodies_over_cap: bool,
+    /// True if the particle cap was breached.
+    pub particles_over_cap: bool,
+    /// True if the contact cap was breached.
+    pub contacts_over_cap: bool,
+    /// True if the dirty-bytes cap was breached.
+    pub dirty_bytes_over_cap: bool,
+    /// True if the solver-time cap was breached.
+    pub solver_ns_over_cap: bool,
+}
+
+/// Per-class demote eligibility check. Honours
+/// [`PhysicalClassPolicy`]'s gameplay-critical guard — bodies whose
+/// class is gameplay-critical are NEVER demoted under pressure.
+///
+/// V2-P5 spec: "Preserve PhysicalClassPolicy gameplay-critical
+/// guard."
+pub const fn is_demote_eligible(class: PhysicalClass) -> bool {
+    !class.is_gameplay_critical()
+}
+
+/// Pure-function overload evaluator. No I/O, no allocation beyond
+/// the action list.
+pub fn evaluate_shard_overload(
+    policy: &ShardOverloadPolicy,
+    active_rigid_bodies: u32,
+    active_particles: u32,
+    active_contacts: u32,
+    dirty_bytes_this_tick: u32,
+    solver_ns_this_tick: u64,
+) -> ShardOverloadReport {
+    let bodies_over_cap = active_rigid_bodies > policy.max_active_rigid_bodies;
+    let particles_over_cap = active_particles > policy.max_active_particles;
+    let contacts_over_cap = active_contacts > policy.max_active_contacts;
+    let dirty_bytes_over_cap = dirty_bytes_this_tick > policy.max_dirty_bytes_per_tick;
+    let solver_ns_over_cap = solver_ns_this_tick > policy.max_solver_ns_per_tick;
+
+    let any_hard = bodies_over_cap
+        || particles_over_cap
+        || contacts_over_cap
+        || dirty_bytes_over_cap
+        || solver_ns_over_cap;
+
+    let soft_threshold = |cap: u32| -> u32 {
+        if cap == 0 {
+            return u32::MAX;
+        }
+        (cap as f32 * policy.soft_pressure_fraction) as u32
+    };
+    let any_soft = active_rigid_bodies > soft_threshold(policy.max_active_rigid_bodies)
+        || active_particles > soft_threshold(policy.max_active_particles)
+        || active_contacts > soft_threshold(policy.max_active_contacts)
+        || dirty_bytes_this_tick > soft_threshold(policy.max_dirty_bytes_per_tick);
+
+    let pressure = if any_hard {
+        ShardPressureLevel::Hard
+    } else if any_soft {
+        ShardPressureLevel::Soft
+    } else {
+        ShardPressureLevel::None
+    };
+
+    let mut actions = Vec::new();
+    if bodies_over_cap {
+        actions.push(ShardOverloadAction::DemoteEligibleBody);
+        actions.push(ShardOverloadAction::AggregateDebris);
+    }
+    if particles_over_cap || dirty_bytes_over_cap {
+        actions.push(ShardOverloadAction::ReduceNonCriticalFidelity);
+    }
+    if contacts_over_cap || solver_ns_over_cap {
+        actions.push(ShardOverloadAction::DeferWake);
+    }
+    if matches!(pressure, ShardPressureLevel::Soft) {
+        actions.push(ShardOverloadAction::EmitDiagnostic);
+    }
+
+    ShardOverloadReport {
+        pressure,
+        actions,
+        bodies_over_cap,
+        particles_over_cap,
+        contacts_over_cap,
+        dirty_bytes_over_cap,
+        solver_ns_over_cap,
+    }
+}
+
+/// Boundary contract: which shard owns the body vs which shard
+/// holds the ghost mirror. V2-P5 spec: "authoritative shard owns
+/// body, neighbor shard owns ghost, one solver owner per pair, no
+/// double solve."
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BoundaryOwnership {
+    /// The body whose ownership is described.
+    pub body: GlobalPhysicalEntityId,
+    /// Authoritative shard — the only shard that solves the body.
+    pub authoritative: ShardId,
+    /// Optional ghost shard — mirrors the body's state for boundary
+    /// contact generation; **does not** solve.
+    pub ghost: Option<ShardId>,
+}
+
+impl BoundaryOwnership {
+    /// True if `shard` is the solver-owner for this body.
+    pub fn is_solver_owner(&self, shard: ShardId) -> bool {
+        self.authoritative == shard
+    }
+
+    /// True if `shard` holds the ghost mirror.
+    pub fn is_ghost_owner(&self, shard: ShardId) -> bool {
+        self.ghost == Some(shard)
+    }
+}
+
+/// Cross-shard transfer state — V2-P5 four-stage handoff window.
+///
+/// Stages: `Outgoing` → `Ghosted` → `Acknowledged` → `Finalized`.
+/// The transfer's destination becomes the new authoritative owner
+/// only at `Finalized`; intermediate stages keep the source as
+/// authoritative so contacts continue to be solved exactly once.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[repr(u8)]
+pub enum TransferWindowStage {
+    /// Source shard is preparing to release ownership; destination
+    /// has not been notified yet.
+    #[default]
+    Outgoing = 0,
+    /// Source has notified destination; destination has inserted
+    /// a ghost mirror so its boundary contact generation can see
+    /// the body. Source is still authoritative.
+    Ghosted = 1,
+    /// Destination has acknowledged the ghost; both sides agree on
+    /// the body's state. Source is still authoritative.
+    Acknowledged = 2,
+    /// Ownership has flipped: destination is now authoritative,
+    /// source has retired the body. Ghost mirrors collapse.
+    Finalized = 3,
+}
+
+impl TransferWindowStage {
+    /// Stable diagnostic name for telemetry.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Outgoing => "outgoing",
+            Self::Ghosted => "ghosted",
+            Self::Acknowledged => "acknowledged",
+            Self::Finalized => "finalized",
+        }
+    }
+
+    /// True if `self` represents an in-flight transfer (anything
+    /// before `Finalized`).
+    pub const fn is_in_flight(self) -> bool {
+        !matches!(self, Self::Finalized)
+    }
+
+    /// Advance to the next stage. Returns `Some(next)` for live
+    /// stages, `None` once finalized.
+    pub const fn advance(self) -> Option<Self> {
+        match self {
+            Self::Outgoing => Some(Self::Ghosted),
+            Self::Ghosted => Some(Self::Acknowledged),
+            Self::Acknowledged => Some(Self::Finalized),
+            Self::Finalized => None,
+        }
+    }
+}
+
+/// One in-flight cross-shard transfer record. Lives in
+/// [`ShardTransferLedger`] until it reaches `Finalized` and is
+/// retired.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TransferWindow {
+    /// Body being transferred.
+    pub body: GlobalPhysicalEntityId,
+    /// Source shard (current authoritative owner during in-flight).
+    pub from: ShardId,
+    /// Destination shard (becomes authoritative at `Finalized`).
+    pub to: ShardId,
+    /// Current stage.
+    pub stage: TransferWindowStage,
+    /// Linear velocity at handoff start. Preserved across stages so
+    /// the destination can resume integration without state loss.
+    pub linear_velocity: Vec3,
+    /// Angular velocity at handoff start.
+    pub angular_velocity: Vec3,
+    /// Rotation at handoff start.
+    pub rotation: Quat,
+    /// Tick the transfer began on.
+    pub started_tick: u32,
+}
+
+impl TransferWindow {
+    /// New transfer in `Outgoing` stage.
+    pub fn new(
+        body: GlobalPhysicalEntityId,
+        from: ShardId,
+        to: ShardId,
+        linear_velocity: Vec3,
+        angular_velocity: Vec3,
+        rotation: Quat,
+        tick: u32,
+    ) -> Self {
+        Self {
+            body,
+            from,
+            to,
+            stage: TransferWindowStage::Outgoing,
+            linear_velocity,
+            angular_velocity,
+            rotation,
+            started_tick: tick,
+        }
+    }
+
+    /// Authoritative shard given the current stage. Source until
+    /// `Finalized`, destination after.
+    pub const fn solver_owner(&self) -> ShardId {
+        match self.stage {
+            TransferWindowStage::Finalized => self.to,
+            _ => self.from,
+        }
+    }
+}
+
+/// Per-process ledger of in-flight transfer windows.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct ShardTransferLedger {
+    transfers: std::collections::BTreeMap<GlobalPhysicalEntityId, TransferWindow>,
+}
+
+impl ShardTransferLedger {
+    /// Empty ledger.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of in-flight transfers.
+    pub fn len(&self) -> usize {
+        self.transfers.len()
+    }
+
+    /// True if no transfers are in flight.
+    pub fn is_empty(&self) -> bool {
+        self.transfers.is_empty()
+    }
+
+    /// Begin a transfer in `Outgoing` stage.
+    pub fn begin(&mut self, transfer: TransferWindow) -> bool {
+        if self.transfers.contains_key(&transfer.body) {
+            return false;
+        }
+        self.transfers.insert(transfer.body, transfer);
+        true
+    }
+
+    /// Advance the transfer for `body` by one stage. Returns the
+    /// new stage on success; returns `None` if the body has no
+    /// in-flight transfer or the transfer is already finalized.
+    pub fn advance(&mut self, body: GlobalPhysicalEntityId) -> Option<TransferWindowStage> {
+        let entry = self.transfers.get_mut(&body)?;
+        let next = entry.stage.advance()?;
+        entry.stage = next;
+        Some(next)
+    }
+
+    /// Retire a finalized transfer. Returns the removed window for
+    /// downstream telemetry.
+    pub fn retire(&mut self, body: GlobalPhysicalEntityId) -> Option<TransferWindow> {
+        let entry = self.transfers.get(&body)?;
+        if !matches!(entry.stage, TransferWindowStage::Finalized) {
+            return None;
+        }
+        self.transfers.remove(&body)
+    }
+
+    /// Look up the in-flight transfer for `body`, if any.
+    pub fn get(&self, body: GlobalPhysicalEntityId) -> Option<&TransferWindow> {
+        self.transfers.get(&body)
+    }
+
+    /// Iterate transfers in body-id-sorted order (deterministic via
+    /// `BTreeMap`).
+    pub fn iter(
+        &self,
+    ) -> std::collections::btree_map::Iter<'_, GlobalPhysicalEntityId, TransferWindow> {
+        self.transfers.iter()
+    }
+}
+
+#[cfg(test)]
+mod v2p5_tests {
+    use super::*;
+    use crate::physics::physical_lod::PhysicalClass;
+    use bevy::prelude::Vec3;
+
+    fn shard(id: u32) -> ShardId {
+        ShardId(id)
+    }
+
+    fn body(id: u64) -> GlobalPhysicalEntityId {
+        GlobalPhysicalEntityId(id)
+    }
+
+    #[test]
+    fn shard_runtime_mode_default_is_single_process_fixed_grid() {
+        // Production rollback contract: default never silently
+        // routes through dynamic-grid or distributed paths.
+        assert_eq!(
+            ShardRuntimeMode::default(),
+            ShardRuntimeMode::SingleProcessFixedGrid
+        );
+        assert!(ShardRuntimeMode::SingleProcessFixedGrid.is_single_process());
+        assert!(!ShardRuntimeMode::SingleProcessFixedGrid.allows_dynamic_grid());
+    }
+
+    #[test]
+    fn shard_runtime_mode_classifies_paths() {
+        assert!(ShardRuntimeMode::SingleProcessDynamicGrid.is_single_process());
+        assert!(ShardRuntimeMode::SingleProcessDynamicGrid.allows_dynamic_grid());
+        assert!(!ShardRuntimeMode::DistributedExperimental.is_single_process());
+        assert!(ShardRuntimeMode::DistributedExperimental.allows_dynamic_grid());
+    }
+
+    #[test]
+    fn shard_runtime_mode_names_are_stable() {
+        assert_eq!(
+            ShardRuntimeMode::SingleProcessFixedGrid.as_str(),
+            "single_process_fixed_grid"
+        );
+        assert_eq!(
+            ShardRuntimeMode::DistributedExperimental.as_str(),
+            "distributed_experimental"
+        );
+    }
+
+    #[test]
+    fn scheduler_emits_one_item_per_active_shard_in_deterministic_order() {
+        // Two shards on a 4x1x1 grid; scheduler must emit them in
+        // deterministic cell order regardless of registration order.
+        let mut registry = ShardRegistry::with_cell_size(1.0, 0.0);
+        registry.add_shard(CellId::new(2, 0, 0));
+        registry.add_shard(CellId::new(0, 0, 0));
+        let scheduler = ShardWorkScheduler::default();
+        let items = scheduler.build(&registry, 7);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].cell, CellId::new(0, 0, 0));
+        assert_eq!(items[1].cell, CellId::new(2, 0, 0));
+        assert_eq!(items[0].tick, 7);
+        // Independent shards may run in parallel.
+        assert!(scheduler.allows_parallel_independent_shards());
+    }
+
+    #[test]
+    fn scheduler_is_deterministic_across_runs() {
+        let make_items = || {
+            let mut registry = ShardRegistry::with_cell_size(1.0, 0.0);
+            for cell in [
+                CellId::new(0, 1, 0),
+                CellId::new(1, 0, 0),
+                CellId::new(0, 0, 0),
+                CellId::new(1, 1, 0),
+            ] {
+                registry.add_shard(cell);
+            }
+            ShardWorkScheduler::default().build(&registry, 1)
+        };
+        let a = make_items();
+        let b = make_items();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn boundary_ownership_one_solver_per_pair() {
+        // Body owned by shard 0 with ghost on shard 1: shard 0 is
+        // the solver owner; shard 1 holds the ghost only.
+        let ownership = BoundaryOwnership {
+            body: body(7),
+            authoritative: shard(0),
+            ghost: Some(shard(1)),
+        };
+        assert!(ownership.is_solver_owner(shard(0)));
+        assert!(!ownership.is_solver_owner(shard(1)));
+        assert!(!ownership.is_ghost_owner(shard(0)));
+        assert!(ownership.is_ghost_owner(shard(1)));
+    }
+
+    #[test]
+    fn boundary_ownership_no_double_solve() {
+        // Two shards looking at the same body: at most one is the
+        // solver owner. The boundary contract is enforced by the
+        // single `authoritative` field.
+        let ownership = BoundaryOwnership {
+            body: body(7),
+            authoritative: shard(0),
+            ghost: Some(shard(1)),
+        };
+        let solvers: Vec<ShardId> = [shard(0), shard(1), shard(2)]
+            .into_iter()
+            .filter(|s| ownership.is_solver_owner(*s))
+            .collect();
+        assert_eq!(solvers.len(), 1, "exactly one solver owner");
+        assert_eq!(solvers[0], shard(0));
+    }
+
+    #[test]
+    fn transfer_window_walks_four_stages_in_order() {
+        let stage = TransferWindowStage::default();
+        assert_eq!(stage, TransferWindowStage::Outgoing);
+        assert!(stage.is_in_flight());
+
+        let stage = stage.advance().unwrap();
+        assert_eq!(stage, TransferWindowStage::Ghosted);
+        assert!(stage.is_in_flight());
+
+        let stage = stage.advance().unwrap();
+        assert_eq!(stage, TransferWindowStage::Acknowledged);
+        assert!(stage.is_in_flight());
+
+        let stage = stage.advance().unwrap();
+        assert_eq!(stage, TransferWindowStage::Finalized);
+        assert!(!stage.is_in_flight());
+        assert!(stage.advance().is_none());
+    }
+
+    #[test]
+    fn transfer_preserves_rotation_and_velocity_across_stages() {
+        let mut window = TransferWindow::new(
+            body(1),
+            shard(0),
+            shard(1),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(4.0, 5.0, 6.0),
+            Quat::from_xyzw(0.1, 0.2, 0.3, 0.927),
+            42,
+        );
+        let original_lin = window.linear_velocity;
+        let original_ang = window.angular_velocity;
+        let original_rot = window.rotation;
+        // Walk through every stage.
+        for _ in 0..3 {
+            window.stage = window.stage.advance().unwrap();
+        }
+        assert_eq!(window.stage, TransferWindowStage::Finalized);
+        assert_eq!(window.linear_velocity, original_lin);
+        assert_eq!(window.angular_velocity, original_ang);
+        assert_eq!(window.rotation, original_rot);
+    }
+
+    #[test]
+    fn transfer_solver_owner_flips_only_at_finalized() {
+        let mut window = TransferWindow::new(
+            body(1),
+            shard(0),
+            shard(1),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            0,
+        );
+        // Source owns through Outgoing / Ghosted / Acknowledged.
+        for _ in 0..3 {
+            assert_eq!(
+                window.solver_owner(),
+                shard(0),
+                "source remains authoritative until Finalized"
+            );
+            if let Some(next) = window.stage.advance() {
+                window.stage = next;
+            }
+        }
+        // Now finalized.
+        assert_eq!(window.stage, TransferWindowStage::Finalized);
+        assert_eq!(window.solver_owner(), shard(1));
+    }
+
+    #[test]
+    fn transfer_ledger_advance_and_retire() {
+        let mut ledger = ShardTransferLedger::default();
+        let window = TransferWindow::new(
+            body(1),
+            shard(0),
+            shard(1),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            0,
+        );
+        assert!(ledger.begin(window));
+        assert_eq!(ledger.len(), 1);
+        // Retire before finalized → fails.
+        assert!(ledger.retire(body(1)).is_none());
+        // Advance through every stage.
+        assert_eq!(ledger.advance(body(1)), Some(TransferWindowStage::Ghosted));
+        assert_eq!(
+            ledger.advance(body(1)),
+            Some(TransferWindowStage::Acknowledged)
+        );
+        assert_eq!(
+            ledger.advance(body(1)),
+            Some(TransferWindowStage::Finalized)
+        );
+        // No further advance.
+        assert!(ledger.advance(body(1)).is_none());
+        // Retire works now.
+        let retired = ledger.retire(body(1)).unwrap();
+        assert_eq!(retired.body, body(1));
+        assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn duplicate_transfer_begin_rejected() {
+        let mut ledger = ShardTransferLedger::default();
+        let w = TransferWindow::new(
+            body(1),
+            shard(0),
+            shard(1),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            0,
+        );
+        assert!(ledger.begin(w));
+        assert!(!ledger.begin(w), "duplicate transfer rejected");
+    }
+
+    #[test]
+    fn overload_evaluator_no_pressure_under_caps() {
+        let policy = ShardOverloadPolicy::default();
+        let report = evaluate_shard_overload(&policy, 100, 1_000, 100, 1_000, 100_000);
+        assert_eq!(report.pressure, ShardPressureLevel::None);
+        assert!(report.actions.is_empty());
+        assert!(!report.bodies_over_cap);
+    }
+
+    #[test]
+    fn overload_evaluator_soft_pressure_emits_diagnostic() {
+        // 13_000 active bodies on a 16_384 cap with 0.75 soft
+        // fraction → soft pressure (12_288 threshold).
+        let policy = ShardOverloadPolicy::default();
+        let report = evaluate_shard_overload(&policy, 13_000, 1_000, 100, 1_000, 100_000);
+        assert_eq!(report.pressure, ShardPressureLevel::Soft);
+        assert!(
+            report
+                .actions
+                .contains(&ShardOverloadAction::EmitDiagnostic)
+        );
+        assert!(!report.bodies_over_cap);
+    }
+
+    #[test]
+    fn overload_evaluator_hard_pressure_demotes_eligible_bodies() {
+        let policy = ShardOverloadPolicy::default();
+        let report = evaluate_shard_overload(&policy, 20_000, 1_000, 100, 1_000, 100_000);
+        assert_eq!(report.pressure, ShardPressureLevel::Hard);
+        assert!(report.bodies_over_cap);
+        assert!(
+            report
+                .actions
+                .contains(&ShardOverloadAction::DemoteEligibleBody)
+        );
+        assert!(
+            report
+                .actions
+                .contains(&ShardOverloadAction::AggregateDebris)
+        );
+    }
+
+    #[test]
+    fn overload_evaluator_contact_breach_defers_wake() {
+        let policy = ShardOverloadPolicy::default();
+        let report = evaluate_shard_overload(&policy, 100, 1_000, 100_000, 1_000, 100_000);
+        assert_eq!(report.pressure, ShardPressureLevel::Hard);
+        assert!(report.contacts_over_cap);
+        assert!(report.actions.contains(&ShardOverloadAction::DeferWake));
+    }
+
+    #[test]
+    fn overload_evaluator_dirty_bytes_reduces_fidelity() {
+        let policy = ShardOverloadPolicy::default();
+        let report = evaluate_shard_overload(
+            &policy,
+            100,
+            1_000,
+            100,
+            policy.max_dirty_bytes_per_tick + 1,
+            100_000,
+        );
+        assert_eq!(report.pressure, ShardPressureLevel::Hard);
+        assert!(report.dirty_bytes_over_cap);
+        assert!(
+            report
+                .actions
+                .contains(&ShardOverloadAction::ReduceNonCriticalFidelity)
+        );
+    }
+
+    #[test]
+    fn gameplay_critical_classes_never_demote_under_pressure() {
+        // V2-P5 spec: "Preserve PhysicalClassPolicy gameplay-critical
+        // guard."
+        assert!(!is_demote_eligible(PhysicalClass::Player));
+        assert!(!is_demote_eligible(PhysicalClass::Vehicle));
+        // Non-critical classes are eligible.
+        assert!(is_demote_eligible(PhysicalClass::Rubble));
+        assert!(is_demote_eligible(PhysicalClass::BackgroundActor));
+        assert!(is_demote_eligible(PhysicalClass::AggregateRubbleField));
+    }
+
+    #[test]
+    fn replay_digest_stable_across_handoff() {
+        // Two independent ledgers walking the same transfer through
+        // the same stage sequence must produce identical
+        // post-handoff state. This is the V2-P5 closest analog to
+        // "replay digest stable across handoff" before the
+        // shard-runtime digest path is wired.
+        let build = || {
+            let mut ledger = ShardTransferLedger::default();
+            let w = TransferWindow::new(
+                body(7),
+                shard(0),
+                shard(1),
+                Vec3::new(1.0, 2.0, 3.0),
+                Vec3::new(4.0, 5.0, 6.0),
+                Quat::from_xyzw(0.1, 0.2, 0.3, 0.927),
+                100,
+            );
+            ledger.begin(w);
+            for _ in 0..3 {
+                ledger.advance(body(7));
+            }
+            let post = ledger.get(body(7)).cloned().unwrap();
+            ledger.retire(body(7));
+            (post.solver_owner(), post.linear_velocity, post.rotation)
+        };
+        let a = build();
+        let b = build();
+        assert_eq!(a, b, "handoff produces deterministic post-state");
+        assert_eq!(a.0, shard(1), "post-handoff solver owner is destination");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

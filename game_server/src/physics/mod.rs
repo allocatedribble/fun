@@ -65,9 +65,12 @@ pub use replay_bridge::{
 };
 #[allow(unused_imports)]
 pub use shard::{
-    BodyLifecycleCommand, BodyLifecycleTier, CellId, GlobalPhysicalEntityId, ShardBodyRecord,
-    ShardBudget, ShardId, ShardIdentity, ShardLocalBodyId, ShardNeighbors, ShardPhysics,
-    ShardRegistry, ShardRegistryDiagnostics, ShardReplication, ShardRuntime,
+    BodyLifecycleCommand, BodyLifecycleTier, BoundaryOwnership, CellId, GlobalPhysicalEntityId,
+    ShardBodyRecord, ShardBudget, ShardId, ShardIdentity, ShardLocalBodyId, ShardNeighbors,
+    ShardOverloadAction, ShardOverloadPolicy, ShardOverloadReport, ShardPhysics,
+    ShardPressureLevel, ShardRegistry, ShardRegistryDiagnostics, ShardReplication, ShardRuntime,
+    ShardRuntimeMode, ShardTransferLedger, ShardWorkItem, ShardWorkScheduler, TransferWindow,
+    TransferWindowStage, evaluate_shard_overload, is_demote_eligible,
 };
 #[allow(unused_imports)]
 pub use thunder_bridge::ThunderPhysicsDeltaSnapshot;
