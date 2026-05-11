@@ -80,6 +80,7 @@ pub mod research;
 pub mod runtime;
 pub mod scene_lighting;
 pub mod shadow;
+pub mod shadow_update_plan;
 pub mod tonemap;
 pub mod volumetric;
 pub mod world;
@@ -113,6 +114,7 @@ pub use research::*;
 pub use runtime::*;
 pub use scene_lighting::*;
 pub use shadow::*;
+pub use shadow_update_plan::*;
 pub use tonemap::*;
 pub use volumetric::*;
 pub use world::{
