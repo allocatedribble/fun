@@ -18,6 +18,8 @@ pub mod cloud_diagnostics;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_executor;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_gpu_resource_set;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_receive_lux_lighting;
@@ -997,6 +999,8 @@ pub use benchmark::*;
 pub use cloud_diagnostics::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_executor::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_gpu_resource_set::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
