@@ -15,6 +15,8 @@ pub mod acceleration_bridge;
 #[allow(dead_code)]
 pub mod active_pool;
 #[allow(dead_code)]
+pub mod avis_rigid_mvp;
+#[allow(dead_code)]
 pub mod cold_storage;
 #[allow(dead_code)]
 pub mod physical_lod;
@@ -36,6 +38,12 @@ pub use active_pool::{
     ActiveBodyDirtyRow, ActiveBodyHandle, ActiveBodyId, ActiveBodyKind, ActiveBodyRow,
     ActivePhysicsHandle, ActivePhysicsPool, ActivePhysicsPoolPlugin, ActivePoolDiagnostics,
     ActivePoolDirtyMask, ActivePoolPolicy, ActivePoolWritebackMode,
+};
+#[allow(unused_imports)]
+pub use avis_rigid_mvp::{
+    AvisRigidBroadProxyLanes, AvisRigidDiagnostics, AvisRigidDirtyRow, AvisRigidExperimental,
+    AvisRigidMode, avis_dirty_outputs_to_ecs_writeback, avis_dirty_outputs_to_thunder_bridge,
+    ecs_extraction_to_avis_lane,
 };
 #[allow(unused_imports)]
 pub use cold_storage::{

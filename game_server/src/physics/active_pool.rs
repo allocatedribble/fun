@@ -1915,7 +1915,7 @@ mod tests {
         assert!(pool.remove_entity(entity));
         // Slot is freed but the lane entry still exists (occupied=false).
         let lanes = pool.body_lane_view().unwrap();
-        assert_eq!(lanes.occupied[handle.id.raw() as usize], false);
+        assert!(!lanes.occupied[handle.id.raw() as usize]);
         // Stale handle no longer resolves.
         assert!(pool.row_owned(handle).is_none());
         // Slot reuse picks the same id back up with a bumped generation.
