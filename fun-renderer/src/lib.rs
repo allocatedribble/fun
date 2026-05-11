@@ -38,6 +38,8 @@ pub mod cloud_shadow_golden_scenes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_live_executor;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod cloud_shadow_look_tuning;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_passes;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod cloud_shadow_pipelines;
@@ -1031,6 +1033,8 @@ pub use cloud_shadow_dispatch_feedback::*;
 pub use cloud_shadow_golden_scenes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_live_executor::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use cloud_shadow_look_tuning::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use cloud_shadow_passes::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
