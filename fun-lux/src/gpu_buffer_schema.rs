@@ -246,7 +246,9 @@ impl FunLuxLightIndexBufferSchema {
     pub const PRODUCT_DEFAULT: Self = Self {
         schema_version: FUN_LUX_GPU_BUFFER_SCHEMA_VERSION,
         stable_id: "fun_lux.gpu.light_index_buffer",
-        max_cluster_count: 16 * 8 * 24,
+        // Pass 6 harmonization: 16 × 9 × 24 matches
+        // `LuxClusterGridTier::High`.
+        max_cluster_count: 16 * 9 * 24,
         max_lights_per_cluster: 32,
         bytes_per_index: 4,
         layout_mode: FunLuxGpuBufferLayoutMode::TightlyPacked,
@@ -279,8 +281,14 @@ impl FunLuxClusterGridBufferSchema {
     pub const PRODUCT_DEFAULT: Self = Self {
         schema_version: FUN_LUX_GPU_BUFFER_SCHEMA_VERSION,
         stable_id: "fun_lux.gpu.cluster_grid_buffer",
+        // Pass 6 harmonization: matches
+        // `LuxClusterGridTier::High` (16 × 9 × 24) and
+        // fun-renderer's `lighting_stack` constants. Pass 4
+        // shipped 16 × 8 × 24; the typed
+        // `LuxClusterGridLayout` in `gpu_layout` is the
+        // source of truth and this buffer schema mirrors it.
         clusters_x: 16,
-        clusters_y: 8,
+        clusters_y: 9,
         clusters_z: 24,
         bytes_per_cluster_record: 32,
         layout_mode: FunLuxGpuBufferLayoutMode::StructureOfArrays,
@@ -529,13 +537,16 @@ mod tests {
     fn light_index_schema_default_uses_tightly_packed() {
         let schema = FunLuxLightIndexBufferSchema::PRODUCT_DEFAULT;
         assert_eq!(schema.layout_mode, FunLuxGpuBufferLayoutMode::TightlyPacked,);
-        assert_eq!(schema.total_byte_size(), (16u64 * 8 * 24) * 32 * 4,);
+        // Pass 6 harmonization: cluster grid is 16 × 9 × 24.
+        assert_eq!(schema.total_byte_size(), (16u64 * 9 * 24) * 32 * 4,);
     }
 
     #[test]
     fn cluster_grid_schema_cluster_count_walks_dimensions() {
         let schema = FunLuxClusterGridBufferSchema::PRODUCT_DEFAULT;
-        assert_eq!(schema.cluster_count(), 16 * 8 * 24);
+        // Pass 6 harmonization: cluster grid is 16 × 9 × 24
+        // (matches `LuxClusterGridTier::High`).
+        assert_eq!(schema.cluster_count(), 16 * 9 * 24);
     }
 
     /// Pass 4 acceptance: typed bundle predicate — every

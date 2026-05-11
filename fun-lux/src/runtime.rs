@@ -372,20 +372,23 @@ impl LuxFramePlanner {
                 .push(LuxPassRequest::ClusterLights(ClusterLightsPass {
                     common: LuxPassCommon::new("fun_lux.scene.cluster_lights", tier)
                         .depends_on("fun_lux.scene.upload_light_buffers"),
+                    // Pass 6 harmonization: cluster grid is
+                    // 16 × 9 × 24 (matches
+                    // `LuxClusterGridTier::High`).
                     clusters_x: 16,
-                    clusters_y: 8,
+                    clusters_y: 9,
                     clusters_z: 24,
                     max_lights_per_cluster: 32,
                 }));
             scene.resources.push(LuxResourceIntent::ClusterGrid {
                 stable_id: "fun_lux.scene.cluster_grid",
                 clusters_x: 16,
-                clusters_y: 8,
+                clusters_y: 9,
                 clusters_z: 24,
             });
             scene.resources.push(LuxResourceIntent::LightIndexBuffer {
                 stable_id: "fun_lux.scene.light_index_buffer",
-                max_cluster_count: 16 * 8 * 24,
+                max_cluster_count: 16 * 9 * 24,
                 max_lights_per_cluster: 32,
             });
         }
