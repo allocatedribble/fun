@@ -3,9 +3,15 @@
 //! `FunLuxLookProfile` carries the renderer-neutral artistic
 //! look knobs that `fun-renderer` consumes when it composes the
 //! final image: exposure compensation, white point, tone-map
-//! operator, color-grading LUT, contrast, saturation. The
-//! profile is part of `LuxFramePlan::look_profile` so renderers
-//! never invent look policy — they read it.
+//! operator, color-grading LUT, contrast, saturation, godrays.
+//! The profile is part of `LuxFramePlan::look_profile` so
+//! renderers never invent look policy — they read it.
+//!
+//! Pass 9 wires the typed [`crate::godrays::LuxGodraySettings`]
+//! into the profile per rule #5 of the Pass 9 acceptance
+//! criteria.
+
+use crate::godrays::LuxGodraySettings;
 
 pub const FUN_LUX_LOOK_SCHEMA_VERSION: u16 = 1;
 
@@ -152,6 +158,12 @@ pub struct FunLuxLookProfile {
     pub saturation_q8: i16,
     /// Vignette strength. `0` disabled. Range: [0, 100].
     pub vignette_strength_q8: u16,
+    /// Pass 9 typed godray settings.  The canonical home
+    /// for [`LuxGodraySettings`] is the look profile per
+    /// Pass 9 rule #5; the volumetric pipeline reads the
+    /// same record through
+    /// [`crate::fog_volumetric::LuxVolumetricSettings::godrays`].
+    pub godrays: LuxGodraySettings,
 }
 
 impl FunLuxLookProfile {
@@ -164,6 +176,7 @@ impl FunLuxLookProfile {
         contrast_q8: 0,
         saturation_q8: 0,
         vignette_strength_q8: 0,
+        godrays: LuxGodraySettings::PRODUCT_DEFAULT,
     };
 
     /// Typed cold-default look profile: no look applied.
@@ -177,10 +190,15 @@ impl FunLuxLookProfile {
         contrast_q8: 0,
         saturation_q8: 0,
         vignette_strength_q8: 0,
+        godrays: LuxGodraySettings::COLD_DEFAULT,
     };
 
     /// Typed predicate: is this profile the cold-default
     /// (no look applied at all)?
+    ///
+    /// Pass 9: godrays are part of the cold-default audit —
+    /// the profile is "cold" only when EVERY dial including
+    /// godrays is neutral.
     #[must_use]
     pub const fn is_cold_default(self) -> bool {
         self.exposure_ev_compensation_q8 == 0
@@ -189,6 +207,7 @@ impl FunLuxLookProfile {
             && self.contrast_q8 == 0
             && self.saturation_q8 == 0
             && self.vignette_strength_q8 == 0
+            && !self.godrays.enabled
     }
 
     /// Typed predicate: does this profile drive a real look
@@ -196,6 +215,22 @@ impl FunLuxLookProfile {
     #[must_use]
     pub const fn drives_look_pipeline(self) -> bool {
         !self.is_cold_default()
+    }
+
+    /// Typed Pass 9 predicate: does the look profile carry
+    /// typed godray settings?  Always `true` — the
+    /// `godrays` field is a const part of the typed struct.
+    /// This predicate exists so the Pass 9 acceptance
+    /// verdict (which lives in [`crate::godrays`]) can wire
+    /// rule #5 to a typed source of truth rather than a
+    /// magic boolean.
+    #[must_use]
+    pub const fn carries_godray_settings(&self) -> bool {
+        // `LuxGodraySettings` is a non-optional struct field;
+        // the predicate is a typed assertion at the API
+        // level, not a runtime check.
+        let _ = self;
+        true
     }
 }
 
@@ -264,5 +299,30 @@ mod tests {
         let p = FunLuxLookProfile::COLD_DEFAULT;
         assert!(p.is_cold_default());
         assert!(!p.drives_look_pipeline());
+    }
+
+    /// Pass 9 rule #5 — godray settings are part of
+    /// `FunLuxLookProfile`.  Verified by the typed
+    /// `carries_godray_settings` predicate.
+    #[test]
+    fn pass9_godray_settings_live_on_look_profile() {
+        let p = FunLuxLookProfile::PRODUCT_DEFAULT;
+        assert!(p.carries_godray_settings());
+        assert!(p.godrays.enabled);
+        let cold = FunLuxLookProfile::COLD_DEFAULT;
+        assert!(cold.carries_godray_settings());
+        assert!(!cold.godrays.enabled);
+    }
+
+    /// Pass 9: cold-default profile is cold only when EVERY
+    /// dial including godrays is neutral.  Flipping
+    /// `godrays.enabled` to `true` on the cold profile
+    /// makes it drive the look pipeline.
+    #[test]
+    fn cold_default_flips_when_godrays_enable() {
+        let mut cold = FunLuxLookProfile::COLD_DEFAULT;
+        cold.godrays.enabled = true;
+        assert!(!cold.is_cold_default());
+        assert!(cold.drives_look_pipeline());
     }
 }

@@ -662,37 +662,16 @@ impl LuxHeightFogSettings {
 }
 
 /// Typed godray sub-settings.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LuxGodraySettings {
-    pub schema_version: u16,
-    pub enabled: bool,
-    /// Default godray intensity Q16 — applied when a light
-    /// doesn't override.
-    pub default_intensity_q16: u16,
-    /// Default godray sharpness Q16.
-    pub default_sharpness_q16: u16,
-    /// Maximum number of lights that contribute godrays
-    /// per frame.
-    pub max_contributing_lights: u32,
-}
-
-impl LuxGodraySettings {
-    pub const PRODUCT_DEFAULT: Self = Self {
-        schema_version: FUN_LUX_FOG_VOLUMETRIC_SCHEMA_VERSION,
-        enabled: true,
-        default_intensity_q16: u16::MAX / 2,
-        default_sharpness_q16: u16::MAX / 2,
-        max_contributing_lights: 32,
-    };
-
-    pub const COLD_DEFAULT: Self = Self {
-        schema_version: FUN_LUX_FOG_VOLUMETRIC_SCHEMA_VERSION,
-        enabled: false,
-        default_intensity_q16: 0,
-        default_sharpness_q16: 0,
-        max_contributing_lights: 0,
-    };
-}
+///
+/// Pass 9 supersedes the Pass 8 placeholder with the typed
+/// canonical [`crate::godrays::LuxGodraySettings`] (8 fields
+/// matching the user spec verbatim).  The canonical home is
+/// [`crate::godrays`] because Pass 9 rule #5 requires the
+/// settings live on the typed [`crate::look::FunLuxLookProfile`].
+/// `LuxVolumetricSettings` re-exports the same record so the
+/// volumetric pipeline + the look profile share one typed
+/// source of truth.
+pub use crate::godrays::LuxGodraySettings;
 
 // ============================================================================
 // Section 10 — Typed top-level volumetric settings (user spec)
