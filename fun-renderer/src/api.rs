@@ -745,7 +745,15 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         | FrameGraphPassRole::LuxReservoirSpatialReuse => PassKind::LuxReservoir,
         FrameGraphPassRole::LuxShadowRequests
         | FrameGraphPassRole::LuxVirtualShadowPages
-        | FrameGraphPassRole::LuxVirtualShadowFilter => PassKind::LuxShadow,
+        | FrameGraphPassRole::LuxVirtualShadowFilter
+        // Pass C7.2 — typed cloud shadow roles share the
+        // typed `LuxShadow` PassKind grouping because they
+        // produce typed shadow data the typed direct-lighting
+        // pass samples alongside the typed Lux virtual
+        // shadow pages.
+        | FrameGraphPassRole::LuxCloudShadowProject
+        | FrameGraphPassRole::LuxCloudShadowFilter
+        | FrameGraphPassRole::LuxCloudShadowRegisterLayer => PassKind::LuxShadow,
         FrameGraphPassRole::LuxDirectLighting => PassKind::LuxDirectLighting,
         FrameGraphPassRole::LuxGiTrace
         | FrameGraphPassRole::LuxGiCacheUpdate

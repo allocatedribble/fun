@@ -186,6 +186,17 @@ impl From<FrameGraphResourceType> for Tier4ResourceTypeOption {
             | FrameGraphResourceType::LuxVolumetricFroxelDensity
             | FrameGraphResourceType::LuxVolumetricFroxelScattering
             | FrameGraphResourceType::LuxVolumetricIntegratedFog => Self::LuxFrameLocal,
+            // Pass C7.2 — typed cloud shadow resources.
+            // `CloudWorldShadowFiltered` is typed persistent
+            // because the typed one-frame-delayed mode reads
+            // the typed PREVIOUS frame's result.  The typed
+            // `CloudWorldShadowTransmittance` + the typed
+            // `CloudShadowProjectionConstants` are typed
+            // frame-local; they are written + consumed
+            // within the same typed frame.
+            FrameGraphResourceType::CloudWorldShadowFiltered => Self::LuxPersistent,
+            FrameGraphResourceType::CloudWorldShadowTransmittance
+            | FrameGraphResourceType::CloudShadowProjectionConstants => Self::LuxFrameLocal,
         }
     }
 }

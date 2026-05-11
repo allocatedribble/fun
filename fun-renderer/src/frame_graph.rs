@@ -112,6 +112,28 @@ pub enum FrameGraphPassRole {
     LuxVolumetricTemporalReproject,
     LuxVolumetricIntegrate,
     LuxVolumetricComposite,
+    // Pass C7.2 — typed cloud shadow roles.  Grouped under
+    // Lux because Lux owns shadow consumption (the typed
+    // direct-lighting pass samples the typed cloud world
+    // shadow alongside the typed Lux virtual shadow pages).
+    //
+    // - LuxCloudShadowProject: typed cloud transmittance →
+    //   world-shadow projection pass.  Reads the typed cloud
+    //   transmittance target produced by the typed
+    //   `CloudPassRole::Raymarch` and writes the typed
+    //   `CloudWorldShadowTransmittance` target.
+    // - LuxCloudShadowFilter: typed gaussian filter +
+    //   distance-fade resolve.  Reads
+    //   `CloudWorldShadowTransmittance`, writes
+    //   `CloudWorldShadowFiltered`.
+    // - LuxCloudShadowRegisterLayer: typed bridge that
+    //   registers the typed filtered cloud shadow as a
+    //   typed Lux shadow layer the typed direct-lighting
+    //   pass can sample alongside the typed virtual
+    //   shadow pages.
+    LuxCloudShadowProject,
+    LuxCloudShadowFilter,
+    LuxCloudShadowRegisterLayer,
     LuxDebugOverlay,
 }
 
@@ -159,6 +181,9 @@ impl FrameGraphPassRole {
             Self::LuxVolumetricTemporalReproject => "lux_volumetric_temporal_reproject",
             Self::LuxVolumetricIntegrate => "lux_volumetric_integrate",
             Self::LuxVolumetricComposite => "lux_volumetric_composite",
+            Self::LuxCloudShadowProject => "lux_cloud_shadow_project",
+            Self::LuxCloudShadowFilter => "lux_cloud_shadow_filter",
+            Self::LuxCloudShadowRegisterLayer => "lux_cloud_shadow_register_layer",
             Self::LuxDebugOverlay => "lux_debug_overlay",
         }
     }
@@ -187,6 +212,9 @@ impl FrameGraphPassRole {
                 | Self::LuxVolumetricTemporalReproject
                 | Self::LuxVolumetricIntegrate
                 | Self::LuxVolumetricComposite
+                | Self::LuxCloudShadowProject
+                | Self::LuxCloudShadowFilter
+                | Self::LuxCloudShadowRegisterLayer
                 | Self::LuxDebugOverlay
         )
     }
@@ -205,6 +233,19 @@ impl FrameGraphPassRole {
             Self::LuxShadowRequests => 120,
             Self::LuxVirtualShadowPages => 130,
             Self::LuxVirtualShadowFilter => 135,
+            // Pass C7.2 — cloud shadow lane sits between
+            // the typed virtual shadow filter (135) and
+            // the typed direct lighting (200) so the typed
+            // direct-lighting pass sees the typed
+            // registered cloud shadow layer alongside the
+            // typed virtual shadow pages.  Same-frame mode
+            // uses these keys directly; one-frame-delayed
+            // mode runs the typed project + filter passes
+            // here but reads the typed PREVIOUS frame's
+            // filtered target in `LuxDirectLighting`.
+            Self::LuxCloudShadowProject => 140,
+            Self::LuxCloudShadowFilter => 145,
+            Self::LuxCloudShadowRegisterLayer => 150,
             Self::LuxDirectLighting => 200,
             Self::LuxGiTrace => 210,
             Self::LuxGiCacheUpdate => 215,
@@ -263,10 +304,22 @@ pub enum FrameGraphResourceType {
     LuxVolumetricFroxelScattering,
     LuxVolumetricIntegratedFog,
     LuxVolumetricHistory,
+    // Pass C7.2 — typed cloud shadow resources.  The
+    // typed `LuxCloudShadowProject` pass writes the
+    // typed `CloudWorldShadowTransmittance` target;
+    // the typed `LuxCloudShadowFilter` pass reads it,
+    // writes `CloudWorldShadowFiltered`.  The typed
+    // `CloudShadowProjectionConstants` uniform carries
+    // the typed sun direction + bounds the typed
+    // direct-lighting pass needs to sample the typed
+    // filtered shadow layer.
+    CloudWorldShadowTransmittance,
+    CloudWorldShadowFiltered,
+    CloudShadowProjectionConstants,
 }
 
 impl FrameGraphResourceType {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 37] = [
         Self::RenderResolutionSceneColor,
         Self::DisplayResolutionSceneColor,
         Self::Depth,
@@ -301,6 +354,10 @@ impl FrameGraphResourceType {
         Self::LuxVolumetricFroxelScattering,
         Self::LuxVolumetricIntegratedFog,
         Self::LuxVolumetricHistory,
+        // Pass C7.2 — typed cloud shadow resources.
+        Self::CloudWorldShadowTransmittance,
+        Self::CloudWorldShadowFiltered,
+        Self::CloudShadowProjectionConstants,
     ];
 
     #[must_use]
@@ -340,6 +397,9 @@ impl FrameGraphResourceType {
             Self::LuxVolumetricFroxelScattering => "lux_volumetric_froxel_scattering",
             Self::LuxVolumetricIntegratedFog => "lux_volumetric_integrated_fog",
             Self::LuxVolumetricHistory => "lux_volumetric_history",
+            Self::CloudWorldShadowTransmittance => "cloud_world_shadow_transmittance",
+            Self::CloudWorldShadowFiltered => "cloud_world_shadow_filtered",
+            Self::CloudShadowProjectionConstants => "cloud_shadow_projection_constants",
         }
     }
 

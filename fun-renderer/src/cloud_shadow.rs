@@ -1,14 +1,21 @@
-//! Pass C0 / C1 — typed cloud world-shadow settings.
+//! Pass C0 / C1 / C7.2 — typed cloud world-shadow settings
+//! + typed frame-graph ordering.
 //!
 //! The typed cloud raymarch produces a typed transmittance
-//! map (per-pixel cloud opacity toward the sun); Pass C2+
-//! will project this transmittance onto the world to drive
-//! the typed cloud world-shadow mask that terrain +
-//! materials sample.
+//! map (per-pixel cloud opacity toward the sun); Pass C7.2
+//! adds the typed pass roles +
+//! resources that project this transmittance onto the
+//! world to drive the typed cloud world-shadow mask that
+//! terrain + materials sample.
 //!
-//! Pass C0 / C1 lands the typed settings + the typed
-//! resource intent shape; the actual GPU shadow projection
-//! pass lands in a later cloud pass.
+//! Pass C0 / C1 land the typed settings + the typed
+//! resource intent shape.  Pass C7.2 lands the typed
+//! `CloudShadowFrameDelayMode` enum + the typed ordering
+//! predicates against the typed Lux direct-lighting pass.
+//! The actual GPU shadow projection pass lives in a later
+//! cloud pass.
+
+use crate::frame_graph::{FrameGraphPassRole, FrameGraphResourceType};
 
 pub const FUN_RENDERER_CLOUD_SHADOW_SCHEMA_VERSION: u16 = 1;
 
@@ -162,6 +169,145 @@ impl Default for CloudWorldShadowSettings {
     }
 }
 
+// ============================================================================
+// Pass C7.2 — typed frame-delay mode + ordering predicates
+// ============================================================================
+
+/// Typed Pass C7.2 cloud shadow frame-delay mode.  The
+/// typed renderer picks one of these per the typed
+/// product setting; the typed ordering predicates audit
+/// the typed contract holds.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CloudShadowFrameDelayMode {
+    /// Typed one-frame-delayed mode.  Frame N writes the
+    /// typed `CloudWorldShadowFiltered` target; frame N+1
+    /// reads it in the typed `LuxDirectLighting` pass.
+    /// Easier to schedule (the typed project + filter
+    /// passes run anywhere in frame N before the typed
+    /// frame-graph submit), at the cost of one frame of
+    /// stale cloud shadows.
+    #[default]
+    OneFrameDelayed,
+    /// Typed same-frame mode.  Frame N writes the typed
+    /// `CloudWorldShadowFiltered` target AND reads it in
+    /// the typed `LuxDirectLighting` pass.  Harder to
+    /// schedule (the typed project + filter must run
+    /// before the typed direct-lighting pass), but the
+    /// typed cloud shadows track the typed sun + camera
+    /// without a frame of lag.
+    SameFrame,
+}
+
+impl CloudShadowFrameDelayMode {
+    pub const ALL: [Self; 2] = [Self::OneFrameDelayed, Self::SameFrame];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OneFrameDelayed => "one_frame_delayed",
+            Self::SameFrame => "same_frame",
+        }
+    }
+
+    /// Typed predicate: does the typed
+    /// `LuxDirectLighting` pass sample the typed
+    /// CURRENT frame's filtered cloud shadow?  `true` for
+    /// `SameFrame`, `false` for `OneFrameDelayed`.
+    #[must_use]
+    pub const fn samples_current_frame_filtered_shadow(self) -> bool {
+        matches!(self, Self::SameFrame)
+    }
+
+    /// Typed predicate: does the typed
+    /// `LuxDirectLighting` pass sample the typed
+    /// PREVIOUS frame's filtered cloud shadow?  `true`
+    /// for `OneFrameDelayed`.
+    #[must_use]
+    pub const fn samples_previous_frame_filtered_shadow(self) -> bool {
+        matches!(self, Self::OneFrameDelayed)
+    }
+}
+
+/// Typed Pass C7.2 const predicate — the typed cloud
+/// shadow project pass runs BEFORE the typed cloud shadow
+/// filter pass.
+#[must_use]
+pub const fn cloud_shadow_project_runs_before_filter() -> bool {
+    let project = match FrameGraphPassRole::LuxCloudShadowProject.lux_order_key() {
+        Some(k) => k,
+        None => return false,
+    };
+    let filter = match FrameGraphPassRole::LuxCloudShadowFilter.lux_order_key() {
+        Some(k) => k,
+        None => return false,
+    };
+    project < filter
+}
+
+/// Typed Pass C7.2 const predicate — the typed cloud
+/// shadow filter pass runs BEFORE the typed cloud shadow
+/// register-layer pass.
+#[must_use]
+pub const fn cloud_shadow_filter_runs_before_register_layer() -> bool {
+    let filter = match FrameGraphPassRole::LuxCloudShadowFilter.lux_order_key() {
+        Some(k) => k,
+        None => return false,
+    };
+    let register = match FrameGraphPassRole::LuxCloudShadowRegisterLayer.lux_order_key() {
+        Some(k) => k,
+        None => return false,
+    };
+    filter < register
+}
+
+/// Typed Pass C7.2 const predicate — the typed cloud
+/// shadow register-layer pass runs BEFORE the typed
+/// `LuxDirectLighting` pass that consumes the typed
+/// filtered cloud shadow.  Same-frame mode requires this
+/// strictly; one-frame-delayed mode does not (the typed
+/// direct-lighting pass reads the PREVIOUS frame's
+/// result, so the typed register pass can run any time
+/// in the typed current frame).
+#[must_use]
+pub const fn cloud_shadow_register_runs_before_direct_lighting() -> bool {
+    let register = match FrameGraphPassRole::LuxCloudShadowRegisterLayer.lux_order_key() {
+        Some(k) => k,
+        None => return false,
+    };
+    let direct = match FrameGraphPassRole::LuxDirectLighting.lux_order_key() {
+        Some(k) => k,
+        None => return false,
+    };
+    register < direct
+}
+
+/// Typed Pass C7.2 const predicate — every typed cloud
+/// shadow ordering invariant holds.
+#[must_use]
+pub const fn cloud_shadow_ordering_invariants_hold() -> bool {
+    cloud_shadow_project_runs_before_filter()
+        && cloud_shadow_filter_runs_before_register_layer()
+        && cloud_shadow_register_runs_before_direct_lighting()
+}
+
+/// Typed Pass C7.2 const helper — typed slice of the
+/// typed cloud-shadow frame-graph resource types.  Used
+/// by tests + diagnostics that audit "the typed cloud
+/// shadow resources appear in `RendererFrameGraphDiagnostics`."
+pub const CLOUD_SHADOW_RESOURCE_TYPES: &[FrameGraphResourceType] = &[
+    FrameGraphResourceType::CloudWorldShadowTransmittance,
+    FrameGraphResourceType::CloudWorldShadowFiltered,
+    FrameGraphResourceType::CloudShadowProjectionConstants,
+];
+
+/// Typed Pass C7.2 const helper — typed slice of the
+/// typed cloud-shadow frame-graph pass roles.
+pub const CLOUD_SHADOW_PASS_ROLES: &[FrameGraphPassRole] = &[
+    FrameGraphPassRole::LuxCloudShadowProject,
+    FrameGraphPassRole::LuxCloudShadowFilter,
+    FrameGraphPassRole::LuxCloudShadowRegisterLayer,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +348,117 @@ mod tests {
         let mut s = CloudWorldShadowSettings::PRODUCT_DEFAULT;
         s.opacity_scale_q16 = 0;
         assert!(!s.registers_world_shadow_pass());
+    }
+
+    /// Pass C7.2 acceptance — cloud shadow resources
+    /// appear in the typed `FrameGraphResourceType` taxonomy
+    /// (and therefore in `RendererFrameGraphDiagnostics`
+    /// when a typed pass writes one).
+    #[test]
+    fn cloud_shadow_resources_appear_in_frame_graph_resource_types() {
+        // Every typed cloud-shadow resource type appears in
+        // the typed `FrameGraphResourceType::ALL` slice (the
+        // typed source of truth the typed diagnostics + the
+        // typed Tier4 mapping iterate).
+        for kind in CLOUD_SHADOW_RESOURCE_TYPES {
+            assert!(
+                FrameGraphResourceType::ALL.contains(kind),
+                "{:?} missing from FrameGraphResourceType::ALL",
+                kind,
+            );
+            // Every typed name starts with `cloud_` —
+            // distinguishes them from typed `lux_*`
+            // resources at the typed string layer.
+            assert!(kind.as_str().starts_with("cloud_"));
+        }
+        // The typed `is_lux()` predicate intentionally
+        // returns `false` for typed cloud resource types —
+        // cloud resources are produced by typed cloud
+        // passes (grouped under Lux PassKind via the typed
+        // `LuxShadow` mapping) but the typed resources
+        // themselves are typed cloud-owned.
+        for kind in CLOUD_SHADOW_RESOURCE_TYPES {
+            assert!(!kind.is_lux(), "{:?} reports is_lux=true", kind);
+        }
+    }
+
+    /// Pass C7.2 acceptance — cloud shadow project / filter
+    /// passes appear BEFORE any typed pass that consumes
+    /// them.  Verified via the typed `lux_order_key`
+    /// monotonic chain:
+    ///   Project (140) < Filter (145) < Register (150)
+    ///     < LuxDirectLighting (200).
+    #[test]
+    fn cloud_shadow_project_filter_runs_before_consumers() {
+        assert!(cloud_shadow_project_runs_before_filter());
+        assert!(cloud_shadow_filter_runs_before_register_layer());
+        assert!(cloud_shadow_register_runs_before_direct_lighting());
+        assert!(cloud_shadow_ordering_invariants_hold());
+
+        let project = FrameGraphPassRole::LuxCloudShadowProject
+            .lux_order_key()
+            .expect("project has order key");
+        let filter = FrameGraphPassRole::LuxCloudShadowFilter
+            .lux_order_key()
+            .expect("filter has order key");
+        let register = FrameGraphPassRole::LuxCloudShadowRegisterLayer
+            .lux_order_key()
+            .expect("register has order key");
+        let direct = FrameGraphPassRole::LuxDirectLighting
+            .lux_order_key()
+            .expect("direct lighting has order key");
+        assert!(project < filter);
+        assert!(filter < register);
+        assert!(register < direct);
+
+        // Every typed cloud-shadow pass role reports
+        // `is_lux=true` (they live under the typed Lux
+        // shadow grouping per Pass C7.2).
+        for role in CLOUD_SHADOW_PASS_ROLES {
+            assert!(role.is_lux(), "{:?} reports is_lux=false", role);
+        }
+    }
+
+    /// Pass C7.2 acceptance — one-frame-delayed mode is
+    /// explicit, not accidental.  The typed
+    /// `CloudShadowFrameDelayMode` enum carries typed
+    /// predicates that audit which frame's typed filtered
+    /// shadow the typed direct-lighting pass samples.
+    #[test]
+    fn one_frame_delayed_mode_is_explicit() {
+        // Typed `OneFrameDelayed` samples the typed
+        // PREVIOUS frame.
+        assert!(
+            CloudShadowFrameDelayMode::OneFrameDelayed
+                .samples_previous_frame_filtered_shadow(),
+        );
+        assert!(
+            !CloudShadowFrameDelayMode::OneFrameDelayed
+                .samples_current_frame_filtered_shadow(),
+        );
+        // Typed `SameFrame` samples the typed CURRENT
+        // frame.
+        assert!(
+            CloudShadowFrameDelayMode::SameFrame
+                .samples_current_frame_filtered_shadow(),
+        );
+        assert!(
+            !CloudShadowFrameDelayMode::SameFrame
+                .samples_previous_frame_filtered_shadow(),
+        );
+        // Typed default is the typed `OneFrameDelayed`
+        // mode (easier to schedule).
+        let default_mode = CloudShadowFrameDelayMode::default();
+        assert_eq!(default_mode, CloudShadowFrameDelayMode::OneFrameDelayed);
+        // Typed taxonomy has exactly 2 typed variants.
+        assert_eq!(CloudShadowFrameDelayMode::ALL.len(), 2);
+        // Typed predicates are mutually exclusive — exactly
+        // one of `samples_current` / `samples_previous`
+        // returns `true` per mode.
+        for mode in CloudShadowFrameDelayMode::ALL {
+            let current = mode.samples_current_frame_filtered_shadow();
+            let previous = mode.samples_previous_frame_filtered_shadow();
+            assert!(current ^ previous, "{:?} ambiguous", mode);
+        }
     }
 }
