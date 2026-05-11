@@ -59,6 +59,7 @@ winit_presentation = []
 bevy.workspace = true
 fun_dx12_dlss = { path = "../fun_dx12_dlss", optional = true }
 fun_renderer.workspace = true
+hashbrown.workspace = true
 # Pass V2.3 — the typed `lux_extraction` system reads
 # fun-scene's typed lighting components (LuxLight,
 # LuxEmissive, VirtualShadowCaster, VirtualShadowReceiver,

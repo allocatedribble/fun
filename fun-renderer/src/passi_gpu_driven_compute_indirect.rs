@@ -33,7 +33,7 @@
 //! counters. On hosts without DX12 the live boot returns
 //! `BridgeRuntimeFailed` and records honestly.
 
-use std::sync::mpsc::channel;
+use flume::unbounded;
 
 use bevy_ecs::prelude::Resource;
 
@@ -871,7 +871,7 @@ pub fn run_gpu_driven_compute_indirect_against_fresh_dx12_device(
 
     // Map + read the typed debug counters.
     let slice = buffers.debug_counters_readback.slice(..);
-    let (sender, receiver) = channel();
+    let (sender, receiver) = unbounded();
     slice.map_async(::wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
@@ -1046,7 +1046,7 @@ mod tests {
 
     #[test]
     fn rule_str_taxonomy_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassIGpuDrivenComputeIndirectRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }

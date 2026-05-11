@@ -9,7 +9,7 @@
 //! buffers that satisfy the Thunder trait without coupling either crate
 //! to the other.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use bevy::prelude::*;
 use thunder::physics::BodyState3;

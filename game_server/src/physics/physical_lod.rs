@@ -586,8 +586,8 @@ mod tests {
 
     #[test]
     fn classes_have_unique_codes_and_strings() {
-        let mut codes = std::collections::HashSet::new();
-        let mut names = std::collections::HashSet::new();
+        let mut codes = hashbrown::HashSet::new();
+        let mut names = hashbrown::HashSet::new();
         for class in PhysicalClass::ALL {
             assert!(codes.insert(class.code()), "duplicate code for {:?}", class);
             assert!(

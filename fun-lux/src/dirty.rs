@@ -408,7 +408,7 @@ mod tests {
             LuxDirtyFlags::CREATED,
         ];
         assert_eq!(constants.len(), LUX_DIRTY_FLAG_BIT_COUNT);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for c in constants {
             assert!(seen.insert(c.0));
         }

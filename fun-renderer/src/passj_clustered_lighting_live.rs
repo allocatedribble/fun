@@ -42,7 +42,7 @@
 //! the real frame probe pixel. On hosts without DX12 the live
 //! boot returns `BridgeRuntimeFailed` and records honestly.
 
-use std::sync::mpsc::channel;
+use flume::unbounded;
 
 use bevy_ecs::prelude::Resource;
 
@@ -1153,8 +1153,8 @@ pub fn run_clustered_lighting_live_against_fresh_dx12_device(
     // Map both readbacks.
     let counts_slice = buffers.cluster_light_counts_readback.slice(..);
     let probe_slice = target.readback_buffer.slice(..);
-    let (counts_tx, counts_rx) = channel();
-    let (probe_tx, probe_rx) = channel();
+    let (counts_tx, counts_rx) = unbounded();
+    let (probe_tx, probe_rx) = unbounded();
     counts_slice.map_async(::wgpu::MapMode::Read, move |r| {
         let _ = counts_tx.send(r);
     });
@@ -1234,7 +1234,7 @@ mod tests {
 
     #[test]
     fn rule_str_taxonomy_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassJClusteredLightingLiveRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }

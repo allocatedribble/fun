@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn rule_str_taxonomy_is_unique_and_stable() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassCRuntimeCacheBurndownRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }

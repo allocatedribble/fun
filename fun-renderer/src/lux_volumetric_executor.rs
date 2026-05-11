@@ -234,7 +234,10 @@ mod tests {
         planner.current_light_count = 16;
         let plan = planner.build_frame_plan(
             1,
-            &[LuxSceneChangeSignal::light_changed(LuxSceneId::PROOF_SCENE, 1)],
+            &[LuxSceneChangeSignal::light_changed(
+                LuxSceneId::PROOF_SCENE,
+                1,
+            )],
         );
         let mut graph = RendererFrameGraph::default();
         let mut resources = RendererResourceRegistry::default();
@@ -275,12 +278,10 @@ mod tests {
     #[test]
     fn volumetric_composite_runs_before_bloom_and_tonemap_predicate_holds() {
         assert!(volumetric_composite_runs_before_bloom_and_tonemap());
-        let composite =
-            hdr_pipeline_order_key(FrameGraphPassRole::LuxVolumetricComposite).unwrap();
+        let composite = hdr_pipeline_order_key(FrameGraphPassRole::LuxVolumetricComposite).unwrap();
         let bloom_prefilter =
             hdr_pipeline_order_key(FrameGraphPassRole::PostProcessBloomPrefilter).unwrap();
-        let tonemap =
-            hdr_pipeline_order_key(FrameGraphPassRole::PostProcessToneMapping).unwrap();
+        let tonemap = hdr_pipeline_order_key(FrameGraphPassRole::PostProcessToneMapping).unwrap();
         assert!(composite < bloom_prefilter);
         assert!(composite < tonemap);
     }

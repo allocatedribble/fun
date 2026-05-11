@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn evidence_kind_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in EvidenceKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }
@@ -861,7 +861,7 @@ mod tests {
 
     #[test]
     fn integration_test_category_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for category in IntegrationTestCategory::ALL {
             assert!(
                 seen.insert(category.as_str()),

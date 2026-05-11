@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use bevy::{
     core_pipeline::{Core3d, Core3dSystems},

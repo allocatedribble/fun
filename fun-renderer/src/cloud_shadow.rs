@@ -34,8 +34,7 @@ pub enum CloudShadowResolution {
 }
 
 impl CloudShadowResolution {
-    pub const ALL: [Self; 3] =
-        [Self::Cheap1024, Self::Balanced2048, Self::Cinematic4096];
+    pub const ALL: [Self; 3] = [Self::Cheap1024, Self::Balanced2048, Self::Cinematic4096];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -139,9 +138,9 @@ impl CloudWorldShadowSettings {
         resolution: CloudShadowResolution::Balanced2048,
         update_policy: CloudShadowUpdatePolicy::EveryNFrames,
         opacity_scale_q16: 52_429, // ~0.8 — cloud shadows
-                                   // dim but not full
-                                   // opaque
-        softness_q16: 8_192,       // ~0.125 — soft edges
+        // dim but not full
+        // opaque
+        softness_q16: 8_192, // ~0.125 — soft edges
         max_distance_meters: 20_000,
     };
 
@@ -403,10 +402,7 @@ impl LuxDirectLightShadowMath {
     /// both effects multiply into the typed final
     /// visibility.
     #[must_use]
-    pub fn compose_final_direct_visibility(
-        opaque_shadow: f32,
-        cloud_transmittance: f32,
-    ) -> f32 {
+    pub fn compose_final_direct_visibility(opaque_shadow: f32, cloud_transmittance: f32) -> f32 {
         let opaque = opaque_shadow.clamp(0.0, 1.0);
         let cloud = cloud_transmittance.clamp(0.0, 1.0);
         opaque * cloud
@@ -812,8 +808,7 @@ impl CloudShadowProjectionConstants {
     /// `cloud_base_meters >= 0.0`.
     #[must_use]
     pub fn has_valid_cloud_slab(&self) -> bool {
-        self.cloud_base_meters >= 0.0
-            && self.cloud_top_meters > self.cloud_base_meters
+        self.cloud_base_meters >= 0.0 && self.cloud_top_meters > self.cloud_base_meters
     }
 
     /// Typed predicate: do these typed constants describe a
@@ -906,8 +901,7 @@ impl CloudShadowResourceDiagnostics {
                 ..Self::COLD_DEFAULT
             };
         }
-        let format =
-            CloudShadowStorageFormat::for_quality(settings.quality, debug_readback_active);
+        let format = CloudShadowStorageFormat::for_quality(settings.quality, debug_readback_active);
         let (width, height) = settings.world_shadows.resolution.pixel_extent();
         let extent = [width, height];
         let pixel_count = (width as u64).saturating_mul(height as u64);
@@ -928,9 +922,7 @@ impl CloudShadowResourceDiagnostics {
     /// typed cloud shadow GPU bytes this frame?
     #[must_use]
     pub const fn allocated_any_gpu_bytes(&self) -> bool {
-        self.transmittance_bytes > 0
-            || self.filtered_bytes > 0
-            || self.constants_bytes > 0
+        self.transmittance_bytes > 0 || self.filtered_bytes > 0 || self.constants_bytes > 0
     }
 
     /// Typed total typed GPU bytes the typed cloud shadow
@@ -950,15 +942,30 @@ mod tests {
 
     #[test]
     fn cloud_shadow_resolution_taxonomy_walks_user_spec() {
-        assert_eq!(CloudShadowResolution::Cheap1024.pixel_extent(), (1024, 1024));
-        assert_eq!(CloudShadowResolution::Balanced2048.pixel_extent(), (2048, 2048));
-        assert_eq!(CloudShadowResolution::Cinematic4096.pixel_extent(), (4096, 4096));
+        assert_eq!(
+            CloudShadowResolution::Cheap1024.pixel_extent(),
+            (1024, 1024)
+        );
+        assert_eq!(
+            CloudShadowResolution::Balanced2048.pixel_extent(),
+            (2048, 2048)
+        );
+        assert_eq!(
+            CloudShadowResolution::Cinematic4096.pixel_extent(),
+            (4096, 4096)
+        );
     }
 
     #[test]
     fn cloud_shadow_update_policy_default_strides() {
-        assert_eq!(CloudShadowUpdatePolicy::EveryFrame.default_stride_frames(), 1);
-        assert_eq!(CloudShadowUpdatePolicy::EveryNFrames.default_stride_frames(), 4);
+        assert_eq!(
+            CloudShadowUpdatePolicy::EveryFrame.default_stride_frames(),
+            1
+        );
+        assert_eq!(
+            CloudShadowUpdatePolicy::EveryNFrames.default_stride_frames(),
+            4
+        );
         assert_eq!(
             CloudShadowUpdatePolicy::OnWeatherOrSunChange.default_stride_frames(),
             u32::MAX,
@@ -1205,23 +1212,15 @@ mod tests {
         // Typed `OneFrameDelayed` samples the typed
         // PREVIOUS frame.
         assert!(
-            CloudShadowFrameDelayMode::OneFrameDelayed
-                .samples_previous_frame_filtered_shadow(),
+            CloudShadowFrameDelayMode::OneFrameDelayed.samples_previous_frame_filtered_shadow(),
         );
         assert!(
-            !CloudShadowFrameDelayMode::OneFrameDelayed
-                .samples_current_frame_filtered_shadow(),
+            !CloudShadowFrameDelayMode::OneFrameDelayed.samples_current_frame_filtered_shadow(),
         );
         // Typed `SameFrame` samples the typed CURRENT
         // frame.
-        assert!(
-            CloudShadowFrameDelayMode::SameFrame
-                .samples_current_frame_filtered_shadow(),
-        );
-        assert!(
-            !CloudShadowFrameDelayMode::SameFrame
-                .samples_previous_frame_filtered_shadow(),
-        );
+        assert!(CloudShadowFrameDelayMode::SameFrame.samples_current_frame_filtered_shadow(),);
+        assert!(!CloudShadowFrameDelayMode::SameFrame.samples_previous_frame_filtered_shadow(),);
         // Typed default is the typed `OneFrameDelayed`
         // mode (easier to schedule).
         let default_mode = CloudShadowFrameDelayMode::default();
@@ -1250,7 +1249,7 @@ mod tests {
     #[test]
     fn cloud_shadow_projection_mode_taxonomy_walks_user_spec() {
         assert_eq!(CloudShadowProjectionMode::ALL.len(), 3);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for mode in CloudShadowProjectionMode::ALL {
             assert!(seen.insert(mode.as_str()), "duplicate: {}", mode.as_str());
         }
@@ -1286,9 +1285,8 @@ mod tests {
         let sun = [0.3, 0.8, 0.5];
         let frame = 17;
 
-        let cs = CloudShadowProjectionConstants::from_inputs(
-            &settings, profile, light_id, sun, frame,
-        );
+        let cs =
+            CloudShadowProjectionConstants::from_inputs(&settings, profile, light_id, sun, frame);
         // Typed constants name the Lux light id.
         assert_eq!(cs.light_id, light_id);
         // Typed projection mode defaults to the typed
@@ -1323,20 +1321,16 @@ mod tests {
         let d = cs.max_distance_meters;
         // shadow_uv_from_world applied to world (0,_,0) =
         // (0.5, _, 0.5, 1) — typed UV center.
-        let u =
-            cs.shadow_uv_from_world[0][0] * 0.0 + cs.shadow_uv_from_world[0][3];
-        let v =
-            cs.shadow_uv_from_world[2][2] * 0.0 + cs.shadow_uv_from_world[2][3];
+        let u = cs.shadow_uv_from_world[0][0] * 0.0 + cs.shadow_uv_from_world[0][3];
+        let v = cs.shadow_uv_from_world[2][2] * 0.0 + cs.shadow_uv_from_world[2][3];
         assert!((u - 0.5).abs() < 1e-6);
         assert!((v - 0.5).abs() < 1e-6);
         // world_from_shadow_uv applied to UV (0,_,0,1) =
         // (-D, _, -D, 1) — typed UV (0,0) maps to the
         // typed `(-max_distance, _, -max_distance)`
         // corner.
-        let wx =
-            cs.world_from_shadow_uv[0][0] * 0.0 + cs.world_from_shadow_uv[0][3];
-        let wz =
-            cs.world_from_shadow_uv[2][2] * 0.0 + cs.world_from_shadow_uv[2][3];
+        let wx = cs.world_from_shadow_uv[0][0] * 0.0 + cs.world_from_shadow_uv[0][3];
+        let wz = cs.world_from_shadow_uv[2][2] * 0.0 + cs.world_from_shadow_uv[2][3];
         assert!((wx - -d).abs() < 1e-3);
         assert!((wz - -d).abs() < 1e-3);
     }
@@ -1417,9 +1411,8 @@ mod tests {
         let light_id = LuxLightId::new(1);
         let sun = [0.0, 1.0, 0.0];
         for profile in CloudWeatherProfileId::ALL {
-            let cs = CloudShadowProjectionConstants::from_inputs(
-                &settings, profile, light_id, sun, 0,
-            );
+            let cs =
+                CloudShadowProjectionConstants::from_inputs(&settings, profile, light_id, sun, 0);
             assert!(
                 cs.has_valid_cloud_slab(),
                 "{:?} produced an invalid slab",
@@ -1511,9 +1504,7 @@ mod tests {
         // Typed Off quality cascade-disables the pass.
         let mut off_quality = CloudRenderSettings::PRODUCT_DEFAULT;
         off_quality.quality = CloudQuality::Off;
-        let d_off = CloudShadowResourceDiagnostics::from_settings(
-            &off_quality, false, false,
-        );
+        let d_off = CloudShadowResourceDiagnostics::from_settings(&off_quality, false, false);
         assert!(!d_off.enabled);
         assert!(!d_off.allocated_any_gpu_bytes());
 
@@ -1525,7 +1516,10 @@ mod tests {
         let d_cheap = CloudShadowResourceDiagnostics::from_settings(&cheap, false, false);
         assert!(d_cheap.enabled);
         assert_eq!(d_cheap.extent, [1024, 1024]);
-        assert_eq!(d_cheap.transmittance_format, CloudShadowStorageFormat::R8Unorm);
+        assert_eq!(
+            d_cheap.transmittance_format,
+            CloudShadowStorageFormat::R8Unorm
+        );
         // 1024 * 1024 * 1 byte/pixel = 1,048,576 bytes.
         assert_eq!(d_cheap.transmittance_bytes, 1024 * 1024);
 
@@ -1550,9 +1544,7 @@ mod tests {
         // resource byte counts.
         assert_eq!(
             d_cine.total_gpu_bytes(),
-            d_cine.transmittance_bytes
-                + d_cine.filtered_bytes
-                + d_cine.constants_bytes,
+            d_cine.transmittance_bytes + d_cine.filtered_bytes + d_cine.constants_bytes,
         );
     }
 

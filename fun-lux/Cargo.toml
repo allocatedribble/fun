@@ -25,3 +25,4 @@ fun_lux_virtual_shadows = ["virtual_shadows"]
 [dependencies]
 bevy_ecs.workspace = true
 fun_scene.workspace = true
+hashbrown.workspace = true

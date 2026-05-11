@@ -51,7 +51,7 @@
 //! `SurfaceTexture::present`) differs. The windowed lane is
 //! deferred to a binary-layer closeout that pulls in winit.
 
-use std::sync::mpsc::channel;
+use flume::unbounded;
 
 use bevy_ecs::prelude::Resource;
 
@@ -983,7 +983,7 @@ impl LiveGraphExecutor {
         // Step 4: poll the device until the GPU work is done +
         // map the readback buffer.
         let buffer_slice = target.readback_buffer.slice(..);
-        let (sender, receiver) = channel();
+        let (sender, receiver) = unbounded();
         buffer_slice.map_async(::wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
@@ -1119,7 +1119,7 @@ impl LiveGraphExecutor {
         // Step 4: poll the device until the GPU work is done +
         // map the readback buffer.
         let buffer_slice = target.readback_buffer.slice(..);
-        let (sender, receiver) = channel();
+        let (sender, receiver) = unbounded();
         buffer_slice.map_async(::wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
@@ -1283,8 +1283,8 @@ impl LiveGraphExecutor {
         // Step 5: map both readback buffers, poll, read.
         let probe_slice = target.readback_buffer.slice(..);
         let timestamp_slice = timestamps.readback_buffer.slice(..);
-        let (probe_tx, probe_rx) = channel();
-        let (ts_tx, ts_rx) = channel();
+        let (probe_tx, probe_rx) = unbounded();
+        let (ts_tx, ts_rx) = unbounded();
         probe_slice.map_async(::wgpu::MapMode::Read, move |result| {
             let _ = probe_tx.send(result);
         });
@@ -1485,8 +1485,8 @@ impl LiveGraphExecutor {
 
         let probe_slice = target.readback_buffer.slice(..);
         let timestamp_slice = timestamps.readback_buffer.slice(..);
-        let (probe_tx, probe_rx) = channel();
-        let (ts_tx, ts_rx) = channel();
+        let (probe_tx, probe_rx) = unbounded();
+        let (ts_tx, ts_rx) = unbounded();
         probe_slice.map_async(::wgpu::MapMode::Read, move |result| {
             let _ = probe_tx.send(result);
         });
@@ -1785,8 +1785,8 @@ impl LiveGraphExecutor {
         // Map both readbacks, poll, read.
         let probe_slice = target.readback_buffer.slice(..);
         let timestamp_slice = timestamps.readback_buffer.slice(..);
-        let (probe_tx, probe_rx) = channel();
-        let (ts_tx, ts_rx) = channel();
+        let (probe_tx, probe_rx) = unbounded();
+        let (ts_tx, ts_rx) = unbounded();
         probe_slice.map_async(::wgpu::MapMode::Read, move |result| {
             let _ = probe_tx.send(result);
         });

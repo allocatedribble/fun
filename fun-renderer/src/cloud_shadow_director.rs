@@ -601,8 +601,8 @@ pub fn decide_cloud_shadow_refresh(
     // when typed budgets are set AND typed last frame's
     // GPU times exceeded them AND typed the tier permits
     // downgrade.
-    let project_over = budget.project_budget_ns > 0
-        && inputs.last_project_gpu_ns > budget.project_budget_ns;
+    let project_over =
+        budget.project_budget_ns > 0 && inputs.last_project_gpu_ns > budget.project_budget_ns;
     let filter_over =
         budget.filter_budget_ns > 0 && inputs.last_filter_gpu_ns > budget.filter_budget_ns;
     let budget_pressure = project_over || filter_over;
@@ -666,7 +666,10 @@ mod tests {
         // Typed defaults match the user-spec policy.
         assert_eq!(CloudShadowQualityTier::Cheap.default_cadence_frames(), 6);
         assert_eq!(CloudShadowQualityTier::Balanced.default_cadence_frames(), 4);
-        assert_eq!(CloudShadowQualityTier::Cinematic.default_cadence_frames(), 1);
+        assert_eq!(
+            CloudShadowQualityTier::Cinematic.default_cadence_frames(),
+            1
+        );
         assert_eq!(CloudShadowQualityTier::Debug.default_cadence_frames(), 1);
         // Typed resolutions match the user-spec policy.
         assert_eq!(
@@ -744,10 +747,8 @@ mod tests {
         // Typed frames 0 .. cadence-1 → typed skip.
         for frames_idle in 0..3 {
             inputs.frames_since_last_refresh = frames_idle;
-            let decision = decide_cloud_shadow_refresh(
-                &inputs,
-                &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-            );
+            let decision =
+                decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
             assert_eq!(decision.action, CloudShadowRefreshAction::Skip);
             assert_eq!(decision.reason, CloudShadowRefreshReason::StableSkipped);
             assert!(!decision.refreshed_this_frame());
@@ -755,11 +756,12 @@ mod tests {
         // Typed cadence reached at typed frame 4 → typed
         // refresh.
         inputs.frames_since_last_refresh = 4;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
+        assert_eq!(
+            decision.action,
+            CloudShadowRefreshAction::RefreshProjectAndFilter
         );
-        assert_eq!(decision.action, CloudShadowRefreshAction::RefreshProjectAndFilter);
         assert_eq!(decision.reason, CloudShadowRefreshReason::CadenceReached);
     }
 
@@ -770,10 +772,8 @@ mod tests {
         inputs.quality_tier = CloudShadowQualityTier::Balanced;
         inputs.frames_since_last_refresh = 0; // typed below cadence
         inputs.sun_changed = true;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_eq!(decision.action, CloudShadowRefreshAction::ForceRefresh);
         assert_eq!(decision.reason, CloudShadowRefreshReason::SunChanged);
         assert!(decision.refreshed_this_frame());
@@ -787,10 +787,8 @@ mod tests {
         inputs.quality_tier = CloudShadowQualityTier::Balanced;
         inputs.frames_since_last_refresh = 0;
         inputs.weather_changed = true;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_eq!(decision.action, CloudShadowRefreshAction::ForceRefresh);
         assert_eq!(decision.reason, CloudShadowRefreshReason::WeatherChanged);
     }
@@ -805,20 +803,16 @@ mod tests {
         // Typed camera movement = 100 m (above typed
         // PRODUCT_DEFAULT snap threshold of 64 m).
         inputs.camera_movement_meters = 100.0;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_eq!(decision.reason, CloudShadowRefreshReason::CameraSnap);
         assert!(decision.requires_projection_center_snap());
         assert!(decision.projection_center_snap.is_some());
         // Typed movement just below threshold → typed no
         // snap, typed cadence skip.
         inputs.camera_movement_meters = 50.0;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_ne!(decision.reason, CloudShadowRefreshReason::CameraSnap);
         assert!(!decision.requires_projection_center_snap());
     }
@@ -834,10 +828,8 @@ mod tests {
         // Typed last frame's project GPU ns exceeds the
         // typed budget.
         inputs.last_project_gpu_ns = 1_000_000; // > 300_000 budget
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert!(decision.budget_pressure);
         assert_eq!(decision.reason, CloudShadowRefreshReason::BudgetDowngrade);
         // Typed next resolution typed lower than typed
@@ -859,10 +851,8 @@ mod tests {
         inputs.current_resolution = CloudShadowResolution::Cheap1024;
         inputs.frames_since_last_refresh = 6; // typed cadence reached
         inputs.last_project_gpu_ns = 1_000_000;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert!(!decision.budget_pressure);
         assert_eq!(decision.reason, CloudShadowRefreshReason::CadenceReached);
         assert_eq!(decision.next_resolution, CloudShadowResolution::Cheap1024);
@@ -877,10 +867,8 @@ mod tests {
         // Even with typed stable inputs + typed cadence
         // not reached, typed Debug forces a refresh.
         inputs.frames_since_last_refresh = 0;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_eq!(decision.action, CloudShadowRefreshAction::ForceRefresh);
         assert_eq!(decision.reason, CloudShadowRefreshReason::DebugForce);
         assert_eq!(decision.next_cadence_frames, 1);
@@ -893,10 +881,8 @@ mod tests {
         let mut inputs = CloudShadowDirectorInputs::STABLE;
         inputs.quality_tier = CloudShadowQualityTier::Balanced;
         inputs.world_stream_event_pending = true;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_eq!(decision.action, CloudShadowRefreshAction::ForceRefresh);
         assert_eq!(decision.reason, CloudShadowRefreshReason::WorldStreamEvent);
         assert!(decision.requires_projection_center_snap());
@@ -912,10 +898,8 @@ mod tests {
         inputs.sun_changed = true;
         inputs.world_stream_event_pending = true;
         inputs.camera_movement_meters = 1000.0;
-        let decision = decide_cloud_shadow_refresh(
-            &inputs,
-            &CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        );
+        let decision =
+            decide_cloud_shadow_refresh(&inputs, &CloudShadowDirectorBudget::PRODUCT_DEFAULT);
         assert_eq!(decision.reason, CloudShadowRefreshReason::DebugForce);
     }
 

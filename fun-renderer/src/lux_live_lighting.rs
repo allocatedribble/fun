@@ -264,7 +264,12 @@ impl LuxLiveLightInput {
     #[must_use]
     pub const fn to_passj(self) -> PassJLightInput {
         PassJLightInput {
-            position_radius: [self.position[0], self.position[1], self.position[2], self.radius],
+            position_radius: [
+                self.position[0],
+                self.position[1],
+                self.position[2],
+                self.radius,
+            ],
             color_intensity: [self.color[0], self.color[1], self.color[2], self.intensity],
         }
     }

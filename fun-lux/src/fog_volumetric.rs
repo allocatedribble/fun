@@ -1227,7 +1227,7 @@ mod tests {
 
     #[test]
     fn resource_intent_names_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for r in LuxVolumetricResourceIntent::ALL {
             assert!(seen.insert(r.as_str()), "duplicate: {}", r.as_str());
         }

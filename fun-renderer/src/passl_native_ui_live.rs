@@ -64,7 +64,7 @@
 //! four typed probe pixels to prove every pipeline landed
 //! pixels.
 
-use std::sync::mpsc::channel;
+use flume::unbounded;
 
 use bevy_ecs::prelude::Resource;
 
@@ -1547,7 +1547,7 @@ pub fn run_native_ui_live_against_fresh_dx12_device() -> PassLBootResult {
         .submit(::core::iter::once(command_buffer));
 
     let frame_slice = buffers.frame_readback.slice(..);
-    let (tx, rx) = channel();
+    let (tx, rx) = unbounded();
     frame_slice.map_async(::wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
@@ -1613,7 +1613,7 @@ mod tests {
 
     #[test]
     fn rule_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassLNativeUiLiveRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }
@@ -1624,7 +1624,7 @@ mod tests {
         for (i, &kind) in PassLUiQuadKind::ALL.iter().enumerate() {
             assert_eq!(kind.as_float(), i as f32, "{}", kind.as_str());
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in PassLUiQuadKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }

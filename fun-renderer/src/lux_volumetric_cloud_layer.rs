@@ -622,8 +622,7 @@ mod tests {
     #[test]
     fn clear_profile_leaves_volumetric_lighting_unchanged() {
         let light_id = LuxLightId::new(1);
-        let registry =
-            make_registry_with_layer(light_id, CloudShadowFrameDelayMode::SameFrame);
+        let registry = make_registry_with_layer(light_id, CloudShadowFrameDelayMode::SameFrame);
         // Typed clear → typed cloud transmittance = 1.0.
         let compose = apply_cloud_layer_to_volumetric_scattering(
             &registry,
@@ -708,13 +707,19 @@ mod tests {
         // Typed const-layer audit.
         assert!(local_lights_skip_cloud_shadow());
         assert!(directional_lights_attenuate_with_cloud_shadow());
-        assert!(!light_kind_attenuates_with_cloud_shadow(LuxLightKind::Punctual));
+        assert!(!light_kind_attenuates_with_cloud_shadow(
+            LuxLightKind::Punctual
+        ));
         assert!(!light_kind_attenuates_with_cloud_shadow(LuxLightKind::Area));
         assert!(!light_kind_attenuates_with_cloud_shadow(
             LuxLightKind::EmissiveCandidate,
         ));
-        assert!(!light_kind_attenuates_with_cloud_shadow(LuxLightKind::Probe));
-        assert!(light_kind_attenuates_with_cloud_shadow(LuxLightKind::Directional));
+        assert!(!light_kind_attenuates_with_cloud_shadow(
+            LuxLightKind::Probe
+        ));
+        assert!(light_kind_attenuates_with_cloud_shadow(
+            LuxLightKind::Directional
+        ));
 
         // Typed runtime audit — register a typed layer
         // under a typed light id, then run typed every
@@ -843,8 +848,7 @@ mod tests {
     #[test]
     fn no_attenuation_baseline_matches_input() {
         let light_id = LuxLightId::new(1);
-        let compose =
-            VolumetricCloudCompose::no_attenuation(light_id, LuxLightKind::Punctual, 4.0);
+        let compose = VolumetricCloudCompose::no_attenuation(light_id, LuxLightKind::Punctual, 4.0);
         assert!(!compose.attenuation_applied);
         assert!(!compose.layer_found);
         assert_eq!(compose.cloud_transmittance, 1.0);
@@ -888,8 +892,7 @@ mod tests {
     #[test]
     fn both_delay_modes_are_explicit_on_volumetric_records() {
         let light_id = LuxLightId::new(1);
-        let same =
-            make_registry_with_layer(light_id, CloudShadowFrameDelayMode::SameFrame);
+        let same = make_registry_with_layer(light_id, CloudShadowFrameDelayMode::SameFrame);
         let same_compose = apply_cloud_layer_to_volumetric_scattering(
             &same,
             light_id,
@@ -936,7 +939,10 @@ mod tests {
         );
         assert_eq!(from_registry.final_scattering, from_layer.final_scattering);
         assert_eq!(from_registry.latency, from_layer.latency);
-        assert_eq!(from_registry.attenuation_applied, from_layer.attenuation_applied);
+        assert_eq!(
+            from_registry.attenuation_applied,
+            from_layer.attenuation_applied
+        );
 
         // Typed `_with_layer` path also short-circuits for
         // typed local kinds.

@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn user_spec_scene_taxonomy_is_dense() {
         assert_eq!(UserSpecScene::ALL.len(), 6);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for scene in UserSpecScene::ALL {
             assert!(seen.insert(scene.as_str()));
             // Typed scene names exist + are unique.
@@ -571,7 +571,7 @@ mod tests {
         }
         // Typed mapping is dense — typed every user-spec
         // scene maps to a typed unique C7.11 scene.
-        let mut mapped = std::collections::HashSet::new();
+        let mut mapped = hashbrown::HashSet::new();
         for scene in UserSpecScene::ALL {
             assert!(mapped.insert(scene.as_golden_scene()));
         }

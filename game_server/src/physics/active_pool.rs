@@ -17,7 +17,7 @@
 //!   first so the shape can stabilize before any of it migrates into Avian.
 
 use core::sync::atomic::{AtomicU32, Ordering};
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use avian3d::prelude::{
     ActiveBodySource as AvianActiveBodySource, ActiveContactSource as AvianActiveContactSource,

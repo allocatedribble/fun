@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn lifetime_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for lt in LuxResourceLifetime::ALL {
             assert!(seen.insert(lt.as_str()), "duplicate: {}", lt.as_str());
         }

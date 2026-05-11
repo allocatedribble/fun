@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn light_kind_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in FunLuxLightKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }

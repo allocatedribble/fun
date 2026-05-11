@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn pass_kind_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in LuxPassKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn debug_overlay_kind_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in LuxDebugOverlayKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }

@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn cloud_pass_role_taxonomy_is_dense() {
         assert_eq!(CloudPassRole::ALL.len(), 7);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for r in CloudPassRole::ALL {
             assert!(seen.insert(r.as_str()), "duplicate: {}", r.as_str());
             // Every typed name starts with "cloud_".

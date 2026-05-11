@@ -33,6 +33,7 @@ fun_telemetry_core = { workspace = true, optional = true }
 fun_scene.workspace = true
 game_scene = { path = "../game_scene" }
 game_shared = { path = "../game_shared" }
+hashbrown.workspace = true
 log.workspace = true
 ring = "0.17.14"
 serde.workspace = true

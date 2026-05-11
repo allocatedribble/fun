@@ -1,7 +1,7 @@
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 use std::time::Instant;
+use hashbrown::{HashMap, HashSet};
 use std::{
-    collections::{HashMap, HashSet},
     env,
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},

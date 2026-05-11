@@ -449,7 +449,9 @@ mod tests {
         );
         assert_eq!(
             layer.softness_q16,
-            CloudRenderSettings::PRODUCT_DEFAULT.world_shadows.softness_q16,
+            CloudRenderSettings::PRODUCT_DEFAULT
+                .world_shadows
+                .softness_q16,
         );
         assert_eq!(layer.latency, CloudShadowFrameDelayMode::OneFrameDelayed);
     }

@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn density_model_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for model in FunLuxVolumetricDensityModel::ALL {
             assert!(seen.insert(model.as_str()), "duplicate: {}", model.as_str());
         }

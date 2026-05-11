@@ -100,7 +100,8 @@ impl DirectLightingCloudCompose {
     /// acceptance audit.
     #[must_use]
     pub fn cloud_darkens_final_visibility(&self) -> bool {
-        self.layer_found && self.cloud_transmittance < 1.0
+        self.layer_found
+            && self.cloud_transmittance < 1.0
             && self.final_visibility < self.opaque_visibility
     }
 
@@ -163,8 +164,7 @@ pub fn apply_cloud_layer_to_direct_visibility(
     opaque_lux_visibility: f32,
     cloud_transmittance_sample: f32,
 ) -> DirectLightingCloudCompose {
-    let layer =
-        registry.find_for_kind(light_id, LuxShadowAuxLayerKind::CloudTransmittance);
+    let layer = registry.find_for_kind(light_id, LuxShadowAuxLayerKind::CloudTransmittance);
     let Some(layer) = layer else {
         return DirectLightingCloudCompose::no_layer(light_id, opaque_lux_visibility);
     };
@@ -361,12 +361,8 @@ mod tests {
         let light_id = LuxLightId::new(1);
         let same_registry =
             make_registry_with_layer(light_id, CloudShadowFrameDelayMode::SameFrame);
-        let same_compose = apply_cloud_layer_to_direct_visibility(
-            &same_registry,
-            light_id,
-            1.0,
-            0.5,
-        );
+        let same_compose =
+            apply_cloud_layer_to_direct_visibility(&same_registry, light_id, 1.0, 0.5);
         assert!(same_compose.layer_found);
         assert_eq!(same_compose.latency, CloudShadowFrameDelayMode::SameFrame);
         assert!(same_compose.samples_current_frame);
@@ -375,12 +371,8 @@ mod tests {
         // Typed one-frame-delayed mode.
         let delayed_registry =
             make_registry_with_layer(light_id, CloudShadowFrameDelayMode::OneFrameDelayed);
-        let delayed_compose = apply_cloud_layer_to_direct_visibility(
-            &delayed_registry,
-            light_id,
-            1.0,
-            0.5,
-        );
+        let delayed_compose =
+            apply_cloud_layer_to_direct_visibility(&delayed_registry, light_id, 1.0, 0.5);
         assert!(delayed_compose.layer_found);
         assert_eq!(
             delayed_compose.latency,
@@ -418,12 +410,8 @@ mod tests {
     #[test]
     fn invalid_light_id_returns_no_layer_outcome() {
         let registry = LuxShadowAuxLayerRegistry::EMPTY;
-        let compose = apply_cloud_layer_to_direct_visibility(
-            &registry,
-            LuxLightId::INVALID,
-            0.5,
-            0.3,
-        );
+        let compose =
+            apply_cloud_layer_to_direct_visibility(&registry, LuxLightId::INVALID, 0.5, 0.3);
         assert!(!compose.layer_found);
         assert!((compose.final_visibility - 0.5).abs() < 1e-6);
     }
@@ -454,11 +442,9 @@ mod tests {
         let light_id = LuxLightId::new(13);
         let registry = make_registry_with_layer(light_id, CloudShadowFrameDelayMode::SameFrame);
         let layer = *registry.find(light_id).expect("registered");
-        let from_registry =
-            apply_cloud_layer_to_direct_visibility(&registry, light_id, 0.6, 0.4);
-        let from_layer = apply_cloud_layer_to_direct_visibility_with_layer(
-            &layer, light_id, 0.6, 0.4,
-        );
+        let from_registry = apply_cloud_layer_to_direct_visibility(&registry, light_id, 0.6, 0.4);
+        let from_layer =
+            apply_cloud_layer_to_direct_visibility_with_layer(&layer, light_id, 0.6, 0.4);
         assert_eq!(from_registry.final_visibility, from_layer.final_visibility);
         assert_eq!(from_registry.latency, from_layer.latency);
         assert_eq!(from_registry.layer_found, from_layer.layer_found);

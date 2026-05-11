@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn tone_map_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for op in FunLuxToneMapOperator::ALL {
             assert!(seen.insert(op.as_str()), "duplicate: {}", op.as_str());
         }

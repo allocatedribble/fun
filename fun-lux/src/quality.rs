@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn quality_feature_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for feature in LuxQualityFeature::ALL {
             assert!(
                 seen.insert(feature.as_str()),

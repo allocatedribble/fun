@@ -161,8 +161,7 @@ pub enum CloudInternalScale {
 }
 
 impl CloudInternalScale {
-    pub const ALL: [Self; 4] =
-        [Self::Full, Self::ThreeQuarter, Self::Half, Self::Third];
+    pub const ALL: [Self; 4] = [Self::Full, Self::ThreeQuarter, Self::Half, Self::Third];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -384,8 +383,7 @@ impl CloudLuxLightingSettings {
     /// receive any Lux-lighting contribution this frame?
     #[must_use]
     pub const fn receives_any_lux_lighting(&self) -> bool {
-        self.scattering_scale_q16 > 0
-            && (self.receive_directional_lux || self.receive_local_lux)
+        self.scattering_scale_q16 > 0 && (self.receive_directional_lux || self.receive_local_lux)
     }
 }
 
@@ -521,7 +519,11 @@ mod tests {
         // Off disables the pipeline; every other tier
         // enables it.
         assert!(!CloudQuality::Off.is_active());
-        for q in [CloudQuality::Cheap, CloudQuality::Balanced, CloudQuality::Cinematic] {
+        for q in [
+            CloudQuality::Cheap,
+            CloudQuality::Balanced,
+            CloudQuality::Cinematic,
+        ] {
             assert!(q.is_active());
         }
     }

@@ -287,7 +287,7 @@ mod tests {
                 resource_type: FrameGraphResourceType::LuxLightBuffer,
             },
         ];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for k in kinds {
             assert!(seen.insert(k.as_str()), "duplicate: {}", k.as_str());
             assert!(k.is_acceptance_violation());

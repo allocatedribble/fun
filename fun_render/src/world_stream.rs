@@ -1,7 +1,5 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Instant,
-};
+use hashbrown::{HashMap, HashSet};
+use std::time::Instant;
 
 use bevy::{
     pbr::experimental::meshlet::{MeshletMesh, MeshletMesh3d},

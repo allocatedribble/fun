@@ -29,7 +29,7 @@
 //!   walks dirty rows, so two runs over the same input produce
 //!   identical command sequences.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use bevy::prelude::*;
 

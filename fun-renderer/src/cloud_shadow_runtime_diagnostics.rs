@@ -336,8 +336,7 @@ impl CloudShadowDiagnostics {
                 ..Self::COLD_DEFAULT
             };
         }
-        let (project_dispatch_count, filter_dispatch_count) =
-            dispatch_counts.unwrap_or((0, 0));
+        let (project_dispatch_count, filter_dispatch_count) = dispatch_counts.unwrap_or((0, 0));
         let (project_gpu_ns, filter_gpu_ns) = gpu_times.unwrap_or((0, 0));
         let (min_q16, max_q16, avg_q16) = match transmittance_stats {
             Some(stats) if stats.has_samples() => (
@@ -437,10 +436,9 @@ pub fn cloud_shadow_diagnostics_section(
                 diagnostics.project_dispatch_count,
                 diagnostics.project_gpu_ns,
             ),
-            crate::frame_graph::FrameGraphPassRole::LuxCloudShadowFilter => (
-                diagnostics.filter_dispatch_count,
-                diagnostics.filter_gpu_ns,
-            ),
+            crate::frame_graph::FrameGraphPassRole::LuxCloudShadowFilter => {
+                (diagnostics.filter_dispatch_count, diagnostics.filter_gpu_ns)
+            }
             // Typed register pass has no typed GPU dispatch —
             // it produces typed CPU-side aux-layer metadata.
             _ => (0, 0),
@@ -508,12 +506,15 @@ mod tests {
     #[test]
     fn overlay_taxonomy_is_dense() {
         assert_eq!(CloudShadowOverlayKind::ALL.len(), 6);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for k in CloudShadowOverlayKind::ALL {
             assert!(seen.insert(k.as_str()), "duplicate: {}", k.as_str());
         }
         // Typed default is typed None.
-        assert_eq!(CloudShadowOverlayKind::default(), CloudShadowOverlayKind::None);
+        assert_eq!(
+            CloudShadowOverlayKind::default(),
+            CloudShadowOverlayKind::None
+        );
         // Typed user-spec overlays.
         assert!(CloudShadowOverlayKind::ShadowMask.is_active());
         assert!(CloudShadowOverlayKind::LuxOpaqueShadow.is_active());
@@ -759,18 +760,11 @@ mod tests {
             Some((250_000, 180_000)),
             None,
         );
-        let section =
-            cloud_shadow_diagnostics_section(&diag, &chain, CloudShadowOverlayKind::None);
+        let section = cloud_shadow_diagnostics_section(&diag, &chain, CloudShadowOverlayKind::None);
         // Typed per-pass GPU timings appear next to their
         // typed role.
-        assert!(
-            section.contains("lux_cloud_shadow_project")
-                && section.contains("gpu_ns=250000"),
-        );
-        assert!(
-            section.contains("lux_cloud_shadow_filter")
-                && section.contains("gpu_ns=180000"),
-        );
+        assert!(section.contains("lux_cloud_shadow_project") && section.contains("gpu_ns=250000"),);
+        assert!(section.contains("lux_cloud_shadow_filter") && section.contains("gpu_ns=180000"),);
         // Typed register pass has no GPU dispatch.
         assert!(section.contains("lux_cloud_shadow_register_layer"));
         // Typed total_gpu_ns line.

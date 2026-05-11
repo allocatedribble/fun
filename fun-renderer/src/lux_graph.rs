@@ -27,7 +27,7 @@
 //!    [`crate::frame_graph::RendererFrameGraphDiagnostics`];
 //!    they never name `fun_lux` internals.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use fun_lux::{LuxFramePlan, LuxPassRequest, LuxResourceIntent};
 

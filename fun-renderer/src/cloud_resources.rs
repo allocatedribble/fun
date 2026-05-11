@@ -137,8 +137,11 @@ mod tests {
 
     #[test]
     fn cloud_resource_kind_taxonomy_is_dense() {
-        assert_eq!(CloudResourceKind::ALL.len(), FUN_RENDERER_CLOUD_RESOURCE_KIND_COUNT);
-        let mut seen = std::collections::HashSet::new();
+        assert_eq!(
+            CloudResourceKind::ALL.len(),
+            FUN_RENDERER_CLOUD_RESOURCE_KIND_COUNT
+        );
+        let mut seen = hashbrown::HashSet::new();
         for kind in CloudResourceKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }

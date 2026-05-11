@@ -112,6 +112,8 @@ pub mod lux_material_pbr_cloud_shader;
 #[cfg(feature = "experimental_renderer_ml")]
 pub mod ml;
 pub mod page;
+#[cfg(feature = "schedule_contract")]
+pub mod page_scheduler;
 pub mod parity;
 #[cfg(feature = "bevy_ecs")]
 pub mod passb_proof_frame_runtime;
@@ -151,11 +153,15 @@ pub mod proof_scene;
 #[cfg(feature = "bevy_ecs")]
 pub mod quality_audit_contract;
 pub mod queue_scheduler;
+#[cfg(feature = "schedule_graph")]
+pub mod render_work_graph;
 pub mod research;
 pub mod resource;
 pub mod scene;
 #[cfg(feature = "bevy_ecs")]
 pub mod scene_streaming;
+#[cfg(feature = "schedule_contract")]
+pub mod schedule_contract;
 pub mod scheduler;
 pub mod settings;
 pub mod shader;

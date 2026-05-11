@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn rule_str_taxonomy_is_unique_and_stable() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassFTemporalStackRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn test_scenario_taxonomy_covers_four_canonical_scenarios() {
         assert_eq!(PassFTemporalTestScenario::ALL.len(), 4);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for scenario in PassFTemporalTestScenario::ALL {
             assert!(seen.insert(scenario.as_str()));
         }

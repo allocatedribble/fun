@@ -182,16 +182,15 @@ pub const fn tonemap_runs_after_bloom_and_hdr_composite() -> bool {
             Some(k) => k,
             None => return false,
         };
-    let bloom_upsample =
-        match hdr_pipeline_order_key(FrameGraphPassRole::PostProcessBloomUpsample) {
-            Some(k) => k,
-            None => return false,
-        };
-    let volumetric =
-        match hdr_pipeline_order_key(FrameGraphPassRole::LuxVolumetricComposite) {
-            Some(k) => k,
-            None => return false,
-        };
+    let bloom_upsample = match hdr_pipeline_order_key(FrameGraphPassRole::PostProcessBloomUpsample)
+    {
+        Some(k) => k,
+        None => return false,
+    };
+    let volumetric = match hdr_pipeline_order_key(FrameGraphPassRole::LuxVolumetricComposite) {
+        Some(k) => k,
+        None => return false,
+    };
     tonemap > bloom_composite && tonemap > bloom_upsample && tonemap > volumetric
 }
 
@@ -362,8 +361,8 @@ mod tests {
         ];
         let mut prev = 0u16;
         for role in chain {
-            let k = hdr_pipeline_order_key(role)
-                .expect("every typed Pass V2.5 role has an order key");
+            let k =
+                hdr_pipeline_order_key(role).expect("every typed Pass V2.5 role has an order key");
             assert!(
                 k >= prev,
                 "non-monotonic order: {:?} key {} < prev {}",

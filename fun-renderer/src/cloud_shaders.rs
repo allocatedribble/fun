@@ -26,8 +26,7 @@ pub const CLOUD_SHADOW_PROJECT_WGSL: &str =
 /// Applies a typed softness-modulated gaussian-like blur to the typed
 /// projected transmittance + writes the typed result into
 /// `CloudWorldShadowFiltered`.
-pub const CLOUD_SHADOW_FILTER_WGSL: &str =
-    include_str!("clouds/shaders/cloud_shadow_filter.wgsl");
+pub const CLOUD_SHADOW_FILTER_WGSL: &str = include_str!("clouds/shaders/cloud_shadow_filter.wgsl");
 
 /// Typed Pass C7.4.3 entry-point name in `cloud_shadow_project.wgsl`.
 pub const CLOUD_SHADOW_PROJECT_ENTRY_POINT: &str = "project_cloud_shadow";
@@ -152,13 +151,16 @@ mod tests {
     #[test]
     fn cloud_shadow_shader_role_taxonomy_is_dense() {
         assert_eq!(CloudShadowShaderRole::ALL.len(), 2);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for role in CloudShadowShaderRole::ALL {
             assert!(seen.insert(role.as_str()), "duplicate: {}", role.as_str());
             assert!(role.as_str().starts_with("cloud_shadow_"));
         }
         // Typed default is the typed projection role.
-        assert_eq!(CloudShadowShaderRole::default(), CloudShadowShaderRole::Project);
+        assert_eq!(
+            CloudShadowShaderRole::default(),
+            CloudShadowShaderRole::Project
+        );
     }
 
     /// Pass C7.4 acceptance — typed shader source strings are non-empty
@@ -264,7 +266,10 @@ mod tests {
     #[test]
     fn cloud_shadow_filter_softness_drives_kernel() {
         let src = CLOUD_SHADOW_FILTER_WGSL;
-        assert!(src.contains("knobs.y"), "filter shader does not read softness knob");
+        assert!(
+            src.contains("knobs.y"),
+            "filter shader does not read softness knob"
+        );
         // Typed softness threads into typed kernel radius — the typed
         // `radius` local variable depends on typed `softness`.
         assert!(src.contains("softness"));
@@ -281,7 +286,10 @@ mod tests {
     #[test]
     fn cloud_shadow_filter_opacity_drives_shadow_strength() {
         let src = CLOUD_SHADOW_FILTER_WGSL;
-        assert!(src.contains("knobs.x"), "filter shader does not read opacity knob");
+        assert!(
+            src.contains("knobs.x"),
+            "filter shader does not read opacity knob"
+        );
         assert!(src.contains("opacity"));
         // Typed opacity composes: typed `1 - (1 - blurred) * opacity`
         // (typed opacity=0 → typed transmittance always 1; typed
@@ -323,8 +331,14 @@ mod tests {
     /// source / entry point / path constants.
     #[test]
     fn cloud_shadow_shader_role_api_matches_constants() {
-        assert_eq!(CloudShadowShaderRole::Project.source(), CLOUD_SHADOW_PROJECT_WGSL);
-        assert_eq!(CloudShadowShaderRole::Filter.source(), CLOUD_SHADOW_FILTER_WGSL);
+        assert_eq!(
+            CloudShadowShaderRole::Project.source(),
+            CLOUD_SHADOW_PROJECT_WGSL
+        );
+        assert_eq!(
+            CloudShadowShaderRole::Filter.source(),
+            CLOUD_SHADOW_FILTER_WGSL
+        );
         assert_eq!(
             CloudShadowShaderRole::Project.entry_point(),
             CLOUD_SHADOW_PROJECT_ENTRY_POINT,

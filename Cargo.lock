@@ -1298,7 +1298,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde",
- "spin",
+ "spin 0.10.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
@@ -3071,6 +3071,9 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+dependencies = [
+ "getrandom 0.3.4",
+]
 
 [[package]]
 name = "fdeflate"
@@ -3130,6 +3133,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flume"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
+dependencies = [
+ "fastrand",
+ "futures-core",
+ "futures-sink",
+ "spin 0.9.8",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3162,7 +3177,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c20b425addb8661e97fe1d51c4d8bcec3ec29ed6ad0db983976a7521276b8f7"
 dependencies = [
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "linebender_resource_handle",
  "memmap2",
  "parlance",
@@ -3212,6 +3227,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "fun-scene",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -3232,11 +3248,15 @@ dependencies = [
  "bevy_camera",
  "bevy_ecs",
  "bevy_transform",
+ "flume",
  "fun-lux",
  "fun-scene",
+ "fun-scheduler-core",
+ "fun-scheduler-testkit",
  "fun-scheduler-types",
  "fun-telemetry-core",
  "fun_ai_core",
+ "hashbrown 0.17.1",
  "naga",
  "rvelte-fun-ui-core",
  "serde",
@@ -3277,6 +3297,24 @@ dependencies = [
 [[package]]
 name = "fun-scene-macros"
 version = "0.1.0"
+
+[[package]]
+name = "fun-scheduler-core"
+version = "0.1.0"
+dependencies = [
+ "fun-scheduler-types",
+ "hashbrown 0.17.1",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "fun-scheduler-testkit"
+version = "0.1.0"
+dependencies = [
+ "fun-scheduler-core",
+ "tracing",
+]
 
 [[package]]
 name = "fun-scheduler-types"
@@ -3412,6 +3450,7 @@ dependencies = [
  "fun-scene",
  "fun_dx12_dlss",
  "game_shared",
+ "hashbrown 0.17.1",
  "serde",
  "serde_json",
  "thunder",
@@ -3600,6 +3639,7 @@ dependencies = [
  "fun_ai_tactics",
  "game_scene",
  "game_shared",
+ "hashbrown 0.17.1",
  "log",
  "ring",
  "serde",
@@ -3936,10 +3976,12 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -4265,7 +4307,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "serde",
  "serde_core",
 ]
@@ -5460,7 +5502,7 @@ checksum = "8fad031076f48f0d4d85ce1aea9b94b4e715a4d636a030a123038f8f5b5e4343"
 dependencies = [
  "fontique",
  "harfrust",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "icu_normalizer",
  "icu_properties",
  "icu_segmenter",
@@ -6665,6 +6707,7 @@ dependencies = [
 name = "rvelte-manifest"
 version = "0.1.0"
 dependencies = [
+ "hashbrown 0.17.1",
  "rvelte-core",
  "serde",
  "serde_yml",
@@ -7086,6 +7129,15 @@ dependencies = [
  "num-traits",
  "robust",
  "smallvec",
+]
+
+[[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]

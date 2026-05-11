@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn material_kind_taxonomy_is_dense() {
         assert_eq!(CloudShadowMaterialKind::ALL.len(), 8);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for k in CloudShadowMaterialKind::ALL {
             assert!(seen.insert(k.as_str()), "duplicate: {}", k.as_str());
         }

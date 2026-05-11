@@ -723,7 +723,7 @@ fn run_windowed_surface_present_against_winit_window() -> PassMRunResult {
 
             // 7: Map readback + sample (0, 0).
             let slice = readback_buffer.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = flume::unbounded();
             slice.map_async(::wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
@@ -813,7 +813,7 @@ mod tests {
 
     #[test]
     fn rule_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassMWindowedSurfacePresentRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }
@@ -832,7 +832,7 @@ mod tests {
             PassMHostAvailabilityFailure::SurfaceAcquireFailed,
             PassMHostAvailabilityFailure::OffscreenMirrorReadbackFailed,
         ];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for v in variants {
             assert!(seen.insert(v.as_str()), "duplicate: {}", v.as_str());
         }

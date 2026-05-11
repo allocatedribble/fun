@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn layout_mode_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for mode in FunLuxGpuBufferLayoutMode::ALL {
             assert!(seen.insert(mode.as_str()), "duplicate: {}", mode.as_str());
         }
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn buffer_kind_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in FunLuxGpuBufferKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }

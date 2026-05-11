@@ -67,7 +67,7 @@
 //! records honestly via
 //! [`crate::live_proof_frame_executor::ran_on_real_dx12_adapter`].
 
-use std::sync::mpsc::channel;
+use flume::unbounded;
 
 use bevy_ecs::prelude::Resource;
 
@@ -1705,11 +1705,11 @@ pub fn run_temporal_reconstruction_live_against_fresh_dx12_device() -> PassKBoot
     let disocclusion_slice = buffers.disocclusion_readback.slice(..);
     let debug_slice = buffers.debug_readback.slice(..);
     let color_slice = buffers.color_readback.slice(..);
-    let (motion_tx, motion_rx) = channel();
-    let (history_tx, history_rx) = channel();
-    let (disocclusion_tx, disocclusion_rx) = channel();
-    let (debug_tx, debug_rx) = channel();
-    let (color_tx, color_rx) = channel();
+    let (motion_tx, motion_rx) = unbounded();
+    let (history_tx, history_rx) = unbounded();
+    let (disocclusion_tx, disocclusion_rx) = unbounded();
+    let (debug_tx, debug_rx) = unbounded();
+    let (color_tx, color_rx) = unbounded();
     motion_slice.map_async(::wgpu::MapMode::Read, move |r| {
         let _ = motion_tx.send(r);
     });
@@ -1829,7 +1829,7 @@ mod tests {
 
     #[test]
     fn rule_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for rule in PassKTemporalReconstructionLiveRule::ALL {
             assert!(seen.insert(rule.as_str()), "duplicate: {}", rule.as_str());
         }

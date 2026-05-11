@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn light_record_field_taxonomy_is_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for f in LuxGpuLightRecordField::ALL {
             assert!(seen.insert(f.as_str()), "duplicate: {}", f.as_str());
         }

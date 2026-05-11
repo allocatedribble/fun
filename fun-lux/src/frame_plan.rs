@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn scene_priority_taxonomy() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for p in LuxScenePriority::ALL {
             assert!(seen.insert(p.as_str()), "duplicate: {}", p.as_str());
         }
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn resource_intent_kind_taxonomy_strings_are_unique() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = hashbrown::HashSet::new();
         for kind in LuxResourceIntentKind::ALL {
             assert!(seen.insert(kind.as_str()), "duplicate: {}", kind.as_str());
         }
