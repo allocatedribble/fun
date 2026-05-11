@@ -63,6 +63,8 @@ pub mod frame_generation;
 pub mod frame_graph;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod fun_render_cloud_retirement;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod fun_render_route_audit;
 pub mod gpu_driven;
 #[cfg(feature = "bevy_ecs")]
 pub mod gpu_driven_runtime;
@@ -1051,6 +1053,8 @@ pub use extraction::*;
 pub use frame_graph::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use fun_render_cloud_retirement::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use fun_render_route_audit::*;
 pub use gpu_driven::*;
 #[cfg(feature = "bevy_ecs")]
 pub use gpu_driven_runtime::*;
