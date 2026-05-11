@@ -69,6 +69,19 @@ pub enum FrameGraphPassRole {
     FrameGenerationBoundary,
     PostProcessExposure,
     PostProcessBloom,
+    // Pass V2.5 — granular typed HDR-post roles that
+    // refine the coarse `PostProcessExposure` /
+    // `PostProcessBloom` umbrellas above.  The typed
+    // `FunLuxHdrPipelineStage::order_key` ordering is
+    // mirrored by the typed `hdr_pipeline` module so the
+    // typed graph compiler can sort these roles
+    // consistently with the typed fun-lux policy.
+    PostProcessExposureHistogram,
+    PostProcessExposureAdapt,
+    PostProcessBloomPrefilter,
+    PostProcessBloomDownsample,
+    PostProcessBloomUpsample,
+    PostProcessBloomComposite,
     PostProcessToneMapping,
     PostProcessColorGradingLut,
     PostProcessSharpening,
@@ -115,6 +128,12 @@ impl FrameGraphPassRole {
             Self::FrameGenerationBoundary => "frame_generation_boundary",
             Self::PostProcessExposure => "post_process_exposure",
             Self::PostProcessBloom => "post_process_bloom",
+            Self::PostProcessExposureHistogram => "post_process_exposure_histogram",
+            Self::PostProcessExposureAdapt => "post_process_exposure_adapt",
+            Self::PostProcessBloomPrefilter => "post_process_bloom_prefilter",
+            Self::PostProcessBloomDownsample => "post_process_bloom_downsample",
+            Self::PostProcessBloomUpsample => "post_process_bloom_upsample",
+            Self::PostProcessBloomComposite => "post_process_bloom_composite",
             Self::PostProcessToneMapping => "post_process_tone_mapping",
             Self::PostProcessColorGradingLut => "post_process_color_grading_lut",
             Self::PostProcessSharpening => "post_process_sharpening",

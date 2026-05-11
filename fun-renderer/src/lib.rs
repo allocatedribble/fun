@@ -16,6 +16,8 @@ pub mod dx12_production;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod exposure_pass;
 #[cfg(feature = "bevy_ecs")]
 pub mod extraction;
 pub mod frame_generation;
@@ -23,6 +25,8 @@ pub mod frame_graph;
 pub mod gpu_driven;
 #[cfg(feature = "bevy_ecs")]
 pub mod gpu_driven_runtime;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod hdr_pipeline;
 #[cfg(feature = "bevy_ecs")]
 pub mod heuristics;
 pub mod ir;
@@ -92,6 +96,8 @@ pub mod settings;
 pub mod shader;
 #[cfg(feature = "bevy_ecs")]
 pub mod taa;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub mod tonemap_pass;
 #[cfg(feature = "bevy_ecs")]
 pub mod tier0_proof_frame_gate;
 #[cfg(feature = "bevy_ecs")]
@@ -957,6 +963,13 @@ pub use ir::*;
 pub use lighting_stack::*;
 #[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
 pub use live_proof_frame_executor::*;
+// Pass V2.5 typed renderer-side HDR-post modules.
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use exposure_pass::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use hdr_pipeline::*;
+#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+pub use tonemap_pass::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub use lux_diagnostics::*;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]

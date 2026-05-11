@@ -715,6 +715,19 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         FrameGraphPassRole::FrameGenerationBoundary => PassKind::FrameGeneration,
         FrameGraphPassRole::PostProcessExposure => PassKind::PostProcessExposure,
         FrameGraphPassRole::PostProcessBloom => PassKind::PostProcessBloom,
+        // Pass V2.5 — granular typed HDR-post roles collapse
+        // back into the typed `PostProcessExposure` /
+        // `PostProcessBloom` / `PostProcessToneMapping` /
+        // `PostProcessFinalOutputTransform` umbrellas at
+        // the typed `PassKind` layer.  The typed
+        // `FrameGraphPassRole` keeps the granular taxonomy
+        // for scheduler precision.
+        FrameGraphPassRole::PostProcessExposureHistogram
+        | FrameGraphPassRole::PostProcessExposureAdapt => PassKind::PostProcessExposure,
+        FrameGraphPassRole::PostProcessBloomPrefilter
+        | FrameGraphPassRole::PostProcessBloomDownsample
+        | FrameGraphPassRole::PostProcessBloomUpsample
+        | FrameGraphPassRole::PostProcessBloomComposite => PassKind::PostProcessBloom,
         FrameGraphPassRole::PostProcessToneMapping => PassKind::PostProcessToneMapping,
         FrameGraphPassRole::PostProcessColorGradingLut => PassKind::PostProcessColorGradingLut,
         FrameGraphPassRole::PostProcessSharpening => PassKind::PostProcessSharpening,
