@@ -120,6 +120,25 @@ pub enum Tier4ResourceTypeOption {
     FinalComposedOutput,
     TransientScratch,
     HistoryBuffer,
+    // Pass V2.0 — typed Lux resource groupings.  Mirrors the
+    // typed `crate::lux_resources::LuxResourceLifetime`
+    // classification so the typed transient-memory tracker
+    // can account for Lux resources without exposing the
+    // full Lux resource taxonomy.
+    LuxPersistent,
+    LuxFrameLocal,
+    LuxGraphTransient,
+}
+
+impl Tier4ResourceTypeOption {
+    /// Typed predicate: is this a Pass V2.0 Lux grouping?
+    #[must_use]
+    pub const fn is_lux(self) -> bool {
+        matches!(
+            self,
+            Self::LuxPersistent | Self::LuxFrameLocal | Self::LuxGraphTransient,
+        )
+    }
 }
 
 impl From<FrameGraphResourceType> for Tier4ResourceTypeOption {
@@ -145,6 +164,28 @@ impl From<FrameGraphResourceType> for Tier4ResourceTypeOption {
             FrameGraphResourceType::FinalComposedOutput => Self::FinalComposedOutput,
             FrameGraphResourceType::TransientScratch => Self::TransientScratch,
             FrameGraphResourceType::HistoryBuffer => Self::HistoryBuffer,
+            // Pass V2.0 — typed Lux groupings.  Mirrors the
+            // typed `LuxResourceLifetime` classification in
+            // `lux_resources::lifetime_for`: persistent
+            // (cross-frame caches + atlases) vs frame-local
+            // (per-frame cluster grids / index buffers /
+            // froxel textures).
+            FrameGraphResourceType::LuxLightBuffer
+            | FrameGraphResourceType::LuxShadowAtlas
+            | FrameGraphResourceType::LuxVirtualShadowPages
+            | FrameGraphResourceType::LuxSurfaceCache
+            | FrameGraphResourceType::LuxRadianceCache
+            | FrameGraphResourceType::LuxProbeCache
+            | FrameGraphResourceType::LuxDenoiseHistory
+            | FrameGraphResourceType::LuxVolumetricHistory => Self::LuxPersistent,
+            FrameGraphResourceType::LuxLightIndexBuffer
+            | FrameGraphResourceType::LuxClusterGrid
+            | FrameGraphResourceType::LuxReservoirBuffer
+            | FrameGraphResourceType::LuxShadowRequestBuffer
+            | FrameGraphResourceType::LuxReflectionBuffer
+            | FrameGraphResourceType::LuxVolumetricFroxelDensity
+            | FrameGraphResourceType::LuxVolumetricFroxelScattering
+            | FrameGraphResourceType::LuxVolumetricIntegratedFog => Self::LuxFrameLocal,
         }
     }
 }
@@ -172,6 +213,16 @@ impl From<Tier4ResourceTypeOption> for FrameGraphResourceType {
             Tier4ResourceTypeOption::FinalComposedOutput => Self::FinalComposedOutput,
             Tier4ResourceTypeOption::TransientScratch => Self::TransientScratch,
             Tier4ResourceTypeOption::HistoryBuffer => Self::HistoryBuffer,
+            // Pass V2.0 — typed Lux groupings collapse N
+            // resource types into one grouping, so the
+            // reverse mapping picks a canonical
+            // representative per grouping.  Callers that
+            // need the full taxonomy must keep the original
+            // `FrameGraphResourceType` value alongside the
+            // grouping.
+            Tier4ResourceTypeOption::LuxPersistent => Self::LuxLightBuffer,
+            Tier4ResourceTypeOption::LuxFrameLocal => Self::LuxLightIndexBuffer,
+            Tier4ResourceTypeOption::LuxGraphTransient => Self::TransientScratch,
         }
     }
 }
@@ -264,6 +315,20 @@ impl Tier4ResourceAliasability {
             }
             Tier4ResourceTypeOption::DisplayResolutionSceneColor
             | Tier4ResourceTypeOption::TransientScratch => Self::Aliasable,
+            // Pass V2.0 — typed Lux groupings:
+            // - LuxPersistent survives across frames so it
+            //   is excluded from the transient pool, same as
+            //   `HistoryBuffer`.
+            // - LuxFrameLocal lives within one frame; its
+            //   typed lifetime is bounded by the frame
+            //   graph's pass interval so it is aliasable.
+            // - LuxGraphTransient is the typed scratch
+            //   bucket — aliasable.
+            Tier4ResourceTypeOption::LuxPersistent => {
+                Self::Excluded(Tier4AliasingExclusionReason::HistoryResource)
+            }
+            Tier4ResourceTypeOption::LuxFrameLocal
+            | Tier4ResourceTypeOption::LuxGraphTransient => Self::Aliasable,
         }
     }
 
@@ -1414,6 +1479,73 @@ mod tests {
             let s = reason.as_str();
             assert!(!s.is_empty());
             assert!(!s.contains(' '));
+        }
+    }
+
+    /// Pass V2.0 acceptance: every Lux variant of
+    /// `FrameGraphResourceType` maps to a typed Lux
+    /// grouping of `Tier4ResourceTypeOption`.  No Lux
+    /// resource type falls through to a non-Lux grouping.
+    #[test]
+    fn every_lux_frame_graph_resource_type_maps_to_tier4_resource_option() {
+        use crate::frame_graph::FrameGraphResourceType;
+        let lux_persistent = [
+            FrameGraphResourceType::LuxLightBuffer,
+            FrameGraphResourceType::LuxShadowAtlas,
+            FrameGraphResourceType::LuxVirtualShadowPages,
+            FrameGraphResourceType::LuxSurfaceCache,
+            FrameGraphResourceType::LuxRadianceCache,
+            FrameGraphResourceType::LuxProbeCache,
+            FrameGraphResourceType::LuxDenoiseHistory,
+            FrameGraphResourceType::LuxVolumetricHistory,
+        ];
+        for r in lux_persistent {
+            assert_eq!(
+                Tier4ResourceTypeOption::from(r),
+                Tier4ResourceTypeOption::LuxPersistent,
+                "{:?} did not map to LuxPersistent",
+                r,
+            );
+        }
+        let lux_frame_local = [
+            FrameGraphResourceType::LuxLightIndexBuffer,
+            FrameGraphResourceType::LuxClusterGrid,
+            FrameGraphResourceType::LuxReservoirBuffer,
+            FrameGraphResourceType::LuxShadowRequestBuffer,
+            FrameGraphResourceType::LuxReflectionBuffer,
+            FrameGraphResourceType::LuxVolumetricFroxelDensity,
+            FrameGraphResourceType::LuxVolumetricFroxelScattering,
+            FrameGraphResourceType::LuxVolumetricIntegratedFog,
+        ];
+        for r in lux_frame_local {
+            assert_eq!(
+                Tier4ResourceTypeOption::from(r),
+                Tier4ResourceTypeOption::LuxFrameLocal,
+                "{:?} did not map to LuxFrameLocal",
+                r,
+            );
+        }
+    }
+
+    /// Pass V2.0 acceptance: every Lux resource type that
+    /// `FrameGraphResourceType` exposes routes to a Lux
+    /// grouping; no Lux variant falls through to a non-Lux
+    /// option (which would silently misclassify it as,
+    /// e.g., `RenderResolutionSceneColor`).
+    #[test]
+    fn no_lux_resource_type_falls_through_to_unknown() {
+        use crate::frame_graph::FrameGraphResourceType;
+        for r in FrameGraphResourceType::ALL {
+            let opt = Tier4ResourceTypeOption::from(r);
+            let name = r.as_str();
+            if name.starts_with("lux_") {
+                assert!(
+                    opt.is_lux(),
+                    "Lux resource {:?} mapped to non-Lux tier4 option {:?}",
+                    r,
+                    opt,
+                );
+            }
         }
     }
 }

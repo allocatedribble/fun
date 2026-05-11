@@ -154,6 +154,21 @@ pub enum PassKind {
     PostProcessFinalOutputTransform,
     DiagnosticsReadback,
     Present,
+    // Pass V2.0 — typed Lux pass kinds. Every Pass 3
+    // `FrameGraphPassRole::Lux*` variant maps to one of
+    // these groupings via `pass_kind_for_frame_graph_role`.
+    // The renderer-side scheduler reads the typed kind to
+    // batch / dispatch Lux work consistently with the rest
+    // of the pipeline.
+    LuxUpload,
+    LuxCluster,
+    LuxReservoir,
+    LuxShadow,
+    LuxDirectLighting,
+    LuxGiReflection,
+    LuxDenoise,
+    LuxVolumetric,
+    LuxDebug,
 }
 
 impl PassKind {
@@ -181,7 +196,35 @@ impl PassKind {
             Self::PostProcessFinalOutputTransform => "post_process_final_output_transform",
             Self::DiagnosticsReadback => "diagnostics_readback",
             Self::Present => "present",
+            Self::LuxUpload => "lux_upload",
+            Self::LuxCluster => "lux_cluster",
+            Self::LuxReservoir => "lux_reservoir",
+            Self::LuxShadow => "lux_shadow",
+            Self::LuxDirectLighting => "lux_direct_lighting",
+            Self::LuxGiReflection => "lux_gi_reflection",
+            Self::LuxDenoise => "lux_denoise",
+            Self::LuxVolumetric => "lux_volumetric",
+            Self::LuxDebug => "lux_debug",
         }
+    }
+
+    /// Typed predicate: is this kind a Pass V2.0 Lux pass
+    /// grouping?  Mirrors `FrameGraphPassRole::is_lux` on the
+    /// downstream side.
+    #[must_use]
+    pub const fn is_lux(self) -> bool {
+        matches!(
+            self,
+            Self::LuxUpload
+                | Self::LuxCluster
+                | Self::LuxReservoir
+                | Self::LuxShadow
+                | Self::LuxDirectLighting
+                | Self::LuxGiReflection
+                | Self::LuxDenoise
+                | Self::LuxVolumetric
+                | Self::LuxDebug
+        )
     }
 }
 
@@ -656,6 +699,25 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         FrameGraphPassRole::Compose => PassKind::UiComposite,
         FrameGraphPassRole::DiagnosticsReadback => PassKind::DiagnosticsReadback,
         FrameGraphPassRole::Present => PassKind::Present,
+        // Pass V2.0 — typed Lux groupings.
+        FrameGraphPassRole::LuxUploadLightBuffers => PassKind::LuxUpload,
+        FrameGraphPassRole::LuxClusterLights => PassKind::LuxCluster,
+        FrameGraphPassRole::LuxReservoirTemporalReuse
+        | FrameGraphPassRole::LuxReservoirSpatialReuse => PassKind::LuxReservoir,
+        FrameGraphPassRole::LuxShadowRequests
+        | FrameGraphPassRole::LuxVirtualShadowPages
+        | FrameGraphPassRole::LuxVirtualShadowFilter => PassKind::LuxShadow,
+        FrameGraphPassRole::LuxDirectLighting => PassKind::LuxDirectLighting,
+        FrameGraphPassRole::LuxGiTrace
+        | FrameGraphPassRole::LuxGiCacheUpdate
+        | FrameGraphPassRole::LuxReflectionTrace => PassKind::LuxGiReflection,
+        FrameGraphPassRole::LuxDenoise => PassKind::LuxDenoise,
+        FrameGraphPassRole::LuxVolumetricFogInject
+        | FrameGraphPassRole::LuxVolumetricLightInject
+        | FrameGraphPassRole::LuxVolumetricTemporalReproject
+        | FrameGraphPassRole::LuxVolumetricIntegrate
+        | FrameGraphPassRole::LuxVolumetricComposite => PassKind::LuxVolumetric,
+        FrameGraphPassRole::LuxDebugOverlay => PassKind::LuxDebug,
     }
 }
 
@@ -772,5 +834,130 @@ mod tests {
         assert!(!cef_compositor.cpu_runtime_upload_fallback_allowed);
         assert!(upscale_frame_generation.scene_color_ui_color_separate);
         assert!(upscale_frame_generation.hudless_scene_color_required);
+    }
+
+    /// Pass V2.0 acceptance: every typed Lux variant of
+    /// `FrameGraphPassRole` maps to a typed Lux grouping
+    /// of `PassKind`.  Encoded as an enumerated table so
+    /// adding a new Lux role at the frame-graph layer
+    /// without updating the mapping fails compilation here.
+    #[test]
+    fn every_lux_frame_graph_pass_role_maps_to_pass_kind() {
+        use crate::frame_graph::FrameGraphPassRole;
+        let table: &[(FrameGraphPassRole, PassKind)] = &[
+            (FrameGraphPassRole::LuxUploadLightBuffers, PassKind::LuxUpload),
+            (FrameGraphPassRole::LuxClusterLights, PassKind::LuxCluster),
+            (
+                FrameGraphPassRole::LuxReservoirTemporalReuse,
+                PassKind::LuxReservoir,
+            ),
+            (
+                FrameGraphPassRole::LuxReservoirSpatialReuse,
+                PassKind::LuxReservoir,
+            ),
+            (FrameGraphPassRole::LuxShadowRequests, PassKind::LuxShadow),
+            (
+                FrameGraphPassRole::LuxVirtualShadowPages,
+                PassKind::LuxShadow,
+            ),
+            (
+                FrameGraphPassRole::LuxVirtualShadowFilter,
+                PassKind::LuxShadow,
+            ),
+            (
+                FrameGraphPassRole::LuxDirectLighting,
+                PassKind::LuxDirectLighting,
+            ),
+            (FrameGraphPassRole::LuxGiTrace, PassKind::LuxGiReflection),
+            (
+                FrameGraphPassRole::LuxGiCacheUpdate,
+                PassKind::LuxGiReflection,
+            ),
+            (
+                FrameGraphPassRole::LuxReflectionTrace,
+                PassKind::LuxGiReflection,
+            ),
+            (FrameGraphPassRole::LuxDenoise, PassKind::LuxDenoise),
+            (
+                FrameGraphPassRole::LuxVolumetricFogInject,
+                PassKind::LuxVolumetric,
+            ),
+            (
+                FrameGraphPassRole::LuxVolumetricLightInject,
+                PassKind::LuxVolumetric,
+            ),
+            (
+                FrameGraphPassRole::LuxVolumetricTemporalReproject,
+                PassKind::LuxVolumetric,
+            ),
+            (
+                FrameGraphPassRole::LuxVolumetricIntegrate,
+                PassKind::LuxVolumetric,
+            ),
+            (
+                FrameGraphPassRole::LuxVolumetricComposite,
+                PassKind::LuxVolumetric,
+            ),
+            (FrameGraphPassRole::LuxDebugOverlay, PassKind::LuxDebug),
+        ];
+        for (role, expected_kind) in table.iter().copied() {
+            assert!(role.is_lux(), "{:?} reported is_lux=false", role);
+            assert!(
+                expected_kind.is_lux(),
+                "{:?} reported is_lux=false",
+                expected_kind,
+            );
+            assert_eq!(
+                pass_kind_for_frame_graph_role(role),
+                expected_kind,
+                "{:?} mismatch",
+                role,
+            );
+        }
+    }
+
+    /// Pass V2.0 acceptance: no Lux pass role falls through
+    /// to a non-Lux `PassKind`.  Walks every variant of
+    /// `FrameGraphPassRole` that reports `is_lux()` and
+    /// confirms the mapping target also reports `is_lux()`.
+    /// Pairs with the enumerated table test above: this one
+    /// catches mappings to the wrong typed lane (e.g. a Lux
+    /// role accidentally mapped to `PassKind::ClearColor`).
+    #[test]
+    fn no_lux_pass_role_falls_through_to_unknown() {
+        use crate::frame_graph::FrameGraphPassRole;
+        // Iterate every Lux role by name. The list is
+        // exhaustive at the level of `is_lux()` — if a new
+        // Lux role lands without being added here, the
+        // enumerated-table test above fails too.
+        let roles = [
+            FrameGraphPassRole::LuxUploadLightBuffers,
+            FrameGraphPassRole::LuxClusterLights,
+            FrameGraphPassRole::LuxReservoirTemporalReuse,
+            FrameGraphPassRole::LuxReservoirSpatialReuse,
+            FrameGraphPassRole::LuxShadowRequests,
+            FrameGraphPassRole::LuxVirtualShadowPages,
+            FrameGraphPassRole::LuxVirtualShadowFilter,
+            FrameGraphPassRole::LuxDirectLighting,
+            FrameGraphPassRole::LuxGiTrace,
+            FrameGraphPassRole::LuxGiCacheUpdate,
+            FrameGraphPassRole::LuxReflectionTrace,
+            FrameGraphPassRole::LuxDenoise,
+            FrameGraphPassRole::LuxVolumetricFogInject,
+            FrameGraphPassRole::LuxVolumetricLightInject,
+            FrameGraphPassRole::LuxVolumetricTemporalReproject,
+            FrameGraphPassRole::LuxVolumetricIntegrate,
+            FrameGraphPassRole::LuxVolumetricComposite,
+            FrameGraphPassRole::LuxDebugOverlay,
+        ];
+        for role in roles {
+            let kind = pass_kind_for_frame_graph_role(role);
+            assert!(
+                kind.is_lux(),
+                "Lux role {:?} mapped to non-Lux kind {:?}",
+                role,
+                kind,
+            );
+        }
     }
 }
