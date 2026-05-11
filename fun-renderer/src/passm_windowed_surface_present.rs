@@ -490,10 +490,20 @@ fn run_windowed_surface_present_against_winit_window() -> PassMRunResult {
             self.result.window_created = true;
 
             // 3: Create wgpu Instance + Surface against the window.
-            let instance = ::wgpu::Instance::new(&::wgpu::InstanceDescriptor {
+            // Pass C9.0 — typed wgpu 29 API takes typed
+            // `InstanceDescriptor` by value, and the typed
+            // struct gained typed `display` +
+            // `memory_budget_thresholds` fields.  Typed
+            // DX12 path does not need a typed display
+            // handle (per typed `InstanceDescriptor::display`
+            // docs: "On Vulkan, Metal and Dx12, this is
+            // currently unused.").
+            let instance = ::wgpu::Instance::new(::wgpu::InstanceDescriptor {
                 backends: ::wgpu::Backends::DX12,
                 flags: ::wgpu::InstanceFlags::default(),
+                memory_budget_thresholds: ::wgpu::MemoryBudgetThresholds::default(),
                 backend_options: ::wgpu::BackendOptions::default(),
+                display: None,
             });
             // `&winit::window::Window` implements `Send + Sync +
             // HasWindowHandle + HasDisplayHandle` (with winit's
@@ -529,11 +539,17 @@ fn run_windowed_surface_present_against_winit_window() -> PassMRunResult {
             self.result.adapter_resolved = true;
 
             // 3c: Request device + queue.
+            // Pass C9.0 — typed wgpu 29 `DeviceDescriptor`
+            // gained typed `experimental_features` field.
+            // The typed Pass M live-surface test does not
+            // need typed experimental features, so we
+            // default-initialize it.
             let (device, queue) =
                 match block_on_init(adapter.request_device(&::wgpu::DeviceDescriptor {
                     label: Some("fun_renderer.passm.device"),
                     required_features: ::wgpu::Features::empty(),
                     required_limits: ::wgpu::Limits::downlevel_defaults(),
+                    experimental_features: ::wgpu::ExperimentalFeatures::default(),
                     memory_hints: ::wgpu::MemoryHints::default(),
                     trace: ::wgpu::Trace::Off,
                 })) {
@@ -601,9 +617,20 @@ fn run_windowed_surface_present_against_winit_window() -> PassMRunResult {
             });
 
             // 5b: Acquire surface texture.
+            // Pass C9.0 — typed wgpu 29 returns typed
+            // `CurrentSurfaceTexture` enum directly (not a
+            // typed `Result`).  Typed `Success` /
+            // `Suboptimal` carry the typed `SurfaceTexture`;
+            // typed every other variant indicates a typed
+            // typed host-side availability failure.
             let surface_texture = match surface.get_current_texture() {
-                Ok(t) => t,
-                Err(_) => {
+                ::wgpu::CurrentSurfaceTexture::Success(t)
+                | ::wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                ::wgpu::CurrentSurfaceTexture::Timeout
+                | ::wgpu::CurrentSurfaceTexture::Occluded
+                | ::wgpu::CurrentSurfaceTexture::Outdated
+                | ::wgpu::CurrentSurfaceTexture::Lost
+                | ::wgpu::CurrentSurfaceTexture::Validation => {
                     self.result.host_availability_failure =
                         PassMHostAvailabilityFailure::SurfaceAcquireFailed;
                     event_loop.exit();

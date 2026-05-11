@@ -30,8 +30,8 @@ use crate::cloud_shaders::{
     CLOUD_SHADOW_PROJECT_WGSL,
 };
 use crate::cloud_shadow::{
-    CloudShadowProjectionConstants, CloudShadowProjectionMode, CloudShadowResolution,
-    CloudShadowStorageFormat,
+    CLOUD_SHADOW_PROJECTION_CONSTANTS_CPU_BYTES, CloudShadowProjectionConstants,
+    CloudShadowProjectionMode, CloudShadowResolution, CloudShadowStorageFormat,
 };
 
 pub const FUN_RENDERER_CLOUD_SHADOW_PIPELINES_SCHEMA_VERSION: u16 = 1;
@@ -242,10 +242,11 @@ pub const fn cloud_shadow_resolution_extent(resolution: CloudShadowResolution) -
 #[cfg(feature = "wgpu_bridge")]
 mod wgpu_bridge {
     use super::{
-        CLOUD_SHADOW_FILTER_ENTRY_POINT, CLOUD_SHADOW_FILTER_WGSL, CLOUD_SHADOW_PROJECT_ENTRY_POINT,
-        CLOUD_SHADOW_PROJECT_WGSL, CLOUD_SHADOW_PROJECTION_CONSTANTS_GPU_BYTES,
-        CloudShadowProjectionConstantsGpu, FUN_RENDERER_CLOUD_SHADOW_PIPELINES_SCHEMA_VERSION,
-        cloud_shadow_storage_format_to_wgpu, cloud_shadow_workgroup_count,
+        CLOUD_SHADOW_FILTER_ENTRY_POINT, CLOUD_SHADOW_FILTER_WGSL,
+        CLOUD_SHADOW_PROJECT_ENTRY_POINT, CLOUD_SHADOW_PROJECT_WGSL,
+        CLOUD_SHADOW_PROJECTION_CONSTANTS_GPU_BYTES, CloudShadowProjectionConstantsGpu,
+        FUN_RENDERER_CLOUD_SHADOW_PIPELINES_SCHEMA_VERSION, cloud_shadow_storage_format_to_wgpu,
+        cloud_shadow_workgroup_count,
     };
     use crate::cloud_shadow::CloudShadowStorageFormat;
 
@@ -680,12 +681,7 @@ mod wgpu_bridge {
         filter_bind_group: &::wgpu::BindGroup,
         extent: [u32; 2],
     ) -> CloudShadowDispatchCounts {
-        record_dispatch_cloud_shadow_project(
-            encoder,
-            project_pipeline,
-            project_bind_group,
-            extent,
-        );
+        record_dispatch_cloud_shadow_project(encoder, project_pipeline, project_bind_group, extent);
         record_dispatch_cloud_shadow_filter(encoder, filter_pipeline, filter_bind_group, extent);
         CloudShadowDispatchCounts {
             schema_version: FUN_RENDERER_CLOUD_SHADOW_PIPELINES_SCHEMA_VERSION,

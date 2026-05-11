@@ -450,6 +450,41 @@ impl FrameGraphResourceType {
                 | Self::LuxVolumetricHistory
         )
     }
+
+    /// Typed predicate: is this resource type a typed
+    /// cloud-owned resource (Pass C7.2+ taxonomy)?  Mirrors
+    /// the typed `is_lux` predicate at the typed cloud
+    /// boundary.
+    #[must_use]
+    pub const fn is_cloud_owned(self) -> bool {
+        matches!(
+            self,
+            Self::CloudWorldShadowTransmittance
+                | Self::CloudWorldShadowFiltered
+                | Self::CloudShadowProjectionConstants
+                | Self::CloudWeatherMap
+                | Self::CloudShapeNoise
+                | Self::CloudShadowAuxLayer
+        )
+    }
+
+    /// Pass C9.0 typed predicate — is this typed resource
+    /// type a typed "core required" resource that every
+    /// typed renderer build must allocate (typed scene
+    /// color / depth / present / UI / final output /
+    /// scratch / history / etc.)?  Returns `false` for
+    /// typed conditional resources (typed `is_lux` +
+    /// typed `is_cloud_owned`) which only allocate when
+    /// the typed Lux / cloud sub-paths register them.
+    ///
+    /// Drives the typed `validate_required_resources`
+    /// gate so the typed default frame description does
+    /// NOT fail validation when typed Lux / cloud paths
+    /// are not yet registered.
+    #[must_use]
+    pub const fn is_core_required(self) -> bool {
+        !self.is_lux() && !self.is_cloud_owned()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1496,7 +1531,17 @@ impl RendererFrameGraph {
     }
 
     fn validate_required_resources(&self, failures: &mut Vec<FrameGraphValidationFailure>) {
+        // Pass C9.0 — typed conditional resources (typed
+        // Lux + typed cloud-owned) are only required when
+        // the typed sub-path registers them.  Iterate the
+        // typed `is_core_required` set so the typed default
+        // frame description passes validation without
+        // forcing typed Lux / cloud allocations the typed
+        // product surface may not enable.
         for resource_type in FrameGraphResourceType::ALL {
+            if !resource_type.is_core_required() {
+                continue;
+            }
             if self.resource_handle_for_type(resource_type).is_none() {
                 failures.push(FrameGraphValidationFailure {
                     code: FrameGraphValidationFailureCode::MissingRequiredResource,
@@ -1762,9 +1807,18 @@ mod tests {
         // mapping + final-output transform so the swapchain only ever sees
         // post-process output, not raw scene color.
         assert_eq!(diagnostics.pass_count, 7);
+        // Pass C9.0 — the typed default frame graph allocates only the
+        // typed core-required resources (typed scene/ui/present/etc.).
+        // The typed Lux + typed cloud-owned resources are typed
+        // conditional — registered only by the typed Lux + typed cloud
+        // sub-paths when they opt in.
+        let core_required_count = FrameGraphResourceType::ALL
+            .iter()
+            .filter(|kind| kind.is_core_required())
+            .count();
         assert_eq!(
             diagnostics.resource_count,
-            FrameGraphResourceType::ALL.len() as u16
+            core_required_count as u16,
         );
 
         let roles: Vec<FrameGraphPassRole> = diagnostics
