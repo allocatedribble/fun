@@ -170,6 +170,262 @@ impl Default for CloudWorldShadowSettings {
 }
 
 // ============================================================================
+// Pass C7.3 — typed cloud shadow sample format + shadow math model
+// ============================================================================
+
+/// Typed Pass C7.3 cloud shadow storage format.  Drives
+/// the typed GPU texture format the typed
+/// `CloudWorldShadowFiltered` resource uses.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CloudShadowStorageFormat {
+    /// Typed R8Unorm — typed cheap target.  Stores typed
+    /// transmittance only with 8 bits of precision per
+    /// pixel.  Acceptable for typed Low / Cheap quality
+    /// tiers where the typed banding artifacts are below
+    /// the typed perceptual threshold.
+    R8Unorm,
+    /// Typed R16Float — typed balanced / cinematic
+    /// target.  Stores typed transmittance only with 16
+    /// bits of floating-point precision.  Typed product
+    /// default.
+    #[default]
+    R16Float,
+    /// Typed RGBA16Float — typed packed 4-channel sample
+    /// target.  Stores the typed full
+    /// [`CloudShadowSample`] (transmittance + optical
+    /// depth + coverage + confidence).  Reserved for the
+    /// typed cinematic + typed debug-readback path.
+    Rgba16FloatPacked,
+}
+
+impl CloudShadowStorageFormat {
+    pub const ALL: [Self; 3] = [Self::R8Unorm, Self::R16Float, Self::Rgba16FloatPacked];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::R8Unorm => "r8_unorm",
+            Self::R16Float => "r16_float",
+            Self::Rgba16FloatPacked => "rgba16_float_packed",
+        }
+    }
+
+    /// Typed bytes per pixel of the typed storage format.
+    #[must_use]
+    pub const fn bytes_per_pixel(self) -> u8 {
+        match self {
+            Self::R8Unorm => 1,
+            Self::R16Float => 2,
+            Self::Rgba16FloatPacked => 8,
+        }
+    }
+
+    /// Typed predicate: does this typed format carry the
+    /// typed full [`CloudShadowSample`] payload (vs only
+    /// the typed transmittance channel)?
+    #[must_use]
+    pub const fn carries_full_sample(self) -> bool {
+        matches!(self, Self::Rgba16FloatPacked)
+    }
+
+    /// Typed predicate: is this typed format the typed
+    /// cheap target?
+    #[must_use]
+    pub const fn is_cheap(self) -> bool {
+        matches!(self, Self::R8Unorm)
+    }
+}
+
+/// Typed Pass C7.3 cloud shadow sample.  Packed GPU format
+/// per the user spec.  The typed GPU target can start as
+/// single-channel transmittance (`R16Float`) and migrate
+/// to the typed full 4-channel packed format
+/// (`Rgba16FloatPacked`) when the typed cinematic +
+/// debug-readback path needs the typed extra channels.
+///
+/// Typed encoding:
+/// - `transmittance`: `1.0` = no cloud shadow,
+///   `0.0` = fully occluded by dense cloud.
+/// - `optical_depth`: typed Beer-Lambert optical depth
+///   along the typed sun ray.  `0.0` = no cloud;
+///   higher = denser path.
+/// - `coverage`: typed cloud coverage at the typed
+///   sample point.  `0.0` = no cloud; `1.0` = fully
+///   covered.  Note: `coverage = 1.0` does NOT imply
+///   `transmittance = 0.0` — a typed thin cumulus
+///   patch has high coverage but low optical depth.
+/// - `confidence`: typed confidence the typed sample is
+///   reliable.  `0.0` = typed history-only fallback;
+///   `1.0` = typed full-resolution current-frame sample.
+///
+/// `Hash` is intentionally NOT derived — the typed
+/// struct carries `f32` fields which are not `Eq`.  Pass
+/// C7.3 does not key any typed map on
+/// `CloudShadowSample`; the typed
+/// `RendererFrameGraphDiagnostics::resource_count` keys
+/// off the typed resource handle, not the typed sample.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct CloudShadowSample {
+    pub transmittance: f32,
+    pub optical_depth: f32,
+    pub coverage: f32,
+    pub confidence: f32,
+}
+
+impl CloudShadowSample {
+    /// Typed "no cloud" sample — typed full sunlight, zero
+    /// optical depth, zero coverage, full confidence.  The
+    /// typed `transmittance = 1.0` encoding matches the
+    /// user spec ("1.0 = no cloud shadow").
+    pub const NO_CLOUD: Self = Self {
+        transmittance: 1.0,
+        optical_depth: 0.0,
+        coverage: 0.0,
+        confidence: 1.0,
+    };
+
+    /// Typed "fully occluded" sample — typed zero
+    /// sunlight, high optical depth, full coverage, full
+    /// confidence.  The typed `transmittance = 0.0`
+    /// encoding matches the user spec ("0.0 = fully
+    /// occluded by dense cloud").
+    pub const FULLY_OCCLUDED: Self = Self {
+        transmittance: 0.0,
+        optical_depth: 10.0,
+        coverage: 1.0,
+        confidence: 1.0,
+    };
+
+    /// Typed builder: typed sample from a single typed
+    /// transmittance value.  Derives the typed optical
+    /// depth via Beer-Lambert (`-ln(transmittance)`),
+    /// leaves the typed coverage at `coverage` and the
+    /// typed confidence at `1.0`.
+    #[must_use]
+    pub fn from_transmittance(transmittance: f32, coverage: f32) -> Self {
+        let clamped = transmittance.clamp(0.0, 1.0);
+        // Beer-Lambert: T = exp(-tau) → tau = -ln(T).
+        // Clamp the typed tau to a typed reasonable
+        // maximum (10) so the typed `FULLY_OCCLUDED` case
+        // produces a typed finite value.
+        let optical_depth = if clamped > 0.0 {
+            (-clamped.ln()).min(10.0)
+        } else {
+            10.0
+        };
+        Self {
+            transmittance: clamped,
+            optical_depth,
+            coverage: coverage.clamp(0.0, 1.0),
+            confidence: 1.0,
+        }
+    }
+
+    /// Typed predicate: is this typed sample the typed
+    /// no-cloud baseline (transmittance fully open)?
+    #[must_use]
+    pub fn is_no_cloud(&self) -> bool {
+        self.transmittance >= 1.0
+    }
+
+    /// Typed predicate: is this typed sample fully
+    /// occluded (transmittance fully closed)?
+    #[must_use]
+    pub fn is_fully_occluded(&self) -> bool {
+        self.transmittance <= 0.0
+    }
+}
+
+// ============================================================================
+// Pass C7.3 — typed Lux direct-light shadow math
+// ============================================================================
+
+/// Typed Pass C7.3 Lux direct-light shadow math.  Encodes
+/// the typed user-spec formula:
+///
+///     final_direct_visibility = opaque_shadow * cloud_transmittance
+///
+/// The typed contract refuses baking cloud shadows into
+/// opaque virtual shadow depth — clouds are volumetric
+/// and semi-transparent, not opaque casters.  The typed
+/// `cloud_shadows_not_baked_into_opaque_depth()` const
+/// predicate audits the typed contract.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LuxDirectLightShadowMath;
+
+impl LuxDirectLightShadowMath {
+    /// Typed compose helper: combines a typed opaque
+    /// shadow factor (`1.0` = lit, `0.0` = shadowed by
+    /// opaque geometry) with a typed cloud transmittance
+    /// (`1.0` = no cloud, `0.0` = fully occluded by
+    /// cloud) into a typed final direct-visibility
+    /// factor.
+    ///
+    /// The typed formula is a typed product — opaque
+    /// shadow blocks light through geometry; cloud
+    /// transmittance dims sunlight through atmosphere;
+    /// both effects multiply into the typed final
+    /// visibility.
+    #[must_use]
+    pub fn compose_final_direct_visibility(
+        opaque_shadow: f32,
+        cloud_transmittance: f32,
+    ) -> f32 {
+        let opaque = opaque_shadow.clamp(0.0, 1.0);
+        let cloud = cloud_transmittance.clamp(0.0, 1.0);
+        opaque * cloud
+    }
+
+    /// Typed convenience: typed final visibility from a
+    /// typed opaque shadow factor + a typed full
+    /// `CloudShadowSample` (consumes the typed
+    /// transmittance channel only).
+    #[must_use]
+    pub fn compose_from_sample(opaque_shadow: f32, cloud: CloudShadowSample) -> f32 {
+        Self::compose_final_direct_visibility(opaque_shadow, cloud.transmittance)
+    }
+}
+
+/// Typed Pass C7.3 const predicate — cloud shadows MUST
+/// NOT be baked into the typed opaque virtual shadow
+/// depth.  Encoded by the typed taxonomy split: the
+/// typed cloud shadow resources live in their own typed
+/// `Cloud*` namespace (NOT the typed `LuxVirtualShadow*`
+/// namespace), and the typed `is_lux()` predicate on
+/// `FrameGraphResourceType` returns `false` for typed
+/// cloud resources.  The typed cloud shadow project /
+/// filter passes write to typed `CloudWorldShadow*`
+/// targets, never to typed `LuxVirtualShadowPages` or
+/// `LuxShadowAtlas`.
+#[must_use]
+pub const fn cloud_shadows_not_baked_into_opaque_depth() -> bool {
+    // Typed taxonomy split: typed cloud resource types do
+    // NOT participate in the typed `is_lux()` set, AND
+    // typed cloud shadow pass roles do NOT write to typed
+    // Lux virtual shadow / atlas resources (audited at the
+    // typed `lux_passes::typed_resource_outputs` layer in
+    // the typed compiler).
+    let cw_transmittance = FrameGraphResourceType::CloudWorldShadowTransmittance;
+    let cw_filtered = FrameGraphResourceType::CloudWorldShadowFiltered;
+    let cw_constants = FrameGraphResourceType::CloudShadowProjectionConstants;
+    !cw_transmittance.is_lux() && !cw_filtered.is_lux() && !cw_constants.is_lux()
+}
+
+/// Typed Pass C7.3 const predicate — the typed
+/// transmittance encoding matches the user spec
+/// (`1.0` = no cloud, `0.0` = fully occluded).
+#[must_use]
+pub const fn cloud_transmittance_encoding_matches_user_spec() -> bool {
+    // Typed `NO_CLOUD.transmittance == 1.0`; typed
+    // `FULLY_OCCLUDED.transmittance == 0.0`.  Encoded as
+    // typed const-evaluable f32 comparisons.
+    let no_cloud_t = CloudShadowSample::NO_CLOUD.transmittance;
+    let occluded_t = CloudShadowSample::FULLY_OCCLUDED.transmittance;
+    no_cloud_t == 1.0 && occluded_t == 0.0
+}
+
+// ============================================================================
 // Pass C7.2 — typed frame-delay mode + ordering predicates
 // ============================================================================
 
@@ -417,6 +673,146 @@ mod tests {
         for role in CLOUD_SHADOW_PASS_ROLES {
             assert!(role.is_lux(), "{:?} reports is_lux=false", role);
         }
+    }
+
+    /// Pass C7.3 acceptance — typed `CloudShadowSample`
+    /// carries the typed user-spec 4-field shape.
+    #[test]
+    fn cloud_shadow_sample_carries_user_spec_fields() {
+        let s = CloudShadowSample::NO_CLOUD;
+        assert_eq!(s.transmittance, 1.0);
+        assert_eq!(s.optical_depth, 0.0);
+        assert_eq!(s.coverage, 0.0);
+        assert_eq!(s.confidence, 1.0);
+        assert!(s.is_no_cloud());
+        assert!(!s.is_fully_occluded());
+
+        let occ = CloudShadowSample::FULLY_OCCLUDED;
+        assert_eq!(occ.transmittance, 0.0);
+        assert!(occ.optical_depth > 0.0);
+        assert_eq!(occ.coverage, 1.0);
+        assert_eq!(occ.confidence, 1.0);
+        assert!(occ.is_fully_occluded());
+        assert!(!occ.is_no_cloud());
+    }
+
+    /// Pass C7.3 acceptance — typed cloud transmittance
+    /// encoding matches user spec (`1.0` = no shadow,
+    /// `0.0` = fully occluded).
+    #[test]
+    fn cloud_transmittance_encoding_matches_user_spec_predicate() {
+        assert!(cloud_transmittance_encoding_matches_user_spec());
+        // Typed `from_transmittance` builder respects the
+        // typed encoding.
+        let mid = CloudShadowSample::from_transmittance(0.5, 0.7);
+        assert_eq!(mid.transmittance, 0.5);
+        // Beer-Lambert: tau = -ln(0.5) ≈ 0.693.
+        assert!((mid.optical_depth - 0.693).abs() < 0.01);
+        assert_eq!(mid.coverage, 0.7);
+        // Typed out-of-range inputs clamp to typed [0, 1].
+        let clamped_high = CloudShadowSample::from_transmittance(1.5, 1.5);
+        assert_eq!(clamped_high.transmittance, 1.0);
+        assert_eq!(clamped_high.coverage, 1.0);
+        let clamped_low = CloudShadowSample::from_transmittance(-0.5, -0.3);
+        assert_eq!(clamped_low.transmittance, 0.0);
+        assert_eq!(clamped_low.coverage, 0.0);
+    }
+
+    /// Pass C7.3 acceptance — typed final direct
+    /// visibility composes opaque shadow × cloud
+    /// transmittance.
+    #[test]
+    fn final_direct_visibility_composes_opaque_and_cloud() {
+        // Typed lit + no cloud → typed full visibility.
+        assert_eq!(
+            LuxDirectLightShadowMath::compose_final_direct_visibility(1.0, 1.0),
+            1.0,
+        );
+        // Typed shadowed by geometry → typed zero
+        // visibility regardless of cloud.
+        assert_eq!(
+            LuxDirectLightShadowMath::compose_final_direct_visibility(0.0, 1.0),
+            0.0,
+        );
+        // Typed fully occluded by cloud → typed zero
+        // visibility regardless of geometry.
+        assert_eq!(
+            LuxDirectLightShadowMath::compose_final_direct_visibility(1.0, 0.0),
+            0.0,
+        );
+        // Typed partial × partial = product.
+        assert_eq!(
+            LuxDirectLightShadowMath::compose_final_direct_visibility(0.8, 0.5),
+            0.4,
+        );
+        // Typed compose_from_sample reads the typed
+        // transmittance channel only.
+        let cloud = CloudShadowSample::from_transmittance(0.5, 0.8);
+        let v = LuxDirectLightShadowMath::compose_from_sample(0.8, cloud);
+        assert!((v - 0.4).abs() < 1e-6);
+        // Typed clamps work on typed out-of-range inputs.
+        assert_eq!(
+            LuxDirectLightShadowMath::compose_final_direct_visibility(1.5, 1.5),
+            1.0,
+        );
+        assert_eq!(
+            LuxDirectLightShadowMath::compose_final_direct_visibility(-0.5, 0.5),
+            0.0,
+        );
+    }
+
+    /// Pass C7.3 acceptance — cloud shadows MUST NOT be
+    /// baked into the typed opaque virtual shadow depth.
+    /// The typed `is_lux()` predicate on typed cloud
+    /// resources MUST return `false` (typed cloud
+    /// resources live in their own typed namespace,
+    /// not the typed Lux virtual shadow set).
+    #[test]
+    fn cloud_shadows_not_baked_into_opaque_depth_predicate() {
+        assert!(cloud_shadows_not_baked_into_opaque_depth());
+        // Typed cloud resource types are NOT in the typed
+        // Lux set.
+        assert!(!FrameGraphResourceType::CloudWorldShadowTransmittance.is_lux());
+        assert!(!FrameGraphResourceType::CloudWorldShadowFiltered.is_lux());
+        assert!(!FrameGraphResourceType::CloudShadowProjectionConstants.is_lux());
+        // Typed Lux virtual shadow resource types remain
+        // in the typed Lux set (sanity check that the
+        // typed split keeps both sides intact).
+        assert!(FrameGraphResourceType::LuxVirtualShadowPages.is_lux());
+        assert!(FrameGraphResourceType::LuxShadowAtlas.is_lux());
+    }
+
+    /// Pass C7.3 acceptance — typed
+    /// `CloudShadowStorageFormat` taxonomy walks the
+    /// user-spec formats.
+    #[test]
+    fn cloud_shadow_storage_format_taxonomy_walks_user_spec() {
+        assert_eq!(CloudShadowStorageFormat::ALL.len(), 3);
+        // Typed bytes per pixel:
+        //   R8Unorm           = 1
+        //   R16Float          = 2
+        //   Rgba16FloatPacked = 8
+        assert_eq!(CloudShadowStorageFormat::R8Unorm.bytes_per_pixel(), 1);
+        assert_eq!(CloudShadowStorageFormat::R16Float.bytes_per_pixel(), 2);
+        assert_eq!(
+            CloudShadowStorageFormat::Rgba16FloatPacked.bytes_per_pixel(),
+            8,
+        );
+        // Only the typed packed format carries the typed
+        // full 4-channel sample.
+        assert!(!CloudShadowStorageFormat::R8Unorm.carries_full_sample());
+        assert!(!CloudShadowStorageFormat::R16Float.carries_full_sample());
+        assert!(CloudShadowStorageFormat::Rgba16FloatPacked.carries_full_sample());
+        // Only the typed R8Unorm format is typed cheap.
+        assert!(CloudShadowStorageFormat::R8Unorm.is_cheap());
+        assert!(!CloudShadowStorageFormat::R16Float.is_cheap());
+        assert!(!CloudShadowStorageFormat::Rgba16FloatPacked.is_cheap());
+        // Typed default is R16Float — typed balanced /
+        // cinematic target.
+        assert_eq!(
+            CloudShadowStorageFormat::default(),
+            CloudShadowStorageFormat::R16Float,
+        );
     }
 
     /// Pass C7.2 acceptance — one-frame-delayed mode is
