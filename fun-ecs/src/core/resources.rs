@@ -1,6 +1,7 @@
 use crate::FunEcsResourceKind;
 
-pub const FUN_WORLD_SPATIAL_RESOURCE_KINDS: [FunEcsResourceKind; 13] = [
+pub const FUN_WORLD_SPATIAL_RESOURCE_KINDS: [FunEcsResourceKind; 14] = [
+    FunEcsResourceKind::ProceduralWorldManifest,
     FunEcsResourceKind::SpatialPageTable,
     FunEcsResourceKind::PageResidencyTable,
     FunEcsResourceKind::DirtyRegionLedger,

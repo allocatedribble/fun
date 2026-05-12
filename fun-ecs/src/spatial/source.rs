@@ -3,9 +3,10 @@ use bevy_ecs::prelude::Resource;
 use crate::{
     ECS_SPATIAL_MAX_DECODE_OVERLAYS, ECS_SPATIAL_MAX_DECODED_PAGE_ROWS,
     ECS_SPATIAL_MAX_SOURCE_PAYLOAD_BYTES, ECS_SPATIAL_MAX_SOURCE_QUEUE_ROWS, EcsPageChannelMask,
-    EcsPageFailureCode, EcsSourceRequestId, EcsSpatialPageKey, EcsSpatialRegionKey,
-    EcsSpatialSourceId, EcsSpatialValidationError, EcsStreamPriority,
+    EcsPageFailureCode, EcsProceduralWorldManifest, EcsSourceRequestId, EcsSpatialPageKey,
+    EcsSpatialRegionKey, EcsSpatialSourceId, EcsSpatialValidationError, EcsStreamPriority,
     VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelBrickPayload, VoxelClusterSummary,
+    generate_procedural_terrain_page,
 };
 
 pub trait EcsSpatialSource {
@@ -141,7 +142,22 @@ pub struct EcsProceduralRecipeRef {
     pub key: EcsSpatialPageKey,
     pub recipe_id: u64,
     pub seed: u64,
+    pub generator_version: u16,
+    pub manifest_signature: u64,
     pub checksum: EcsSourceChecksum,
+}
+
+impl EcsProceduralRecipeRef {
+    pub fn validate(self) -> Result<(), EcsSpatialValidationError> {
+        if self.recipe_id == 0
+            || self.generator_version == 0
+            || self.manifest_signature == 0
+            || self.checksum == EcsSourceChecksum::NONE
+        {
+            return Err(EcsSpatialValidationError::InvalidProceduralRecipe);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -189,7 +205,8 @@ impl EcsSourcePayload {
     pub fn validate(&self) -> Result<(), EcsSpatialValidationError> {
         match self {
             Self::CompressedPage(payload) => payload.validate(),
-            Self::ProceduralRecipe(_) | Self::Failure(_) => Ok(()),
+            Self::ProceduralRecipe(recipe) => recipe.validate(),
+            Self::Failure(_) => Ok(()),
         }
     }
 }
@@ -355,6 +372,27 @@ pub fn decode_pages(
     decode_epoch: u32,
     output: &mut EcsDecodedPageQueue,
 ) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
+    decode_pages_inner(acquired, overlays, decode_epoch, None, output)
+}
+
+pub fn decode_pages_with_procedural_manifest(
+    acquired: &EcsSourceAcquireQueue,
+    overlays: &[EcsDecodeOverlay],
+    decode_epoch: u32,
+    manifest: EcsProceduralWorldManifest,
+    output: &mut EcsDecodedPageQueue,
+) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
+    manifest.validate()?;
+    decode_pages_inner(acquired, overlays, decode_epoch, Some(manifest), output)
+}
+
+fn decode_pages_inner(
+    acquired: &EcsSourceAcquireQueue,
+    overlays: &[EcsDecodeOverlay],
+    decode_epoch: u32,
+    procedural_manifest: Option<EcsProceduralWorldManifest>,
+    output: &mut EcsDecodedPageQueue,
+) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
     if overlays.len() > ECS_SPATIAL_MAX_DECODE_OVERLAYS {
         return Err(EcsSpatialValidationError::DecodeOverlayQueueFull);
     }
@@ -368,7 +406,8 @@ pub fn decode_pages(
         if overlay_count > u16::MAX as usize {
             return Err(EcsSpatialValidationError::DecodeOverlayQueueFull);
         }
-        let record = decode_page_record(row, overlay_count as u16, decode_epoch)?;
+        let record =
+            decode_page_record(row, overlay_count as u16, decode_epoch, procedural_manifest)?;
         match record.payload_kind {
             EcsDecodedPagePayloadKind::VoxelBrick | EcsDecodedPagePayloadKind::Empty => {
                 report.decoded += 1;
@@ -386,6 +425,7 @@ fn decode_page_record(
     row: &EcsSourceAcquireRecord,
     overlay_count: u16,
     decode_epoch: u32,
+    procedural_manifest: Option<EcsProceduralWorldManifest>,
 ) -> Result<EcsDecodedPageRecord, EcsSpatialValidationError> {
     row.request.payload.validate()?;
     let key = row.request.key;
@@ -425,24 +465,37 @@ fn decode_page_record(
                 },
             })
         }
-        EcsSourcePayload::ProceduralRecipe(recipe) => Ok(EcsDecodedPageRecord {
-            key,
-            source: row.request.source,
-            source_epoch: row.request.source_epoch,
-            payload_kind: EcsDecodedPagePayloadKind::ProceduralRecipeRef,
-            voxel_brick: None,
-            cluster_summaries: empty_clusters,
-            telemetry: EcsDecodeTelemetry {
-                key,
-                source_epoch: row.request.source_epoch,
-                decode_epoch,
-                source_bytes: 0,
-                overlay_count,
-                cluster_summary_count: 0,
-                checksum: recipe.checksum,
-                failure: None,
-            },
-        }),
+        EcsSourcePayload::ProceduralRecipe(recipe) => {
+            if let Some(manifest) = procedural_manifest {
+                generate_procedural_terrain_page(
+                    manifest,
+                    *recipe,
+                    row.request.source,
+                    row.request.source_epoch,
+                    decode_epoch,
+                    overlay_count,
+                )
+            } else {
+                Ok(EcsDecodedPageRecord {
+                    key,
+                    source: row.request.source,
+                    source_epoch: row.request.source_epoch,
+                    payload_kind: EcsDecodedPagePayloadKind::ProceduralRecipeRef,
+                    voxel_brick: None,
+                    cluster_summaries: empty_clusters,
+                    telemetry: EcsDecodeTelemetry {
+                        key,
+                        source_epoch: row.request.source_epoch,
+                        decode_epoch,
+                        source_bytes: 0,
+                        overlay_count,
+                        cluster_summary_count: 0,
+                        checksum: recipe.checksum,
+                        failure: None,
+                    },
+                })
+            }
+        }
         EcsSourcePayload::Failure(failure) => Ok(EcsDecodedPageRecord {
             key,
             source: row.request.source,

@@ -8,26 +8,25 @@ use fun_scheduler_types::{GraphExecutionMode, NodeOutcome};
 
 use crate::{
     CollisionCookMode, ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS, ECS_SPATIAL_DEFAULT_DECODE_CHUNKS,
-    EcsArtifactConsumer, EcsChunkKey, EcsCommandBufferId, EcsCompressedPagePayload,
+    EcsArtifactConsumer, EcsCameraTransformSample, EcsChunkKey, EcsCommandBufferId,
     EcsCrossDomainHandoff, EcsCrossDomainHandoffKind, EcsDecodeOverlay,
-    EcsDerivedArtifactBuildSystem, EcsDerivedArtifactRecord, EcsHandoffQueueId, EcsPageChannelMask,
-    EcsPageResidencyRecord, EcsPageResidencyState, EcsSourceChecksum, EcsSourcePayload,
-    EcsSourcePayloadCodec, EcsSourceRequest, EcsSourceRequestId, EcsSpatialCommand,
+    EcsDerivedArtifactBuildSystem, EcsDerivedArtifactRecord, EcsHandoffQueueId,
+    EcsPageResidencyRecord, EcsPageResidencyState, EcsProceduralTerrainSource, EcsSpatialCommand,
     EcsSpatialCommandApplyDigest, EcsSpatialCommandApplyReport, EcsSpatialCommandBarrierKind,
-    EcsSpatialCommandBuffer, EcsSpatialCompilerBarrierKind, EcsSpatialPageKey, EcsSpatialRegionKey,
+    EcsSpatialCommandBuffer, EcsSpatialCompilerBarrierKind, EcsSpatialPageKey,
     EcsSpatialScheduleBuildInput, EcsSpatialScheduleCompileError, EcsSpatialScheduleCompileOutput,
-    EcsSpatialScheduleCompiler, EcsSpatialSource, EcsSpatialSourceId, EcsSpatialSourceKind,
-    EcsSpatialValidationError, EcsStreamCameraId, EcsStreamPriority, EcsStreamRequest,
-    EcsStreamRequestId, EcsStreamSourceDescriptor, EcsStreamSourceId, EcsStreamWaveLedger,
-    EcsStreamingSourceSnapshot, EcsSystemClass, EcsWork, EcsWorkKind, FUN_COMMAND_BUFFER_ARTIFACTS,
-    FUN_COMMAND_BUFFER_DIRTY_PROPAGATION, FUN_COMMAND_BUFFER_HANDOFFS,
-    FUN_COMMAND_BUFFER_SPATIAL_REQUESTS, FixedStepId, FunRevision, FunWorld, GraphInvariantError,
-    ProductRegistry, RendererVisibilityHint, RevisionCategory, ScheduleDomain, ScheduleLane,
-    StreamWaveReason, WorkBlockingClass, WorkNode, WorkNodeId, WorkWaitToken, acquire_sources,
-    apply_artifact_commands_with_revisions, apply_dirty_propagation_commands_with_revisions,
-    apply_handoff_commands_with_revisions, build_derived_artifacts, build_interest, decode_pages,
-    diff_requests, plan_stream_wave, publish_lux_handoffs, publish_physics_cooks,
-    publish_renderer_handoffs, sense_sources,
+    EcsSpatialScheduleCompiler, EcsSpatialSourceId, EcsSpatialValidationError, EcsStreamCameraId,
+    EcsStreamPriority, EcsStreamRequest, EcsStreamRequestId, EcsStreamSourceDescriptor,
+    EcsStreamSourceId, EcsStreamWaveLedger, EcsStreamingSourceSnapshot, EcsSystemClass, EcsWork,
+    EcsWorkKind, FUN_COMMAND_BUFFER_ARTIFACTS, FUN_COMMAND_BUFFER_DIRTY_PROPAGATION,
+    FUN_COMMAND_BUFFER_HANDOFFS, FUN_COMMAND_BUFFER_SPATIAL_REQUESTS, FixedStepId, FunRevision,
+    FunWorld, GraphInvariantError, ProductRegistry, RendererVisibilityHint, RevisionCategory,
+    ScheduleDomain, ScheduleLane, SpatialStreamCamera, StreamWaveReason, WorkBlockingClass,
+    WorkNode, WorkNodeId, WorkWaitToken, acquire_sources, apply_artifact_commands_with_revisions,
+    apply_dirty_propagation_commands_with_revisions, apply_handoff_commands_with_revisions,
+    build_derived_artifacts, build_interest, decode_pages_with_procedural_manifest, diff_requests,
+    plan_stream_wave, publish_lux_handoffs, publish_physics_cooks, publish_renderer_handoffs,
+    sense_sources,
 };
 
 const DECODE_CHUNK_BASE: u64 = 0x0dec_0000;
@@ -35,7 +34,6 @@ const ARTIFACT_CONSUMER_CHUNK_BASE: u64 = 0x0a7f_0000;
 const DEFAULT_SOURCE_ID: EcsSpatialSourceId = EcsSpatialSourceId::new(1);
 const DEFAULT_STREAM_SOURCE_ID: EcsStreamSourceId = EcsStreamSourceId::new(1);
 const DEFAULT_CAMERA_ID: EcsStreamCameraId = EcsStreamCameraId::new(1);
-const DEFAULT_REGION_EDGE_PAGES: u16 = 8;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -219,7 +217,7 @@ pub struct EcsNodeRunner<'a> {
     handoff_commands: EcsSpatialCommandBuffer,
     decode_overlays: Vec<EcsDecodeOverlay>,
     sources: Vec<EcsStreamSourceDescriptor>,
-    cameras: Vec<(crate::SpatialStreamCamera, crate::EcsCameraTransformSample)>,
+    cameras: Vec<(SpatialStreamCamera, EcsCameraTransformSample)>,
     next_artifact_id: u64,
     next_request_id: u64,
     decode_chunk_count: u16,
@@ -291,6 +289,28 @@ impl<'a> EcsNodeRunner<'a> {
     #[must_use]
     pub fn with_decode_chunk_count(mut self, decode_chunk_count: u16) -> Self {
         self.decode_chunk_count = decode_chunk_count.max(1);
+        self
+    }
+
+    #[must_use]
+    pub fn with_stream_source(mut self, source: EcsStreamSourceDescriptor) -> Self {
+        self.sources.push(source);
+        self
+    }
+
+    #[must_use]
+    pub fn with_stream_camera(
+        mut self,
+        camera: SpatialStreamCamera,
+        transform: EcsCameraTransformSample,
+    ) -> Self {
+        self.cameras.push((camera, transform));
+        self
+    }
+
+    #[must_use]
+    pub fn with_decode_overlay(mut self, overlay: EcsDecodeOverlay) -> Self {
+        self.decode_overlays.push(overlay);
         self
     }
 
@@ -486,15 +506,15 @@ impl<'a> EcsNodeRunner<'a> {
                 ..EcsNodeMetrics::default()
             });
         }
-        let source = SyntheticSpatialSource {
+        let source = EcsProceduralTerrainSource {
             source_id: DEFAULT_SOURCE_ID,
-            region_edge_pages: DEFAULT_REGION_EDGE_PAGES,
+            manifest: self.world.procedural_world_manifest,
         };
         let before = self.world.source_acquire_queue.rows.len();
         let report = acquire_sources(
             &source,
             &pages,
-            DEFAULT_REGION_EDGE_PAGES,
+            self.world.procedural_world_manifest.region_edge_pages,
             &mut self.world.source_acquire_queue,
         )?;
         Ok(EcsNodeMetrics {
@@ -523,10 +543,11 @@ impl<'a> EcsNodeRunner<'a> {
                 acquired.push(row.clone())?;
             }
         }
-        let report = decode_pages(
+        let report = decode_pages_with_procedural_manifest(
             &acquired,
             &self.decode_overlays,
             self.frame as u32,
+            self.world.procedural_world_manifest,
             &mut self.world.decoded_page_queue,
         )?;
         Ok(EcsNodeMetrics {
@@ -894,6 +915,7 @@ impl EcsSpatialWorldDigest {
     pub fn from_world(world: &FunWorld) -> Self {
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
         hash = hash_u64(hash, world.revision.get());
+        hash = hash_u64(hash, world.procedural_world_manifest.signature().value);
         hash = hash_u64(hash, world.spatial_page_table.len() as u64);
         hash = hash_u64(hash, world.stream_request_queue.requests.len() as u64);
         hash = hash_u64(hash, world.source_acquire_queue.rows.len() as u64);
@@ -986,6 +1008,20 @@ impl FunWorld {
         self.submit_spatial_frame(&runtime)
     }
 
+    pub fn run_spatial_frame_deterministic_with_streaming_inputs(
+        &mut self,
+        cameras: &[(SpatialStreamCamera, EcsCameraTransformSample)],
+        sources: &[EcsStreamSourceDescriptor],
+    ) -> Result<EcsSpatialFrameRunReport, EcsNodeError> {
+        let runtime = Runtime::new(FunSchedulerConfig::default());
+        self.run_spatial_frame_with_runtime_and_inputs(
+            &runtime,
+            EcsNodeExecutionMode::DeterministicSingleThread,
+            cameras,
+            sources,
+        )
+    }
+
     pub fn run_spatial_frame_parallel(&mut self) -> Result<EcsSpatialFrameRunReport, EcsNodeError> {
         let runtime = Runtime::new(FunSchedulerConfig::default());
         self.run_spatial_frame_with_runtime(
@@ -999,6 +1035,16 @@ impl FunWorld {
         runtime: &Runtime<ProductRegistry>,
         mode: EcsNodeExecutionMode,
     ) -> Result<EcsSpatialFrameRunReport, EcsNodeError> {
+        self.run_spatial_frame_with_runtime_and_inputs(runtime, mode, &[], &[])
+    }
+
+    fn run_spatial_frame_with_runtime_and_inputs(
+        &mut self,
+        runtime: &Runtime<ProductRegistry>,
+        mode: EcsNodeExecutionMode,
+        cameras: &[(SpatialStreamCamera, EcsCameraTransformSample)],
+        sources: &[EcsStreamSourceDescriptor],
+    ) -> Result<EcsSpatialFrameRunReport, EcsNodeError> {
         let mut output = self.compile_spatial_frame_graph()?;
         let requested_mode = mode.requested_graph_mode();
         output.graph.mode = requested_mode;
@@ -1006,9 +1052,15 @@ impl FunWorld {
         output.graph.mode = mode.executor_graph_mode();
         let executed_mode = output.graph.mode;
 
-        let runner = EcsNodeRunner::new(self)
+        let mut runner = EcsNodeRunner::new(self)
             .with_execution_mode(mode)
             .with_decode_chunk_count(output.chunk_plan.decode_chunks);
+        for source in sources {
+            runner = runner.with_stream_source(*source);
+        }
+        for (camera, transform) in cameras {
+            runner = runner.with_stream_camera(*camera, *transform);
+        }
         let outcome_sink = runner.outcome_sink();
         let executor =
             DeterministicSingleThreadedGraphExecutor::new(Arc::clone(runtime.clock()), runner);
@@ -1094,51 +1146,6 @@ fn ready_artifacts_for_consumer(
     artifacts
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SyntheticSpatialSource {
-    source_id: EcsSpatialSourceId,
-    region_edge_pages: u16,
-}
-
-impl EcsSpatialSource for SyntheticSpatialSource {
-    fn source_id(&self) -> EcsSpatialSourceId {
-        self.source_id
-    }
-
-    fn manifest_for_region(&self, key: EcsSpatialRegionKey) -> crate::EcsSpatialRegionManifest {
-        crate::EcsSpatialRegionManifest {
-            region: key,
-            source: self.source_id,
-            source_kind: EcsSpatialSourceKind::DebugSynthetic,
-            manifest_epoch: 1,
-            page_count: u32::from(self.region_edge_pages).pow(3),
-            channel_mask: EcsPageChannelMask::terrain_primary(),
-            checksum: EcsSourceChecksum::NONE,
-        }
-    }
-
-    fn request_page(&self, key: EcsSpatialPageKey) -> EcsSourceRequest {
-        let region = EcsSpatialRegionKey::from_page(key, self.region_edge_pages);
-        EcsSourceRequest {
-            request_id: EcsSourceRequestId::new(key.chunk_key().get()),
-            source: self.source_id,
-            source_kind: EcsSpatialSourceKind::DebugSynthetic,
-            key,
-            region,
-            manifest_epoch: 1,
-            source_epoch: 1,
-            priority: EcsStreamPriority::default(),
-            payload: EcsSourcePayload::CompressedPage(EcsCompressedPagePayload {
-                key,
-                codec: EcsSourcePayloadCodec::None,
-                byte_len: 0,
-                bytes: Vec::new(),
-                checksum: EcsSourceChecksum::NONE,
-            }),
-        }
-    }
-}
-
 fn page_sort_key(page: EcsSpatialPageKey) -> (u8, u64, u8, i32, i32, i32, u8) {
     (
         page.domain as u8,
@@ -1181,8 +1188,10 @@ const fn hash_u64(mut hash: u64, value: u64) -> u64 {
 mod tests {
     use super::*;
     use crate::{
-        EcsDecodedPageRecord, EcsPageChannel, EcsSpatialDomainKind, EcsSpatialGridId,
-        EcsSystemExecutionContract, VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelClusterSummary,
+        EcsDecodedPagePayloadKind, EcsDecodedPageRecord, EcsEntityId, EcsPageChannel,
+        EcsSourceChecksum, EcsSpatialDomainKind, EcsSpatialGridId, EcsSystemExecutionContract,
+        EcsViewFrustum, IVec3, RendererArtifactHandoffKind, StreamCameraRole,
+        VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelClusterSummary,
     };
     use fun_scheduler_types::{
         DeterministicDescriptor, EcsLivenessClass, EcsWorldRevision, ScheduleBudget,
@@ -1219,6 +1228,38 @@ mod tests {
                 checksum: EcsSourceChecksum::NONE,
                 failure: None,
             },
+        }
+    }
+
+    fn main_stream_camera(
+        origin_world_ft: IVec3,
+    ) -> (SpatialStreamCamera, EcsCameraTransformSample) {
+        (
+            SpatialStreamCamera {
+                role: StreamCameraRole::MainView,
+                enabled: true,
+                priority: 10,
+                required_shells: 0,
+                desired_shells: 0,
+                velocity_lookahead_s: 0.0,
+            },
+            EcsCameraTransformSample {
+                camera_entity: EcsEntityId::new(1),
+                camera_id: DEFAULT_CAMERA_ID,
+                origin_world_ft,
+                velocity_world_ft_s: IVec3::zero(),
+                view_frustum: EcsViewFrustum::EMPTY,
+                cut_or_teleport: false,
+            },
+        )
+    }
+
+    fn terrain_source() -> EcsStreamSourceDescriptor {
+        EcsStreamSourceDescriptor {
+            source: DEFAULT_STREAM_SOURCE_ID,
+            domain: EcsSpatialDomainKind::Terrain,
+            grid_id: EcsSpatialGridId::new(1),
+            priority: 10,
         }
     }
 
@@ -1322,6 +1363,32 @@ mod tests {
             report.scheduler_report.metrics.node_count
         );
         assert_eq!(report.digest, EcsSpatialWorldDigest::from_world(&world));
+    }
+
+    #[test]
+    fn streaming_frame_generates_procedural_voxel_page_and_renderer_handoff() {
+        let mut world = FunWorld::default();
+        let camera = main_stream_camera(IVec3::zero());
+        let source = terrain_source();
+        let report = world
+            .run_spatial_frame_deterministic_with_streaming_inputs(&[camera], &[source])
+            .expect("streaming spatial frame runs");
+
+        assert_eq!(report.scheduler_report.metrics.rejected_count, 0);
+        assert_eq!(world.source_acquire_queue.rows.len(), 1);
+        assert!(matches!(
+            world.source_acquire_queue.rows[0].request.payload,
+            crate::EcsSourcePayload::ProceduralRecipe(_)
+        ));
+        assert_eq!(world.decoded_page_queue.rows.len(), 1);
+        let decoded = &world.decoded_page_queue.rows[0];
+        assert_eq!(decoded.payload_kind, EcsDecodedPagePayloadKind::VoxelBrick);
+        assert!(decoded.voxel_brick.is_some());
+        assert!(
+            world.renderer_handoff_queue.items.iter().any(|handoff| {
+                handoff.kind == RendererArtifactHandoffKind::TerrainSurfacePackets
+            })
+        );
     }
 
     #[test]

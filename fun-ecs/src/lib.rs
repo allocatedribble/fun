@@ -32,6 +32,8 @@ pub mod spatial;
 pub mod storage;
 #[path = "spatial/streaming.rs"]
 pub mod streaming;
+#[path = "spatial/terrain.rs"]
+pub mod terrain;
 #[path = "spatial/voxel.rs"]
 pub mod voxel;
 
@@ -225,7 +227,7 @@ pub use source::{
     EcsProceduralRecipeRef, EcsSourceAcquireQueue, EcsSourceAcquireRecord, EcsSourceAcquireReport,
     EcsSourceChecksum, EcsSourceChecksumAlgorithm, EcsSourceFailure, EcsSourcePayload,
     EcsSourcePayloadCodec, EcsSourceRequest, EcsSpatialRegionManifest, EcsSpatialSource,
-    EcsSpatialSourceKind, acquire_sources, decode_pages,
+    EcsSpatialSourceKind, acquire_sources, decode_pages, decode_pages_with_procedural_manifest,
 };
 pub use spatial::{
     DebugPinReason, EcsAabbF32, EcsAabbI64, EcsBoundsUm, EcsClipLevelDesc, EcsFineOverlayDecl,
@@ -245,6 +247,11 @@ pub use streaming::{
     EcsStreamWaveLedger, EcsStreamWaveRecord, EcsStreamingHole, EcsStreamingSourceSnapshot,
     EcsViewFrustum, IVec3, StreamWaveReason, build_interest, chebyshev_shell_offsets,
     diff_requests, offset_page, plan_stream_wave, sense_sources, terrain_page_for_world_ft,
+};
+pub use terrain::{
+    ECS_PROCEDURAL_TERRAIN_DEFAULT_REGION_EDGE_PAGES, ECS_PROCEDURAL_TERRAIN_GENERATOR_VERSION_V1,
+    ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION, EcsBiomeRecipe, EcsProceduralTerrainSource,
+    EcsProceduralWorldManifest, EcsTerrainGeneratorVersion, generate_procedural_terrain_page,
 };
 pub use voxel::{
     EcsFineOverlayLink, EcsFineOverlayOverride, EcsFineOverlayOverrideMask, MaterialPalettePolicy,
@@ -1840,6 +1847,8 @@ mod tests {
                     key: recipe_page,
                     recipe_id: 44,
                     seed: 99,
+                    generator_version: 1,
+                    manifest_signature: 77,
                     checksum: EcsSourceChecksum {
                         algorithm: EcsSourceChecksumAlgorithm::Fnv1a64,
                         value: 123,

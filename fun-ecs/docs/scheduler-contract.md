@@ -49,6 +49,7 @@ lowers the public schedule declarations into
 - scalar nodes for small control stages
 - chunk nodes for `decode_pages`
 - one artifact-build chunk per artifact consumer
+- explicit procedural world manifest reads for source acquire and page decode
 - explicit apply/finalization barrier nodes
 - scheduler access rows for table/resource reads and writes
 - command-buffer IDs for request, artifact, dirty-propagation, and handoff
@@ -91,6 +92,9 @@ Every current spatial schedule set has a descriptor. The descriptors keep
 `acquire_sources` on the blocking lane, make `decode_pages` and
 `build_derived_artifacts` chunkable, declare command buffers for command
 emitters, and keep optional eviction and diagnostics as idle work.
+Procedural generation is scheduler-owned decode work: `fun-ecs` declares the
+manifest and page recipe inputs, and `fun-scheduler` admits the chunked decode
+nodes before any artifact or handoff work can observe the page.
 
 The spatial compiler validates these descriptor outputs at graph-build time:
 blocking source acquire is only emitted on the scheduler blocking lane, decode

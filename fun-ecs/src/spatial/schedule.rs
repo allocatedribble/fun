@@ -407,6 +407,9 @@ pub fn spatial_set_access(set: EcsSpatialScheduleSet) -> FunSystemAccess {
     match set {
         EcsSpatialScheduleSet::SenseSources => {
             FunSystemAccess::read_component_kind(FunEcsComponentKind::StreamCamera)
+                .merge(FunSystemAccess::read_resource_kind(
+                    FunEcsResourceKind::ProceduralWorldManifest,
+                ))
                 .merge(FunSystemAccess::read_component_kind(
                     FunEcsComponentKind::StreamSource,
                 ))
@@ -446,12 +449,19 @@ pub fn spatial_set_access(set: EcsSpatialScheduleSet) -> FunSystemAccess {
             )
         }
         EcsSpatialScheduleSet::AcquireSources => {
-            FunSystemAccess::read_table_kind(FunEcsResourceKind::StreamRequestQueue).merge(
-                FunSystemAccess::write_table_kind(FunEcsResourceKind::SourceAcquireQueue),
-            )
+            FunSystemAccess::read_table_kind(FunEcsResourceKind::StreamRequestQueue)
+                .merge(FunSystemAccess::read_resource_kind(
+                    FunEcsResourceKind::ProceduralWorldManifest,
+                ))
+                .merge(FunSystemAccess::write_table_kind(
+                    FunEcsResourceKind::SourceAcquireQueue,
+                ))
         }
         EcsSpatialScheduleSet::DecodePages => {
             FunSystemAccess::read_table_kind(FunEcsResourceKind::SourceAcquireQueue)
+                .merge(FunSystemAccess::read_resource_kind(
+                    FunEcsResourceKind::ProceduralWorldManifest,
+                ))
                 .merge(FunSystemAccess::read_table_kind(
                     FunEcsResourceKind::DirtyRegionLedger,
                 ))
@@ -1460,6 +1470,9 @@ fn diagnostics_finalize_access() -> FunSystemAccess {
 
 fn decode_chunk_access(chunk: EcsChunkKey) -> FunSystemAccess {
     read_table_chunk_kind(FunEcsResourceKind::SourceAcquireQueue, chunk)
+        .merge(FunSystemAccess::read_resource_kind(
+            FunEcsResourceKind::ProceduralWorldManifest,
+        ))
         .merge(read_table_chunk_kind(
             FunEcsResourceKind::DirtyRegionLedger,
             chunk,
@@ -1827,6 +1840,11 @@ mod tests {
         assert!(
             acquire
                 .access
+                .reads_resource_kind(FunEcsResourceKind::ProceduralWorldManifest)
+        );
+        assert!(
+            acquire
+                .access
                 .writes_resource_kind(FunEcsResourceKind::SourceAcquireQueue)
         );
 
@@ -1835,6 +1853,11 @@ mod tests {
             decode
                 .access
                 .reads_resource_kind(FunEcsResourceKind::SourceAcquireQueue)
+        );
+        assert!(
+            decode
+                .access
+                .reads_resource_kind(FunEcsResourceKind::ProceduralWorldManifest)
         );
         assert!(
             decode

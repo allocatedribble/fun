@@ -3,11 +3,12 @@ use bevy_ecs::world::World;
 use crate::{
     EcsCrossDomainHandoffQueues, EcsDecodedPageQueue, EcsDerivedArtifactRegistry,
     EcsDirtyRegionLedger, EcsLuxHandoffQueue, EcsPageResidencyMap, EcsPageResidencyTable,
-    EcsPhysicsCookQueue, EcsRendererHandoffQueue, EcsSourceAcquireQueue, EcsStreamInterestTable,
-    EcsStreamRequestQueue, FunWorldRevision, RevisionCategory, WorldRevisionLedger,
+    EcsPhysicsCookQueue, EcsProceduralWorldManifest, EcsRendererHandoffQueue,
+    EcsSourceAcquireQueue, EcsStreamInterestTable, EcsStreamRequestQueue, FunWorldRevision,
+    RevisionCategory, WorldRevisionLedger,
 };
 
-pub const FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT: u16 = 13;
+pub const FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT: u16 = 14;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FunWorldId(pub u64);
@@ -174,6 +175,7 @@ pub struct FunWorld {
     pub mode: FunWorldMode,
     pub storage_backend: FunWorldStorageBackend,
     pub diagnostics: FunWorldDiagnostics,
+    pub procedural_world_manifest: EcsProceduralWorldManifest,
     pub spatial_page_table: EcsPageResidencyTable,
     pub residency_table: EcsPageResidencyMap,
     pub dirty_ledger: EcsDirtyRegionLedger,
@@ -236,6 +238,7 @@ impl FunWorld {
                 scheduler_authority: FunWorldSchedulerAuthority::FunScheduler,
                 ..FunWorldDiagnostics::default()
             },
+            procedural_world_manifest: EcsProceduralWorldManifest::default(),
             spatial_page_table: EcsPageResidencyTable::default(),
             residency_table: EcsPageResidencyMap::default(),
             dirty_ledger: EcsDirtyRegionLedger::default(),
@@ -255,6 +258,7 @@ impl FunWorld {
     }
 
     pub fn initialize_spatial_resources(&mut self) {
+        self.procedural_world_manifest = EcsProceduralWorldManifest::default();
         self.spatial_page_table = EcsPageResidencyTable::default();
         self.residency_table = EcsPageResidencyMap::default();
         self.dirty_ledger = EcsDirtyRegionLedger::default();
@@ -273,6 +277,7 @@ impl FunWorld {
         if let Some(bevy_world) = &mut self.bevy_world {
             insert_spatial_resources_into_bevy(
                 bevy_world,
+                &self.procedural_world_manifest,
                 &self.spatial_page_table,
                 &self.residency_table,
                 &self.dirty_ledger,
@@ -308,6 +313,22 @@ impl FunWorld {
     pub fn bevy_world_mut(&mut self) -> Option<&mut World> {
         self.bevy_world.as_mut()
     }
+
+    pub fn set_procedural_world_manifest(
+        &mut self,
+        manifest: EcsProceduralWorldManifest,
+    ) -> Result<(), crate::EcsSpatialValidationError> {
+        manifest.validate()?;
+        self.procedural_world_manifest = manifest;
+        if let Some(bevy_world) = &mut self.bevy_world {
+            bevy_world.insert_resource(manifest);
+        }
+        let (_previous, new) = self
+            .revision_ledger
+            .advance_category(RevisionCategory::Structure);
+        self.revision = new;
+        Ok(())
+    }
 }
 
 #[allow(
@@ -316,6 +337,7 @@ impl FunWorld {
 )]
 fn insert_spatial_resources_into_bevy(
     bevy_world: &mut World,
+    procedural_world_manifest: &EcsProceduralWorldManifest,
     spatial_page_table: &EcsPageResidencyTable,
     residency_table: &EcsPageResidencyMap,
     dirty_ledger: &EcsDirtyRegionLedger,
@@ -329,6 +351,7 @@ fn insert_spatial_resources_into_bevy(
     lux_handoff_queue: &EcsLuxHandoffQueue,
     physics_cook_queue: &EcsPhysicsCookQueue,
 ) {
+    bevy_world.insert_resource(*procedural_world_manifest);
     bevy_world.insert_resource(spatial_page_table.clone());
     bevy_world.insert_resource(residency_table.clone());
     bevy_world.insert_resource(dirty_ledger.clone());
@@ -348,8 +371,8 @@ mod tests {
     use crate::{
         EcsCrossDomainHandoffQueues, EcsDecodedPageQueue, EcsDerivedArtifactRegistry,
         EcsDirtyRegionLedger, EcsLuxHandoffQueue, EcsPageResidencyMap, EcsPageResidencyTable,
-        EcsPhysicsCookQueue, EcsRendererHandoffQueue, EcsSourceAcquireQueue,
-        EcsStreamInterestTable, EcsStreamRequestQueue,
+        EcsPhysicsCookQueue, EcsProceduralWorldManifest, EcsRendererHandoffQueue,
+        EcsSourceAcquireQueue, EcsStreamInterestTable, EcsStreamRequestQueue,
     };
 
     use super::*;
@@ -367,6 +390,10 @@ mod tests {
         assert_eq!(
             world.scheduler_authority(),
             FunWorldSchedulerAuthority::FunScheduler
+        );
+        assert_eq!(
+            world.procedural_world_manifest,
+            EcsProceduralWorldManifest::default()
         );
         assert!(world.spatial_page_table.is_empty());
         assert!(world.residency_table.is_consistent());
@@ -392,6 +419,7 @@ mod tests {
             world.diagnostics.bevy_resources_mirrored,
             FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT
         );
+        assert!(bevy_world.contains_resource::<EcsProceduralWorldManifest>());
         assert!(bevy_world.contains_resource::<EcsPageResidencyTable>());
         assert!(bevy_world.contains_resource::<EcsPageResidencyMap>());
         assert!(bevy_world.contains_resource::<EcsDirtyRegionLedger>());

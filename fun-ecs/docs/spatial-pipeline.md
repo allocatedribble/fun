@@ -13,8 +13,8 @@ The current spatial pipeline is:
 3. plan stream waves
 4. diff requested and pinned pages
 5. apply request commands
-6. acquire source rows
-7. decode pages
+6. acquire source rows from the procedural manifest or package/delta sources
+7. decode pages, including deterministic procedural terrain generation
 8. build derived artifacts
 9. apply artifact commands
 10. propagate dirty regions and voxel edits
@@ -29,6 +29,10 @@ The current spatial pipeline is:
 - No page-per-entity design.
 - High-level spatial controls may be ECS entities.
 - Hot page state lives in dense resources.
+- Terrain truth is the procedural world manifest, generator version, page key,
+  biome recipe, deterministic fixed-point math, and future deltas.
+- Procedural terrain generation materializes only bounded local page payloads;
+  it never implies dense global voxel storage.
 - Mutation crosses deterministic command-buffer barriers.
 - Handoffs are typed records.
 - Derived artifacts feed consumers without creating render pages.
