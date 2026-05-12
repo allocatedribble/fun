@@ -51,16 +51,16 @@ use fun_scheduler_core::{
     GraphReport, GraphRunError, GraphSubmitError, NodeRunner, RendererGraphCounters,
 };
 use fun_scheduler_types::class::TaskClass;
-use fun_scheduler_types::lane::LaneKind;
 use fun_scheduler_types::schedule::ScheduleLane;
 use fun_scheduler_types::work_graph::{
-    GraphExecutionMode, NodeOutcome, WorkGraphId, WorkGraphMetrics, WorkNode, WorkNodeId,
+    NodeOutcome, WorkGraphId, WorkGraphMetrics, WorkNode, WorkNodeId,
 };
 
 use crate::frame_graph::FrameGraphPassRole;
 use crate::schedule_contract::{
-    LuxNodeKind, RendererGraphPhase, RendererNodeClass, RendererWork, RendererWorkGraph,
-    pass_role_to_task_class, renderer_work_graph, renderer_work_node,
+    LuxNodeKind, RendererGraphLivenessError, RendererGraphPhase, RendererNodeClass, RendererWork,
+    RendererWorkGraph, RendererWorkKind, pass_role_to_task_class, renderer_work_graph,
+    renderer_work_node, validate_renderer_graph_liveness,
 };
 
 // ============================================================================
@@ -158,6 +158,7 @@ pub fn build_renderer_work_graph(
     let prepare_assets = add_node(
         &mut g,
         RendererWork {
+            kind: RendererWorkKind::PrepareUploadBatch,
             class: RendererNodeClass::AssetPrepare,
             phase: RendererGraphPhase::RenderPrepareAssets,
             pass_role: None,
@@ -172,6 +173,7 @@ pub fn build_renderer_work_graph(
     let prepare_scene = add_node(
         &mut g,
         RendererWork {
+            kind: RendererWorkKind::PrepareGpuSceneChunk,
             class: RendererNodeClass::PageSchedule,
             phase: RendererGraphPhase::RenderPrepareScene,
             pass_role: None,
@@ -186,6 +188,7 @@ pub fn build_renderer_work_graph(
     let lux_plan = add_node(
         &mut g,
         RendererWork {
+            kind: RendererWorkKind::ClusterBuild,
             class: RendererNodeClass::LuxGraph,
             phase: RendererGraphPhase::RenderLuxPlan,
             pass_role: None,
@@ -200,6 +203,7 @@ pub fn build_renderer_work_graph(
     let graph_build = add_node(
         &mut g,
         RendererWork {
+            kind: RendererWorkKind::FrameGraphBuild,
             class: RendererNodeClass::PacketBuild,
             phase: RendererGraphPhase::RenderGraphBuild,
             pass_role: None,
@@ -215,6 +219,7 @@ pub fn build_renderer_work_graph(
     let graph_validate = add_node(
         &mut g,
         RendererWork {
+            kind: RendererWorkKind::FrameGraphBuild,
             class: RendererNodeClass::PacketBuild,
             phase: RendererGraphPhase::RenderGraphValidate,
             pass_role: None,
@@ -229,6 +234,7 @@ pub fn build_renderer_work_graph(
     let graph_compile = add_node(
         &mut g,
         RendererWork {
+            kind: RendererWorkKind::FrameGraphCompile,
             class: RendererNodeClass::PassCompile,
             phase: RendererGraphPhase::RenderGraphCompile,
             pass_role: None,
@@ -253,6 +259,7 @@ pub fn build_renderer_work_graph(
         let id = add_node(
             &mut g,
             RendererWork {
+                kind: record_work_kind_for_pass_role(role),
                 class: RendererNodeClass::CommandRecord,
                 phase: RendererGraphPhase::RenderRecord,
                 pass_role: Some(role),
@@ -267,6 +274,7 @@ pub fn build_renderer_work_graph(
 
     // 10. Submit. Depends on every Lux + every record node.
     let submit = add_node(&mut g, RendererWork::submit(inputs.generation));
+    g.add_edge(fun_scheduler_types::work_graph::WorkEdge::Barrier { at: submit });
     for id in lux_node_ids.iter().chain(record_node_ids.iter()).copied() {
         add_dep(&mut g, submit, id);
     }
@@ -289,6 +297,55 @@ pub fn build_renderer_work_graph(
     }
 
     g
+}
+
+const fn record_work_kind_for_pass_role(role: FrameGraphPassRole) -> RendererWorkKind {
+    match role {
+        FrameGraphPassRole::CefGpuImport
+        | FrameGraphPassRole::UiImportPlaceholder
+        | FrameGraphPassRole::VirtualResourceFeedback => RendererWorkKind::RecordCopyPass,
+        FrameGraphPassRole::PostProcessExposure
+        | FrameGraphPassRole::PostProcessBloom
+        | FrameGraphPassRole::PostProcessExposureHistogram
+        | FrameGraphPassRole::PostProcessExposureAdapt
+        | FrameGraphPassRole::PostProcessBloomPrefilter
+        | FrameGraphPassRole::PostProcessBloomDownsample
+        | FrameGraphPassRole::PostProcessBloomUpsample
+        | FrameGraphPassRole::PostProcessBloomComposite
+        | FrameGraphPassRole::LuxUploadLightBuffers
+        | FrameGraphPassRole::LuxClusterLights
+        | FrameGraphPassRole::LuxReservoirTemporalReuse
+        | FrameGraphPassRole::LuxReservoirSpatialReuse
+        | FrameGraphPassRole::LuxShadowRequests
+        | FrameGraphPassRole::LuxVirtualShadowPages
+        | FrameGraphPassRole::LuxVirtualShadowFilter
+        | FrameGraphPassRole::LuxDirectLighting
+        | FrameGraphPassRole::LuxGiTrace
+        | FrameGraphPassRole::LuxGiCacheUpdate
+        | FrameGraphPassRole::LuxReflectionTrace
+        | FrameGraphPassRole::LuxDenoise
+        | FrameGraphPassRole::LuxVolumetricFogInject
+        | FrameGraphPassRole::LuxVolumetricLightInject
+        | FrameGraphPassRole::LuxVolumetricTemporalReproject
+        | FrameGraphPassRole::LuxVolumetricIntegrate
+        | FrameGraphPassRole::LuxVolumetricComposite
+        | FrameGraphPassRole::LuxCloudShadowProject
+        | FrameGraphPassRole::LuxCloudShadowFilter
+        | FrameGraphPassRole::LuxCloudShadowRegisterLayer => RendererWorkKind::RecordComputePass,
+        FrameGraphPassRole::DiagnosticsReadback
+        | FrameGraphPassRole::PostProcessDebugOverlay
+        | FrameGraphPassRole::LuxDebugOverlay => RendererWorkKind::RecordCopyPass,
+        FrameGraphPassRole::Present => RendererWorkKind::RecordPass,
+        FrameGraphPassRole::Compose
+        | FrameGraphPassRole::Clear
+        | FrameGraphPassRole::StaticScenePlaceholder
+        | FrameGraphPassRole::UpscaleBoundary
+        | FrameGraphPassRole::FrameGenerationBoundary
+        | FrameGraphPassRole::PostProcessToneMapping
+        | FrameGraphPassRole::PostProcessColorGradingLut
+        | FrameGraphPassRole::PostProcessSharpening
+        | FrameGraphPassRole::PostProcessFinalOutputTransform => RendererWorkKind::RecordPass,
+    }
 }
 
 fn add_node(g: &mut RendererWorkGraph, work: RendererWork) -> WorkNodeId {
@@ -427,6 +484,8 @@ impl RendererGraphReport {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum RendererGraphRunError {
+    /// Renderer-specific liveness validation rejected the graph.
+    Liveness(RendererGraphLivenessError),
     /// `submit_graph` rejected the graph.
     Submit(GraphSubmitError),
     /// `run_graph_until_complete` returned an error.
@@ -436,6 +495,12 @@ pub enum RendererGraphRunError {
 impl From<GraphSubmitError> for RendererGraphRunError {
     fn from(e: GraphSubmitError) -> Self {
         Self::Submit(e)
+    }
+}
+
+impl From<RendererGraphLivenessError> for RendererGraphRunError {
+    fn from(e: RendererGraphLivenessError) -> Self {
+        Self::Liveness(e)
     }
 }
 
@@ -457,6 +522,7 @@ pub fn run_renderer_work_graph_deterministic(
     clock: Arc<dyn Clock>,
 ) -> Result<RendererGraphReport, RendererGraphRunError> {
     let graph = build_renderer_work_graph(graph_id, inputs);
+    validate_renderer_graph_liveness(&graph)?;
     let runner = RendererNodeRunner::new();
     let executor = DeterministicSingleThreadedGraphExecutor::new(clock, runner);
     let handle = executor.submit_graph(graph)?;
@@ -491,6 +557,7 @@ fn visit_order_from_inputs(
 fn fold_replay_digest(visits: &[RendererWork]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for w in visits {
+        h = fnv1a_64(h, &[w.kind as u8]);
         h = fnv1a_64(h, &[w.class as u8]);
         h = fnv1a_64(h, &[w.phase as u8]);
         h = fnv1a_64(h, &[w.pass_role.map_or(0xFF, |r| r as u8)]);
@@ -550,8 +617,9 @@ mod tests {
     use super::*;
 
     use fun_scheduler_testkit::FakeClock;
+    use fun_scheduler_types::lane::LaneKind;
     use fun_scheduler_types::schedule::ScheduleLane;
-    use fun_scheduler_types::work_graph::CommitPolicy;
+    use fun_scheduler_types::work_graph::{CommitPolicy, GraphExecutionMode};
 
     /// Every [`FrameGraphPassRole`] variant. Mirrors the canonical
     /// list pinned in `schedule_contract::tests::ALL_ROLES`.
@@ -819,6 +887,7 @@ mod tests {
             // Field-by-field ascription. If the renderer ever
             // tries to embed a wgpu handle into `RendererWork`, this
             // file won't compile.
+            let _: RendererWorkKind = w.kind;
             let _: RendererNodeClass = w.class;
             let _: RendererGraphPhase = w.phase;
             let _: Option<FrameGraphPassRole> = w.pass_role;
@@ -980,7 +1049,8 @@ mod tests {
         assert_eq!(counters.pass_count, inputs.record_passes.len() as u64);
         assert_eq!(counters.resource_count, 0);
         assert_eq!(
-            counters.graph_compile_ns, report.graph_metrics.graph_build_ns,
+            counters.graph_compile_ns,
+            report.graph_metrics.graph_build_ns,
         );
         // Wait time defaults to 0 — the executor's
         // `note_completed_graph` path is the authoritative source.

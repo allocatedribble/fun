@@ -62,7 +62,8 @@ pub const LUX_VOLUMETRIC_LIGHT_INJECT_CLOUD_COMPOSE_ENTRY_POINT: &str =
 /// Typed Pass C9.4 — typed helper function names exposed
 /// by the typed WGSL source.
 pub const LUX_VOLUMETRIC_LIGHT_INJECT_CLOUD_SAMPLE_FN: &str = "sample_cloud_shadow_layer_at_froxel";
-pub const LUX_VOLUMETRIC_LIGHT_INJECT_KIND_GATE_FN: &str = "light_kind_attenuates_with_cloud_shadow";
+pub const LUX_VOLUMETRIC_LIGHT_INJECT_KIND_GATE_FN: &str =
+    "light_kind_attenuates_with_cloud_shadow";
 
 // ============================================================================
 // Section 1 — typed LuxLightKindGpu discriminant
@@ -279,8 +280,7 @@ impl CloudShadowDebugBreakdown {
         volumetric: VolumetricCloudCompose,
     ) -> Self {
         Self {
-            schema_version:
-                FUN_RENDERER_LUX_VOLUMETRIC_LIGHT_INJECT_CLOUD_SHADER_SCHEMA_VERSION,
+            schema_version: FUN_RENDERER_LUX_VOLUMETRIC_LIGHT_INJECT_CLOUD_SHADER_SCHEMA_VERSION,
             light_id: direct.light_id,
             direct,
             volumetric,
@@ -330,9 +330,7 @@ impl CloudShadowDebugBreakdown {
 /// the typed `CloudDebugOverlay::LuxLighting` renders to
 /// the typed debug artifact.
 #[must_use]
-pub fn cloud_shadow_debug_separate_sections(
-    breakdown: &CloudShadowDebugBreakdown,
-) -> String {
+pub fn cloud_shadow_debug_separate_sections(breakdown: &CloudShadowDebugBreakdown) -> String {
     use core::fmt::Write as _;
     let mut content = String::new();
     let _ = writeln!(content, "Cloud Shadow Lighting Breakdown");
@@ -582,8 +580,7 @@ mod tests {
         let light_id = LuxLightId::new(42);
         let registry = registry_with_layer(light_id, CloudShadowFrameDelayMode::OneFrameDelayed);
         // Typed direct path lookup.
-        let direct_compose =
-            apply_cloud_layer_to_direct_visibility(&registry, light_id, 1.0, 0.4);
+        let direct_compose = apply_cloud_layer_to_direct_visibility(&registry, light_id, 1.0, 0.4);
         assert!(direct_compose.layer_found);
         // Typed volumetric path lookup (same registry,
         // same light id).
@@ -668,8 +665,7 @@ mod tests {
     fn debug_overlay_displays_direct_and_volumetric_separately() {
         let light_id = LuxLightId::new(13);
         let registry = registry_with_layer(light_id, CloudShadowFrameDelayMode::OneFrameDelayed);
-        let direct_compose =
-            apply_cloud_layer_to_direct_visibility(&registry, light_id, 1.0, 0.3);
+        let direct_compose = apply_cloud_layer_to_direct_visibility(&registry, light_id, 1.0, 0.3);
         let volumetric_compose = apply_cloud_layer_to_volumetric_scattering(
             &registry,
             light_id,
@@ -678,8 +674,7 @@ mod tests {
             0.3,
         );
 
-        let breakdown =
-            CloudShadowDebugBreakdown::from_pair(direct_compose, volumetric_compose);
+        let breakdown = CloudShadowDebugBreakdown::from_pair(direct_compose, volumetric_compose);
         assert!(breakdown.both_paths_show_cloud_effects());
 
         let section = cloud_shadow_debug_separate_sections(&breakdown);
@@ -723,8 +718,7 @@ mod tests {
                 // Typed CPU C7.7 reference (computes typed
                 // pre-opacity cloud sample as input).
                 let opacity = aux.opacity();
-                let effective_cloud =
-                    (1.0 - (1.0 - cloud) * opacity).clamp(0.0, 1.0);
+                let effective_cloud = (1.0 - (1.0 - cloud) * opacity).clamp(0.0, 1.0);
                 let cpu_final = scattering.max(0.0) * effective_cloud;
                 assert!(
                     (shader_final - cpu_final).abs() < 1e-5,
@@ -783,8 +777,7 @@ mod tests {
         assert!(breakdown.uses_same_lux_light_id_across_direct_and_volumetric());
 
         // Typed clear cloud → neither darkens.
-        let direct_clear =
-            apply_cloud_layer_to_direct_visibility(&registry, light_id, 1.0, 1.0);
+        let direct_clear = apply_cloud_layer_to_direct_visibility(&registry, light_id, 1.0, 1.0);
         let vol_clear = apply_cloud_layer_to_volumetric_scattering(
             &registry,
             light_id,
@@ -792,8 +785,7 @@ mod tests {
             10.0,
             1.0,
         );
-        let clear =
-            CloudShadowDebugBreakdown::from_pair(direct_clear, vol_clear);
+        let clear = CloudShadowDebugBreakdown::from_pair(direct_clear, vol_clear);
         assert!(!clear.direct_path_darkened());
         assert!(!clear.volumetric_path_dimmed());
         assert!(!clear.both_paths_show_cloud_effects());

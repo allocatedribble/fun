@@ -29,13 +29,13 @@
 //! signatures.
 
 use crate::cloud_shadow::CloudShadowFrameDelayMode;
+use crate::cloud_shadow::CloudShadowResolution;
 use crate::cloud_shadow_director::{
     CloudShadowDirectorBudget, CloudShadowDirectorDecision, CloudShadowDirectorInputs,
     CloudShadowQualityTier, CloudShadowRefreshAction, CloudShadowRefreshReason,
     decide_cloud_shadow_refresh,
 };
 use crate::cloud_shadow_runtime_diagnostics::CloudShadowDiagnostics;
-use crate::cloud_shadow::CloudShadowResolution;
 use fun_lux::LuxLightId;
 
 /// Typed Pass C9.7 — typed local copy of the typed Pass
@@ -402,9 +402,9 @@ impl CloudShadowDispatchBudget {
     pub const PRODUCT_DEFAULT: Self = Self {
         schema_version: FUN_RENDERER_CLOUD_SHADOW_DISPATCH_FEEDBACK_SCHEMA_VERSION,
         base: CloudShadowDirectorBudget::PRODUCT_DEFAULT,
-        register_layer_budget_ns: 50_000,            // 50 µs typed CPU register
-        direct_lighting_sample_budget_ns: 200_000,   // 200 µs typed direct compose
-        volumetric_sample_budget_ns: 200_000,        // 200 µs typed volumetric compose
+        register_layer_budget_ns: 50_000, // 50 µs typed CPU register
+        direct_lighting_sample_budget_ns: 200_000, // 200 µs typed direct compose
+        volumetric_sample_budget_ns: 200_000, // 200 µs typed volumetric compose
     };
 
     /// Typed cinematic budgets (typed wider envelope per
@@ -655,9 +655,7 @@ pub fn compose_dispatch_diagnostics(
 /// "Wire `CloudShadowDispatchCounts` into
 /// `CloudShadowDiagnostics`."
 #[must_use]
-pub fn feedback_wires_full_dispatch_counts(
-    feedback: &CloudShadowDispatchFeedback,
-) -> bool {
+pub fn feedback_wires_full_dispatch_counts(feedback: &CloudShadowDispatchFeedback) -> bool {
     // Typed full counts means typed all four counts-view
     // fields are typed accessible (typed not collapsed
     // to typed two u32s).
@@ -665,8 +663,7 @@ pub fn feedback_wires_full_dispatch_counts(
     let _ = feedback.counts.filter_dispatches;
     let _ = feedback.counts.workgroup_count;
     let _ = feedback.counts.schema_version;
-    feedback.counts.schema_version
-        == FUN_RENDERER_CLOUD_SHADOW_DISPATCH_FEEDBACK_SCHEMA_VERSION
+    feedback.counts.schema_version == FUN_RENDERER_CLOUD_SHADOW_DISPATCH_FEEDBACK_SCHEMA_VERSION
 }
 
 /// Typed Pass C9.7 — typed predicate: typed every typed
@@ -691,9 +688,7 @@ pub fn timings_carry_every_user_spec_pass(timings: &CloudShadowGpuTimings) -> bo
 /// the typed user-spec acceptance "Diagnostics overlay
 /// reports the same values as log/debug artifact".
 #[must_use]
-pub fn overlay_and_log_artifact_agree(
-    diagnostics: &CloudShadowDispatchDiagnostics,
-) -> bool {
+pub fn overlay_and_log_artifact_agree(diagnostics: &CloudShadowDispatchDiagnostics) -> bool {
     diagnostics.dispatch_counts_agree() && diagnostics.gpu_timings_agree()
 }
 
@@ -807,7 +802,10 @@ mod tests {
         let project_budget = budget.base.project_budget_ns;
         // Typed over budget by 2x.
         let over_budget = project_budget.saturating_mul(2);
-        assert!(budget_downgrade_uses_measured_gpu_time(&budget, over_budget));
+        assert!(budget_downgrade_uses_measured_gpu_time(
+            &budget,
+            over_budget
+        ));
 
         // Typed under budget → typed no downgrade.
         let under_budget = project_budget / 2;
@@ -844,11 +842,11 @@ mod tests {
             LuxLightId::new(1),
             CloudShadowDispatchCountsView::from_project_filter(1, 1, [16, 16, 1]),
             CloudShadowGpuTimings::new(
-                100_000,                                              // project ok
-                50_000,                                               // filter ok
-                10_000,                                               // register ok
-                budget.direct_lighting_sample_budget_ns + 100_000,    // OVER
-                50_000,                                               // volumetric ok
+                100_000,                                           // project ok
+                50_000,                                            // filter ok
+                10_000,                                            // register ok
+                budget.direct_lighting_sample_budget_ns + 100_000, // OVER
+                50_000,                                            // volumetric ok
             ),
         );
         let decision = decide_cloud_shadow_refresh_with_feedback(&inputs, &budget, &feedback);
@@ -873,9 +871,16 @@ mod tests {
                 frames_since_last_refresh: f,
                 ..CloudShadowDirectorInputs::STABLE
             };
-            assert!(stable_inputs_skip_until_cadence(&inputs, &budget, &feedback));
+            assert!(stable_inputs_skip_until_cadence(
+                &inputs, &budget, &feedback
+            ));
             let decision = decide_cloud_shadow_refresh_with_feedback(&inputs, &budget, &feedback);
-            assert_eq!(decision.action, CloudShadowRefreshAction::Skip, "frame {}", f);
+            assert_eq!(
+                decision.action,
+                CloudShadowRefreshAction::Skip,
+                "frame {}",
+                f
+            );
         }
 
         // Typed at cadence → typed refresh.
@@ -885,7 +890,9 @@ mod tests {
             frames_since_last_refresh: cadence,
             ..CloudShadowDirectorInputs::STABLE
         };
-        assert!(stable_inputs_skip_until_cadence(&inputs, &budget, &feedback));
+        assert!(stable_inputs_skip_until_cadence(
+            &inputs, &budget, &feedback
+        ));
         let decision = decide_cloud_shadow_refresh_with_feedback(&inputs, &budget, &feedback);
         assert_eq!(
             decision.action,

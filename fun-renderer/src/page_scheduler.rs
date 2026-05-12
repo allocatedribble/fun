@@ -853,7 +853,10 @@ mod tests {
             PageWorkClass::CloudShadowUpdate.schedule_lane(),
             ScheduleLane::RenderPrepare,
         );
-        assert_eq!(PageWorkClass::CloudShadowUpdate.label(), "cloud_shadow_update");
+        assert_eq!(
+            PageWorkClass::CloudShadowUpdate.label(),
+            "cloud_shadow_update"
+        );
     }
 
     #[test]

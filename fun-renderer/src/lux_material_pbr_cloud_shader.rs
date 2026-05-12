@@ -160,11 +160,7 @@ impl CloudShadowMaterialKindGpu {
     pub const fn receives_cloud_shadow(self) -> bool {
         matches!(
             self,
-            Self::Terrain
-                | Self::StaticMesh
-                | Self::DynamicMesh
-                | Self::Foliage
-                | Self::Water,
+            Self::Terrain | Self::StaticMesh | Self::DynamicMesh | Self::Foliage | Self::Water,
         )
     }
 
@@ -422,10 +418,7 @@ mod tests {
     /// Pass C9.5 schema is stable.
     #[test]
     fn schema_version_is_stable() {
-        assert_eq!(
-            FUN_RENDERER_LUX_MATERIAL_PBR_CLOUD_SHADER_SCHEMA_VERSION,
-            1,
-        );
+        assert_eq!(FUN_RENDERER_LUX_MATERIAL_PBR_CLOUD_SHADER_SCHEMA_VERSION, 1,);
         // Typed Foliage softening factor matches WGSL.
         assert!((FOLIAGE_SOFTENING_FACTOR - 0.7).abs() < 1e-6);
     }
@@ -665,7 +658,8 @@ mod tests {
             // Typed final = typed opaque × typed material
             // × typed 1.0 = typed opaque × typed material
             // (typed no cloud darkening).
-            let final_direct = simulate_apply_cloud_layer_to_material_direct_lighting(1.0, 1.0, cloud);
+            let final_direct =
+                simulate_apply_cloud_layer_to_material_direct_lighting(1.0, 1.0, cloud);
             assert!((final_direct - 1.0).abs() < 1e-6, "{:?}", kind);
         }
     }
@@ -734,21 +728,24 @@ mod tests {
         // + typed indirect = 2.5; typed total = 2.7.
         let expected = 0.2 + 2.5;
         for c in pixel.iter() {
-            assert!((c - expected).abs() < 1e-5, "channel={} expected={}", c, expected);
+            assert!(
+                (c - expected).abs() < 1e-5,
+                "channel={} expected={}",
+                c,
+                expected
+            );
         }
 
         // Typed clear cloud → typed direct passes through
         // unchanged.
-        let clear_pixel =
-            simulate_compose_pbr_pixel_with_cloud(direct, emissive, indirect, 1.0);
+        let clear_pixel = simulate_compose_pbr_pixel_with_cloud(direct, emissive, indirect, 1.0);
         for c in clear_pixel.iter() {
             assert!((c - 3.5).abs() < 1e-5);
         }
 
         // Typed zero cloud → typed direct fully blocked
         // but typed emissive + typed indirect still appear.
-        let dark_pixel =
-            simulate_compose_pbr_pixel_with_cloud(direct, emissive, indirect, 0.0);
+        let dark_pixel = simulate_compose_pbr_pixel_with_cloud(direct, emissive, indirect, 0.0);
         for c in dark_pixel.iter() {
             assert!((c - 2.5).abs() < 1e-5);
         }
@@ -798,8 +795,7 @@ mod tests {
                 // Typed CPU C9.3 reference + typed
                 // softening blend.
                 let opacity = aux.opacity();
-                let opacity_modulated =
-                    (1.0 - (1.0 - cloud_sample) * opacity).clamp(0.0, 1.0);
+                let opacity_modulated = (1.0 - (1.0 - cloud_sample) * opacity).clamp(0.0, 1.0);
                 let softening = material_kind.softening_factor();
                 let cpu_cloud = mix(1.0, opacity_modulated, softening);
                 assert!(

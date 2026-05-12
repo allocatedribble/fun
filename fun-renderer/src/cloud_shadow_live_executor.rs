@@ -118,8 +118,7 @@ impl CloudShadowLiveInputs {
     /// gate.
     #[must_use]
     pub fn should_run_chain(&self) -> bool {
-        self.settings.registers_world_shadow_pass()
-            && self.constants.projects_world_shadow()
+        self.settings.registers_world_shadow_pass() && self.constants.projects_world_shadow()
     }
 
     /// Typed light id the typed projection constants name.
@@ -325,11 +324,8 @@ impl CloudShadowLiveExecutor {
             /* reallocated_this_frame */ true,
         );
 
-        let (project_dispatches, filter_dispatches) = if dispatch_simulated {
-            (1, 1)
-        } else {
-            (0, 0)
-        };
+        let (project_dispatches, filter_dispatches) =
+            if dispatch_simulated { (1, 1) } else { (0, 0) };
 
         // Typed register the typed aux layer in the typed
         // registry.  Mirrors the typed C9.1
@@ -378,12 +374,11 @@ impl CloudShadowLiveExecutor {
     #[must_use]
     pub fn binds_all_cloud_shadow_roles() -> bool {
         let roles = Self::bound_frame_graph_roles();
-        let chain_records =
-            record_cloud_shadow_pass_chain(
-                &CloudRenderSettings::PRODUCT_DEFAULT,
-                &CloudShadowProjectionConstants::DISABLED,
-                CloudShadowFrameDelayMode::OneFrameDelayed,
-            );
+        let chain_records = record_cloud_shadow_pass_chain(
+            &CloudRenderSettings::PRODUCT_DEFAULT,
+            &CloudShadowProjectionConstants::DISABLED,
+            CloudShadowFrameDelayMode::OneFrameDelayed,
+        );
         // Typed every typed bound role MUST appear in the
         // typed C7.4.5 pass chain.
         for role in roles {
@@ -703,7 +698,10 @@ mod tests {
             .with_frame_delay_mode(CloudShadowFrameDelayMode::SameFrame)
             .with_debug_readback(true);
         assert_eq!(inputs.frame_index, 5);
-        assert_eq!(inputs.frame_delay_mode, CloudShadowFrameDelayMode::SameFrame);
+        assert_eq!(
+            inputs.frame_delay_mode,
+            CloudShadowFrameDelayMode::SameFrame
+        );
         assert!(inputs.debug_readback_active);
         assert_eq!(inputs.light_id(), LuxLightId::new(7));
         assert!(inputs.should_run_chain());

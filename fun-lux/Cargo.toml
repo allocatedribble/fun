@@ -14,6 +14,7 @@ default = []
 hybrid_gi = []
 many_light = []
 radiance_neural_cache = []
+schedule_contract = ["dep:fun-scheduler-types"]
 virtual_shadows = []
 
 # Compatibility aliases for Pass 1 callers. New code should use the canonical
@@ -24,5 +25,6 @@ fun_lux_virtual_shadows = ["virtual_shadows"]
 
 [dependencies]
 bevy_ecs.workspace = true
+fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types", optional = true }
 fun_scene.workspace = true
 hashbrown.workspace = true

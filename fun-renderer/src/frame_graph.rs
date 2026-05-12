@@ -1816,10 +1816,7 @@ mod tests {
             .iter()
             .filter(|kind| kind.is_core_required())
             .count();
-        assert_eq!(
-            diagnostics.resource_count,
-            core_required_count as u16,
-        );
+        assert_eq!(diagnostics.resource_count, core_required_count as u16,);
 
         let roles: Vec<FrameGraphPassRole> = diagnostics
             .pass_order

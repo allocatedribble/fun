@@ -70,12 +70,7 @@ pub enum CloudShadowOpacityCurve {
 }
 
 impl CloudShadowOpacityCurve {
-    pub const ALL: [Self; 4] = [
-        Self::Linear,
-        Self::EaseIn,
-        Self::EaseOut,
-        Self::SoftKnee,
-    ];
+    pub const ALL: [Self; 4] = [Self::Linear, Self::EaseIn, Self::EaseOut, Self::SoftKnee];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -486,9 +481,7 @@ pub fn volumetric_fog_darkens_plausibly(tuning: &CloudShadowLookTuning) -> bool 
 /// Walks typed every typed user-spec acceptance bullet
 /// for the typed tuning record.
 #[must_use]
-pub fn audit_cloud_shadow_look_tuning(
-    tuning: &CloudShadowLookTuning,
-) -> CloudShadowLookAudit {
+pub fn audit_cloud_shadow_look_tuning(tuning: &CloudShadowLookTuning) -> CloudShadowLookAudit {
     CloudShadowLookAudit {
         schema_version: FUN_RENDERER_CLOUD_SHADOW_LOOK_TUNING_SCHEMA_VERSION,
         overcast_dims_without_crushing: overcast_dims_without_crushing(tuning),
@@ -506,10 +499,7 @@ mod tests {
     /// Pass C9.9 schema is stable.
     #[test]
     fn schema_version_is_stable() {
-        assert_eq!(
-            FUN_RENDERER_CLOUD_SHADOW_LOOK_TUNING_SCHEMA_VERSION,
-            1,
-        );
+        assert_eq!(FUN_RENDERER_CLOUD_SHADOW_LOOK_TUNING_SCHEMA_VERSION, 1,);
     }
 
     /// Pass C9.9 — typed opacity curve taxonomy is dense.
@@ -586,7 +576,11 @@ mod tests {
         let tuned = tuning.apply_opacity_curve(0.2);
         let terrain = tuning.apply_terrain_strength(tuned);
         assert!(terrain < 0.5, "terrain={}", terrain);
-        assert!(terrain >= tuning.min_transmittance_floor, "terrain={}", terrain);
+        assert!(
+            terrain >= tuning.min_transmittance_floor,
+            "terrain={}",
+            terrain
+        );
     }
 
     /// Pass C9.9 acceptance — scattered clouds create

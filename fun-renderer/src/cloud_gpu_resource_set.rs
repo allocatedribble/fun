@@ -74,9 +74,7 @@ impl CloudTextureSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RendererOwned => "renderer_owned",
-            Self::LegacyFunRenderDonorDiagnosticOnly => {
-                "legacy_fun_render_donor_diagnostic_only"
-            }
+            Self::LegacyFunRenderDonorDiagnosticOnly => "legacy_fun_render_donor_diagnostic_only",
         }
     }
 
@@ -146,7 +144,10 @@ pub const fn cloud_texture_source_aligns_with_retirement(
             // Typed legacy donor source only aligns with
             // typed `DiagnosticOnly` retirement (typed
             // both flag typed non-production).
-            matches!(retirement, FunRenderCloudShadowExecutionPolicy::DiagnosticOnly)
+            matches!(
+                retirement,
+                FunRenderCloudShadowExecutionPolicy::DiagnosticOnly
+            )
         }
     }
 }
@@ -282,8 +283,7 @@ impl CloudGpuResourceSet {
         diagnostics: &CloudShadowResourceDiagnostics,
     ) -> bool {
         if diagnostics.enabled {
-            self.cloud_shadow_transmittance.is_valid()
-                && self.cloud_shadow_filtered.is_valid()
+            self.cloud_shadow_transmittance.is_valid() && self.cloud_shadow_filtered.is_valid()
         } else {
             true
         }
@@ -383,10 +383,7 @@ impl CloudResourceOwnershipContract {
     /// agree typed `fun_renderer_owns_cloud_execution`
     /// and typed `fun_render_extracts_only`.
     #[must_use]
-    pub const fn aligns_with_c0_ownership(
-        &self,
-        c0: &FunCloudRendererContract,
-    ) -> bool {
+    pub const fn aligns_with_c0_ownership(&self, c0: &FunCloudRendererContract) -> bool {
         self.renderer_owns_allocation
             && c0.fun_renderer_owns_cloud_execution
             && self.legacy_donor_rejected
@@ -435,8 +432,7 @@ impl CloudResourceOwnerIdentity {
     /// `fun-renderer` as the typed owner?
     #[must_use]
     pub fn names_fun_renderer_as_owner(&self) -> bool {
-        self.owner_package == "fun-renderer"
-            && self.owner_module.starts_with("fun_renderer::")
+        self.owner_package == "fun-renderer" && self.owner_module.starts_with("fun_renderer::")
     }
 
     /// Typed predicate: does this typed identity name
@@ -483,7 +479,10 @@ mod tests {
     fn source_taxonomy_walks_user_spec() {
         assert_eq!(CloudTextureSource::ALL.len(), 2);
         // Typed RendererOwned is the typed default.
-        assert_eq!(CloudTextureSource::default(), CloudTextureSource::RendererOwned);
+        assert_eq!(
+            CloudTextureSource::default(),
+            CloudTextureSource::RendererOwned
+        );
         // Typed RendererOwned is product-permitted; typed
         // legacy donor is not.
         assert!(CloudTextureSource::RendererOwned.is_product_permitted());
@@ -494,8 +493,7 @@ mod tests {
         assert!(!CloudTextureSource::LegacyFunRenderDonorDiagnosticOnly.is_renderer_owned());
         assert!(CloudTextureSource::LegacyFunRenderDonorDiagnosticOnly.is_legacy_donor());
         assert!(
-            CloudTextureSource::LegacyFunRenderDonorDiagnosticOnly
-                .requires_non_production_flag(),
+            CloudTextureSource::LegacyFunRenderDonorDiagnosticOnly.requires_non_production_flag(),
         );
     }
 
@@ -625,7 +623,10 @@ mod tests {
         assert!(identity.names_fun_renderer_as_owner());
         assert!(identity.names_fun_render_as_legacy_donor());
         assert_eq!(identity.owner_package, "fun-renderer");
-        assert_eq!(identity.owner_module, "fun_renderer::cloud_gpu_resource_set");
+        assert_eq!(
+            identity.owner_module,
+            "fun_renderer::cloud_gpu_resource_set"
+        );
         assert_eq!(identity.legacy_donor_package, "fun_render");
         assert_eq!(identity.texture_source, CloudTextureSource::RendererOwned);
 
@@ -663,8 +664,7 @@ mod tests {
         // diagnostics typed enabled → typed shadow
         // handles must be valid.
         let settings = CloudRenderSettings::PRODUCT_DEFAULT;
-        let enabled_diag =
-            CloudShadowResourceDiagnostics::from_settings(&settings, false, true);
+        let enabled_diag = CloudShadowResourceDiagnostics::from_settings(&settings, false, true);
         assert!(enabled_diag.enabled);
         assert!(allocated.shadow_handles_agree_with_diagnostics(&enabled_diag));
 

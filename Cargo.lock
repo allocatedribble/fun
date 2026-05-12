@@ -3227,6 +3227,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "fun-scene",
+ "fun-scheduler-types",
  "hashbrown 0.17.1",
 ]
 
@@ -3258,6 +3259,8 @@ dependencies = [
  "fun_ai_core",
  "hashbrown 0.17.1",
  "naga",
+ "rvelte-core",
+ "rvelte-fun-render-adapter",
  "rvelte-fun-ui-core",
  "serde",
  "serde_json",
@@ -6603,6 +6606,14 @@ name = "rvelte-core"
 version = "0.1.0"
 
 [[package]]
+name = "rvelte-css"
+version = "0.1.0"
+dependencies = [
+ "hashbrown 0.17.1",
+ "rvelte-fun-render-adapter",
+]
+
+[[package]]
 name = "rvelte-facade"
 version = "0.1.0"
 dependencies = [
@@ -6665,6 +6676,7 @@ dependencies = [
 name = "rvelte-fun-paint"
 version = "0.1.0"
 dependencies = [
+ "rvelte-css",
  "rvelte-fun-layout",
  "rvelte-fun-text",
  "rvelte-fun-ui-core",

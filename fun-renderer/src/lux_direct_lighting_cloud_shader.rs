@@ -85,8 +85,7 @@ pub struct LuxShadowAuxLayerGpu {
 
 /// Typed Pass C9.3 — typed GPU byte size of the typed
 /// `LuxShadowAuxLayerGpu` struct.
-pub const LUX_SHADOW_AUX_LAYER_GPU_BYTES: u64 =
-    core::mem::size_of::<LuxShadowAuxLayerGpu>() as u64;
+pub const LUX_SHADOW_AUX_LAYER_GPU_BYTES: u64 = core::mem::size_of::<LuxShadowAuxLayerGpu>() as u64;
 
 impl LuxShadowAuxLayerGpu {
     /// Typed flag bit 0 — typed aux layer present this
@@ -140,10 +139,7 @@ impl LuxShadowAuxLayerGpu {
     /// when no typed registered aux layer matches the
     /// typed light id.
     #[must_use]
-    pub fn from_registry(
-        registry: &LuxShadowAuxLayerRegistry,
-        light_id: LuxLightId,
-    ) -> Self {
+    pub fn from_registry(registry: &LuxShadowAuxLayerRegistry, light_id: LuxLightId) -> Self {
         match registry.find_for_kind(light_id, LuxShadowAuxLayerKind::CloudTransmittance) {
             Some(layer) => Self::from_cpu(layer),
             None => Self::NO_LAYER,
@@ -460,12 +456,8 @@ mod tests {
         assert_eq!(gpu.light_id_u64(), light_id.0);
         // Typed `OneFrameDelayed` → typed
         // `samples_previous_frame` bit set.
-        assert!(
-            (gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_PREVIOUS_FRAME) != 0,
-        );
-        assert!(
-            (gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_CURRENT_FRAME) == 0,
-        );
+        assert!((gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_PREVIOUS_FRAME) != 0,);
+        assert!((gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_CURRENT_FRAME) == 0,);
         // Typed CloudTransmittance kind discriminant.
         assert_eq!(gpu.header[2], 0);
         // Typed opacity matches.
@@ -474,23 +466,17 @@ mod tests {
 
         // Typed `from_registry` returns typed `NO_LAYER`
         // when no typed match.
-        let no_layer =
-            LuxShadowAuxLayerGpu::from_registry(&registry, LuxLightId::new(7));
+        let no_layer = LuxShadowAuxLayerGpu::from_registry(&registry, LuxLightId::new(7));
         assert!(!no_layer.is_present());
         assert_eq!(no_layer, LuxShadowAuxLayerGpu::NO_LAYER);
 
         // Typed `SameFrame` mode sets typed
         // `samples_current_frame` bit.
-        let same =
-            registry_with_layer(LuxLightId::new(5), CloudShadowFrameDelayMode::SameFrame);
+        let same = registry_with_layer(LuxLightId::new(5), CloudShadowFrameDelayMode::SameFrame);
         let same_layer = *same.find(LuxLightId::new(5)).unwrap();
         let same_gpu = LuxShadowAuxLayerGpu::from_cpu(&same_layer);
-        assert!(
-            (same_gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_CURRENT_FRAME) != 0,
-        );
-        assert!(
-            (same_gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_PREVIOUS_FRAME) == 0,
-        );
+        assert!((same_gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_CURRENT_FRAME) != 0,);
+        assert!((same_gpu.header[3] & LuxShadowAuxLayerGpu::FLAG_SAMPLES_PREVIOUS_FRAME) == 0,);
     }
 
     /// Pass C9.3 — typed safe byte serializer round-trips
@@ -498,7 +484,12 @@ mod tests {
     #[test]
     fn gpu_aux_layer_to_bytes_round_trips() {
         let gpu = LuxShadowAuxLayerGpu {
-            header: [0x12345678, 0x9abcdef0, 0, LuxShadowAuxLayerGpu::FLAG_PRESENT],
+            header: [
+                0x12345678,
+                0x9abcdef0,
+                0,
+                LuxShadowAuxLayerGpu::FLAG_PRESENT,
+            ],
             knobs: [0.5, 0.25, 0.0, 0.0],
         };
         let bytes = gpu.to_bytes();
@@ -548,13 +539,9 @@ mod tests {
             // typed post-opacity-modulated transmittance.
             // To make them agree we compute the typed
             // shader's typed effective transmittance.
-            simulate_sample_cloud_shadow_layer(
-                &gpu,
-                light_id,
-                &matrix,
-                world,
-                |_uv| Some(sampled_cloud),
-            ),
+            simulate_sample_cloud_shadow_layer(&gpu, light_id, &matrix, world, |_uv| {
+                Some(sampled_cloud)
+            }),
         );
         assert!(
             (shader_final - cpu_compose.final_visibility).abs() < 1e-5,
@@ -699,7 +686,11 @@ mod tests {
             // sentinel value to catch a typed bug.
             |_uv| Some(0.0),
         );
-        assert!((sampled - 1.0).abs() < 1e-6, "outside-footprint sample={}", sampled);
+        assert!(
+            (sampled - 1.0).abs() < 1e-6,
+            "outside-footprint sample={}",
+            sampled
+        );
     }
 
     /// Pass C9.3 — typed wrong light id falls back to
@@ -734,25 +725,19 @@ mod tests {
         // typed 1.0 regardless of typed sample.
         gpu.knobs[0] = 0.0;
         let matrix = live_projection_matrix(light_id);
-        let sampled = simulate_sample_cloud_shadow_layer(
-            &gpu,
-            light_id,
-            &matrix,
-            [0.0, 0.0, 0.0],
-            |_uv| Some(0.0),
-        );
+        let sampled =
+            simulate_sample_cloud_shadow_layer(&gpu, light_id, &matrix, [0.0, 0.0, 0.0], |_uv| {
+                Some(0.0)
+            });
         assert!((sampled - 1.0).abs() < 1e-6);
 
         // Force typed opacity = 1.0 → typed shader passes
         // through typed raw sample.
         gpu.knobs[0] = 1.0;
-        let sampled_full = simulate_sample_cloud_shadow_layer(
-            &gpu,
-            light_id,
-            &matrix,
-            [0.0, 0.0, 0.0],
-            |_uv| Some(0.3),
-        );
+        let sampled_full =
+            simulate_sample_cloud_shadow_layer(&gpu, light_id, &matrix, [0.0, 0.0, 0.0], |_uv| {
+                Some(0.3)
+            });
         assert!((sampled_full - 0.3).abs() < 1e-6);
     }
 }

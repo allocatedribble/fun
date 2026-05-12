@@ -5,6 +5,8 @@ pub mod composite;
 pub mod dx12_transport;
 #[cfg(feature = "native_ui_adapter")]
 pub mod native_adapter;
+#[cfg(feature = "native_ui_adapter")]
+pub mod packet_consumer;
 #[cfg(feature = "bevy_ecs")]
 pub mod producer;
 #[cfg(feature = "bevy_ecs")]
@@ -17,6 +19,8 @@ pub use composite::*;
 pub use dx12_transport::*;
 #[cfg(feature = "native_ui_adapter")]
 pub use native_adapter::*;
+#[cfg(feature = "native_ui_adapter")]
+pub use packet_consumer::*;
 #[cfg(feature = "bevy_ecs")]
 pub use producer::*;
 #[cfg(feature = "bevy_ecs")]

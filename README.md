@@ -1,515 +1,103 @@
 # Fun
 
-Fun is a work-in-progress first person shooter built around tactical movement,
-destructible environments, and large-scale combined-arms battles.
+## What It Offers
 
-## Vision
+`fun` is the main game workspace for `project-FUN`. It owns the playable game:
+gameplay crates, client/server runtime, launcher and host state, shared game
+protocols, renderer integration, scene authoring, Lux lighting integration, and
+benchmark pressure around the product runtime.
 
-The game should feel sharp enough for a competitive 5v5 match, but the sandbox is
-being designed for much larger battles: three-team, PlanetSide 2-like wars with
-roughly 100v100v100 players or more, infantry squads, vehicles, and territory
-pressure all fighting over the same physical space.
+This is where reusable platform contracts become game behavior. AI, data,
+networking, backend, Warden, UI, and physics work may start in sibling
+workspaces, but `fun` decides how those contracts serve the tactical FPS.
+Use this workspace when a change affects what players, servers, launchers, or
+runtime hosts actually do.
 
-## Core Pillars
+## Current State
 
-- First person shooter fundamentals: readable movement, responsive weapons, and
-  clear tactical decision-making.
-- Environment destruction that changes routes, sightlines, cover, objectives,
-  and vehicle access during a match.
-- Competitive 5v5 mode for tight team play, balance testing, and fast iteration.
-- Large three-faction war mode built for 100v100v100-scale battles and beyond.
-- Vehicles as part of the battlefield, not a separate minigame: transport, armor,
-  fire support, logistics, and objective pressure.
-- A shared sandbox across modes so tactics learned in 5v5 still matter in the
-  larger war.
+status: active runtime authority
 
-## Modes
+The workspace is the active authority for runtime game behavior. It depends on
+local checkouts for Bevy, Avian, Thunder, rvelte, fun-data, fun-ai, backend, and
+Warden integration. The umbrella [workspace map](../docs/workspace-map.md)
+names `fun` as owner for gameplay, client/server crates, launcher code, game
+protocol types, arena tooling, rendering integration, benchmarking, and
+game-specific engine/networking use.
 
-### Competitive 5v5
+## Progress
 
-A smaller, focused mode for round-to-round mastery. Maps are dense, objectives
-are readable, and destruction is constrained enough to keep matches fair while
-still allowing teams to reshape the fight.
+The game client, game server, shared protocol crate, launcher, renderer bridge,
+product renderer, scene layer, Lux lighting layer, and benchmark surfaces
+exist. Renderer identity and the V4 renderer doctrine exist. The scene, Lux,
+and render split is explicit: `fun-scene` owns scene declaration, `fun-lux`
+owns lighting and radiance policy, `fun-renderer` owns the product renderer
+core, and `fun_render` owns Bevy-facing extraction and integration.
 
-### Three-Faction War
+The current physics data plane remains in `game_server` plus the Avian baseline
+while Avis matures. Runtime UI is moving toward native rvelte/FUN packets with
+Rust-owned host state.
 
-A large-scale combined-arms mode with three opposing teams fighting over a
-persistent battlefield. The target scale is 100v100v100 or larger, with infantry,
-ground vehicles, air vehicles, destructible strongholds, supply pressure, and
-front lines that move as players break and rebuild control of the environment.
+## Goals
 
-## Development Status
+- Make `fun-renderer` the product renderer default with measured evidence.
+- Move launcher, editor, HUD, menu, diagnostics, and debug UI toward native
+  rvelte/FUN UI packets.
+- Keep Bevy ECS as orchestration, extraction, and scheduling where it helps.
+- Keep game semantics in `fun`; move reusable primitives to sibling workspaces
+  only when the ownership boundary is proven.
+- Keep client/server protocols bounded, typed, and rejection-tested.
 
-This repository is currently an early Rust/Bevy prototype. The immediate focus is
-on first-person movement, collision, rendering, networking foundations, and the
-technical groundwork needed for meshlet rendering, raytraced lighting, and future
-large-match simulation.
+## Ownership
 
-## Rendering Architecture
+`fun` owns gameplay semantics, runtime authority, host state, scenes, game UI
+integration, renderer integration, and game benchmarks. It must not own
+reusable networking primitives, account/customer policy, telemetry schema
+authority, Warden enforcement policy, reusable AI runtime, or physics engine
+primitives after they graduate to Avis.
 
-`fun-renderer` is the new default renderer core package. Its Rust library crate
-is `fun_renderer`, housed at `fun/fun-renderer`, and it owns virtual geometry,
-virtual shadows, the GPU scene database, frame graph, page scheduler,
-renderer-owned CEF compositor, upscaling/frame-generation orchestration, and the
-DX12/Vulkan backend abstraction.
-It must work with and take advantage of `bevy_ecs` for extraction, scheduling,
-frame-graph coordination, and GPU-scene ownership.
+## Validation
 
-`fun-scene` is the first-party scene authoring and ECS scene declaration layer.
-It starts from Bevy's confirmed scene resolver through FUN-owned
-`fun!`/`fun_list!` macros, then becomes the owner for deterministic scene
-manifests, server/editor scene authority, streaming declarations,
-renderer-facing scene components, lighting/GI authoring components, and the
-future `.fun` scene asset format. `fun-renderer` consumes ECS archetypes and
-components generated by `fun-scene`; `fun-lux` consumes ECS-authored
-lighting/GI/shadow declarations. The migration guard and authoring rules live in
-[`docs/fun_scene_migration.md`](docs/fun_scene_migration.md).
-`game_scene` is now the game-specific catalog layer for default arenas,
-benchmark scenes, stress scenes, and editor starter scenes. Generic
-`SceneManifest`, `SceneEntityManifest`, `SceneStreamChunk`, stable identity,
-manifest signature, and stream chunk helpers live in `fun-scene`; server,
-client, editor, renderer, and virtual page scheduling consume that shared
-contract.
-Network-aware authoring uses `NetworkedSceneEntity` with replication class,
-authority, scope, and priority. `SceneStableIdentity` remains separate from the
-runtime Bevy `Entity`; `SceneStableHistoryKey` and `SceneStableEntityIndex`
-give renderer extraction stable keys for GPU history, motion vectors, and cache
-invalidation. Manifest signatures are generated from scene entity fields and
-are carried on world-stream chunks so server, client, and editor can detect
-deterministic field changes without reassigning stable IDs.
-
-`fun-lux` is the lighting package. Its Rust library crate is `fun_lux`, housed
-at `fun/fun-lux`, and it owns direct lighting, many-light sampling, virtual
-shadow policy, GI, reflections, denoising/reconstruction policy, and
-radiance/surface/probe caches. `fun-renderer` depends on `fun-lux`, so the
-product/API shape still treats Fun Lux as housed inside the renderer while the
-lighting code stays maintainable as its own crate.
-Many-light direct illumination is now represented by `fun_lux::many_light`.
-`GpuLightDatabase` stores stable light IDs, type, view transform,
-color/intensity, shape, shadow policy, update stamp, importance hints, and
-emissive-source references. `ClusteredCandidateSet` partitions view space into
-bounded clustered/Forward+ candidate lists; `ReservoirStorage` tracks selected
-lights, temporal/spatial reuse, validity, rejection reasons, and shadowed
-candidate counts. Important emissive geometry can be promoted into candidates,
-and selected shadow-casting lights emit budgeted shadow request intents for the
-renderer-owned virtual shadow storage.
-Hybrid GI and reflections are represented by `fun_lux::gi`. The production
-world representation is exactly one persistent surface cache; quality tiers
-range from ambient/probe fallback through screen-space, screen-space plus
-surface cache, selective hardware RT assist, and experimental neural/radiance
-assistance. Surface-cache cells track occupancy, age, validity, update cost,
-history rejection, and explicit invalidation reasons for procedural edits,
-destruction, time-of-day or weather jumps, material changes, camera cuts, and
-major scene-streaming events. Reflection source selection follows the ordered
-ladder of screen trace, surface cache, optional RT assist, and
-denoise/reconstruction, with compact debug artifacts explaining source mix and
-cache stability.
-
-`fun_render` remains the shared Bevy-facing bridge for the game client and the
-editor during migration. It owns extraction, app/plugin integration, feature
-flags, legacy compatibility, diagnostics, and benchmark integration. It exposes
-`fun_renderer` and `fun_lux` to Bevy/game integration, but it is no longer the
-renderer brain.
-Pass 2 makes the ownership split the canonical feature surface:
-`legacy_renderer`, `fun_renderer_core`, `dx12_native_interop`,
-`vulkan_backend`, `cef_gpu_only`, `upscaling`, `dlss`, `fsr`,
-`frame_generation`, `many_light`, `virtual_geometry`, `virtual_shadows`,
-`hybrid_gi`, and `experimental_renderer_ml`. The older
-`fun_renderer_*`/`fun_lux_*` feature names remain compatibility aliases for the
-transition. The `fun_render` bridge now installs a typed backend selector;
-unset, `auto`, and `FUN_RENDERER_BACKEND=fun` resolve to the `fun-renderer`
-core and `fun-lux` baseline policy. `FUN_RENDERER_BACKEND=legacy` is loud and
-diagnostic-only for the remaining transition cycle. The Winit presentation
-shell remains a compatibility bridge until the renderer-owned visible-frame
-handoff, but it is no longer the default renderer selection.
-
-AI ownership is separate: `fun-ai` owns model registry, model manifests,
-inference backend selection, evals, model trust/versioning, and offline
-training/evaluation hooks. `fun-renderer` owns only renderer-side feature
-interfaces, tensor input/output schemas, GPU resource handles, and fallback
-heuristic paths.
-
-Bevy remains ECS, app scheduling, extraction framework, and asset/event plumbing
-where useful. `fun-renderer` should use `bevy_ecs` directly for ECS-shaped
-state, extraction, and scheduling instead of becoming an isolated renderer
-world. Bevy renderer changes are allowed only for backend capability reporting,
-sanctioned native handle or command-list access, diagnostics, and unavoidable
-low-level scheduling primitives. The detailed contract lives in
-[`docs/renderer_ownership.md`](docs/renderer_ownership.md).
-The renderer ECS contract is already represented by `FunSceneSet`,
-`FunRendererSet`, unprefixed render-world sets such as `RendererExtractSet` and
-`RendererPrepareSet`, renderer/lux marker components, compact handle
-components, the `GpuScene` resource with table-level renderer deltas,
-`ExtractedSceneDeltas`, `FrameGraph`, `LuxWorld`, and typed renderer/lux
-message lanes.
-Renderer resource ownership is represented by `RendererResourceClass`,
-`RendererResourceKind`, `RENDERER_RESOURCE_OWNERSHIP_POLICY`,
-`ResourceFrameAllocationDiagnostics`, and `HOT_UPLOAD_KILL_LIST`; `fun_render`
-may keep `FunUploadArena` as a compatibility shim, but allocator policy belongs
-to `fun-renderer`.
-The shared page scheduler is represented by `PageScheduler`, `LogicalPageId`,
-`PhysicalPageSlot`, `PageOwner`, `PageResidencyState`, `PagePriorityScore`, and
-`PageSchedulerDiagnostics`. Virtual geometry, virtual shadows, streamed
-textures, GI/radiance caches, material caches, and future neural cache data use
-the same residency API so page priority, fault storms, uploads, and evictions
-are comparable across systems.
-Static virtual geometry is now represented in `fun-renderer` by
-`StaticVirtualGeometryAsset`, `VirtualGeometryClusterHeader`,
-`VirtualGeometryPage`, the static virtual geometry runtime policy type, and
-`select_static_virtual_geometry_frame`. The `virtual_geometry_bake` tool emits
-the renderer-owned `.funvg.json` schema deterministically; runtime selection
-uses frustum/HZB culling, hierarchical refinement, shared page-scheduler
-requests, compute-indirect draw packets, an optional mesh-shader fast path, and
-a fallback mesh path for missing root pages.
-Dynamic geometry is a separate first-class path, not a forced static virtual
-geometry rebuild. `fun-scene` declares `GeometryDeclaration`,
-`DynamicGeometryAuthoring`, `SceneGeometryKind`, `DynamicGeometryClass`,
-`DynamicGeometryLifetime`, `DynamicGeometryUpdateHint`, and
-`ProceduralChunkOwner`; `fun-renderer` consumes those declarations through
-`DynamicGeometrySubmission` and `DynamicGeometryDatabase`. The current substrate
-supports classic mesh draw packets, optional dynamic cluster packets for
-selected classes, procedural chunk invalidation by revision, destruction
-fragment stress accounting, and compact upload/dirty-record diagnostics.
-Virtual shadows are now represented by renderer-owned page storage, not a
-monolithic atlas. `VirtualShadowStorage` owns directional clipmap pages,
-local-light pages, physical shadow page pools, page-table records,
-invalidation state, refresh budgets, cache hit/miss counters, per-light page
-budget diagnostics, and pressure metrics. `fun-lux::shadow::ShadowPolicyEngine`
-decides which lights should cast shadows, soft-shadow/reconstruction mode,
-quality tier, and directional/local budgets; it does not allocate pages or
-own invalidation storage.
-The renderer-owned frame graph is represented by `RendererFrameGraph`,
-`RendererFrameDescription`, typed pass/resource declarations, graph validation
-failures, pass timing placeholders, resource lifetimes, and debug artifacts.
-`fun_render` submits a frame description derived from bridge state, while
-`fun-renderer` owns pass order and execution policy. The initial graph keeps
-HUD-less scene color, UI color/alpha, final composition, and present as
-separate resources from day one.
-The upscaling boundary is represented by `fun_renderer::upscaling`. It consumes
-render-resolution HUD-less scene color, depth, motion vectors, exposure, jitter,
-reactive and transparency masks, and HDR metadata, then produces
-display-resolution HUD-less scene color before late UI composition and before
-any frame-generation handoff. Native/debug upscaling is the fallback path;
-DLSS SR and FSR hooks remain capability-gated and require diagnostics to prove
-valid motion vectors, masks, HDR/exposure handling, mip-bias policy, history
-state, and UI separation.
-The frame-generation boundary is represented by
-`fun_renderer::frame_generation`. It consumes display-resolution HUD-less scene
-color, UI color/alpha, depth, motion vectors, frame timing, present resources,
-and reset flags, then produces presentable frame candidates plus pacing
-diagnostics without flattening UI early. DLSS FG and FSR FG are vendor hooks
-behind capability, backend-truth, present-lifetime, UI-readability, and
-frame-pacing gates. FG is off by default for docked editor viewports and only
-eligible for game runtime, play-in-editor, immersive editor viewports, or
-cinematic preview when explicitly enabled and valid.
-The renderer-facing model scaffold is represented by `fun_renderer::ml` behind
-`experimental_renderer_ml`. The first narrow feature is a shadow-page priority
-prior: `fun-renderer` owns tensor/resource request metadata, GPU handle
-references, validation, and deterministic heuristic fallback, while `fun-ai`
-owns the model manifest, hook schema, backend selection, inference queues, trust
-policy, and offline eval comparison across heuristic-only, model-assisted, and
-model-disabled lanes.
-The renderer-owned GPU scene database is represented by `GpuSceneDatabase`.
-It stores generation-checked view, instance, mesh, material, light, and page
-metadata records, derives records from `fun-scene` declarations, retains
-previous transforms for motion history, tracks dirty ranges and compaction, and
-uploads dirty records through the renderer resource/upload diagnostics. The
-`fun_render` extraction bridge reads Bevy ECS entities/components and submits
-records to this database; Bevy remains orchestration and extraction, not the
-renderer-core storage owner.
-`COMPONENT_GPU_MAPPINGS` keeps ECS authoring components ergonomic while mapping
-them into compact SoA-style GPU tables: instance, transform, material,
-geometry-page, light, and shadow-page tables. Renderer history lives in
-`StableHistoryTable` keyed by scene stable identity, so motion vectors, virtual
-geometry pages, shadow pages, GI cache, and light reservoirs are not keyed by
-transient Bevy `Entity` values.
-Scene-authored component taxonomy names intentionally skip the redundant product
-prefix inside `fun_scene`: `SceneStableIdentity`, `Renderable`, `LuxLight`,
-`VirtualShadowCaster`, `CefSurface`, and `UpscalePolicy` are the canonical
-forms.
-Virtual geometry and virtual shadows are scene-authored ECS data, not magic
-asset paths. `fun!` emits `Renderable`, `VirtualGeometryAuthoring`,
-`VirtualShadowCaster`, `VirtualShadowReceiver`, and `LuxGiParticipant`; renderer
-systems react through Bevy change detection to request page metadata and bake
-checks, register bounds, update motion vectors, release page references, and
-invalidate shadow/GI caches.
-The heuristic scheduler is also an ECS system graph. `RenderHeuristicScheduler`
-uses authored inputs such as `Renderable`, `VirtualGeometryAuthoring`,
-`LuxLight`, `LuxEmissive`, `VirtualShadowReceiver`, `GameplaySalient`,
-`EditorSelection`, `SceneChunkId`, `StreamingPriority`, and
-`TemporalInstability` to publish `PagePriority`, `ShadowPagePriority`,
-`LuxLightPriority`, `GiCacheUpdatePriority`, `ShadingRatePriority`, and
-`MlInferencePriority`. `HeuristicDebugOverlay` records the component causes for
-each priority so CEF/Svelte diagnostics can explain page, light, and cache
-decisions without a Bevy UI runtime surface.
-The shared scheduler language is represented by `fun_renderer::scheduler`.
-It normalizes projected area, motion, temporal history error, luminance
-variance, material and alpha/specular risk, occlusion confidence, gameplay
-salience, editor focus, and camera proximity into one explainable priority
-score. Geometry pages, shadow pages, light candidate budgets, GI cache updates,
-reflection ray budgets, texture residency, shading-rate decisions, and optional
-ML inference density consume the same score and emit comparable budget
-recommendations, heatmaps, high-priority miss counters, stability scores, and
-p95/p99 frame-impact artifacts.
-Renderer quality and settings are represented by `fun_renderer::settings`.
-The quality ladder is Baseline, Hybrid, High, RT-assisted, Vendor-enhanced, and
-Experimental. User-facing settings cover runtime/backend selection, quality
-preset, upscaler, frame generation, shadow/GI/reflection quality, virtual
-geometry and texture budgets, and diagnostics visibility. Internal settings
-cover page pools, shadow/light/GI budgets, pipeline warmup, runtime pipeline
-creation policy, and fallback strictness. The capability-aware selector uses
-actual backend facts, vendor/VRAM/display/runtime mode, CEF GPU transport, SR/FG
-support, RT/VRS/work-graph support, and compiled feature gates to choose safe
-defaults or reject unsupported requests with explicit reasons. `fun_render`
-exports a CEF/Svelte-safe settings UI model derived from the typed selection;
-benchmark artifacts record the full selected settings needed to reproduce a run.
-Renderer benchmark gates are represented by `fun_renderer::benchmark`. The
-suite declares clear/present, static, CEF UI, DX12/Vulkan parity, upload,
-pipeline hot-loop, virtual geometry, dynamic geometry, procedural invalidation,
-many-light, virtual shadow, GI/reflection, upscaling, and FG pacing scenes. JSON
-and Markdown artifacts record active settings, capability facts, git revisions,
-feature flags, p50/p95/p99 timing, renderer metrics, fallback reasons, and hard
-gate results for runtime pipeline creation, backend fallback, CPU CEF fallback,
-page-fault storms, unsupported FG, product Bevy UI usage, and performance
-claims without artifacts.
-Renderer research spikes are represented by `fun_renderer::research` and
-`fun_lux::research`. Work Graphs, the mesh-shader virtual-geometry fast path,
-the radiance/neural cache, the learned page-priority predictor, and neural
-texture compression each have their own compile-time feature flag and require a
-runtime opt-in plus benchmark comparison before promotion. None of these spikes
-is a default renderer boot requirement; mesh shaders must keep the compute
-fallback, the learned predictor must keep deterministic heuristic fallback
-through `fun-ai`, and neural texture compression stays an offline asset-pipeline
-experiment until evidence proves it can be promoted.
-`FUN_RENDERER_BACKEND=fun` is the default. Unset or `auto` resolves to `fun`;
-`legacy` is explicit, loud, and diagnostic-only while the final compatibility
-lane is retired. The default flip is encoded in
-`fun_render::bridge::RendererBridgeSettings::from_env` and
-`fun_renderer::default_flip`, with CEF/Svelte GPU-only UI, Bevy UI product
-usage, CPU CEF fallback, duplicate upload systems, duplicate lighting/shadow
-policy, and stale transition feature flags all tracked as retirement gates.
-
-Presentation is split by caller. `game_client` enables
-`fun_render/winit_presentation` and adds the Winit presentation plugin for the
-real game window. The merged FunClientHost editor preview uses that current
-client render state as the background under transparent CEF editor panels. A
-separate preview world may be added later only if live editing conflicts with
-gameplay, but it must remain in-process and must not revive a child
-`game_client`, HWND embedding, or Tauri-owned preview path.
-
-## Browser UI Architecture
-
-`fun_ui_cef` is the game UI browser subsystem. It is a sibling of `fun_render`,
-not a `fun_render` feature and not a Bevy engine feature. `game_client` can opt
-into it with `cef_ui`, which performs the CEF subprocess escape before Bevy app
-construction and then initializes CEF as a separate windowless browser runtime.
-`fun_ui_cef` owns browser lifetime, bridge messages, and page loading; the
-renderer-owned CEF compositor belongs in `fun-renderer`. Product CEF UI requires
-accelerated GPU shared-texture transport. CPU `OnPaint` uploads may exist only
-as temporary test fixtures and must not be exposed as a runtime fallback.
-
-## Fun Client Host Architecture
-
-`FunClientHost` is the product-level host concept for the single executable
-path. The current binary remains `game_client` until runner scripts, docs, and
-legacy editor references can be renamed safely, but the runtime authority now
-has a crate boundary in `fun_host` instead of being added directly to
-`game_client/src/lib.rs`.
-
-`fun_host` owns the merged launcher/game/editor state machine, runtime-service
-status, mode transitions, and CEF-facing command routing. `game_client` remains
-the thin executable host: CEF subprocess escape, CEF runtime init, Bevy app
-creation, CEF compositor insertion, `FunClientHostPlugin`, game/runtime
-plugins, run, and CEF shutdown. Tauri is not part of this active runtime path.
-
-`fun_editor_core` is the new Rust-owned home for editor service contracts inside
-the `fun` workspace. The first surface preserves the command IDs already used by
-the legacy Tauri wrapper, including `project.open`, `project.edit.open`,
-`projects.authorized.list`, `entity_stream.open`, `preview.renderer.ensure`,
-and `runtime.diagnostics.list`. The old Tauri shell can remain a development
-reference while command authority migrates into these Rust crates.
-
-`FunHostState` is the canonical Rust-owned application state for the unified
-client host. Its top-level mode is one of `boot`, `launcher`, `game`, `editor`,
-`editor_overlay`, `loading`, or `shutdown`, and it carries game, launcher,
-editor, project, runtime, diagnostics, account, commandbar, and input-owner
-state in one snapshot. Input ownership is one of `gameplay`, `launcher_ui`,
-`editor_ui`, `game_menu_ui`, `text_entry`, or `commandbar`; Rust maps that owner
-to CEF capture and `GameplayInputGate`. CEF/Svelte requests the initial snapshot
-with `host.snapshot.get` and then receives host state patches; command polling
-is only a browser-preview fallback.
-
-Editor scene edits are typed operations, not browser-authored runtime truth.
-CEF/Svelte sends `scene.operation.apply` payloads using the
-`fun_scene::EditorOperation` schema. `fun_host` validates the operation envelope
-and queues it into `fun_scene::EditorOperationQueue`; `fun-scene` applies
-supported operations to Bevy ECS through normal component/resource mutation.
-Current operations cover spawning scene components, patching component fields,
-deleting and duplicating entities, attaching child scenes, adjusting lights and
-render policies, and marking selection/salience. `.fun` asset references are
-declarative; dynamic Rust expressions remain macro-only.
-
-CEF owns browser lifetime, page loading, JavaScript bridge messages, offscreen
-paint callbacks, dirty rects, transparent UI buffers, and UI compositor state.
-Bevy ECS owns game state and exchanges typed UI packets with the browser bridge.
-`game_client` publishes accelerated CEF ready-frame tokens into
-`fun_renderer::RendererCefCompositor`; the renderer owns the UI texture record
-and late `cef_gpu_import` frame-graph input. Product CEF UI is GPU-only and
-fail-closed: CPU `OnPaint` frames are rejected instead of uploaded into Bevy
-images, and Bevy UI is not a product presentation surface.
-
-CEF composition is a HUD/UI layer, not a world-image layer. Render ordering is
-world render, depth/motion vectors, Solari/lighting, DLSS SR/RR if active,
-post-processing, CEF UI composition, renderer/CEF diagnostics, and present.
-CEF UI must not feed DLSS input color, depth, motion vectors, or Ray
-Reconstruction guide buffers; browser pixels have no world-space motion-vector
-contract and must not contaminate temporal reconstruction.
-DLSS, FSR, and frame generation are renderer-owned presentation features, not
-late hacks. Scene color and UI color remain separate. Frame generation receives
-HUD-less scene color, UI color, depth, motion vectors, and valid present-time
-resource lifetimes. Editor viewports must be SR-capable and FG-capable where
-supported, while docked/editor text and CEF UI remain readable and stable.
-
-Lighting targets artistically unbounded scenes with budget management rather
-than brute-force `number_of_lights * pixels` work. The renderer direction is
-tiled/clustered light bins, reservoir sampling, temporal/spatial reuse,
-emissive candidate promotion, and virtual shadow demand pages.
-
-Massive procedural dynamic scenes are the main renderer target: streaming,
-dynamic scene mutation, world scale, destruction, runtime procedural geometry,
-high light counts, many moving occluders, editor mode changes, and p95/p99
-stability.
-
-The main browser page is `fun-ui://main/index.html`, uses a transparent
-background, and carries HUD, menu, launcher, editor, loading, diagnostics, and
-debug overlay state inside the same full-window Svelte page at
-`game_client/ui/main`. The same CEF command lane now accepts host command
-requests such as `launcher.state.get`,
-`launcher.show`, `games.list`, `projects.authorized.list`, `project.edit.open`,
-`editor.activate`, `runtime.host.status`, `project.open`,
-`preview.renderer.ensure`, `entity_stream.open`, `runtime.diagnostics.list`,
-and `auth.ticket.request`. JavaScript/TypeScript may orchestrate requests,
-Svelte state, hit-region reporting, and local visual state; Rust remains the
-authority for launcher/editor/game lifecycle, filesystem and project access,
-preview/editor services, account tickets, networking, and service control.
-Compatibility commands such as `viewport.client.launch`,
-`viewport.client.focus`, and `viewport.client.resize` do not create, focus, or
-resize a child client. They switch the single host to game mode, release input
-to gameplay, or update CEF/game layout state. `preview.renderer.*` binds the
-editor viewport to the current client render background; Svelte must not render
-preview pixels inside the page.
-CEF host commands are typed in `fun_ui_cef::bridge` with target, capability,
-request ID, size budget, bounded payload, rejection, failure, and diagnostic
-types. `game_client` validates the CEF envelope and forwards accepted commands
-to `fun_host`; Svelte never receives raw filesystem, process, runtime, or ticket
-authority.
-`host.commands.list` returns the Rust-owned command catalog used by the
-commandbar. Each descriptor carries a command ID, title, category, payload
-schema ID, required capability, and risk metadata. Svelte may build local search
-results from that catalog and local UI state, but commandbar execution is routed
-back through `host.commandbar.execute` or the target host command so Rust
-validates capabilities, payload shape, and mutation risk before any runtime
-effect. Tool-call stubs remain gated; browser text, model output, and MCP/tool
-payloads are data until Rust accepts a typed command.
-Editor observer logic is allowed for local scene/editor behavior such as
-selection changes, gizmo drags, light changes, prefab instantiation, and trigger
-volume edits. Observers must produce normal ECS component/resource changes; they
-must not become renderer hot-path logic.
-The Vite production build writes hashed assets to `game_client/ui/main/dist`,
-and `fun_ui_cef` embeds only those generated assets through the `fun-ui://`
-scheme.
-Tauri, WRY, native child webviews, `SetParent`, HWND child hosting,
-browser-window embedding, and process or window embedding are not game UI
-runtime paths.
-
-## Client Benchmarking
-
-Client changes must be measurable. Use the Rust `fun-bench criterion` command
-for deterministic code-path costs, and use `fun-bench client` to capture FPS,
-frame nanoseconds, Solari pass timings, meshlet timings, DLSS RR timings, CPU,
-memory, and before/after deltas. First-party docs, CI, fixtures, and agent
-commands call Rust tooling directly.
-
-Default Criterion capture:
+Run from this directory:
 
 ```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline before
+cargo fmt-check
+cargo check-workspace
+cargo test-workspace
+cargo clippy-strict
 ```
 
-Default runtime capture:
+For narrow work, validate the owning crate first:
 
 ```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --render-backend dx12 --present-mode immediate
+cargo check -p game_client --all-targets
+cargo test -p game_client
 ```
 
-Windows DX12/Vulkan parity capture:
+Renderer, UI, networking, and physics claims need the relevant benchmark,
+diagnostic, or trace command recorded in `agent-report.ndjson`.
+
+Documentation-only changes should still run the root README gate from the
+umbrella root:
 
 ```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity
+cargo run --manifest-path fun-cli\Cargo.toml -p fun -- quality check-readmes --path fun/README.md
 ```
 
-Present pacing matrix and dashboard artifact:
+## Production Rules
 
-```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-parity --matrix-size present --continue-on-failure
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -- report dx12-parity --vulkan target\benchmarks\client\<vulkan>\benchmark.funpb.zst --dx12 target\benchmarks\client\<dx12>\benchmark.funpb.zst --markdown target\benchmarks\dx12_parity\dashboard.md --csv target\benchmarks\dx12_parity\dashboard.csv
-```
+All runtime boundary input is hostile: packets, files, browser input, tools,
+backend responses, telemetry, and AI output require typed validation. Runtime
+authority stays Rust-owned and server-owned where applicable. Public errors and
+diagnostics are redacted. Hot paths borrow first, allocate late, and avoid
+unbounded reads, runtime panics, and hidden process launches.
 
-Local DX12 regression gate once matched baseline/candidate bundles exist:
+## Key Files
 
-```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regression-check --baseline target\benchmarks\client\<baseline>\benchmark.funpb.zst --current target\benchmarks\client\<candidate>\benchmark.funpb.zst --report-path target\benchmarks\dx12_perf_gate\report.md
-```
-
-`--render-diagnostics` also enables render upload counters for
-`RenderQueue::write_texture`, `write_buffer`, and `write_buffer_with`. The
-current upload inventory and cleanup target order are in
-[`docs/dx12_upload_audit.md`](docs/dx12_upload_audit.md).
-The DX12 implementation order is governed by
-[`docs/dx12_implementation_doctrine.md`](docs/dx12_implementation_doctrine.md):
-observe first, remove hot uploads, harden CEF GPU transport, reduce
-barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
-native interop, then bring up DLSS SR before RR.
-The live pass checklist is
-[`docs/dx12_parity_decision_pass.md`](docs/dx12_parity_decision_pass.md), and
-the hardware-free doctrine checker is
-`fun-bench dx12-doctrine-check`.
-It also enables transient render-resource descriptor diagnostics; the reuse,
-near-miss, and aliasing contract is in
-[`docs/dx12_transient_resource_reuse.md`](docs/dx12_transient_resource_reuse.md).
-Post-parity moonshot gates are tracked in
-[`docs/dx12_moonshot_experiments.md`](docs/dx12_moonshot_experiments.md); the
-parity dashboard now reports DX12 memory budget/usage fields when available.
-
-Denoiser and DLSS Ray Reconstruction comparison:
-
-```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- denoisers
-```
-
-Rich tracing diagnostics:
-
-```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --render-diagnostics --trace-diagnostics --render-backend dx12 --present-mode immediate
-```
-
-The standard runtime path is Solari plus meshlets with the BalancedFast
-denoiser. BalancedFast is the performance-first SVGF-lite preset: cheap temporal
-history plus one à trous pass with fused output. The regular Balanced preset is
-kept as the quality-leaning comparison point, and Quality remains opt-in for
-screenshots and denoiser comparisons.
-`FUN_SOLARI_INTERNAL_SCALE=1.0|0.75|0.66|0.5` controls Solari's internal GI
-reservoir scale for controlled tests. Raster meshlet presentation remains at
-the main render resolution; the scaled GI path reconstructs into the full-res
-Solari output.
-DLSS Ray Reconstruction remains available as the explicit `rr`/`dlss-rr`
-denoiser preset, but it is currently known not to function properly in this
-project: it can produce a large black square/rectangle and broken or missing
-shadows. Treat RR as a targeted diagnostic mode until that issue is fixed.
-
-The full standard lives in
-[`docs/client_benchmarking.md`](docs/client_benchmarking.md). Do not describe a
-client change as faster, smoother, or cheaper unless Criterion and/or runtime
-benchmark summaries show the difference in nanoseconds and FPS.
-Tracing target details live in
-[`docs/client_diagnostics.md`](docs/client_diagnostics.md).
+- [Cargo.toml](Cargo.toml): game workspace manifest.
+- [game_client](game_client): client runtime and host pressure point.
+- [game_server](game_server): server authority and current physics baseline.
+- [game_shared](game_shared): shared game protocol contracts.
+- [fun-renderer](fun-renderer): product renderer core.
+- [fun-scene](fun-scene): scene declarations and manifests.
+- [fun-lux](fun-lux): lighting and radiance policy.
+- [fun_render](fun_render): Bevy-facing renderer bridge.

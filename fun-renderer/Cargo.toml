@@ -12,7 +12,12 @@ workspace = true
 [features]
 default = ["bevy_ecs", "fun_renderer_core", "native_ui_adapter", "wgpu_bridge"]
 bevy_ecs = ["dep:bevy_app", "dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
-native_ui_adapter = ["bevy_ecs", "dep:rvelte-fun-ui-core"]
+native_ui_adapter = [
+    "bevy_ecs",
+    "dep:rvelte-core",
+    "dep:rvelte-fun-render-adapter",
+    "dep:rvelte-fun-ui-core",
+]
 cef_gpu_only = []
 dlss = []
 dx12_native_interop = []
@@ -78,6 +83,8 @@ flume.workspace = true
 hashbrown.workspace = true
 fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types", optional = true }
 fun-scheduler-core = { path = "../../fun-scheduler/crates/fun-scheduler-core", optional = true }
+rvelte-core = { path = "../../rvelte/crates/rvelte-core", optional = true }
+rvelte-fun-render-adapter = { path = "../../rvelte/crates/rvelte-fun-render-adapter", optional = true }
 rvelte-fun-ui-core = { path = "../../rvelte/crates/rvelte-fun-ui-core", optional = true }
 serde.workspace = true
 serde_json.workspace = true

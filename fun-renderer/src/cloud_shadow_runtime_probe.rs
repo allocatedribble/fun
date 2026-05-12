@@ -603,7 +603,10 @@ mod tests {
     /// non-white.
     #[test]
     fn storm_or_overcast_mask_is_non_white() {
-        for scene in [CloudShadowGoldenScene::Overcast, CloudShadowGoldenScene::StormFront] {
+        for scene in [
+            CloudShadowGoldenScene::Overcast,
+            CloudShadowGoldenScene::StormFront,
+        ] {
             let stats = simulate_reference_stats(scene);
             let probe = simulate_capture_frame_probe(scene, &stats, None);
             assert!(
@@ -695,7 +698,11 @@ mod tests {
             &CloudShadowFrameProbeReadback::disabled_baseline(scene),
             Some(&prev),
         );
-        assert!(audit.sun_change_moves_shadow, "delta={}", curr.stability_error);
+        assert!(
+            audit.sun_change_moves_shadow,
+            "delta={}",
+            curr.stability_error
+        );
     }
 
     /// Pass C9.6 acceptance — snapped camera motion avoids
@@ -716,7 +723,11 @@ mod tests {
         stats_curr.record(stats.max - 0.02);
         stats_curr.record(stats.avg() + 0.05);
         let curr = simulate_capture_frame_probe(scene, &stats_curr, Some(prev.avg_transmittance));
-        assert!(curr.stable_within_tolerance(), "error={}", curr.stability_error);
+        assert!(
+            curr.stable_within_tolerance(),
+            "error={}",
+            curr.stability_error
+        );
 
         // Typed un-snapped projection would crawl past
         // typed tolerance — typed simulate a typed huge

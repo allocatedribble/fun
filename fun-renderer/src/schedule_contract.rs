@@ -26,6 +26,7 @@
 //!   The goal is to make renderer work *schedulable*, not *rescheduled*.
 
 use core::fmt;
+use core::marker::PhantomData;
 
 use fun_lux::frame_plan::LuxResourceIntentKind;
 use fun_scheduler_types::budget::{BudgetOrigin, Deadline, TaskBudget};
@@ -34,7 +35,8 @@ use fun_scheduler_types::schedule::{
     ScheduleBudget, ScheduleDeadline, ScheduleDomain, ScheduleLane,
 };
 use fun_scheduler_types::work_graph::{
-    DeterministicDescriptor, WorkGraph, WorkGraphId, WorkNode, WorkNodeId, WorkPhase,
+    DeterministicDescriptor, GraphInvariantError, WorkEdge, WorkGraph, WorkGraphId, WorkNode,
+    WorkNodeId, WorkNodeLiveness, WorkPhase,
 };
 
 use crate::frame_graph::FrameGraphPassRole;
@@ -407,6 +409,359 @@ impl RendererGraphPhase {
     }
 }
 
+/// Tier-5 renderer work taxonomy. These are the scheduler-visible
+/// work shapes the renderer may emit for a frame; backend handles
+/// and subsystem-specific queues stay out of the descriptor.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Ord, PartialOrd)]
+#[repr(u8)]
+#[non_exhaustive]
+pub enum RendererWorkKind {
+    /// Extract active views.
+    ExtractViews = 0,
+    /// Extract renderable entities.
+    ExtractRenderables = 1,
+    /// Extract renderer-visible lights.
+    ExtractLights = 2,
+    /// Extract native UI surfaces.
+    ExtractUiSurfaces = 3,
+    /// Prepare one GPU-scene chunk.
+    PrepareGpuSceneChunk = 4,
+    /// Prepare one material chunk.
+    PrepareMaterialChunk = 5,
+    /// Prepare one mesh chunk.
+    PrepareMeshChunk = 6,
+    /// Prepare one upload batch.
+    PrepareUploadBatch = 7,
+    /// Reflect shader metadata.
+    ShaderReflect = 8,
+    /// Warm a graphics or compute pipeline.
+    PipelineWarmup = 9,
+    /// Cull one visibility chunk.
+    VisibilityCullChunk = 10,
+    /// Build one light cluster range.
+    ClusterBuild = 11,
+    /// Resolve one virtual-geometry page job.
+    VirtualGeometryPageResolve = 12,
+    /// Resolve one virtual-shadow page job.
+    VirtualShadowPageResolve = 13,
+    /// Build the frame graph.
+    FrameGraphBuild = 14,
+    /// Compile the frame graph.
+    FrameGraphCompile = 15,
+    /// Record a render pass.
+    RecordPass = 16,
+    /// Record a copy/import pass.
+    RecordCopyPass = 17,
+    /// Record a compute pass.
+    RecordComputePass = 18,
+    /// Submit the queue.
+    SubmitQueue = 19,
+    /// Present the surface.
+    PresentSurface = 20,
+    /// Admit visible/required pages.
+    PageSchedulerAdmit = 21,
+    /// Evict or shed optional pages.
+    PageSchedulerEvict = 22,
+    /// Compose a native UI packet.
+    NativeUiPacketCompose = 23,
+    /// Capture renderer diagnostics.
+    DiagnosticCapture = 24,
+}
+
+impl RendererWorkKind {
+    /// Stable label.
+    #[inline]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ExtractViews => "extract_views",
+            Self::ExtractRenderables => "extract_renderables",
+            Self::ExtractLights => "extract_lights",
+            Self::ExtractUiSurfaces => "extract_ui_surfaces",
+            Self::PrepareGpuSceneChunk => "prepare_gpu_scene_chunk",
+            Self::PrepareMaterialChunk => "prepare_material_chunk",
+            Self::PrepareMeshChunk => "prepare_mesh_chunk",
+            Self::PrepareUploadBatch => "prepare_upload_batch",
+            Self::ShaderReflect => "shader_reflect",
+            Self::PipelineWarmup => "pipeline_warmup",
+            Self::VisibilityCullChunk => "visibility_cull_chunk",
+            Self::ClusterBuild => "cluster_build",
+            Self::VirtualGeometryPageResolve => "virtual_geometry_page_resolve",
+            Self::VirtualShadowPageResolve => "virtual_shadow_page_resolve",
+            Self::FrameGraphBuild => "frame_graph_build",
+            Self::FrameGraphCompile => "frame_graph_compile",
+            Self::RecordPass => "record_pass",
+            Self::RecordCopyPass => "record_copy_pass",
+            Self::RecordComputePass => "record_compute_pass",
+            Self::SubmitQueue => "submit_queue",
+            Self::PresentSurface => "present_surface",
+            Self::PageSchedulerAdmit => "page_scheduler_admit",
+            Self::PageSchedulerEvict => "page_scheduler_evict",
+            Self::NativeUiPacketCompose => "native_ui_packet_compose",
+            Self::DiagnosticCapture => "diagnostic_capture",
+        }
+    }
+
+    /// Every variant in declaration order.
+    #[inline]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::ExtractViews,
+            Self::ExtractRenderables,
+            Self::ExtractLights,
+            Self::ExtractUiSurfaces,
+            Self::PrepareGpuSceneChunk,
+            Self::PrepareMaterialChunk,
+            Self::PrepareMeshChunk,
+            Self::PrepareUploadBatch,
+            Self::ShaderReflect,
+            Self::PipelineWarmup,
+            Self::VisibilityCullChunk,
+            Self::ClusterBuild,
+            Self::VirtualGeometryPageResolve,
+            Self::VirtualShadowPageResolve,
+            Self::FrameGraphBuild,
+            Self::FrameGraphCompile,
+            Self::RecordPass,
+            Self::RecordCopyPass,
+            Self::RecordComputePass,
+            Self::SubmitQueue,
+            Self::PresentSurface,
+            Self::PageSchedulerAdmit,
+            Self::PageSchedulerEvict,
+            Self::NativeUiPacketCompose,
+            Self::DiagnosticCapture,
+        ]
+    }
+
+    /// Coarse renderer phase.
+    #[inline]
+    pub const fn phase(self) -> RendererGraphPhase {
+        match self {
+            Self::ExtractViews
+            | Self::ExtractRenderables
+            | Self::ExtractLights
+            | Self::ExtractUiSurfaces => RendererGraphPhase::RenderExtract,
+            Self::PrepareMaterialChunk
+            | Self::PrepareMeshChunk
+            | Self::PrepareUploadBatch
+            | Self::ShaderReflect
+            | Self::PipelineWarmup
+            | Self::PageSchedulerEvict => RendererGraphPhase::RenderPrepareAssets,
+            Self::PrepareGpuSceneChunk
+            | Self::VisibilityCullChunk
+            | Self::VirtualGeometryPageResolve
+            | Self::PageSchedulerAdmit
+            | Self::NativeUiPacketCompose => RendererGraphPhase::RenderPrepareScene,
+            Self::ClusterBuild | Self::VirtualShadowPageResolve => {
+                RendererGraphPhase::RenderLuxPlan
+            }
+            Self::FrameGraphBuild => RendererGraphPhase::RenderGraphBuild,
+            Self::FrameGraphCompile => RendererGraphPhase::RenderGraphCompile,
+            Self::RecordPass | Self::RecordCopyPass | Self::RecordComputePass => {
+                RendererGraphPhase::RenderRecord
+            }
+            Self::SubmitQueue => RendererGraphPhase::RenderSubmit,
+            Self::PresentSurface => RendererGraphPhase::RenderPresent,
+            Self::DiagnosticCapture => RendererGraphPhase::RendererDiagnosticsFlush,
+        }
+    }
+
+    /// Legacy node class projection used by existing reports.
+    #[inline]
+    pub const fn node_class(self) -> RendererNodeClass {
+        match self {
+            Self::ExtractViews
+            | Self::ExtractRenderables
+            | Self::ExtractLights
+            | Self::ExtractUiSurfaces => RendererNodeClass::Extraction,
+            Self::PrepareMaterialChunk
+            | Self::PrepareMeshChunk
+            | Self::PrepareUploadBatch
+            | Self::ShaderReflect
+            | Self::PipelineWarmup => RendererNodeClass::AssetPrepare,
+            Self::PrepareGpuSceneChunk
+            | Self::VisibilityCullChunk
+            | Self::VirtualGeometryPageResolve
+            | Self::PageSchedulerAdmit
+            | Self::PageSchedulerEvict => RendererNodeClass::PageSchedule,
+            Self::ClusterBuild | Self::VirtualShadowPageResolve => RendererNodeClass::LuxGraph,
+            Self::FrameGraphBuild | Self::NativeUiPacketCompose => RendererNodeClass::PacketBuild,
+            Self::FrameGraphCompile => RendererNodeClass::PassCompile,
+            Self::RecordPass | Self::RecordCopyPass | Self::RecordComputePass => {
+                RendererNodeClass::CommandRecord
+            }
+            Self::SubmitQueue => RendererNodeClass::Submit,
+            Self::PresentSurface => RendererNodeClass::Present,
+            Self::DiagnosticCapture => RendererNodeClass::Diagnostics,
+        }
+    }
+
+    /// Whether this work is optional and therefore must never block
+    /// present.
+    #[inline]
+    pub const fn optional_for_present(self) -> bool {
+        matches!(
+            self,
+            Self::DiagnosticCapture
+                | Self::PipelineWarmup
+                | Self::ShaderReflect
+                | Self::PageSchedulerEvict
+        )
+    }
+
+    /// Whether this work records a required command buffer pass.
+    #[inline]
+    pub const fn is_record(self) -> bool {
+        matches!(
+            self,
+            Self::RecordPass | Self::RecordCopyPass | Self::RecordComputePass
+        )
+    }
+
+    /// Whether this work participates in the submit/present path.
+    #[inline]
+    pub const fn is_submit_present(self) -> bool {
+        matches!(self, Self::SubmitQueue | Self::PresentSurface)
+    }
+}
+
+/// Static renderer phase proof marker.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct RendererStaticPhaseProof;
+
+impl RendererStaticPhaseProof {
+    /// Product renderer phase chain. The typestate frame API below
+    /// prevents callers from expressing present-before-submit,
+    /// submit-before-record, record-before-compile, compile-before-build,
+    /// queue-before-visibility, or prepare-scene-before-extraction.
+    pub const PRODUCT: Self = Self;
+
+    /// Canonical static phase chain from extraction through diagnostics.
+    #[inline]
+    pub const fn chain(&self) -> &'static [RendererWorkKind] {
+        &[
+            RendererWorkKind::ExtractViews,
+            RendererWorkKind::ExtractRenderables,
+            RendererWorkKind::ExtractLights,
+            RendererWorkKind::ExtractUiSurfaces,
+            RendererWorkKind::PrepareMaterialChunk,
+            RendererWorkKind::PrepareMeshChunk,
+            RendererWorkKind::PrepareUploadBatch,
+            RendererWorkKind::PrepareGpuSceneChunk,
+            RendererWorkKind::VisibilityCullChunk,
+            RendererWorkKind::ClusterBuild,
+            RendererWorkKind::FrameGraphBuild,
+            RendererWorkKind::FrameGraphCompile,
+            RendererWorkKind::RecordPass,
+            RendererWorkKind::SubmitQueue,
+            RendererWorkKind::PresentSurface,
+            RendererWorkKind::PageSchedulerEvict,
+            RendererWorkKind::DiagnosticCapture,
+        ]
+    }
+}
+
+/// Renderer frame typestate wrapper.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct RendererFrame<State> {
+    /// Frame index.
+    pub frame_index: u64,
+    /// View/asset generation.
+    pub generation: u64,
+    _state: PhantomData<State>,
+}
+
+impl<State> RendererFrame<State> {
+    #[inline]
+    const fn cast<Next>(self) -> RendererFrame<Next> {
+        RendererFrame {
+            frame_index: self.frame_index,
+            generation: self.generation,
+            _state: PhantomData,
+        }
+    }
+}
+
+/// Extracted renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Extracted;
+/// Prepared renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Prepared;
+/// Queued renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Queued;
+/// Graph-compiled renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct GraphCompiled;
+/// Recorded renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Recorded;
+/// Submitted renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Submitted;
+/// Presented renderer frame state.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct Presented;
+
+impl RendererFrame<Extracted> {
+    /// Construct the first proven frame state after extraction.
+    #[must_use]
+    pub const fn new(frame_index: u64, generation: u64) -> Self {
+        Self {
+            frame_index,
+            generation,
+            _state: PhantomData,
+        }
+    }
+
+    /// Prepare assets and scene data.
+    #[must_use]
+    pub const fn prepare(self) -> RendererFrame<Prepared> {
+        self.cast()
+    }
+}
+
+impl RendererFrame<Prepared> {
+    /// Complete visibility and queue/frame-graph build prerequisites.
+    #[must_use]
+    pub const fn queue(self) -> RendererFrame<Queued> {
+        self.cast()
+    }
+}
+
+impl RendererFrame<Queued> {
+    /// Compile the frame graph.
+    #[must_use]
+    pub const fn compile_graph(self) -> RendererFrame<GraphCompiled> {
+        self.cast()
+    }
+}
+
+impl RendererFrame<GraphCompiled> {
+    /// Record all required passes.
+    #[must_use]
+    pub const fn record(self) -> RendererFrame<Recorded> {
+        self.cast()
+    }
+}
+
+impl RendererFrame<Recorded> {
+    /// Submit the required queue work.
+    #[must_use]
+    pub const fn submit(self) -> RendererFrame<Submitted> {
+        self.cast()
+    }
+}
+
+impl RendererFrame<Submitted> {
+    /// Present the surface.
+    #[must_use]
+    pub const fn present(self) -> RendererFrame<Presented> {
+        self.cast()
+    }
+}
+
 /// FS-10 renderer-graph node class taxonomy. 11 classes covering
 /// every typed work-node shape the scheduler routes through the
 /// renderer.
@@ -719,6 +1074,8 @@ impl LuxNodeKind {
 /// decisions.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct RendererWork {
+    /// Tier-5 work kind.
+    pub kind: RendererWorkKind,
     /// Typed node class.
     pub class: RendererNodeClass,
     /// Graph phase this node belongs to.
@@ -739,10 +1096,25 @@ pub struct RendererWork {
 }
 
 impl RendererWork {
+    /// Construct a work descriptor from a Tier-5 work kind.
+    #[must_use]
+    pub const fn for_kind(kind: RendererWorkKind, generation: u64) -> Self {
+        Self {
+            kind,
+            class: kind.node_class(),
+            phase: kind.phase(),
+            pass_role: None,
+            lux_kind: None,
+            resource_intent: None,
+            generation,
+        }
+    }
+
     /// Construct a work descriptor for an extraction node.
     #[must_use]
     pub const fn extraction(generation: u64) -> Self {
         Self {
+            kind: RendererWorkKind::ExtractViews,
             class: RendererNodeClass::Extraction,
             phase: RendererGraphPhase::RenderExtract,
             pass_role: None,
@@ -755,7 +1127,9 @@ impl RendererWork {
     /// Construct a work descriptor for a Lux graph node.
     #[must_use]
     pub const fn lux(kind: LuxNodeKind, generation: u64) -> Self {
+        let work_kind = lux_node_to_work_kind(kind);
         Self {
+            kind: work_kind,
             class: RendererNodeClass::LuxGraph,
             phase: RendererGraphPhase::RenderLuxPlan,
             pass_role: Some(kind.pass_role()),
@@ -769,6 +1143,7 @@ impl RendererWork {
     #[must_use]
     pub const fn present(generation: u64) -> Self {
         Self {
+            kind: RendererWorkKind::PresentSurface,
             class: RendererNodeClass::Present,
             phase: RendererGraphPhase::RenderPresent,
             pass_role: Some(FrameGraphPassRole::Present),
@@ -782,6 +1157,7 @@ impl RendererWork {
     #[must_use]
     pub const fn submit(generation: u64) -> Self {
         Self {
+            kind: RendererWorkKind::SubmitQueue,
             class: RendererNodeClass::Submit,
             phase: RendererGraphPhase::RenderSubmit,
             pass_role: Some(FrameGraphPassRole::Compose),
@@ -795,12 +1171,43 @@ impl RendererWork {
     #[must_use]
     pub const fn diagnostics(generation: u64) -> Self {
         Self {
+            kind: RendererWorkKind::DiagnosticCapture,
             class: RendererNodeClass::Diagnostics,
             phase: RendererGraphPhase::RendererDiagnosticsFlush,
             pass_role: Some(FrameGraphPassRole::DiagnosticsReadback),
             lux_kind: None,
             resource_intent: None,
             generation,
+        }
+    }
+}
+
+#[inline]
+const fn lux_node_to_work_kind(kind: LuxNodeKind) -> RendererWorkKind {
+    match kind {
+        LuxNodeKind::LuxUploadLightBuffers => RendererWorkKind::PrepareUploadBatch,
+        LuxNodeKind::LuxClusterLights => RendererWorkKind::ClusterBuild,
+        LuxNodeKind::LuxShadowRequests
+        | LuxNodeKind::LuxVirtualShadowPages
+        | LuxNodeKind::LuxCloudShadowProject
+        | LuxNodeKind::LuxCloudShadowFilter
+        | LuxNodeKind::LuxCloudShadowRegisterLayer
+        | LuxNodeKind::CloudShadowSamplePack => RendererWorkKind::VirtualShadowPageResolve,
+        LuxNodeKind::LuxGiReflection
+        | LuxNodeKind::LuxVolumetric
+        | LuxNodeKind::LuxGodrays
+        | LuxNodeKind::LuxVolumetricFogInject
+        | LuxNodeKind::LuxVolumetricLightInject
+        | LuxNodeKind::LuxVolumetricIntegrate
+        | LuxNodeKind::LuxVolumetricComposite
+        | LuxNodeKind::PostProcessExposureHistogram
+        | LuxNodeKind::PostProcessExposureAdapt
+        | LuxNodeKind::PostProcessBloomPrefilter
+        | LuxNodeKind::PostProcessBloomDownsample
+        | LuxNodeKind::PostProcessBloomUpsample
+        | LuxNodeKind::PostProcessBloomComposite => RendererWorkKind::RecordComputePass,
+        LuxNodeKind::LuxDirectLighting | LuxNodeKind::Tonemap | LuxNodeKind::FinalOutput => {
+            RendererWorkKind::RecordPass
         }
     }
 }
@@ -895,7 +1302,7 @@ pub type RendererWorkGraph = WorkGraph<RendererWork>;
 #[must_use]
 pub fn renderer_work_node(id: WorkNodeId, work: RendererWork) -> WorkNode<RendererWork> {
     let lane = work.phase.to_schedule_lane();
-    let phase_label = work.phase.label();
+    let work_label = work.kind.label();
     let order_key = work.lux_kind.map_or(0, LuxNodeKind::order_key);
     let priority = if matches!(
         work.phase,
@@ -918,9 +1325,10 @@ pub fn renderer_work_node(id: WorkNodeId, work: RendererWork) -> WorkNode<Render
         work,
     )
     .with_deterministic_descriptor(DeterministicDescriptor::new(
-        phase_label,
+        work_label,
         u64::from(order_key),
     ))
+    .with_liveness_contract(renderer_work_liveness(work))
 }
 
 /// Construct an empty [`RendererWorkGraph`].
@@ -933,6 +1341,356 @@ pub fn renderer_work_graph(graph_id: WorkGraphId) -> RendererWorkGraph {
         GraphExecutionMode::SingleThreadDeterministic,
         CommitPolicy::DescriptorOrder,
     )
+}
+
+fn renderer_work_liveness(work: RendererWork) -> WorkNodeLiveness {
+    let liveness = WorkNodeLiveness::new();
+    if matches!(
+        work.kind,
+        RendererWorkKind::DiagnosticCapture
+            | RendererWorkKind::ShaderReflect
+            | RendererWorkKind::PipelineWarmup
+    ) {
+        liveness.with_frame_worker_allowed(false)
+    } else {
+        liveness
+    }
+}
+
+/// Renderer-specific liveness rejection.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[non_exhaustive]
+pub enum RendererGraphLivenessError {
+    /// Generic work-graph invariant failed.
+    GraphInvariant(GraphInvariantError),
+    /// No submit node exists.
+    MissingSubmit,
+    /// No present node exists.
+    MissingPresent,
+    /// Present must have exactly one dependency.
+    PresentDependencyCount {
+        /// Present node.
+        present: WorkNodeId,
+        /// Dependency count.
+        count: usize,
+    },
+    /// Present must wait on submit only.
+    PresentDependencyNotSubmit {
+        /// Present node.
+        present: WorkNodeId,
+        /// Invalid dependency.
+        dependency: WorkNodeId,
+    },
+    /// Submit does not wait on a required record node.
+    SubmitMissingRequiredRecord {
+        /// Submit node.
+        submit: WorkNodeId,
+        /// Required record node.
+        record: WorkNodeId,
+    },
+    /// Optional work gates present.
+    OptionalWorkBlocksPresent {
+        /// Optional node.
+        optional: WorkNodeId,
+        /// Present node.
+        present: WorkNodeId,
+    },
+    /// A record node waits on present.
+    RecordWaitsOnPresent {
+        /// Record node.
+        record: WorkNodeId,
+        /// Present node.
+        present: WorkNodeId,
+    },
+    /// Frame-critical work appears after submit other than present.
+    FrameCriticalWorkAfterSubmit {
+        /// Submit node.
+        submit: WorkNodeId,
+        /// Later frame-critical node.
+        node: WorkNodeId,
+    },
+    /// GPU readback/diagnostic capture is on a frame worker.
+    GpuReadbackOnFrameWorker {
+        /// Node.
+        node: WorkNodeId,
+    },
+    /// Optional page eviction blocks visible/required page admission.
+    OptionalPageEvictBlocksAdmit {
+        /// Optional eviction node.
+        evict: WorkNodeId,
+        /// Required admission node.
+        admit: WorkNodeId,
+    },
+}
+
+impl RendererGraphLivenessError {
+    /// Stable label.
+    #[inline]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::GraphInvariant(_) => "graph_invariant",
+            Self::MissingSubmit => "missing_submit",
+            Self::MissingPresent => "missing_present",
+            Self::PresentDependencyCount { .. } => "present_dependency_count",
+            Self::PresentDependencyNotSubmit { .. } => "present_dependency_not_submit",
+            Self::SubmitMissingRequiredRecord { .. } => "submit_missing_required_record",
+            Self::OptionalWorkBlocksPresent { .. } => "optional_work_blocks_present",
+            Self::RecordWaitsOnPresent { .. } => "record_waits_on_present",
+            Self::FrameCriticalWorkAfterSubmit { .. } => "frame_critical_work_after_submit",
+            Self::GpuReadbackOnFrameWorker { .. } => "gpu_readback_on_frame_worker",
+            Self::OptionalPageEvictBlocksAdmit { .. } => "optional_page_evict_blocks_admit",
+        }
+    }
+}
+
+impl fmt::Display for RendererGraphLivenessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::GraphInvariant(err) => write!(f, "renderer graph invariant failed: {err}"),
+            Self::MissingSubmit => write!(f, "renderer graph has no submit node"),
+            Self::MissingPresent => write!(f, "renderer graph has no present node"),
+            Self::PresentDependencyCount { present, count } => write!(
+                f,
+                "present node {} has {} dependencies; expected exactly one submit dependency",
+                present.get(),
+                count
+            ),
+            Self::PresentDependencyNotSubmit {
+                present,
+                dependency,
+            } => write!(
+                f,
+                "present node {} depends on non-submit node {}",
+                present.get(),
+                dependency.get()
+            ),
+            Self::SubmitMissingRequiredRecord { submit, record } => write!(
+                f,
+                "submit node {} does not wait on required record node {}",
+                submit.get(),
+                record.get()
+            ),
+            Self::OptionalWorkBlocksPresent { optional, present } => write!(
+                f,
+                "optional renderer node {} blocks present node {}",
+                optional.get(),
+                present.get()
+            ),
+            Self::RecordWaitsOnPresent { record, present } => write!(
+                f,
+                "record node {} waits on present node {}",
+                record.get(),
+                present.get()
+            ),
+            Self::FrameCriticalWorkAfterSubmit { submit, node } => write!(
+                f,
+                "frame-critical node {} is scheduled after submit node {}",
+                node.get(),
+                submit.get()
+            ),
+            Self::GpuReadbackOnFrameWorker { node } => {
+                write!(f, "GPU readback node {} is on a frame worker", node.get())
+            }
+            Self::OptionalPageEvictBlocksAdmit { evict, admit } => write!(
+                f,
+                "optional page eviction node {} blocks required page admission node {}",
+                evict.get(),
+                admit.get()
+            ),
+        }
+    }
+}
+
+impl From<GraphInvariantError> for RendererGraphLivenessError {
+    fn from(value: GraphInvariantError) -> Self {
+        Self::GraphInvariant(value)
+    }
+}
+
+/// Validate renderer-specific liveness invariants on top of the
+/// generic scheduler proof.
+pub fn validate_renderer_graph_liveness(
+    graph: &RendererWorkGraph,
+) -> Result<(), RendererGraphLivenessError> {
+    let submits = nodes_with_kind(graph, RendererWorkKind::SubmitQueue);
+    let presents = nodes_with_kind(graph, RendererWorkKind::PresentSurface);
+    if submits.is_empty() {
+        return Err(RendererGraphLivenessError::MissingSubmit);
+    }
+    if presents.is_empty() {
+        return Err(RendererGraphLivenessError::MissingPresent);
+    }
+
+    for present in &presents {
+        let deps = incoming_dependencies(graph, *present);
+        if deps.len() != 1 {
+            return Err(RendererGraphLivenessError::PresentDependencyCount {
+                present: *present,
+                count: deps.len(),
+            });
+        }
+        let dependency = deps[0];
+        if graph
+            .node(dependency)
+            .is_none_or(|node| node.work_descriptor.kind != RendererWorkKind::SubmitQueue)
+        {
+            return Err(RendererGraphLivenessError::PresentDependencyNotSubmit {
+                present: *present,
+                dependency,
+            });
+        }
+    }
+
+    for node in &graph.nodes {
+        if node.work_descriptor.kind == RendererWorkKind::DiagnosticCapture
+            && node.lane.default_lane_kind() == fun_scheduler_types::lane::LaneKind::Frame
+        {
+            return Err(RendererGraphLivenessError::GpuReadbackOnFrameWorker { node: node.id });
+        }
+    }
+
+    for present in &presents {
+        for optional in graph
+            .nodes
+            .iter()
+            .filter(|node| node.work_descriptor.kind.optional_for_present())
+        {
+            if reaches(graph, optional.id, *present) {
+                return Err(RendererGraphLivenessError::OptionalWorkBlocksPresent {
+                    optional: optional.id,
+                    present: *present,
+                });
+            }
+        }
+    }
+
+    for submit in &submits {
+        for record in graph
+            .nodes
+            .iter()
+            .filter(|node| node.work_descriptor.kind.is_record())
+        {
+            if !reaches(graph, record.id, *submit) {
+                return Err(RendererGraphLivenessError::SubmitMissingRequiredRecord {
+                    submit: *submit,
+                    record: record.id,
+                });
+            }
+        }
+    }
+
+    for record in graph
+        .nodes
+        .iter()
+        .filter(|node| node.work_descriptor.kind.is_record())
+    {
+        for present in &presents {
+            if reaches(graph, *present, record.id) {
+                return Err(RendererGraphLivenessError::RecordWaitsOnPresent {
+                    record: record.id,
+                    present: *present,
+                });
+            }
+        }
+    }
+
+    for submit in &submits {
+        for node in &graph.nodes {
+            if node.id != *submit
+                && node.work_descriptor.kind != RendererWorkKind::PresentSurface
+                && node.lane.default_lane_kind() == fun_scheduler_types::lane::LaneKind::Frame
+                && reaches(graph, *submit, node.id)
+            {
+                return Err(RendererGraphLivenessError::FrameCriticalWorkAfterSubmit {
+                    submit: *submit,
+                    node: node.id,
+                });
+            }
+        }
+    }
+
+    for evict in nodes_with_kind(graph, RendererWorkKind::PageSchedulerEvict) {
+        for admit in nodes_with_kind(graph, RendererWorkKind::PageSchedulerAdmit) {
+            if reaches(graph, evict, admit) {
+                return Err(RendererGraphLivenessError::OptionalPageEvictBlocksAdmit {
+                    evict,
+                    admit,
+                });
+            }
+        }
+    }
+
+    graph.liveness_proof()?;
+    Ok(())
+}
+
+fn nodes_with_kind(graph: &RendererWorkGraph, kind: RendererWorkKind) -> Vec<WorkNodeId> {
+    graph
+        .nodes
+        .iter()
+        .filter_map(|node| (node.work_descriptor.kind == kind).then_some(node.id))
+        .collect()
+}
+
+fn incoming_dependencies(graph: &RendererWorkGraph, node: WorkNodeId) -> Vec<WorkNodeId> {
+    let mut deps = graph
+        .node(node)
+        .map(|node| node.dependencies.clone())
+        .unwrap_or_default();
+    for edge in &graph.edges {
+        match *edge {
+            WorkEdge::Dependency { from, to } if to == node => push_unique(&mut deps, from),
+            WorkEdge::ResourceReadAfterWrite { writer, reader, .. } if reader == node => {
+                push_unique(&mut deps, writer);
+            }
+            _ => {}
+        }
+    }
+    deps
+}
+
+fn successors(graph: &RendererWorkGraph, node: WorkNodeId) -> Vec<WorkNodeId> {
+    let mut out = Vec::new();
+    for candidate in &graph.nodes {
+        if candidate.dependencies.contains(&node) {
+            push_unique(&mut out, candidate.id);
+        }
+    }
+    for edge in &graph.edges {
+        match *edge {
+            WorkEdge::Dependency { from, to } if from == node => push_unique(&mut out, to),
+            WorkEdge::ResourceReadAfterWrite { writer, reader, .. } if writer == node => {
+                push_unique(&mut out, reader);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn reaches(graph: &RendererWorkGraph, from: WorkNodeId, to: WorkNodeId) -> bool {
+    let mut stack = vec![from];
+    let mut seen = vec![false; graph.node_count()];
+    while let Some(node) = stack.pop() {
+        if node == to {
+            return true;
+        }
+        let idx = node.get() as usize;
+        if idx >= seen.len() || seen[idx] {
+            continue;
+        }
+        seen[idx] = true;
+        for successor in successors(graph, node) {
+            stack.push(successor);
+        }
+    }
+    false
+}
+
+fn push_unique(nodes: &mut Vec<WorkNodeId>, node: WorkNodeId) {
+    if !nodes.contains(&node) {
+        nodes.push(node);
+    }
 }
 
 #[cfg(test)]
@@ -1407,12 +2165,217 @@ mod tests {
         // a u64 generation — no Box<dyn>, no &mut dyn Backend, no
         // raw pointers. Compile-time ascription on every field.
         let work = RendererWork::lux(LuxNodeKind::LuxClusterLights, 7);
+        let _: RendererWorkKind = work.kind;
         let _: RendererNodeClass = work.class;
         let _: RendererGraphPhase = work.phase;
         let _: Option<FrameGraphPassRole> = work.pass_role;
         let _: Option<LuxNodeKind> = work.lux_kind;
         let _: Option<LuxResourceIntentKind> = work.resource_intent;
         let _: u64 = work.generation;
+    }
+
+    #[test]
+    fn renderer_work_kind_labels_are_unique_and_cover_tier5_taxonomy() {
+        let labels: Vec<&'static str> = RendererWorkKind::all()
+            .iter()
+            .map(|kind| kind.label())
+            .collect();
+        assert_eq!(labels.len(), 25);
+        for i in 0..labels.len() {
+            for j in (i + 1)..labels.len() {
+                assert_ne!(labels[i], labels[j]);
+            }
+        }
+        assert!(RendererWorkKind::DiagnosticCapture.optional_for_present());
+        assert!(RendererWorkKind::PipelineWarmup.optional_for_present());
+        assert!(RendererWorkKind::RecordPass.is_record());
+        assert!(RendererWorkKind::SubmitQueue.is_submit_present());
+        assert!(RendererWorkKind::PresentSurface.is_submit_present());
+    }
+
+    #[test]
+    fn renderer_frame_typestate_chain_reaches_presented_only_in_order() {
+        let frame: RendererFrame<Presented> = RendererFrame::<Extracted>::new(9, 4)
+            .prepare()
+            .queue()
+            .compile_graph()
+            .record()
+            .submit()
+            .present();
+        assert_eq!(frame.frame_index, 9);
+        assert_eq!(frame.generation, 4);
+    }
+
+    #[test]
+    fn renderer_static_phase_chain_pins_submit_before_present() {
+        let chain = RendererStaticPhaseProof::PRODUCT.chain();
+        let pos = |kind| {
+            chain
+                .iter()
+                .position(|candidate| *candidate == kind)
+                .expect("phase in chain")
+        };
+        assert!(pos(RendererWorkKind::ExtractViews) < pos(RendererWorkKind::PrepareGpuSceneChunk));
+        assert!(
+            pos(RendererWorkKind::VisibilityCullChunk) < pos(RendererWorkKind::FrameGraphBuild)
+        );
+        assert!(pos(RendererWorkKind::FrameGraphBuild) < pos(RendererWorkKind::FrameGraphCompile));
+        assert!(pos(RendererWorkKind::FrameGraphCompile) < pos(RendererWorkKind::RecordPass));
+        assert!(pos(RendererWorkKind::RecordPass) < pos(RendererWorkKind::SubmitQueue));
+        assert!(pos(RendererWorkKind::SubmitQueue) < pos(RendererWorkKind::PresentSurface));
+    }
+
+    fn add_test_node(g: &mut RendererWorkGraph, work: RendererWork) -> WorkNodeId {
+        let id = g.next_node_id();
+        g.add_node(renderer_work_node(id, work));
+        id
+    }
+
+    fn add_test_dep(g: &mut RendererWorkGraph, node: WorkNodeId, dependency: WorkNodeId) {
+        let idx = node.get() as usize;
+        g.nodes[idx].dependencies.push(dependency);
+    }
+
+    fn minimal_live_renderer_graph() -> RendererWorkGraph {
+        let mut g = renderer_work_graph(WorkGraphId::new(700));
+        let extract = add_test_node(&mut g, RendererWork::extraction(1));
+        let record = add_test_node(
+            &mut g,
+            RendererWork {
+                kind: RendererWorkKind::RecordPass,
+                class: RendererNodeClass::CommandRecord,
+                phase: RendererGraphPhase::RenderRecord,
+                pass_role: Some(FrameGraphPassRole::StaticScenePlaceholder),
+                lux_kind: None,
+                resource_intent: None,
+                generation: 1,
+            },
+        );
+        add_test_dep(&mut g, record, extract);
+        let submit = add_test_node(&mut g, RendererWork::submit(1));
+        add_test_dep(&mut g, submit, record);
+        let present = add_test_node(&mut g, RendererWork::present(1));
+        add_test_dep(&mut g, present, submit);
+        g
+    }
+
+    #[test]
+    fn renderer_liveness_accepts_submit_present_shape() {
+        let g = minimal_live_renderer_graph();
+        validate_renderer_graph_liveness(&g).expect("renderer graph is live");
+    }
+
+    #[test]
+    fn renderer_liveness_rejects_diagnostics_or_warmup_blocking_present() {
+        let mut g = minimal_live_renderer_graph();
+        let warmup = add_test_node(
+            &mut g,
+            RendererWork::for_kind(RendererWorkKind::PipelineWarmup, 1),
+        );
+        let submit = nodes_with_kind(&g, RendererWorkKind::SubmitQueue)[0];
+        add_test_dep(&mut g, submit, warmup);
+        let err = validate_renderer_graph_liveness(&g).expect_err("warmup blocks present");
+        assert!(matches!(
+            err,
+            RendererGraphLivenessError::OptionalWorkBlocksPresent { .. }
+        ));
+    }
+
+    #[test]
+    fn renderer_liveness_rejects_present_waiting_on_non_submit() {
+        let mut g = minimal_live_renderer_graph();
+        let present = nodes_with_kind(&g, RendererWorkKind::PresentSurface)[0];
+        let diagnostics = add_test_node(&mut g, RendererWork::diagnostics(1));
+        add_test_dep(&mut g, present, diagnostics);
+        let err = validate_renderer_graph_liveness(&g).expect_err("present has extra wait");
+        assert!(matches!(
+            err,
+            RendererGraphLivenessError::PresentDependencyCount { .. }
+        ));
+    }
+
+    #[test]
+    fn renderer_liveness_rejects_record_waiting_on_present() {
+        let mut g = renderer_work_graph(WorkGraphId::new(701));
+        let submit = add_test_node(&mut g, RendererWork::submit(1));
+        let present = add_test_node(&mut g, RendererWork::present(1));
+        add_test_dep(&mut g, present, submit);
+        let record = add_test_node(
+            &mut g,
+            RendererWork {
+                kind: RendererWorkKind::RecordComputePass,
+                class: RendererNodeClass::CommandRecord,
+                phase: RendererGraphPhase::RenderRecord,
+                pass_role: Some(FrameGraphPassRole::LuxDirectLighting),
+                lux_kind: None,
+                resource_intent: None,
+                generation: 1,
+            },
+        );
+        add_test_dep(&mut g, record, present);
+        let err = validate_renderer_graph_liveness(&g).expect_err("record waits on present");
+        assert!(matches!(
+            err,
+            RendererGraphLivenessError::SubmitMissingRequiredRecord { .. }
+                | RendererGraphLivenessError::RecordWaitsOnPresent { .. }
+        ));
+    }
+
+    #[test]
+    fn renderer_liveness_rejects_resource_cycle() {
+        let mut g = minimal_live_renderer_graph();
+        let material = add_test_node(
+            &mut g,
+            RendererWork::for_kind(RendererWorkKind::PrepareMaterialChunk, 1),
+        );
+        let mesh = add_test_node(
+            &mut g,
+            RendererWork::for_kind(RendererWorkKind::PrepareMeshChunk, 1),
+        );
+        g.add_edge(WorkEdge::ResourceReadAfterWrite {
+            writer: material,
+            reader: mesh,
+            resource_id: 9,
+        });
+        g.add_edge(WorkEdge::ResourceReadAfterWrite {
+            writer: mesh,
+            reader: material,
+            resource_id: 9,
+        });
+        let err = validate_renderer_graph_liveness(&g).expect_err("resource cycle rejects");
+        assert!(matches!(
+            err,
+            RendererGraphLivenessError::GraphInvariant(GraphInvariantError::Cycle { .. })
+                | RendererGraphLivenessError::GraphInvariant(
+                    GraphInvariantError::WaitForCycle { .. }
+                )
+        ));
+    }
+
+    #[test]
+    fn renderer_liveness_rejects_gpu_readback_on_frame_worker() {
+        let mut g = minimal_live_renderer_graph();
+        let bad = add_test_node(
+            &mut g,
+            RendererWork {
+                kind: RendererWorkKind::DiagnosticCapture,
+                class: RendererNodeClass::Diagnostics,
+                phase: RendererGraphPhase::RenderPresent,
+                pass_role: Some(FrameGraphPassRole::DiagnosticsReadback),
+                lux_kind: None,
+                resource_intent: None,
+                generation: 1,
+            },
+        );
+        assert_eq!(
+            g.node(bad).expect("bad readback").lane.default_lane_kind(),
+            fun_scheduler_types::lane::LaneKind::Frame
+        );
+        let err = validate_renderer_graph_liveness(&g).expect_err("readback on frame worker");
+        assert!(matches!(
+            err,
+            RendererGraphLivenessError::GpuReadbackOnFrameWorker { .. }
+        ));
     }
 
     #[test]

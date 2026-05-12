@@ -81,6 +81,8 @@ pub mod quality;
 pub mod research;
 pub mod runtime;
 pub mod scene_lighting;
+#[cfg(feature = "schedule_contract")]
+pub mod schedule_contract;
 pub mod shadow;
 pub mod shadow_update_plan;
 pub mod tonemap;
@@ -117,6 +119,8 @@ pub use quality::*;
 pub use research::*;
 pub use runtime::*;
 pub use scene_lighting::*;
+#[cfg(feature = "schedule_contract")]
+pub use schedule_contract::*;
 pub use shadow::*;
 pub use shadow_update_plan::*;
 pub use tonemap::*;
