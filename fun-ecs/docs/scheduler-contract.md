@@ -95,6 +95,9 @@ emitters, and keep optional eviction and diagnostics as idle work.
 Procedural generation is scheduler-owned decode work: `fun-ecs` declares the
 manifest and page recipe inputs, and `fun-scheduler` admits the chunked decode
 nodes before any artifact or handoff work can observe the page.
+Network validation samples procedural page digests after local decode. Digest
+probes are metadata checks only; generated voxel pages, meshes, surfaces, and
+GPU resources remain local disposable artifacts.
 
 The spatial compiler validates these descriptor outputs at graph-build time:
 blocking source acquire is only emitted on the scheduler blocking lane, decode

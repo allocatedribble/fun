@@ -22,7 +22,10 @@ Stable symbols:
 - Artifacts: `ArtifactDag`, `ArtifactManifest`, `ArtifactReadinessToken`,
   `CrossDomainHandoffQueue`.
 - Terrain: `EcsProceduralWorldManifest`, `EcsBiomeRecipe`,
-  `EcsProceduralTerrainSource`, `generate_procedural_terrain_page`.
+  `EcsProceduralTerrainSource`, `EcsTerrainGeneratorVersion`,
+  `ProceduralWorldSyncManifest`, `ProceduralWorldAuthorityPolicy`,
+  `ProceduralPageDigest`, `ProceduralPageDigestProbe`,
+  `generate_procedural_terrain_page`, `generate_procedural_page_digest`.
 
 Existing crate modules remain visible for compatibility while the strangler
 rewrite lands. Product-critical server paths should depend on this stable
