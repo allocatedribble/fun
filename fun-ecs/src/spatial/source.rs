@@ -142,7 +142,7 @@ pub struct EcsProceduralRecipeRef {
     pub key: EcsSpatialPageKey,
     pub recipe_id: u64,
     pub seed: u64,
-    pub generator_version: u16,
+    pub generator_version: u32,
     pub manifest_signature: u64,
     pub checksum: EcsSourceChecksum,
 }

@@ -249,9 +249,12 @@ pub use streaming::{
     diff_requests, offset_page, plan_stream_wave, sense_sources, terrain_page_for_world_ft,
 };
 pub use terrain::{
-    ECS_PROCEDURAL_TERRAIN_DEFAULT_REGION_EDGE_PAGES, ECS_PROCEDURAL_TERRAIN_GENERATOR_VERSION_V1,
-    ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION, EcsBiomeRecipe, EcsProceduralTerrainSource,
-    EcsProceduralWorldManifest, EcsTerrainGeneratorVersion, generate_procedural_terrain_page,
+    DeterministicMathMode, ECS_PROCEDURAL_TERRAIN_DEFAULT_REGION_EDGE_PAGES,
+    ECS_PROCEDURAL_TERRAIN_GENERATOR_VERSION_V1, ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION,
+    EcsBiomeRecipe, EcsProceduralTerrainSource, EcsProceduralWorldManifest,
+    EcsTerrainGeneratorVersion, ProceduralFeature, ProceduralFeatureMask, ProceduralPageDigest,
+    ProceduralPageDigestProbe, ProceduralWorldAuthorityPolicy, ProceduralWorldSyncManifest,
+    WorldOriginPolicy, generate_procedural_page_digest, generate_procedural_terrain_page,
 };
 pub use voxel::{
     EcsFineOverlayLink, EcsFineOverlayOverride, EcsFineOverlayOverrideMask, MaterialPalettePolicy,
@@ -330,11 +333,13 @@ ecs_id!(EcsHandoffQueueId, u32);
 ecs_id!(EcsAssetId, u64);
 ecs_id!(FixedStepId, u64);
 ecs_id!(BiomeSourceId, u64);
+ecs_id!(ProceduralTerrainProfileId, u64);
 ecs_id!(FoliageSpeciesPaletteId, u64);
 ecs_id!(VoxelTerrainId, u64);
 ecs_id!(TerrainMaterialId, u32);
 ecs_id!(TerrainMaterialPaletteId, u32);
 ecs_id!(WeatherProfileId, u32);
+ecs_id!(NetworkPlayerId, u64);
 
 #[cfg(test)]
 mod tests {

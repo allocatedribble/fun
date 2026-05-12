@@ -15,6 +15,13 @@ pub use crate::{
     ArtifactDag, ArtifactReadinessToken, Commands, EcsNodeRunner, FunFrameContext, FunRunCondition,
     FunSystemExecutionContract, FunSystemSet, FunWorldBuilder, SpatialCommands,
 };
+pub use crate::{
+    DeterministicMathMode, EcsBiomeRecipe, EcsProceduralTerrainSource, EcsProceduralWorldManifest,
+    EcsTerrainGeneratorVersion, NetworkPlayerId, ProceduralFeature, ProceduralFeatureMask,
+    ProceduralPageDigest, ProceduralPageDigestProbe, ProceduralTerrainProfileId,
+    ProceduralWorldAuthorityPolicy, ProceduralWorldSyncManifest, WorldOriginPolicy,
+    generate_procedural_page_digest, generate_procedural_terrain_page,
+};
 
 pub type World = FunWorld;
 pub type ResourceTable<T> = DenseResourceTable<ResourceTableKey, T>;
@@ -187,6 +194,7 @@ pub enum FunStableApiArea {
     Commands = 3,
     Scheduler = 4,
     Artifacts = 5,
+    Terrain = 6,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -195,7 +203,7 @@ pub struct FunStableApiSymbol {
     pub name: &'static str,
 }
 
-pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 27] = [
+pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
     FunStableApiSymbol {
         area: FunStableApiArea::World,
         name: "World",
@@ -304,10 +312,74 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 27] = [
         area: FunStableApiArea::Artifacts,
         name: "CrossDomainHandoffQueue",
     },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "EcsProceduralWorldManifest",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "EcsBiomeRecipe",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "EcsProceduralTerrainSource",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "EcsTerrainGeneratorVersion",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralTerrainProfileId",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "NetworkPlayerId",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralWorldSyncManifest",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "WorldOriginPolicy",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "DeterministicMathMode",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralFeature",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralFeatureMask",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralWorldAuthorityPolicy",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralPageDigest",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralPageDigestProbe",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "generate_procedural_terrain_page",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "generate_procedural_page_digest",
+    },
 ];
 
 #[must_use]
-pub const fn stable_api_symbols() -> &'static [FunStableApiSymbol; 27] {
+pub const fn stable_api_symbols() -> &'static [FunStableApiSymbol; 43] {
     &FUN_ECS_STABLE_API_SYMBOLS
 }
 
@@ -479,10 +551,26 @@ mod tests {
             "ArtifactManifest",
             "ArtifactReadinessToken",
             "CrossDomainHandoffQueue",
+            "EcsProceduralWorldManifest",
+            "EcsBiomeRecipe",
+            "EcsProceduralTerrainSource",
+            "EcsTerrainGeneratorVersion",
+            "ProceduralTerrainProfileId",
+            "NetworkPlayerId",
+            "ProceduralWorldSyncManifest",
+            "WorldOriginPolicy",
+            "DeterministicMathMode",
+            "ProceduralFeature",
+            "ProceduralFeatureMask",
+            "ProceduralWorldAuthorityPolicy",
+            "ProceduralPageDigest",
+            "ProceduralPageDigestProbe",
+            "generate_procedural_terrain_page",
+            "generate_procedural_page_digest",
         ] {
             assert!(has_symbol(name), "missing stable API symbol {name}");
         }
-        assert_eq!(stable_api_symbols().len(), 27);
+        assert_eq!(stable_api_symbols().len(), 43);
     }
 
     #[test]

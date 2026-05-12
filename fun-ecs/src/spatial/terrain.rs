@@ -7,10 +7,10 @@ use crate::{
     EcsSourceRequest, EcsSourceRequestId, EcsSpatialDomainKind, EcsSpatialGridId,
     EcsSpatialPageKey, EcsSpatialRegionKey, EcsSpatialRegionManifest, EcsSpatialSource,
     EcsSpatialSourceId, EcsSpatialSourceKind, EcsSpatialValidationError, EcsStreamPriority,
-    TerrainMaterialId, VOXEL_BRICK_EDGE_CELLS, VOXEL_BRICK_FOOT_CELL_COUNT,
-    VOXEL_CLUSTER_EDGE_CELLS, VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelBrickPayload,
-    VoxelClusterSummary, VoxelMaterialPalette, VoxelOccupancyStorage, VoxelOccupancyStorageKind,
-    VoxelPagePayloadKind,
+    NetworkPlayerId, ProceduralTerrainProfileId, TerrainMaterialId, VOXEL_BRICK_EDGE_CELLS,
+    VOXEL_BRICK_FOOT_CELL_COUNT, VOXEL_CELL_EDGE_UM, VOXEL_CLUSTER_EDGE_CELLS,
+    VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelBrickPayload, VoxelClusterSummary,
+    VoxelMaterialPalette, VoxelOccupancyStorage, VoxelOccupancyStorageKind, VoxelPagePayloadKind,
 };
 
 pub const ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION: u16 = 1;
@@ -29,22 +29,161 @@ const NOISE_Q8_CENTER: i64 = 128;
 const FIXED_ONE_Q16: u32 = 65_536;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EcsTerrainGeneratorVersion(pub u16);
+pub struct EcsTerrainGeneratorVersion(pub u32);
 
 impl EcsTerrainGeneratorVersion {
     #[must_use]
-    pub const fn new(value: u16) -> Self {
+    pub const fn new(value: u32) -> Self {
         Self(value)
     }
 
     #[must_use]
-    pub const fn get(self) -> u16 {
+    pub const fn get(self) -> u32 {
         self.0
     }
 
     #[must_use]
     pub const fn is_supported(self) -> bool {
         self.0 == ECS_PROCEDURAL_TERRAIN_GENERATOR_VERSION_V1.0
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum WorldOriginPolicy {
+    #[default]
+    PageKeyOrigin = 0,
+}
+
+impl WorldOriginPolicy {
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::PageKeyOrigin)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum DeterministicMathMode {
+    #[default]
+    FixedPointQ16ValueNoise = 1,
+}
+
+impl DeterministicMathMode {
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::FixedPointQ16ValueNoise)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ProceduralFeature {
+    FootVoxelCells = 0,
+    MaterialPalette = 1,
+    ClusterSummaries = 2,
+    WaterHints = 3,
+    FoliageHints = 4,
+}
+
+impl ProceduralFeature {
+    #[must_use]
+    pub const fn bit(self) -> u64 {
+        1_u64 << (self as u8)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralFeatureMask {
+    bits: u64,
+}
+
+impl ProceduralFeatureMask {
+    pub const EMPTY: Self = Self { bits: 0 };
+    pub const BASE_TERRAIN: Self = Self {
+        bits: ProceduralFeature::FootVoxelCells.bit()
+            | ProceduralFeature::MaterialPalette.bit()
+            | ProceduralFeature::ClusterSummaries.bit()
+            | ProceduralFeature::WaterHints.bit()
+            | ProceduralFeature::FoliageHints.bit(),
+    };
+
+    #[must_use]
+    pub const fn from_bits(bits: u64) -> Self {
+        Self { bits }
+    }
+
+    #[must_use]
+    pub const fn bits(self) -> u64 {
+        self.bits
+    }
+
+    #[must_use]
+    pub const fn contains(self, feature: ProceduralFeature) -> bool {
+        (self.bits & feature.bit()) != 0
+    }
+
+    #[must_use]
+    pub const fn has_required_generation_bits(self) -> bool {
+        self.contains(ProceduralFeature::FootVoxelCells)
+            && self.contains(ProceduralFeature::MaterialPalette)
+            && self.contains(ProceduralFeature::ClusterSummaries)
+    }
+}
+
+impl Default for ProceduralFeatureMask {
+    fn default() -> Self {
+        Self::BASE_TERRAIN
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralWorldAuthorityPolicy {
+    pub server_world_manifest: bool,
+    pub server_generator_version: bool,
+    pub server_world_seed: bool,
+    pub server_player_spawn_positions: bool,
+    pub server_future_delta_layer: bool,
+    pub client_streaming_priority: bool,
+    pub client_renderer_artifact_realization: bool,
+    pub client_cache_eviction: bool,
+    pub client_debug_profiling_display: bool,
+}
+
+impl ProceduralWorldAuthorityPolicy {
+    pub const SERVER_AUTHORITY_V1: Self = Self {
+        server_world_manifest: true,
+        server_generator_version: true,
+        server_world_seed: true,
+        server_player_spawn_positions: true,
+        server_future_delta_layer: true,
+        client_streaming_priority: true,
+        client_renderer_artifact_realization: true,
+        client_cache_eviction: true,
+        client_debug_profiling_display: true,
+    };
+
+    pub fn validate(self) -> Result<(), EcsSpatialValidationError> {
+        if self.server_world_manifest
+            && self.server_generator_version
+            && self.server_world_seed
+            && self.server_player_spawn_positions
+            && self.server_future_delta_layer
+            && self.client_streaming_priority
+            && self.client_renderer_artifact_realization
+            && self.client_cache_eviction
+            && self.client_debug_profiling_display
+        {
+            Ok(())
+        } else {
+            Err(EcsSpatialValidationError::InvalidProceduralSyncManifest)
+        }
+    }
+}
+
+impl Default for ProceduralWorldAuthorityPolicy {
+    fn default() -> Self {
+        Self::SERVER_AUTHORITY_V1
     }
 }
 
@@ -100,6 +239,38 @@ impl EcsBiomeRecipe {
         material_to_u16(self.bedrock_material)?;
         material_to_u16(self.water_material)?;
         Ok(())
+    }
+
+    #[must_use]
+    pub fn terrain_profile_id(self) -> ProceduralTerrainProfileId {
+        ProceduralTerrainProfileId::new(self.biome.get())
+    }
+
+    #[must_use]
+    pub fn biome_table_digest(self) -> u64 {
+        let mut hash = FNV_OFFSET;
+        hash = hash_u64(hash, self.biome.get());
+        hash = hash_i32(hash, self.base_height_ft);
+        hash = hash_u16(hash, self.amplitude_ft);
+        hash = hash_u16(hash, self.detail_amplitude_ft);
+        hash = hash_u16(hash, self.macro_period_ft);
+        hash = hash_u16(hash, self.detail_period_ft);
+        hash = hash_u8(hash, self.terrace_step_ft);
+        hash = hash_u8(hash, self.surface_depth_ft);
+        hash = hash_u16(hash, self.bedrock_depth_ft);
+        hash = hash_i32(hash, self.water_level_ft);
+        hash = hash_u8(hash, self.foliage_density_q);
+        hash.max(1)
+    }
+
+    #[must_use]
+    pub fn material_table_digest(self) -> u64 {
+        let mut hash = FNV_OFFSET;
+        hash = hash_u32(hash, self.surface_material.get());
+        hash = hash_u32(hash, self.subsurface_material.get());
+        hash = hash_u32(hash, self.bedrock_material.get());
+        hash = hash_u32(hash, self.water_material.get());
+        hash.max(1)
     }
 
     #[must_use]
@@ -179,7 +350,7 @@ impl EcsProceduralWorldManifest {
         let mut hash = FNV_OFFSET;
         hash = hash_u16(hash, self.schema_version);
         hash = hash_u64(hash, self.world_seed);
-        hash = hash_u16(hash, self.generator_version.get());
+        hash = hash_u32(hash, self.generator_version.get());
         hash = hash_u64(hash, self.terrain_grid.get());
         hash = hash_u16(hash, self.region_edge_pages);
         hash = hash_u32(hash, self.channel_mask.bits());
@@ -193,7 +364,7 @@ impl EcsProceduralWorldManifest {
     #[must_use]
     pub fn source_epoch(self) -> u32 {
         let low = self.signature().value as u32;
-        low.max(u32::from(self.generator_version.get())).max(1)
+        low.max(self.generator_version.get()).max(1)
     }
 
     #[must_use]
@@ -240,11 +411,239 @@ impl EcsProceduralWorldManifest {
             value: hash.max(1),
         }
     }
+
+    #[must_use]
+    pub fn sync_manifest(self) -> ProceduralWorldSyncManifest {
+        ProceduralWorldSyncManifest::from_world_manifest(self)
+    }
 }
 
 impl Default for EcsProceduralWorldManifest {
     fn default() -> Self {
         Self::BEDROCK_QUARRY
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Resource)]
+pub struct ProceduralWorldSyncManifest {
+    pub schema_version: u16,
+    pub generator_version: u32,
+    pub world_seed: u64,
+    pub terrain_profile: ProceduralTerrainProfileId,
+    pub biome_table_digest: u64,
+    pub material_table_digest: u64,
+    pub world_origin_policy: WorldOriginPolicy,
+    pub voxel_edge_um: u32,
+    pub page_edge_voxels: u16,
+    pub region_edge_pages: u16,
+    pub deterministic_math_mode: DeterministicMathMode,
+    pub enabled_features: ProceduralFeatureMask,
+}
+
+impl ProceduralWorldSyncManifest {
+    #[must_use]
+    pub fn from_world_manifest(manifest: EcsProceduralWorldManifest) -> Self {
+        Self {
+            schema_version: manifest.schema_version,
+            generator_version: manifest.generator_version.get(),
+            world_seed: manifest.world_seed,
+            terrain_profile: manifest.biome_recipe.terrain_profile_id(),
+            biome_table_digest: manifest.biome_recipe.biome_table_digest(),
+            material_table_digest: manifest.biome_recipe.material_table_digest(),
+            world_origin_policy: WorldOriginPolicy::PageKeyOrigin,
+            voxel_edge_um: VOXEL_CELL_EDGE_UM,
+            page_edge_voxels: u16::from(VOXEL_BRICK_EDGE_CELLS),
+            region_edge_pages: manifest.region_edge_pages,
+            deterministic_math_mode: DeterministicMathMode::FixedPointQ16ValueNoise,
+            enabled_features: ProceduralFeatureMask::BASE_TERRAIN,
+        }
+    }
+
+    pub fn validate(self) -> Result<(), EcsSpatialValidationError> {
+        if self.schema_version != ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION
+            || self.generator_version == 0
+            || !EcsTerrainGeneratorVersion::new(self.generator_version).is_supported()
+            || !self.terrain_profile.is_valid()
+            || self.biome_table_digest == 0
+            || self.material_table_digest == 0
+            || !self.world_origin_policy.is_supported()
+            || self.voxel_edge_um != VOXEL_CELL_EDGE_UM
+            || self.page_edge_voxels != u16::from(VOXEL_BRICK_EDGE_CELLS)
+            || self.region_edge_pages == 0
+            || !self.deterministic_math_mode.is_supported()
+            || !self.enabled_features.has_required_generation_bits()
+        {
+            return Err(EcsSpatialValidationError::InvalidProceduralSyncManifest);
+        }
+        Ok(())
+    }
+
+    pub fn to_world_manifest(
+        self,
+        terrain_grid: EcsSpatialGridId,
+        channel_mask: EcsPageChannelMask,
+        biome_recipe: EcsBiomeRecipe,
+    ) -> Result<EcsProceduralWorldManifest, EcsSpatialValidationError> {
+        self.validate()?;
+        if self.terrain_profile != biome_recipe.terrain_profile_id()
+            || self.biome_table_digest != biome_recipe.biome_table_digest()
+            || self.material_table_digest != biome_recipe.material_table_digest()
+        {
+            return Err(EcsSpatialValidationError::InvalidProceduralSyncManifest);
+        }
+        let manifest = EcsProceduralWorldManifest {
+            schema_version: self.schema_version,
+            world_seed: self.world_seed,
+            generator_version: EcsTerrainGeneratorVersion::new(self.generator_version),
+            terrain_grid,
+            region_edge_pages: self.region_edge_pages,
+            channel_mask,
+            biome_recipe,
+        };
+        manifest.validate()?;
+        Ok(manifest)
+    }
+}
+
+impl From<EcsProceduralWorldManifest> for ProceduralWorldSyncManifest {
+    fn from(value: EcsProceduralWorldManifest) -> Self {
+        Self::from_world_manifest(value)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralPageDigest {
+    pub generator_version: u32,
+    pub page_key_hash: u64,
+    pub occupancy_digest: u64,
+    pub material_digest: u64,
+    pub cluster_summary_digest: u64,
+    pub combined_digest: u64,
+}
+
+impl ProceduralPageDigest {
+    pub fn from_decoded_page(
+        manifest: EcsProceduralWorldManifest,
+        page: &EcsDecodedPageRecord,
+    ) -> Result<Self, EcsSpatialValidationError> {
+        let brick = page
+            .voxel_brick
+            .as_ref()
+            .ok_or(EcsSpatialValidationError::DecodeMissingPayload)?;
+        if page.key != brick.key {
+            return Err(EcsSpatialValidationError::SourceRequestMismatch);
+        }
+        Self::from_voxel_brick(manifest, brick)
+    }
+
+    pub fn from_voxel_brick(
+        manifest: EcsProceduralWorldManifest,
+        brick: &VoxelBrickPayload,
+    ) -> Result<Self, EcsSpatialValidationError> {
+        manifest.validate()?;
+        if !manifest.accepts_page(brick.key) {
+            return Err(EcsSpatialValidationError::InvalidProceduralRecipe);
+        }
+        let page_key_hash = page_key_digest(brick.key);
+        let occupancy_digest = occupancy_storage_digest(&brick.occupancy);
+        let material_digest = material_palette_digest(&brick.material_palette);
+        let cluster_summary_digest = cluster_summaries_digest(&brick.clusters);
+        let mut combined_digest = FNV_OFFSET;
+        combined_digest = hash_u32(combined_digest, manifest.generator_version.get());
+        combined_digest = hash_u64(combined_digest, manifest.signature().value);
+        combined_digest = hash_u64(combined_digest, page_key_hash);
+        combined_digest = hash_u64(combined_digest, occupancy_digest);
+        combined_digest = hash_u64(combined_digest, material_digest);
+        combined_digest = hash_u64(combined_digest, cluster_summary_digest);
+        Ok(Self {
+            generator_version: manifest.generator_version.get(),
+            page_key_hash,
+            occupancy_digest,
+            material_digest,
+            cluster_summary_digest,
+            combined_digest: combined_digest.max(1),
+        })
+    }
+
+    pub fn validate_for_page(
+        self,
+        manifest: EcsProceduralWorldManifest,
+        page: EcsSpatialPageKey,
+    ) -> Result<(), EcsSpatialValidationError> {
+        manifest.validate()?;
+        if self.generator_version != manifest.generator_version.get()
+            || self.page_key_hash != page_key_digest(page)
+            || self.occupancy_digest == 0
+            || self.material_digest == 0
+            || self.cluster_summary_digest == 0
+            || self.combined_digest == 0
+        {
+            return Err(EcsSpatialValidationError::ProceduralPageDigestMismatch);
+        }
+        Ok(())
+    }
+}
+
+pub fn generate_procedural_page_digest(
+    manifest: EcsProceduralWorldManifest,
+    page: EcsSpatialPageKey,
+) -> Result<ProceduralPageDigest, EcsSpatialValidationError> {
+    manifest.validate()?;
+    if !manifest.accepts_page(page) {
+        return Err(EcsSpatialValidationError::InvalidProceduralRecipe);
+    }
+    let brick = generate_voxel_brick(manifest, page, manifest.source_epoch())?;
+    ProceduralPageDigest::from_voxel_brick(manifest, &brick)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralPageDigestProbe {
+    pub player_id: NetworkPlayerId,
+    pub page: EcsSpatialPageKey,
+    pub server_digest: ProceduralPageDigest,
+    pub client_digest: ProceduralPageDigest,
+    pub matched: bool,
+}
+
+impl ProceduralPageDigestProbe {
+    #[must_use]
+    pub fn new(
+        player_id: NetworkPlayerId,
+        page: EcsSpatialPageKey,
+        server_digest: ProceduralPageDigest,
+        client_digest: ProceduralPageDigest,
+    ) -> Self {
+        Self {
+            player_id,
+            page,
+            server_digest,
+            client_digest,
+            matched: server_digest == client_digest,
+        }
+    }
+
+    #[must_use]
+    pub const fn should_report_to_server(self) -> bool {
+        !self.matched
+    }
+
+    pub fn validate(self) -> Result<(), EcsSpatialValidationError> {
+        if !self.player_id.is_valid() {
+            return Err(EcsSpatialValidationError::InvalidProceduralDigestProbe);
+        }
+        let expected_page_hash = page_key_digest(self.page);
+        if self.server_digest.page_key_hash != expected_page_hash
+            || self.client_digest.page_key_hash != expected_page_hash
+        {
+            return Err(EcsSpatialValidationError::ProceduralPageDigestMismatch);
+        }
+        if self.matched != (self.server_digest == self.client_digest) {
+            return Err(EcsSpatialValidationError::InvalidProceduralDigestProbe);
+        }
+        if !self.matched {
+            return Err(EcsSpatialValidationError::ProceduralPageDigestMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -568,7 +967,7 @@ fn lattice_hash_q8(
 ) -> i32 {
     let mut hash = FNV_OFFSET;
     hash = hash_u64(hash, seed);
-    hash = hash_u16(hash, version.get());
+    hash = hash_u32(hash, version.get());
     hash = hash_u64(hash, recipe_id);
     hash = hash_i64(hash, gx);
     hash = hash_i64(hash, gy);
@@ -756,6 +1155,48 @@ fn hash_page_key(mut hash: u64, key: EcsSpatialPageKey) -> u64 {
     hash_u8(hash, key.channel as u8)
 }
 
+fn page_key_digest(key: EcsSpatialPageKey) -> u64 {
+    hash_page_key(FNV_OFFSET, key).max(1)
+}
+
+fn occupancy_storage_digest(occupancy: &VoxelOccupancyStorage) -> u64 {
+    let mut hash = FNV_OFFSET;
+    hash = hash_u8(hash, occupancy.kind as u8);
+    for word in occupancy.words {
+        hash = hash_u64(hash, word);
+    }
+    hash.max(1)
+}
+
+fn material_palette_digest(palette: &VoxelMaterialPalette) -> u64 {
+    let mut hash = FNV_OFFSET;
+    let len = usize::from(palette.len).min(palette.materials.len());
+    hash = hash_u16(hash, len as u16);
+    for material in palette.materials.iter().take(len) {
+        hash = hash_u16(hash, *material);
+    }
+    hash.max(1)
+}
+
+fn cluster_summaries_digest(
+    clusters: &[VoxelClusterSummary; VOXEL_CLUSTER_SUMMARIES_PER_BRICK],
+) -> u64 {
+    let mut hash = FNV_OFFSET;
+    for cluster in clusters {
+        hash = hash_u16(hash, cluster.occupancy_popcount);
+        hash = hash_u8(hash, cluster.exposed_face_mask);
+        hash = hash_u16(hash, cluster.dominant_material);
+        hash = hash_i16(hash, cluster.min_height_local);
+        hash = hash_i16(hash, cluster.max_height_local);
+        hash = hash_i16(hash, cluster.sdf_min_q);
+        hash = hash_i16(hash, cluster.sdf_max_q);
+        hash = hash_u8(hash, cluster.foliage_density_q);
+        hash = hash_u8(hash, cluster.water_q);
+        hash = hash_u16(hash, cluster.flags);
+    }
+    hash.max(1)
+}
+
 const fn hash_u8(hash: u64, value: u8) -> u64 {
     (hash ^ value as u64).wrapping_mul(FNV_PRIME)
 }
@@ -777,6 +1218,10 @@ const fn hash_u64(hash: u64, value: u64) -> u64 {
 
 const fn hash_i32(hash: u64, value: i32) -> u64 {
     hash_u32(hash, value as u32)
+}
+
+const fn hash_i16(hash: u64, value: i16) -> u64 {
+    hash_u16(hash, value as u16)
 }
 
 const fn hash_i64(hash: u64, value: i64) -> u64 {
@@ -878,6 +1323,140 @@ mod tests {
         assert!(brick.clusters.iter().any(|cluster| {
             cluster.occupancy_popcount != 0 && cluster.occupancy_popcount != CLUSTER_FULL_POPCOUNT
         }));
+    }
+
+    #[test]
+    fn sync_manifest_carries_only_deterministic_world_contract() {
+        let manifest = EcsProceduralWorldManifest::default();
+        let sync = manifest.sync_manifest();
+
+        sync.validate().expect("sync manifest validates");
+        ProceduralWorldAuthorityPolicy::SERVER_AUTHORITY_V1
+            .validate()
+            .expect("authority policy validates");
+        assert_eq!(sync.schema_version, ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION);
+        assert_eq!(sync.generator_version, manifest.generator_version.get());
+        assert_eq!(sync.world_seed, manifest.world_seed);
+        assert_eq!(
+            sync.terrain_profile,
+            manifest.biome_recipe.terrain_profile_id()
+        );
+        assert_eq!(
+            sync.biome_table_digest,
+            manifest.biome_recipe.biome_table_digest()
+        );
+        assert_eq!(
+            sync.material_table_digest,
+            manifest.biome_recipe.material_table_digest()
+        );
+        assert_eq!(sync.voxel_edge_um, VOXEL_CELL_EDGE_UM);
+        assert_eq!(sync.page_edge_voxels, u16::from(VOXEL_BRICK_EDGE_CELLS));
+        assert_eq!(sync.region_edge_pages, manifest.region_edge_pages);
+        assert_eq!(
+            sync.deterministic_math_mode,
+            DeterministicMathMode::FixedPointQ16ValueNoise
+        );
+        assert!(
+            sync.enabled_features
+                .contains(ProceduralFeature::FootVoxelCells)
+        );
+
+        let client_manifest = sync
+            .to_world_manifest(
+                manifest.terrain_grid,
+                manifest.channel_mask,
+                manifest.biome_recipe,
+            )
+            .expect("client reconstructs manifest from local recipe table");
+        assert_eq!(client_manifest, manifest);
+    }
+
+    #[test]
+    fn sync_manifest_rejects_wrong_local_biome_or_feature_table() {
+        let manifest = EcsProceduralWorldManifest::default();
+        let sync = manifest.sync_manifest();
+        let wrong_recipe = EcsBiomeRecipe {
+            surface_material: TerrainMaterialId::new(99),
+            ..manifest.biome_recipe
+        };
+        let missing_required_features = ProceduralWorldSyncManifest {
+            enabled_features: ProceduralFeatureMask::from_bits(0),
+            ..sync
+        };
+
+        assert_eq!(
+            sync.to_world_manifest(manifest.terrain_grid, manifest.channel_mask, wrong_recipe),
+            Err(EcsSpatialValidationError::InvalidProceduralSyncManifest)
+        );
+        assert_eq!(
+            missing_required_features.validate(),
+            Err(EcsSpatialValidationError::InvalidProceduralSyncManifest)
+        );
+    }
+
+    #[test]
+    fn page_digest_is_multiplayer_checksum_for_manifest_version_and_page() {
+        let manifest = EcsProceduralWorldManifest::default();
+        let key = page(0, 0, 0);
+        let server_digest =
+            generate_procedural_page_digest(manifest, key).expect("server digest generated");
+        let client_digest =
+            generate_procedural_page_digest(manifest, key).expect("client digest generated");
+
+        assert_eq!(server_digest, client_digest);
+        assert_eq!(
+            server_digest.generator_version,
+            manifest.generator_version.get()
+        );
+        assert_eq!(server_digest.page_key_hash, key.chunk_key().get());
+        server_digest
+            .validate_for_page(manifest, key)
+            .expect("digest validates for page");
+    }
+
+    #[test]
+    fn digest_probe_reports_mismatch_without_page_contents() {
+        let key = page(0, 0, 0);
+        let server_manifest = EcsProceduralWorldManifest::default();
+        let client_manifest = EcsProceduralWorldManifest {
+            world_seed: server_manifest.world_seed ^ 0x55aa,
+            ..server_manifest
+        };
+        let server_digest =
+            generate_procedural_page_digest(server_manifest, key).expect("server digest");
+        let client_digest =
+            generate_procedural_page_digest(client_manifest, key).expect("client digest");
+        let probe = ProceduralPageDigestProbe::new(
+            NetworkPlayerId::new(44),
+            key,
+            server_digest,
+            client_digest,
+        );
+
+        assert!(probe.should_report_to_server());
+        assert_eq!(
+            probe.validate(),
+            Err(EcsSpatialValidationError::ProceduralPageDigestMismatch)
+        );
+    }
+
+    #[test]
+    fn digest_probe_rejects_client_supplied_match_flag_drift() {
+        let manifest = EcsProceduralWorldManifest::default();
+        let key = page(0, 0, 0);
+        let digest = generate_procedural_page_digest(manifest, key).expect("digest");
+        let probe = ProceduralPageDigestProbe {
+            player_id: NetworkPlayerId::new(7),
+            page: key,
+            server_digest: digest,
+            client_digest: digest,
+            matched: false,
+        };
+
+        assert_eq!(
+            probe.validate(),
+            Err(EcsSpatialValidationError::InvalidProceduralDigestProbe)
+        );
     }
 
     #[test]
