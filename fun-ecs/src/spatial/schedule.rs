@@ -7,6 +7,7 @@ use fun_scheduler_types::{
 use crate::EcsArtifactConsumer;
 
 pub const ECS_SPATIAL_SCHEDULE_SET_COUNT: usize = 15;
+pub const ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT: usize = 18;
 
 pub const ECS_SPATIAL_SCHEDULE_FRAME_ORDER: [EcsSpatialScheduleSet;
     ECS_SPATIAL_SCHEDULE_SET_COUNT] = [
@@ -25,6 +26,44 @@ pub const ECS_SPATIAL_SCHEDULE_FRAME_ORDER: [EcsSpatialScheduleSet;
     EcsSpatialScheduleSet::PublishNetworkHandoffs,
     EcsSpatialScheduleSet::EvictColdPages,
     EcsSpatialScheduleSet::FlushDiagnostics,
+];
+
+pub const ECS_SPATIAL_COMPILED_SCHEDULE_FRAME_ORDER: [EcsSpatialCompiledScheduleNode;
+    ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT] = [
+    EcsSpatialCompiledScheduleNode::set(0, EcsSpatialScheduleSet::SenseSources),
+    EcsSpatialCompiledScheduleNode::set(1, EcsSpatialScheduleSet::BuildInterest),
+    EcsSpatialCompiledScheduleNode::set(2, EcsSpatialScheduleSet::PlanStreamWave),
+    EcsSpatialCompiledScheduleNode::set(3, EcsSpatialScheduleSet::DiffRequests),
+    EcsSpatialCompiledScheduleNode::barrier(
+        4,
+        EcsSpatialCommandBarrierKind::ApplyRequestCommands,
+        EcsSpatialScheduleSet::DiffRequests,
+    ),
+    EcsSpatialCompiledScheduleNode::set(5, EcsSpatialScheduleSet::AcquireSources),
+    EcsSpatialCompiledScheduleNode::set(6, EcsSpatialScheduleSet::DecodePages),
+    EcsSpatialCompiledScheduleNode::set(7, EcsSpatialScheduleSet::BuildDerivedArtifacts),
+    EcsSpatialCompiledScheduleNode::barrier(
+        8,
+        EcsSpatialCommandBarrierKind::ApplyArtifactCommands,
+        EcsSpatialScheduleSet::BuildDerivedArtifacts,
+    ),
+    EcsSpatialCompiledScheduleNode::set(9, EcsSpatialScheduleSet::PropagateDirtyRegions),
+    EcsSpatialCompiledScheduleNode::barrier(
+        10,
+        EcsSpatialCommandBarrierKind::ApplyDirtyPropagationCommands,
+        EcsSpatialScheduleSet::PropagateDirtyRegions,
+    ),
+    EcsSpatialCompiledScheduleNode::set(11, EcsSpatialScheduleSet::PublishRendererHandoffs),
+    EcsSpatialCompiledScheduleNode::set(12, EcsSpatialScheduleSet::PublishLuxHandoffs),
+    EcsSpatialCompiledScheduleNode::set(13, EcsSpatialScheduleSet::PublishPhysicsHandoffs),
+    EcsSpatialCompiledScheduleNode::set(14, EcsSpatialScheduleSet::PublishNetworkHandoffs),
+    EcsSpatialCompiledScheduleNode::barrier(
+        15,
+        EcsSpatialCommandBarrierKind::ApplyHandoffCommands,
+        EcsSpatialScheduleSet::PublishNetworkHandoffs,
+    ),
+    EcsSpatialCompiledScheduleNode::set(16, EcsSpatialScheduleSet::EvictColdPages),
+    EcsSpatialCompiledScheduleNode::set(17, EcsSpatialScheduleSet::FlushDiagnostics),
 ];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -266,6 +305,117 @@ impl EcsSpatialScheduleSet {
             ..non_blocking_contract()
         }
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum EcsSpatialCommandBarrierKind {
+    #[default]
+    ApplyRequestCommands = 0,
+    ApplyArtifactCommands = 1,
+    ApplyDirtyPropagationCommands = 2,
+    ApplyHandoffCommands = 3,
+}
+
+impl EcsSpatialCommandBarrierKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ApplyRequestCommands => "apply_request_commands",
+            Self::ApplyArtifactCommands => "apply_artifact_commands",
+            Self::ApplyDirtyPropagationCommands => "apply_dirty_propagation_commands",
+            Self::ApplyHandoffCommands => "apply_handoff_commands",
+        }
+    }
+
+    #[must_use]
+    pub const fn contract(self) -> EcsSystemExecutionContract {
+        let _ = self;
+        EcsSystemExecutionContract::COMMAND_BARRIER
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EcsSpatialCompiledScheduleNodeKind {
+    Set(EcsSpatialScheduleSet),
+    Barrier(EcsSpatialCommandBarrierKind),
+}
+
+impl EcsSpatialCompiledScheduleNodeKind {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Set(set) => set.label(),
+            Self::Barrier(barrier) => barrier.label(),
+        }
+    }
+
+    #[must_use]
+    pub const fn work_kind(self) -> EcsWorkKind {
+        match self {
+            Self::Set(set) => set.work_kind(),
+            Self::Barrier(_) => EcsWorkKind::ApplyCommands,
+        }
+    }
+
+    #[must_use]
+    pub const fn contract(self) -> EcsSystemExecutionContract {
+        match self {
+            Self::Set(set) => set.execution_contract(),
+            Self::Barrier(barrier) => barrier.contract(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EcsSpatialCompiledScheduleNode {
+    pub ordinal: u8,
+    pub kind: EcsSpatialCompiledScheduleNodeKind,
+    pub after_set: Option<EcsSpatialScheduleSet>,
+}
+
+impl EcsSpatialCompiledScheduleNode {
+    #[must_use]
+    pub const fn set(ordinal: u8, set: EcsSpatialScheduleSet) -> Self {
+        Self {
+            ordinal,
+            kind: EcsSpatialCompiledScheduleNodeKind::Set(set),
+            after_set: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn barrier(
+        ordinal: u8,
+        barrier: EcsSpatialCommandBarrierKind,
+        after_set: EcsSpatialScheduleSet,
+    ) -> Self {
+        Self {
+            ordinal,
+            kind: EcsSpatialCompiledScheduleNodeKind::Barrier(barrier),
+            after_set: Some(after_set),
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        self.kind.label()
+    }
+
+    #[must_use]
+    pub const fn work_kind(self) -> EcsWorkKind {
+        self.kind.work_kind()
+    }
+
+    #[must_use]
+    pub const fn execution_contract(self) -> EcsSystemExecutionContract {
+        self.kind.contract()
+    }
+}
+
+#[must_use]
+pub const fn compile_spatial_schedule_graph() -> &'static [EcsSpatialCompiledScheduleNode] {
+    &ECS_SPATIAL_COMPILED_SCHEDULE_FRAME_ORDER
 }
 
 const fn non_blocking_contract() -> EcsSystemExecutionContract {

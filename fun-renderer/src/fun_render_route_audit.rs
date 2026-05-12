@@ -584,14 +584,16 @@ mod tests {
     /// const-evaluable.
     #[test]
     fn const_str_helpers_work_at_const_eval() {
-        const EQ_TRUE: bool = const_str_eq("abc", "abc");
-        const EQ_FALSE: bool = const_str_eq("abc", "abd");
-        const SW_TRUE: bool = const_str_starts_with("fun_renderer::cloud_shadow", "fun_renderer::");
-        const SW_FALSE: bool = const_str_starts_with("foo", "fun_renderer::");
-        assert!(EQ_TRUE);
-        assert!(!EQ_FALSE);
-        assert!(SW_TRUE);
-        assert!(!SW_FALSE);
+        const STRINGS_MATCH: bool = const_str_eq("abc", "abc");
+        const STRINGS_DIFFER: bool = const_str_eq("abc", "abd");
+        const PREFIX_MATCHES: bool =
+            const_str_starts_with("fun_renderer::cloud_shadow", "fun_renderer::");
+        const PREFIX_MISMATCHES: bool =
+            const_str_starts_with("renderer::cloud_shadow", "fun_renderer::");
+        assert!(STRINGS_MATCH);
+        assert!(!STRINGS_DIFFER);
+        assert!(PREFIX_MATCHES);
+        assert!(!PREFIX_MISMATCHES);
     }
 
     /// Pass C9.8 — typed cloud_route_startup_log returns

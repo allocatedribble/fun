@@ -93,6 +93,11 @@ pub enum EcsSpatialValidationError {
     InvalidMaterial,
     InvalidAssetRef,
     InvalidTransform,
+    StaleCommandBuffer,
+    RevisionLedgerFull,
+    InvalidTableKey,
+    DuplicateTableKey,
+    ResourceTableFull,
 }
 
 impl EcsSpatialValidationError {
@@ -132,6 +137,11 @@ impl EcsSpatialValidationError {
             Self::InvalidMaterial => "invalid_material",
             Self::InvalidAssetRef => "invalid_asset_ref",
             Self::InvalidTransform => "invalid_transform",
+            Self::StaleCommandBuffer => "stale_command_buffer",
+            Self::RevisionLedgerFull => "revision_ledger_full",
+            Self::InvalidTableKey => "invalid_table_key",
+            Self::DuplicateTableKey => "duplicate_table_key",
+            Self::ResourceTableFull => "resource_table_full",
         }
     }
 }

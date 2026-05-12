@@ -447,7 +447,6 @@ Compatibility aliases retained for one transition cycle:
 - `fun_renderer_dx12` -> `dx12_native_interop` in `fun-renderer`
 - `fun_renderer_vulkan` -> `vulkan_backend`
 - `fun_renderer_metal` -> `metal_backend`
-- `fun_renderer_native_ui_gpu_only` -> `native_ui_gpu_only`
 - `fun_renderer_upscale` -> `upscaling`
 - `fun_renderer_dlss` -> `dlss`
 - `fun_renderer_fsr` -> `fsr`

@@ -44,8 +44,7 @@ impl BridgeFeatureToggles {
         dx12: cfg!(feature = "dx12_native_interop") || cfg!(feature = "fun_renderer_dx12"),
         vulkan: cfg!(feature = "vulkan_backend") || cfg!(feature = "fun_renderer_vulkan"),
         metal: cfg!(feature = "metal_backend") || cfg!(feature = "fun_renderer_metal"),
-        native_ui_gpu_only: cfg!(feature = "native_ui_gpu_only")
-            || cfg!(feature = "fun_renderer_native_ui_gpu_only"),
+        native_ui_gpu_only: cfg!(feature = "native_ui_gpu_only"),
         upscale: cfg!(feature = "upscaling") || cfg!(feature = "fun_renderer_upscale"),
         dlss: cfg!(feature = "dlss") || cfg!(feature = "fun_renderer_dlss"),
         fsr: cfg!(feature = "fsr") || cfg!(feature = "fun_renderer_fsr"),
@@ -587,7 +586,6 @@ mod tests {
         assert_eq!(
             toggles.native_ui_gpu_only,
             cfg!(feature = "native_ui_gpu_only")
-                || cfg!(feature = "fun_renderer_native_ui_gpu_only")
         );
         assert_eq!(
             toggles.lux_many_light,

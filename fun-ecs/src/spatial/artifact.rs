@@ -598,6 +598,15 @@ impl EcsDerivedArtifactRegistry {
         self.artifacts.get(artifact_id)
     }
 
+    pub fn retire(&mut self, artifact_id: EcsDerivedArtifactId) -> bool {
+        if let Some(record) = self.artifacts.get_mut(artifact_id) {
+            record.state = EcsArtifactState::Retiring;
+            true
+        } else {
+            false
+        }
+    }
+
     #[must_use]
     pub fn is_consistent(&self) -> bool {
         self.artifacts.is_consistent()

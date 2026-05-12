@@ -1153,9 +1153,12 @@ mod tests {
 
     #[test]
     fn rvelte_bridge_argv_parser_walks_to_first_match() {
-        let argv = ["--foo", "--rvelte-bridge=launcher", "--bar"];
-        let s = Tier6RvelteBridgeRouteSelection::parse_argv(&argv);
-        assert_eq!(s.route(), Some(Tier6ProductRouteKind::LauncherShell),);
+        let args = ["--diagnostics", "--rvelte-bridge=launcher", "--profile=dev"];
+        let selection = Tier6RvelteBridgeRouteSelection::parse_argv(&args);
+        assert_eq!(
+            selection.route(),
+            Some(Tier6ProductRouteKind::LauncherShell),
+        );
     }
 
     #[test]

@@ -1635,7 +1635,6 @@ fn connect_to_game_server(
     if !client.is_disconnected() {
         if !*active_connection_log_written {
             *active_connection_log_written = true;
-            info!("[client net] Quinnet already has an active connection");
             debug!(target: "fun::net", "quinnet already has an active connection");
         }
         return;
@@ -1652,7 +1651,6 @@ fn connect_to_game_server(
         return;
     }
     *last_attempted_server_addr = Some(server_addr.to_owned());
-    info!("[client net] opening connection to {server_addr}");
     info!(target: "fun::net", server_addr, "opening game server connection");
     let limits = ChannelLimits::default();
     let config = ClientConnectionConfiguration {
@@ -1670,7 +1668,6 @@ fn connect_to_game_server(
 
     match client.open_connection(config) {
         Ok(connection_id) => {
-            info!("[client net] connecting to {server_addr} with local connection {connection_id}");
             info!(
                 target: "fun::net",
                 server_addr,
@@ -1679,7 +1676,6 @@ fn connect_to_game_server(
             );
         }
         Err(error) => {
-            info!("[client net] failed to start game server connection: {error}");
             error!(target: "fun::net", server_addr, %error, "failed to start game server connection");
         }
     }
@@ -1694,13 +1690,7 @@ fn send_client_hello(
 ) {
     crate::frame_profile_scope!(_scope, frame_profiler, "Update", "send_client_hello");
     for event in events.read() {
-        info!("[client net] connection event id={}", event.id);
-        info!(target: "fun::net", connection_id = event.id, "connection event");
         let Some(connection) = client.get_connection_mut_by_id(event.id) else {
-            info!(
-                "[client net] connection event id={} had no matching connection",
-                event.id
-            );
             warn!(
                 target: "fun::net",
                 connection_id = event.id,
@@ -1708,6 +1698,7 @@ fn send_client_hello(
             );
             continue;
         };
+        info!(target: "fun::net", connection_id = event.id, "connection event");
 
         let hello = ClientPacket::Hello {
             hello: ClientHello {
@@ -1724,10 +1715,6 @@ fn send_client_hello(
                 let byte_len = bytes.len();
                 connection.try_send_payload_on(ClientChannel::Control, bytes);
                 info!(
-                    "[client net] sent hello on control channel for connection {} ({} bytes)",
-                    event.id, byte_len
-                );
-                info!(
                     target: "fun::net",
                     connection_id = event.id,
                     bytes = byte_len,
@@ -1736,7 +1723,6 @@ fn send_client_hello(
                 );
             }
             Err(error) => {
-                info!("[client net] failed to encode client hello: {error}");
                 error!(target: "fun::net", %error, "failed to encode client hello");
             }
         }
@@ -2431,16 +2417,10 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     if !render_config.dlss_rr_enabled {
         if render_config.dlss_rr_disabled_by_denoise_mode {
             info!(
-                "[client render] DLSS Ray Reconstruction disabled because the active Solari denoiser is not the RR preset"
-            );
-            info!(
                 target: "fun::rr",
                 "DLSS Ray Reconstruction disabled by active Solari denoiser"
             );
         } else {
-            info!(
-                "[client render] DLSS Ray Reconstruction disabled; set FUN_RENDER_DX12_DLSS_RR=1 after SR is stable"
-            );
             info!(
                 target: "fun::rr",
                 "DLSS Ray Reconstruction disabled by the explicit runtime gate"
@@ -2450,9 +2430,6 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     }
 
     if dlss_rr_supported.is_none() {
-        info!(
-            "[client render] DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path"
-        );
         info!(target: "fun::rr", "DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path");
         return;
     }
@@ -2470,9 +2447,6 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     }
 
     if enabled_count > 0 {
-        info!(
-            "[client render] enabled DLSS Ray Reconstruction for {enabled_count} ready camera view(s)"
-        );
         info!(
             target: "fun::rr",
             enabled_views = enabled_count,
@@ -2495,7 +2469,6 @@ fn reset_dlss_ray_reconstruction_history(
     }
 
     if reset_count > 0 {
-        info!("[client render] reset DLSS Ray Reconstruction history for {reset_count} view(s)");
         info!(
             target: "fun::rr",
             reset_views = reset_count,
@@ -3861,13 +3834,6 @@ fn log_render_performance(
         &bevy::diagnostic::SystemInformationDiagnosticsPlugin::SYSTEM_MEM_USAGE,
     );
     game_shared::fun_diag_info!(
-        "[client perf] process_cpu_pct={} process_mem_gib={} system_cpu_pct={} system_mem_pct={}",
-        format_optional_number(process_cpu),
-        format_optional_number(process_mem),
-        format_optional_number(system_cpu),
-        format_optional_number(system_mem),
-    );
-    game_shared::fun_diag_info!(
         target: "fun::perf::system",
         process_cpu_pct = ?process_cpu,
         process_mem_gib = ?process_mem,
@@ -4020,7 +3986,6 @@ fn log_render_performance(
             .map(|(path, value)| format!("{path}={}", format_number(value)))
             .collect::<Vec<_>>()
             .join(", ");
-        game_shared::fun_diag_info!("[client perf] top render timings {top_timings}");
         game_shared::fun_diag_info!(target: "fun::perf::top_render", %top_timings, "top render timings");
     }
 
@@ -4106,7 +4071,6 @@ fn log_schedule_heatmap(schedule_profiler: &mut ClientScheduleProfiler) {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    game_shared::fun_diag_info!("[client perf] schedule heatmap: total_ns={total_ns} {heatmap}");
     game_shared::fun_diag_info!(
         target: "fun::perf::schedule_heatmap",
         total_ns,

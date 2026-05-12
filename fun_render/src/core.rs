@@ -443,53 +443,6 @@ fn log_fun_render_path(
     solari_settings: &SolariSettings,
     solari_runtime_params: &SolariRuntimeParams,
 ) {
-    if render_config.solari_enabled {
-        info!("[fun render] Solari lighting will start after the streamed world is ready");
-    } else {
-        info!("[fun render] Solari lighting disabled by FUN_DISABLE_SOLARI");
-    }
-    if render_config.meshlets_enabled {
-        info!("[fun render] streamed world will use meshlet meshes");
-    } else {
-        info!("[fun render] streamed world meshlets disabled by FUN_DISABLE_MESHLETS");
-    }
-    if render_config.clouds_enabled {
-        info!(
-            "[fun render] volumetric clouds enabled: profile={} quality={} scale={} temporal={} shadows={}",
-            render_config.cloud_profile_id.as_str(),
-            render_config.cloud_quality.as_env_value(),
-            render_config.cloud_internal_scale.as_env_value(),
-            render_config.cloud_temporal_enabled,
-            render_config.cloud_shadows_enabled
-        );
-    } else {
-        info!("[fun render] volumetric clouds disabled");
-    }
-    info!(
-        "[fun render] Solari denoise mode: {:?}",
-        solari_settings.denoise_mode
-    );
-    info!(
-        "[fun render] Solari internal GI scale: {:?}",
-        solari_settings.internal_scale
-    );
-    info!(
-        "[fun render] Solari world-cache: {} entries, {} updates/frame soft cap, {} frame slices, camera tiers {}m/{}m/{}m",
-        solari_settings.world_cache_size,
-        solari_settings.world_cache_cell_updates_soft_cap,
-        solari_settings.world_cache_frame_slice_count,
-        solari_settings.world_cache_near_camera_distance_meters,
-        solari_settings.world_cache_mid_camera_distance_meters,
-        solari_settings.world_cache_far_camera_distance_meters
-    );
-    info!(
-        "[fun render] Solari architecture: {:?}, visual target: {:?}, target_fps={}, frame_budget_ns={}, gpu_budget_ns={}",
-        solari_runtime_params.architecture,
-        solari_runtime_params.visual_target,
-        solari_runtime_params.target_fps,
-        solari_runtime_params.frame_budget_ns,
-        solari_runtime_params.gpu_budget_ns
-    );
     info!(
         target: "fun::render",
         solari_enabled = render_config.solari_enabled,
@@ -604,7 +557,6 @@ pub fn enable_solari_lighting_for_ready_world(
     solari_reset_events: &mut MessageWriter<bevy::solari::prelude::SolariResetEvent>,
 ) {
     if !render_config.solari_enabled {
-        info!("[fun render] streamed world ready; Solari remains disabled");
         info!(target: "fun::solari", "streamed world ready; Solari remains disabled");
         return;
     }
@@ -619,7 +571,6 @@ pub fn enable_solari_lighting_for_ready_world(
     }
 
     if enabled_count > 0 {
-        info!("[fun render] enabled Solari lighting for {enabled_count} ready camera view(s)");
         info!(
             target: "fun::solari",
             enabled_views = enabled_count,
@@ -642,7 +593,6 @@ pub fn request_solari_lighting_history_reset(
     solari_reset_events.write(bevy::solari::prelude::SolariResetEvent {
         reason: std::borrow::Cow::Owned(reason.to_owned()),
     });
-    info!("[fun render] requested Solari temporal history reset: {reason}");
     let reset_count = reset_solari_lighting_history(solari_lighting);
     info!(
         target: "fun::solari",
@@ -665,7 +615,6 @@ fn reset_solari_lighting_history(
     }
 
     if reset_count > 0 {
-        info!("[fun render] reset Solari temporal history for {reset_count} view(s)");
         info!(
             target: "fun::solari",
             render_solari_reset_applied = true,

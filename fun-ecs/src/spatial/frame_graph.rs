@@ -642,6 +642,10 @@ mod tests {
         )
     }
 
+    // Doctrine gates, not unit trivia: cross-domain waits must stay typed,
+    // renderer present only waits on required render artifacts without fallback,
+    // physics fixed step may use conservative fallback, and optional Lux
+    // refinement cannot gate renderer or present.
     #[test]
     fn cross_domain_frame_flow_declares_requested_owner_sequence() {
         assert_eq!(

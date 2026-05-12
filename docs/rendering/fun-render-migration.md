@@ -106,7 +106,7 @@ Canonical feature names:
 
 Compatibility aliases retained for one transition cycle:
 `fun_renderer_legacy`, `fun_renderer_new_core`, `fun_renderer_dx12`,
-`fun_renderer_vulkan`, `fun_renderer_native_ui_gpu_only`, `fun_renderer_upscale`,
+`fun_renderer_vulkan`, `fun_renderer_upscale`,
 `fun_renderer_dlss`, `fun_renderer_fsr`, `fun_renderer_frame_generation`,
 `fun_renderer_experimental_ml`, `fun_lux_many_light`,
 `fun_lux_virtual_shadows`, and `fun_lux_hybrid_gi`.
@@ -1017,18 +1017,14 @@ No Bevy UI product usage is allowed in `game_client`, `fun_render`,
 `fun-renderer`, or `fun_host` after Pass 8. The checker allows
 `fun-renderer` policy constants that document the prohibition.
 
-## NATIVE_UI/Svelte Product Path
+## Historical Browser/Svelte Product Path
 
 | layer | current status |
 | --- | --- |
-| Svelte app | Active under `game_client/ui/main`; package name `fun-client-ui`; scripts are `dev`, `build`, `preview`, and `check`; UI dependencies are Svelte/Vite/TypeScript/Bulma. |
-| Rust host authority | `fun_host` exposes launcher/editor/preview command descriptors and current-client preview status; NATIVE_UI command surface readiness is part of host status. |
-| NATIVE_UI runtime | `fun_ui_native_ui` owns NATIVE_UI browser bootstrap/runtime, windowless browser settings, JS bridge, input validation, CPU paint compositor, accelerated callback surface, diagnostics, and security checks. |
-| Game integration | `game_client/src/native_ui.rs` installs `GameNativeUiPlugin`, starts NATIVE_UI, routes input/model patches/host commands, tracks transport counters, and publishes GPU-ready NATIVE_UI frames to `RendererNativeUiCompositor`. |
-| Current composition | Renderer-owned NATIVE_UI compositor resource plus frame-graph `native_ui_gpu_import` slot; visible final swapchain composition still awaits the future renderer-present handoff. |
-| Accelerated transport | `game_client/src/native_ui_dx12` opens NATIVE_UI D3D11 shared textures, copies through D3D11On12 into a FUN-owned D3D12 ring during the callback path, and publishes safe tokens with timing/copy metadata. Latest artifacts show bridge readiness failing. |
-| Runtime CPU fallback | Product runtime is fail-closed. CPU `OnPaint` startup requests select `disabled`, accelerated failures do not recreate a CPU browser, and observed CPU frames are rejected by the renderer compositor. |
-| GPU-only product readiness | Code path is GPU-only/fail-closed; runtime proof remains blocked until strict accelerated lane reports `bridge_ready=true`, `selected=d3d11on12`, zero CPU upload bytes, and nonzero GPU copy bytes. |
+| Browser fixture | `game_client/ui/main` is source-only reference material for preview/comparison. Generated `dist/` output is intentionally untracked and should be rebuilt on demand. |
+| Rust host authority | `fun_host` owns launcher/editor/preview command descriptors and current-client preview status; browser fixture commands are not product authority. |
+| Historical NATIVE_UI runtime | `fun_ui_native_ui`, `game_client/src/native_ui.rs`, and `game_client/src/native_ui_dx12/` are no longer present in this workspace; historical mentions remain only to explain migration context. |
+| Current product UI direction | Product runtime routes through native rvelte/FUN packets and renderer-owned native adapter paths, not CEF/browser DOM bundles. |
 
 ## DX12 And Vulkan Status
 

@@ -1,19 +1,42 @@
 #![forbid(unsafe_code)]
 
+pub mod adapters;
+#[path = "spatial/artifact.rs"]
 pub mod artifact;
+#[path = "spatial/authority.rs"]
 pub mod authority;
+#[path = "core/control_plane.rs"]
+pub mod control;
+pub mod core;
+pub mod diagnostics;
+#[path = "spatial/dirty.rs"]
 pub mod dirty;
+pub mod experiments;
+#[path = "spatial/frame_graph.rs"]
 pub mod frame_graph;
+#[path = "spatial/load_animation.rs"]
 pub mod load_animation;
+#[path = "spatial/page_table.rs"]
 pub mod page_table;
+#[path = "spatial/residency.rs"]
 pub mod residency;
+pub mod runtime;
+#[path = "spatial/schedule.rs"]
 pub mod schedule;
+#[path = "spatial/source.rs"]
 pub mod source;
+#[path = "spatial/types.rs"]
 pub mod spatial;
+#[path = "core/storage.rs"]
 pub mod storage;
+#[path = "spatial/streaming.rs"]
 pub mod streaming;
+#[path = "spatial/voxel.rs"]
 pub mod voxel;
 
+pub use adapters::{
+    FUN_ECS_ADAPTER_CONTRACTS, FunEcsAdapterContract, FunEcsAdapterKind, FunEcsAdapterRole,
+};
 pub use artifact::{
     CollisionCookMode, ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT, ECS_DERIVED_ARTIFACT_BUILD_SYSTEMS,
     EcsArtifactBuildReport, EcsArtifactConsumer, EcsArtifactState, EcsCrossDomainHandoff,
@@ -30,9 +53,43 @@ pub use artifact::{
 };
 pub use authority::{
     EcsAssetRef, EcsAuthoringCommandKind, EcsAuthoringEditCommand, EcsAuthoringTool, EcsDebugPin,
-    EcsSpatialCommand, EcsSpatialCommandBuffer, EcsVoxelEditLog, EcsVoxelEditLogEntry,
-    PackedTransform, VoxelEditOp,
+    EcsSpatialCommand, EcsSpatialCommandApplyDigest, EcsSpatialCommandApplyReport,
+    EcsSpatialCommandBuffer, EcsSpatialCommandSortKey, EcsVoxelEditLog, EcsVoxelEditLogEntry,
+    PackedTransform, VoxelEditOp, apply_artifact_commands, apply_artifact_commands_with_revisions,
+    apply_dirty_propagation_commands, apply_dirty_propagation_commands_with_revisions,
+    apply_handoff_commands, apply_handoff_commands_with_revisions,
 };
+pub use control::{
+    FUN_ECS_MAX_RESOURCE_CHUNKS, FUN_ECS_MAX_SYSTEM_DECLARATIONS,
+    FUN_ECS_REQUIRED_HANDOFF_CONSUMER_COUNT, FUN_ECS_REQUIRED_HANDOFF_CONSUMERS,
+    FUN_ECS_SUBSYSTEM_HANDOFF_CONTRACTS, FunEcsAccessMode, FunEcsComponentKind, FunEcsControlPlane,
+    FunEcsLivenessReport, FunEcsResourceChunk, FunEcsResourceKind, FunEcsRevision, FunEcsSubsystem,
+    FunEcsSubsystemHandoffContract, FunEcsSystemAccess, FunEcsSystemDeclaration, FunEcsSystemId,
+    FunEcsValidationError, FunEcsWorldId, validate_subsystem_liveness,
+};
+pub use core::{
+    ArtifactRevision, ColdPayloadStore, ColumnarRowView, DENSE_RESOURCE_TABLE_BENCHMARK_ROW_COUNT,
+    DenseResourcePriorityBand, DenseResourceTable, DenseResourceTableAccess,
+    DenseResourceTableAccessKind, DenseResourceTableChunk, DenseResourceTableChunkRow,
+    DenseResourceTableConfig, DenseResourceTableDigest, DenseResourceTableIndex,
+    DenseResourceTableKey, DenseResourceTableRevision, DenseResourceTableRow,
+    DenseResourceTableStats, ExternalSlabRevision, FUN_ECS_MAX_RESOURCE_REVISION_RECORDS,
+    FUN_ECS_MAX_REVISION_TOUCH_ROWS, FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT,
+    FUN_WORLD_SPATIAL_RESOURCE_KINDS, FrameRevision, FunArchetypeId, FunArtifactId,
+    FunCommandApplyRevisionReport, FunCommandBufferClass, FunCommandBufferDeclaration,
+    FunCommandBufferId, FunCommandDrainPolicy, FunComponentId, FunEntity, FunEntityGeneration,
+    FunExternalSlabId, FunFrameId, FunQueryAccess, FunQueryId, FunQueryMetadata,
+    FunQueryValidationError, FunResourceAccess, FunResourceId, FunResourceTableId, FunRevision,
+    FunRevisionLedgerError, FunSchedulerVirtualResourceKey, FunSchedulerWaitToken,
+    FunSchedulerWaitTokenId, FunSpatialPageVirtualResourceKey, FunStorageChunkId, FunSystemId,
+    FunSystemSetId, FunWorld, FunWorldDiagnostics, FunWorldId, FunWorldMode, FunWorldResourceSet,
+    FunWorldRevision, FunWorldSchedulerAuthority, FunWorldStorageBackend, HandoffRevision,
+    HotFieldMask, IntoSchedulerChunkKey, IntoSchedulerEntityId, IntoSchedulerVirtualResourceKey,
+    IntoSchedulerWaitToken, ResourceRevisionLedger, ResourceRevisionRecord, ResourceTableLayout,
+    ResourceTableRevision, ResourceTableUseCase, RevisionCategory, ScheduleRevision,
+    SpatialPageRevision, TableLayoutAdvice, TableLayoutAdvisor, WorldRevisionLedger,
+};
+pub use diagnostics::FunEcsGraphDebugSnapshot;
 pub use dirty::{
     EcsDirtyRegion, EcsDirtyRegionLedger, EcsVoxelEditImpactMask, EcsVoxelEditPropagationOptions,
     EcsVoxelEditPropagationReport, propagate_voxel_edit,
@@ -61,8 +118,16 @@ pub use page_table::{EcsPageResidencyTable, EcsSpatialPageTable};
 pub use residency::{
     EcsPageFailureCode, EcsPageResidencyMap, EcsPageResidencyRecord, EcsPageResidencyState,
 };
+pub use runtime::{
+    FunEcsRuntimeWork, FunEcsScheduleWorkGraph, FunEcsSchedulerBridgeReport,
+    compile_spatial_schedule_work_graph, compile_spatial_schedule_work_graph_at_revision,
+    scheduler_bridge_report,
+};
 pub use schedule::{
-    ECS_SPATIAL_SCHEDULE_FRAME_ORDER, ECS_SPATIAL_SCHEDULE_SET_COUNT, EcsSpatialScheduleSet,
+    ECS_SPATIAL_COMPILED_SCHEDULE_FRAME_ORDER, ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT,
+    ECS_SPATIAL_SCHEDULE_FRAME_ORDER, ECS_SPATIAL_SCHEDULE_SET_COUNT, EcsSpatialCommandBarrierKind,
+    EcsSpatialCompiledScheduleNode, EcsSpatialCompiledScheduleNodeKind, EcsSpatialScheduleSet,
+    compile_spatial_schedule_graph,
 };
 pub use source::{
     EcsCompressedPagePayload, EcsDecodeOverlay, EcsDecodeOverlayKind, EcsDecodeReport,
@@ -196,6 +261,12 @@ mod tests {
         )
     }
 
+    // Doctrine gates, not unit trivia: no page-per-entity design; high-level
+    // spatial controls may be entities; hot page state lives in dense resources;
+    // mutation is command-buffered; handoffs are typed; optional Lux, foliage,
+    // and refinement work cannot gate renderer present; physics fixed step can
+    // use conservative fallback; cross-domain tokens map to scheduler wait
+    // tokens.
     #[test]
     fn product_default_terrain_voxel_is_one_foot() {
         let model = EcsTerrainVoxelModel::default();
@@ -308,11 +379,7 @@ mod tests {
             EcsPageResidencyState::ExternalResidentFine,
             EcsPageResidencyState::FullyReady,
         ];
-        assert!(
-            states
-                .iter()
-                .any(|state| *state == EcsPageResidencyState::ExternalResidentFine)
-        );
+        assert!(states.contains(&EcsPageResidencyState::ExternalResidentFine));
         assert!(EcsPageResidencyState::ExternalResidentCoarse.is_external_resident());
         for state in states {
             assert!(!state.label().contains("gpu"));
@@ -491,9 +558,10 @@ mod tests {
             temporal_reprojection: true,
         };
         assert!(storm.is_streaming_independent_from_terrain());
-        assert!(StormVolumeStreamingRules::PRODUCT_DEFAULT.contract_holds());
-        assert!(!StormVolumeStreamingRules::PRODUCT_DEFAULT.required_for_terrain_correctness);
-        assert!(!StormVolumeStreamingRules::PRODUCT_DEFAULT.evicted_with_terrain_pages);
+        let rules = StormVolumeStreamingRules::PRODUCT_DEFAULT;
+        assert!(rules.contract_holds());
+        assert!(!rules.required_for_terrain_correctness);
+        assert!(!rules.evicted_with_terrain_pages);
     }
 
     #[test]
@@ -1198,6 +1266,48 @@ mod tests {
     }
 
     #[test]
+    fn spatial_schedule_graph_compiles_internal_apply_barriers_without_public_set_churn() {
+        let public_order = EcsSpatialScheduleSet::all();
+        let compiled = compile_spatial_schedule_graph();
+
+        assert_eq!(public_order.len(), ECS_SPATIAL_SCHEDULE_SET_COUNT);
+        assert_eq!(compiled.len(), ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT);
+        assert_eq!(
+            compiled[4].kind,
+            EcsSpatialCompiledScheduleNodeKind::Barrier(
+                EcsSpatialCommandBarrierKind::ApplyRequestCommands
+            )
+        );
+        assert_eq!(
+            compiled[8].kind,
+            EcsSpatialCompiledScheduleNodeKind::Barrier(
+                EcsSpatialCommandBarrierKind::ApplyArtifactCommands
+            )
+        );
+        assert_eq!(
+            compiled[10].kind,
+            EcsSpatialCompiledScheduleNodeKind::Barrier(
+                EcsSpatialCommandBarrierKind::ApplyDirtyPropagationCommands
+            )
+        );
+        assert_eq!(
+            compiled[15].kind,
+            EcsSpatialCompiledScheduleNodeKind::Barrier(
+                EcsSpatialCommandBarrierKind::ApplyHandoffCommands
+            )
+        );
+        for node in compiled {
+            if matches!(node.kind, EcsSpatialCompiledScheduleNodeKind::Barrier(_)) {
+                assert_eq!(node.work_kind(), EcsWorkKind::ApplyCommands);
+                assert_eq!(
+                    node.execution_contract().lane,
+                    ScheduleLane::EcsCommandBarrier
+                );
+            }
+        }
+    }
+
+    #[test]
     fn voxel_grid_specialization_pins_foot_hierarchy() {
         let grid = VoxelGridDesc::terrain_default();
         assert_eq!(grid.validate(), Ok(()));
@@ -1213,7 +1323,7 @@ mod tests {
         assert_eq!(VOXEL_BRICK_FOOT_CELL_COUNT, 32 * 32 * 32);
         assert_eq!(VOXEL_BRICK_OCCUPANCY_WORDS, 512);
 
-        let mut invalid = grid.clone();
+        let mut invalid = grid;
         invalid.spatial_grid.unit_edge_um = FUN_INCH_VOXEL_EDGE_UM;
         assert_eq!(
             invalid.validate(),
@@ -1865,6 +1975,99 @@ mod tests {
             next_artifact_id as usize,
             ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT
         );
+    }
+
+    #[test]
+    fn artifact_publishers_need_deterministic_apply_before_renderer_handoffs() {
+        let page = page_xyz(0, 0, 0);
+        let source = source_with_payloads(vec![(page, compressed_payload(page, vec![3]))]);
+        let mut acquired = EcsSourceAcquireQueue::default();
+        acquire_sources(&source, &[page], 8, &mut acquired).expect("acquire page");
+        let mut decoded = EcsDecodedPageQueue::default();
+        decode_pages(&acquired, &[], 8, &mut decoded).expect("decode page");
+
+        let mut next_artifact_id = 0;
+        let mut commands = EcsSpatialCommandBuffer::default();
+        build_derived_artifacts(
+            &decoded.rows,
+            &[
+                EcsDerivedArtifactBuildSystem::BuildTerrainSurfacePackets,
+                EcsDerivedArtifactBuildSystem::BuildTerrainMaterialPage,
+            ],
+            &mut next_artifact_id,
+            &mut commands,
+        )
+        .expect("build artifacts");
+
+        let empty_registry = EcsDerivedArtifactRegistry::default();
+        let mut pre_apply_handoff_commands = EcsSpatialCommandBuffer::default();
+        let pre_apply_report = publish_renderer_handoffs(
+            empty_registry.artifacts.values(),
+            RendererVisibilityHint::VisibleNear,
+            &mut pre_apply_handoff_commands,
+        )
+        .expect("pre-apply publish");
+        assert_eq!(pre_apply_report.published, 0);
+        assert!(pre_apply_handoff_commands.commands.is_empty());
+
+        let mut commands_a = commands.clone();
+        let mut commands_b = commands.clone();
+        commands_b.commands.reverse();
+        let mut registry_a = EcsDerivedArtifactRegistry::default();
+        let mut registry_b = EcsDerivedArtifactRegistry::default();
+        let apply_a =
+            apply_artifact_commands(&mut commands_a, &mut registry_a).expect("apply artifacts a");
+        let apply_b =
+            apply_artifact_commands(&mut commands_b, &mut registry_b).expect("apply artifacts b");
+
+        assert_eq!(apply_a.applied, 2);
+        assert_eq!(apply_b.applied, 2);
+        assert_eq!(apply_a.digest, apply_b.digest);
+        assert_eq!(registry_a.artifacts.values(), registry_b.artifacts.values());
+
+        let mut handoff_commands_a = EcsSpatialCommandBuffer::default();
+        let mut handoff_commands_b = EcsSpatialCommandBuffer::default();
+        publish_renderer_handoffs(
+            registry_a.artifacts.values(),
+            RendererVisibilityHint::VisibleNear,
+            &mut handoff_commands_a,
+        )
+        .expect("publish handoffs a");
+        publish_renderer_handoffs(
+            registry_b.artifacts.values(),
+            RendererVisibilityHint::VisibleNear,
+            &mut handoff_commands_b,
+        )
+        .expect("publish handoffs b");
+        handoff_commands_b.commands.reverse();
+
+        let mut renderer_queue_a = EcsRendererHandoffQueue::default();
+        let mut renderer_queue_b = EcsRendererHandoffQueue::default();
+        let mut lux_queue_a = EcsLuxHandoffQueue::default();
+        let mut lux_queue_b = EcsLuxHandoffQueue::default();
+        let mut physics_queue_a = EcsPhysicsCookQueue::default();
+        let mut physics_queue_b = EcsPhysicsCookQueue::default();
+        let handoff_apply_a = apply_handoff_commands(
+            &mut handoff_commands_a,
+            &mut renderer_queue_a,
+            &mut lux_queue_a,
+            &mut physics_queue_a,
+        )
+        .expect("apply handoffs a");
+        let handoff_apply_b = apply_handoff_commands(
+            &mut handoff_commands_b,
+            &mut renderer_queue_b,
+            &mut lux_queue_b,
+            &mut physics_queue_b,
+        )
+        .expect("apply handoffs b");
+
+        assert_eq!(handoff_apply_a.applied, 2);
+        assert_eq!(handoff_apply_a.digest, handoff_apply_b.digest);
+        assert_eq!(renderer_queue_a, renderer_queue_b);
+        assert_eq!(renderer_queue_a.items.len(), 2);
+        assert!(lux_queue_a.items.is_empty());
+        assert!(physics_queue_a.items.is_empty());
     }
 
     #[test]

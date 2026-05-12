@@ -1,10 +1,19 @@
 # Tier 7 / Pass 144 — NATIVE_UI/Browser Product-Runtime Audit
 
 audit_id: fun_native_ui_removal_pass144_audit_v1
-status: pass_144_complete_pass_145_blocked_on_route_wiring
+status: historical_superseded_by_native_ui_routes_cleanup_2026_05_12
 owner: project-fun-ui-platform
 scope: product_runtime_native_ui_and_browser_symbols
 supersedes: extends [`rvelte/docs/native_ui-removal-inventory.md`](../../rvelte/docs/native_ui-removal-inventory.md) with file-and-line precision and current native-route status
+
+## Supersession Note
+
+This audit is historical. As of 2026-05-12, `game_client` defaults to
+`native_ui_routes`; the old CEF crate path, the old `game_client` CEF module,
+`fun_ui_native_ui`, and the old product NATIVE_UI integration paths are absent
+from this workspace. `game_client/ui/main` remains source-only browser
+reference material, and checked-in `dist/` output has been removed so stale CEF
+or browser-host fallbacks do not ship as source artifacts.
 
 ## Decision Recap
 
@@ -31,7 +40,7 @@ The replacement target is the native rvelte/FUN UI adapter:
 
 ## 1. Inventory
 
-### 1a. NATIVE_UI crate and game-client integration (`delete_after_route_cutover`)
+### 1a. Historical NATIVE_UI crate and game-client integration (`keep_archived_documentation_only`)
 
 | Path | Symbol family | LOC | Notes |
 |---|---|---|---|
@@ -42,7 +51,7 @@ The replacement target is the native rvelte/FUN UI adapter:
 | [fun/game_client/src/native_ui_dx12/](../game_client/src/native_ui_dx12/) | NATIVE_UI accelerated-paint transport | ~55 KB across 5 files | `mod.rs`, `bridge.rs` (~38 KB — D3D11On12 ring + dirty rect coordination), `diagnostics.rs`, `handles.rs`, `ring.rs`. Windows-only compile gate at [fun/game_client/src/lib.rs:2-3](../game_client/src/lib.rs). |
 | [fun/fun_render/src/dx12_native/native_ui.rs](../fun_render/src/dx12_native/native_ui.rs) | renderer-side NATIVE_UI DX12 transport policy | ~100 | `Dx12NativeUiTransportPath` and `Dx12NativeUiTransportPolicy`. Re-exported from [fun/fun_render/src/dx12_native/mod.rs:17-20](../fun_render/src/dx12_native/mod.rs). |
 
-### 1b. Build / runtime configuration (`delete_after_route_cutover`)
+### 1b. Historical build / runtime configuration (`keep_archived_documentation_only`)
 
 | Path | Surface | Notes |
 |---|---|---|
@@ -51,16 +60,15 @@ The replacement target is the native rvelte/FUN UI adapter:
 | [fun/scripts/stack/profiles/native_ui.cpu.json](../scripts/stack/profiles/native_ui.cpu.json) | stack runner profile | `paint_transport: cpu`, `enabled: true`. |
 | [fun/scripts/stack/profiles/native_ui.d3d11on12.strict.json](../scripts/stack/profiles/native_ui.d3d11on12.strict.json) | stack runner profile | `paint_transport: d3d11on12`, `accelerated_strict: true`. |
 | [fun/scripts/stack/stack.schema.json](../scripts/stack/stack.schema.json) | NATIVE_UI config block + env bindings | object `native_ui` (~line 69+); env vars `FUN_NATIVE_UI_TRANSPORT_STATUS_PATH`, `FUN_NATIVE_UI_PAINT_TRANSPORT`, `FUN_NATIVE_UI_ACCELERATED_PAINT` (~lines 155–157). |
-| [fun/fun-renderer/Cargo.toml](../fun-renderer/Cargo.toml) | `native_ui_gpu_only` feature + alias | line 16 (empty deps), line 49 alias `fun_renderer_native_ui_gpu_only`. **Already a no-op**; can be deleted now if desired but harmless. Reclassify as `delete_now` (see §3). |
+| [fun/fun-renderer/Cargo.toml](../fun-renderer/Cargo.toml) | `native_ui_gpu_only` feature | Canonical policy hook retained; obsolete compatibility alias removed by the 2026-05-12 cleanup. |
 
 ### 1c. Old browser UI packaging (`keep_test_reference_only`)
 
 | Path | Surface | Notes |
 |---|---|---|
-| [fun/game_client/ui/main/](../game_client/ui/main/) | Vite + Svelte build, `dist/`, `package.json`, `vite.config.ts`, `svelte.config.js` | Builds the legacy browser UI. Not product after route cutover; retained per Pass 38 inventory as comparison fixture. |
-| [fun/game_client/ui/main/src/lib/host/bridge.ts](../game_client/ui/main/src/lib/host/bridge.ts) | JS host bridge (~391 lines) | Uses `window.funHost.postMessage` first, falls back to `window.native_uiQuery` (lines ~95–111). Post-deletion, `native_uiQuery` fallback branch becomes dead and should be pruned even while the file stays. |
-| [fun/game_client/ui/main/src/lib/host/commands.ts](../game_client/ui/main/src/lib/host/commands.ts) | bridge availability check | line 17 references `window.native_uiQuery`; same fallback pruning. |
-| [fun/game_client/ui/main/dist/assets/index-ccr8AYVz.js](../game_client/ui/main/dist/assets/index-ccr8AYVz.js) | bundled output | one NATIVE_UI reference (compiled from bridge.ts fallback). Regenerated on next `npm run build`. |
+| [fun/game_client/ui/main/](../game_client/ui/main/) | Vite + Svelte source fixture, `package.json`, `vite.config.ts`, `svelte.config.js` | Builds a browser comparison fixture when needed. Generated `dist/` output is not tracked. |
+| [fun/game_client/ui/main/src/lib/host/bridge.ts](../game_client/ui/main/src/lib/host/bridge.ts) | JS host bridge | Uses `window.funHost.postMessage`; old browser-host fallback branches have already been pruned from source. |
+| [fun/game_client/ui/main/src/lib/host/commands.ts](../game_client/ui/main/src/lib/host/commands.ts) | bridge availability check | Checks the host bridge only. |
 | [fun/game_client/ui/main/docs/rvelte-dev-island.md](../game_client/ui/main/docs/rvelte-dev-island.md) | dev-island docs | Pass 20 dev-only diagnostics island under `VITE_FUN_RVELTE_DEV=1`. |
 
 ### 1d. Documentation (`keep_archived_documentation_only` or `delete_now`)
@@ -115,9 +123,9 @@ the only product UI plugin added to the Bevy `App`
 
 ### 3a. Safe to delete on Pass 145 turn (no further precondition)
 
-These are doc/feature-string changes whose semantic meaning is already gone:
+These doc/feature-string changes were completed by the 2026-05-12 cleanup:
 
-- [fun/fun-renderer/Cargo.toml](../fun-renderer/Cargo.toml) lines 16, 49: empty `native_ui_gpu_only` feature and its `fun_renderer_native_ui_gpu_only` alias. (No callers; verifiable with a workspace grep.)
+- [fun/fun-renderer/Cargo.toml](../fun-renderer/Cargo.toml) and [fun/fun_render/Cargo.toml](../fun_render/Cargo.toml): obsolete native-ui renderer compatibility alias removed; canonical `native_ui_gpu_only` remains.
 - Root [README.md](../../README.md) lines 33–35, 41–43, and the third-bullet "Product UI is NATIVE_UI/Svelte only" claim near line 169 of [fun/README.md](../README.md): rephrase to name native rvelte as the canonical product UI path. (Pass 38 marked these `delete_now`.)
 
 ### 3b. Blocked until launcher / HUD / pause / diagnostics native routes mount
@@ -139,9 +147,9 @@ Order matters; do them as one atomic Pass 145 turn after the route-mount pass:
    - [fun/scripts/stack/profiles/native_ui.cpu.json](../scripts/stack/profiles/native_ui.cpu.json).
    - [fun/scripts/stack/profiles/native_ui.d3d11on12.strict.json](../scripts/stack/profiles/native_ui.d3d11on12.strict.json).
    - [fun/scripts/stack/stack.schema.json](../scripts/stack/stack.schema.json) `native_ui` config block + the three `FUN_NATIVE_UI_*` env-var bindings.
-5. **Browser-bridge fallback pruning** (optional same-pass cleanup, not file deletion):
-   - [fun/game_client/ui/main/src/lib/host/bridge.ts](../game_client/ui/main/src/lib/host/bridge.ts) lines ~95–111: drop the `window.native_uiQuery` fallback branch.
-   - [fun/game_client/ui/main/src/lib/host/commands.ts](../game_client/ui/main/src/lib/host/commands.ts) line 17: drop the `native_uiQuery` availability check.
+5. **Browser-bridge fallback pruning** (completed):
+   - [fun/game_client/ui/main/src/lib/host/bridge.ts](../game_client/ui/main/src/lib/host/bridge.ts): host bridge source no longer exposes CEF/NATIVE_UI fallback branches.
+   - [fun/game_client/ui/main/src/lib/host/commands.ts](../game_client/ui/main/src/lib/host/commands.ts): bridge availability checks are host-bridge-only.
 6. **Doc supersession headers** for the architecture docs in §1d marked `keep_archived_documentation_only`.
 
 ### 3c. Out of scope for Pass 145 (not deleted)
@@ -178,11 +186,12 @@ Pass 145:
 - **No TODO/FIXME blockers** were found in `fun/game_client/src/**` for the
   cutover (`TODO.*native_ui`, `FIXME.*native_ui`). The cutover is a design task, not a
   finish-incomplete-code task.
-- **`fun_renderer_native_ui_gpu_only` is already a no-op** (feature deps list is
-  empty) — listed in §3a for cleanup.
-- **Bridge.ts still ships NATIVE_UI fallback** even though the file lives in the
-  test-reference tree. Worth pruning at Pass 145 to remove confusion when
-  someone reads the file expecting a clean native bridge.
+- **The obsolete native-ui renderer compatibility alias has been removed.** Use
+  the canonical `native_ui_gpu_only` feature name for remaining renderer policy
+  hooks.
+- **Bridge.ts no longer ships CEF/NATIVE_UI fallback source.** Checked-in
+  generated `dist/` artifacts were removed so stale compiled fallback code is
+  not mistaken for current source.
 - **No NATIVE_UI code outside the predicted scope.** All discovered NATIVE_UI references
   fall inside the Pass 38 inventory's surface set; nothing snuck into
   `fun_render/`, `fun-renderer/` core, `fun-scene`, `fun-lux`, `fun_host`, or
@@ -200,9 +209,6 @@ Pass 145:
 
 ## Pass 145 Status
 
-**BLOCKED on its stated precondition.** The user's Pass 145 goal explicitly
-reads "Remove NATIVE_UI from product runtime *once launcher/HUD/pause/diagnostics
-are covered*." Native routes are declared and tested in
-`fun/game_client/ui/rvelte_bridge` but not mounted in `fun/game_client/src` or
-`fun/fun_host/src`. Run the §4 route-cutover pass first; then Pass 145 becomes
-a mechanical deletion of §3b's items.
+Historical. The active workspace has already moved to `native_ui_routes` by
+default, and the stale generated browser output plus obsolete compatibility
+alias were removed by the 2026-05-12 cleanup.

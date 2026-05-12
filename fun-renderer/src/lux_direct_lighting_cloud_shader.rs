@@ -243,16 +243,16 @@ where
     // (x, y, z, 1).  Note: the typed WGSL shader takes
     // shadow_uv4.xz / w to drop the typed projection's
     // Y axis; we match that here.
-    let w = world_position;
-    let mut tmp = [0.0f32; 4];
-    for (row, cell) in tmp.iter_mut().enumerate() {
-        *cell = shadow_uv_from_world[row][0] * w[0]
-            + shadow_uv_from_world[row][1] * w[1]
-            + shadow_uv_from_world[row][2] * w[2]
+    let world = world_position;
+    let mut shadow_clip = [0.0f32; 4];
+    for (row, cell) in shadow_clip.iter_mut().enumerate() {
+        *cell = shadow_uv_from_world[row][0] * world[0]
+            + shadow_uv_from_world[row][1] * world[1]
+            + shadow_uv_from_world[row][2] * world[2]
             + shadow_uv_from_world[row][3];
     }
-    let wc = tmp[3].abs().max(1e-5);
-    let shadow_uv = [tmp[0] / wc, tmp[2] / wc];
+    let clip_w = shadow_clip[3].abs().max(1e-5);
+    let shadow_uv = [shadow_clip[0] / clip_w, shadow_clip[2] / clip_w];
 
     if !(0.0..=1.0).contains(&shadow_uv[0]) || !(0.0..=1.0).contains(&shadow_uv[1]) {
         return 1.0;
