@@ -12,7 +12,7 @@ DX12 baseline ready for DLSS SR bring-up: no
 | --- | --- | --- |
 | DX12 vs Vulkan parity report exists | partial | selected local report exists at `target\dx12-parity\current\dx12_parity_report.md`; full scene/present coverage is not complete |
 | Present-mode matrix complete | partial | selected immediate/fifo/auto-no-vsync lanes ran; full `--matrix-size present` output is not attached |
-| CEF accelerated path health is isolated | blocked | latest 1280x720 animated `d3d11on12` request selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, nonzero CPU upload bytes, and no accelerated paint callbacks; the health badge and CEF transport matrix are instrumented for the next live proof |
+| NATIVE_UI accelerated path health is isolated | blocked | latest 1280x720 animated `d3d11on12` request selected CPU fallback with `fallback_reason=render_backend_not_dx12`, `bridge_ready=false`, nonzero CPU upload bytes, and no accelerated paint callbacks; the health badge and NATIVE_UI transport matrix are instrumented for the next live proof |
 | Hot upload callsites identified | partial | current matrix summaries include upload counters; top-callsite review is not attached |
 | Barrier audit complete | not_ready | `target\dx12-pix\barrier_summary.md` exists but is blocked because no PIX CSV/capture rows are attached |
 | Steady-state pipeline creation mostly eliminated | not_ready | `target\dx12-pix\pipeline_cardinality_report.md` reports render pipeline p95 `22`, compute pipeline p95 `82`, shader pipeline p95 `104`; `FUN_RENDER_PIPELINE_WARMUP=observed` is the next measured lane, not proof of elimination |
@@ -34,7 +34,7 @@ No pass may claim a DX12 FPS improvement from DLSS until the baseline evidence
 above is attached and the gate is updated.
 
 This gate follows [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md):
-DX12 must first be observable, upload-cleaned, CEF-transport-hardened,
+DX12 must first be observable, upload-cleaned, NATIVE_UI-transport-hardened,
 barrier/descriptor/PSO-audited, present-paced with evidence, and routed through
 the centralized native interop boundary. DLSS Super Resolution comes after that
 baseline; Ray Reconstruction comes after SR is stable.
@@ -62,7 +62,7 @@ discovery.
 
 ## Render Order
 
-DLSS SR is a world-image reconstruction pass. CEF/Svelte and debug overlays are
+DLSS SR is a world-image reconstruction pass. NATIVE_UI/Svelte and debug overlays are
 not temporal inputs.
 
 ```text
@@ -71,11 +71,11 @@ world render
   -> Solari/clouds/lighting
   -> DLSS SR if active
   -> bloom/tonemap/post
-  -> CEF UI composition
+  -> NATIVE_UI UI composition
   -> debug overlays
   -> present
 ```
 
-CEF UI must not be bound as DLSS input color, motion vectors, depth, exposure,
+NATIVE_UI UI must not be bound as DLSS input color, motion vectors, depth, exposure,
 reactive mask, or Ray Reconstruction guide data. The UI remains an
 output-resolution composition layer.

@@ -255,8 +255,8 @@ const fn saturating_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
     use crate::{
-        UPLOAD_CEF_CPU_FULL_FRAME, UPLOAD_MESHLET_INSTANCE_RANGE, UPLOAD_MESHLET_MATERIAL_RANGE,
-        UPLOAD_SOLARI_PARAMS,
+        UPLOAD_MESHLET_INSTANCE_RANGE, UPLOAD_MESHLET_MATERIAL_RANGE,
+        UPLOAD_NATIVE_UI_CPU_FULL_FRAME, UPLOAD_SOLARI_PARAMS,
     };
 
     #[test]
@@ -297,14 +297,14 @@ mod tests {
     fn report_counts_deferred_and_raw_fallback_decisions() {
         let mut builder = FunUploadFrameReportBuilder::new(11);
         builder.record(
-            UPLOAD_CEF_CPU_FULL_FRAME,
-            FunUploadSubsystem::CefCpuPaint,
+            UPLOAD_NATIVE_UI_CPU_FULL_FRAME,
+            FunUploadSubsystem::NativeUiCpuPaint,
             1024,
             FunUploadBudgetDecision::FallbackRawWrite,
         );
         builder.record(
-            UPLOAD_CEF_CPU_FULL_FRAME,
-            FunUploadSubsystem::CefCpuPaint,
+            UPLOAD_NATIVE_UI_CPU_FULL_FRAME,
+            FunUploadSubsystem::NativeUiCpuPaint,
             2048,
             FunUploadBudgetDecision::Defer,
         );

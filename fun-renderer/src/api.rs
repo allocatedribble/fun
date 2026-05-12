@@ -15,7 +15,7 @@ pub struct RendererFeatureToggles {
     pub dx12: bool,
     pub vulkan: bool,
     pub metal: bool,
-    pub cef_gpu_only: bool,
+    pub native_ui_gpu_only: bool,
     pub upscale: bool,
     pub dlss: bool,
     pub fsr: bool,
@@ -30,7 +30,7 @@ impl RendererFeatureToggles {
         dx12: cfg!(feature = "dx12_native_interop"),
         vulkan: cfg!(feature = "vulkan_backend"),
         metal: cfg!(feature = "metal_backend"),
-        cef_gpu_only: cfg!(feature = "cef_gpu_only"),
+        native_ui_gpu_only: cfg!(feature = "native_ui_gpu_only"),
         upscale: cfg!(feature = "upscaling"),
         dlss: cfg!(feature = "dlss"),
         fsr: cfg!(feature = "fsr"),
@@ -142,7 +142,7 @@ pub enum PassKind {
     Lighting,
     Upscale,
     FrameGeneration,
-    CefGpuImport,
+    NativeUiGpuImport,
     UiImportPlaceholder,
     UiComposite,
     PostProcessExposure,
@@ -184,7 +184,7 @@ impl PassKind {
             Self::Lighting => "lighting",
             Self::Upscale => "upscale",
             Self::FrameGeneration => "frame_generation",
-            Self::CefGpuImport => "cef_gpu_import",
+            Self::NativeUiGpuImport => "native_ui_gpu_import",
             Self::UiImportPlaceholder => "ui_import_placeholder",
             Self::UiComposite => "ui_composite",
             Self::PostProcessExposure => "post_process_exposure",
@@ -348,7 +348,7 @@ pub struct RendererCoreInterfaceMap {
     pub gpu_scene_database_shell: bool,
     pub resource_allocator_shell: bool,
     pub upload_arena_ownership_seam: bool,
-    pub cef_compositor_interface: bool,
+    pub native_ui_compositor_interface: bool,
     pub upscaler_frame_generation_interface: bool,
     pub pass_diagnostics: bool,
 }
@@ -360,7 +360,7 @@ pub const RENDERER_CORE_INTERFACE_MAP: RendererCoreInterfaceMap = RendererCoreIn
     gpu_scene_database_shell: true,
     resource_allocator_shell: true,
     upload_arena_ownership_seam: true,
-    cef_compositor_interface: true,
+    native_ui_compositor_interface: true,
     upscaler_frame_generation_interface: true,
     pass_diagnostics: true,
 };
@@ -379,17 +379,18 @@ pub const RENDERER_UPLOAD_ARENA_SEAM: UploadArenaOwnershipSeam = UploadArenaOwne
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CefCompositorInterface {
+pub struct NativeUiCompositorInterface {
     pub gpu_shared_texture_required: bool,
     pub cpu_runtime_upload_fallback_allowed: bool,
     pub owner_crate: &'static str,
 }
 
-pub const RENDERER_CEF_COMPOSITOR_INTERFACE: CefCompositorInterface = CefCompositorInterface {
-    gpu_shared_texture_required: true,
-    cpu_runtime_upload_fallback_allowed: false,
-    owner_crate: crate::FUN_RENDERER_CRATE_NAME,
-};
+pub const RENDERER_NATIVE_UI_COMPOSITOR_INTERFACE: NativeUiCompositorInterface =
+    NativeUiCompositorInterface {
+        gpu_shared_texture_required: true,
+        cpu_runtime_upload_fallback_allowed: false,
+        owner_crate: crate::FUN_RENDERER_CRATE_NAME,
+    };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpscaleFrameGenerationInterface {
@@ -709,7 +710,7 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         FrameGraphPassRole::Clear => PassKind::ClearColor,
         FrameGraphPassRole::StaticScenePlaceholder => PassKind::StaticScenePlaceholder,
         FrameGraphPassRole::VirtualResourceFeedback => PassKind::VirtualResourceFeedback,
-        FrameGraphPassRole::CefGpuImport => PassKind::CefGpuImport,
+        FrameGraphPassRole::NativeUiGpuImport => PassKind::NativeUiGpuImport,
         FrameGraphPassRole::UiImportPlaceholder => PassKind::UiImportPlaceholder,
         FrameGraphPassRole::UpscaleBoundary => PassKind::Upscale,
         FrameGraphPassRole::FrameGenerationBoundary => PassKind::FrameGeneration,
@@ -746,6 +747,8 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         FrameGraphPassRole::LuxShadowRequests
         | FrameGraphPassRole::LuxVirtualShadowPages
         | FrameGraphPassRole::LuxVirtualShadowFilter
+        | FrameGraphPassRole::LuxVoxelShadowDemandMark
+        | FrameGraphPassRole::LuxVoxelShadowPageBuild
         // Pass C7.2 — typed cloud shadow roles share the
         // typed `LuxShadow` PassKind grouping because they
         // produce typed shadow data the typed direct-lighting
@@ -755,11 +758,16 @@ pub const fn pass_kind_for_frame_graph_role(role: FrameGraphPassRole) -> PassKin
         | FrameGraphPassRole::LuxCloudShadowFilter
         | FrameGraphPassRole::LuxCloudShadowRegisterLayer => PassKind::LuxShadow,
         FrameGraphPassRole::LuxDirectLighting => PassKind::LuxDirectLighting,
-        FrameGraphPassRole::LuxGiTrace
+        FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve
+        | FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate
+        | FrameGraphPassRole::LuxVoxelTerrainAoResolve
+        | FrameGraphPassRole::LuxGiTrace
         | FrameGraphPassRole::LuxGiCacheUpdate
         | FrameGraphPassRole::LuxReflectionTrace => PassKind::LuxGiReflection,
         FrameGraphPassRole::LuxDenoise => PassKind::LuxDenoise,
         FrameGraphPassRole::LuxVolumetricFogInject
+        | FrameGraphPassRole::LuxStormExtinctionInject
+        | FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject
         | FrameGraphPassRole::LuxVolumetricLightInject
         | FrameGraphPassRole::LuxVolumetricTemporalReproject
         | FrameGraphPassRole::LuxVolumetricIntegrate
@@ -778,7 +786,10 @@ mod tests {
 
         assert_eq!(toggles.new_core, cfg!(feature = "fun_renderer_core"));
         assert_eq!(toggles.dx12, cfg!(feature = "dx12_native_interop"));
-        assert_eq!(toggles.cef_gpu_only, cfg!(feature = "cef_gpu_only"));
+        assert_eq!(
+            toggles.native_ui_gpu_only,
+            cfg!(feature = "native_ui_gpu_only")
+        );
         assert_eq!(toggles.dlss, cfg!(feature = "dlss"));
         assert_eq!(toggles.frame_generation, cfg!(feature = "frame_generation"));
     }
@@ -791,7 +802,7 @@ mod tests {
         assert_eq!(report.backend, FunRendererBackend::Dx12);
         // The default frame graph now includes the renderer-owned post stack
         // (tone mapping + final output transform) so the registered pass count
-        // reflects clear, static scene, CEF GPU import, tone mapping, final
+        // reflects clear, static scene, NATIVE_UI GPU import, tone mapping, final
         // output transform, compose, and present.
         assert_eq!(report.registered_passes, 7);
         assert!(report.produced_clear_color_frame);
@@ -820,7 +831,7 @@ mod tests {
         let diagnostics = renderer.diagnostics();
         assert_eq!(diagnostics.lifecycle, RendererCoreLifecycle::Initialized);
         // After submit_frame_description with upscaling + frame generation, the
-        // graph contains: clear, static scene, CEF GPU import, upscale boundary,
+        // graph contains: clear, static scene, NATIVE_UI GPU import, upscale boundary,
         // frame generation boundary, post-process tone mapping + final-output
         // transform, compose, present.
         assert_eq!(diagnostics.registered_passes, 9);
@@ -864,7 +875,7 @@ mod tests {
         assert!(map.gpu_scene_database_shell);
         assert!(map.resource_allocator_shell);
         assert!(map.upload_arena_ownership_seam);
-        assert!(map.cef_compositor_interface);
+        assert!(map.native_ui_compositor_interface);
         assert!(map.upscaler_frame_generation_interface);
         assert!(map.pass_diagnostics);
 
@@ -873,12 +884,12 @@ mod tests {
             crate::FUN_RENDERER_CRATE_NAME
         );
         let upload_arena = core::hint::black_box(RENDERER_UPLOAD_ARENA_SEAM);
-        let cef_compositor = core::hint::black_box(RENDERER_CEF_COMPOSITOR_INTERFACE);
+        let native_ui_compositor = core::hint::black_box(RENDERER_NATIVE_UI_COMPOSITOR_INTERFACE);
         let upscale_frame_generation =
             core::hint::black_box(RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE);
         assert!(upload_arena.legacy_bridge_borrow_allowed);
-        assert!(cef_compositor.gpu_shared_texture_required);
-        assert!(!cef_compositor.cpu_runtime_upload_fallback_allowed);
+        assert!(native_ui_compositor.gpu_shared_texture_required);
+        assert!(!native_ui_compositor.cpu_runtime_upload_fallback_allowed);
         assert!(upscale_frame_generation.scene_color_ui_color_separate);
         assert!(upscale_frame_generation.hudless_scene_color_required);
     }
@@ -915,8 +926,20 @@ mod tests {
                 PassKind::LuxShadow,
             ),
             (
+                FrameGraphPassRole::LuxVoxelShadowDemandMark,
+                PassKind::LuxShadow,
+            ),
+            (
+                FrameGraphPassRole::LuxVoxelShadowPageBuild,
+                PassKind::LuxShadow,
+            ),
+            (
                 FrameGraphPassRole::LuxDirectLighting,
                 PassKind::LuxDirectLighting,
+            ),
+            (
+                FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve,
+                PassKind::LuxGiReflection,
             ),
             (FrameGraphPassRole::LuxGiTrace, PassKind::LuxGiReflection),
             (
@@ -924,12 +947,28 @@ mod tests {
                 PassKind::LuxGiReflection,
             ),
             (
+                FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate,
+                PassKind::LuxGiReflection,
+            ),
+            (
                 FrameGraphPassRole::LuxReflectionTrace,
+                PassKind::LuxGiReflection,
+            ),
+            (
+                FrameGraphPassRole::LuxVoxelTerrainAoResolve,
                 PassKind::LuxGiReflection,
             ),
             (FrameGraphPassRole::LuxDenoise, PassKind::LuxDenoise),
             (
                 FrameGraphPassRole::LuxVolumetricFogInject,
+                PassKind::LuxVolumetric,
+            ),
+            (
+                FrameGraphPassRole::LuxStormExtinctionInject,
+                PassKind::LuxVolumetric,
+            ),
+            (
+                FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject,
                 PassKind::LuxVolumetric,
             ),
             (
@@ -988,12 +1027,19 @@ mod tests {
             FrameGraphPassRole::LuxShadowRequests,
             FrameGraphPassRole::LuxVirtualShadowPages,
             FrameGraphPassRole::LuxVirtualShadowFilter,
+            FrameGraphPassRole::LuxVoxelShadowDemandMark,
+            FrameGraphPassRole::LuxVoxelShadowPageBuild,
             FrameGraphPassRole::LuxDirectLighting,
+            FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve,
             FrameGraphPassRole::LuxGiTrace,
             FrameGraphPassRole::LuxGiCacheUpdate,
+            FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate,
             FrameGraphPassRole::LuxReflectionTrace,
+            FrameGraphPassRole::LuxVoxelTerrainAoResolve,
             FrameGraphPassRole::LuxDenoise,
             FrameGraphPassRole::LuxVolumetricFogInject,
+            FrameGraphPassRole::LuxStormExtinctionInject,
+            FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject,
             FrameGraphPassRole::LuxVolumetricLightInject,
             FrameGraphPassRole::LuxVolumetricTemporalReproject,
             FrameGraphPassRole::LuxVolumetricIntegrate,

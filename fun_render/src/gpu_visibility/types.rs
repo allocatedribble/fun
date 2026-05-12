@@ -16,7 +16,7 @@ pub const GPU_VIS_OBJECT_TRANSPARENT: u32 = 1 << 4;
 pub const GPU_VIS_OBJECT_FOLIAGE: u32 = 1 << 5;
 pub const GPU_VIS_OBJECT_PARTICLE: u32 = 1 << 6;
 pub const GPU_VIS_OBJECT_SKINNED: u32 = 1 << 7;
-pub const GPU_VIS_OBJECT_CEF_UI: u32 = 1 << 8;
+pub const GPU_VIS_OBJECT_NATIVE_UI: u32 = 1 << 8;
 pub const GPU_VIS_OBJECT_DEBUG: u32 = 1 << 9;
 pub const GPU_VIS_OBJECT_VIEWMODEL: u32 = 1 << 10;
 
@@ -207,7 +207,7 @@ impl GpuObjectRecord {
                     | GPU_VIS_OBJECT_FOLIAGE
                     | GPU_VIS_OBJECT_PARTICLE
                     | GPU_VIS_OBJECT_SKINNED
-                    | GPU_VIS_OBJECT_CEF_UI
+                    | GPU_VIS_OBJECT_NATIVE_UI
                     | GPU_VIS_OBJECT_DEBUG
                     | GPU_VIS_OBJECT_VIEWMODEL)
                 == 0
@@ -331,7 +331,7 @@ pub const fn gpu_render_path_code(render_path: FunRenderPath) -> u32 {
         FunRenderPath::MeshletDynamicDense => 5,
         FunRenderPath::RayProxyOnly => 6,
         FunRenderPath::Viewmodel => 7,
-        FunRenderPath::CefUi => 8,
+        FunRenderPath::NativeUi => 8,
         FunRenderPath::DebugOnly => 9,
     }
 }
@@ -344,7 +344,7 @@ pub const fn fun_render_path_from_code(code: u32) -> FunRenderPath {
         5 => FunRenderPath::MeshletDynamicDense,
         6 => FunRenderPath::RayProxyOnly,
         7 => FunRenderPath::Viewmodel,
-        8 => FunRenderPath::CefUi,
+        8 => FunRenderPath::NativeUi,
         9 => FunRenderPath::DebugOnly,
         _ => FunRenderPath::StandardRaster,
     }

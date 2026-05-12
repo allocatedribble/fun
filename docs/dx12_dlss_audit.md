@@ -35,7 +35,7 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 
 - Winit/window presentation: `game_client` with `fun_render/winit_presentation`.
 - Offscreen/editor presentation: `fun_render/offscreen`; currently used as a policy surface for editor-owned preview paths and does not own a child `game_client`.
-- Unified CEF/Svelte UI presentation: `game_client` owns browser UI and overlays game render; this is not a DLSS integration point.
+- Unified NATIVE_UI/Svelte UI presentation: `game_client` owns browser UI and overlays game render; this is not a DLSS integration point.
 
 ## Current Anti-Aliasing Path
 

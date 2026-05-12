@@ -1,23 +1,19 @@
 //! Common DirectX 12 native interop boundary for FUN renderer integrations.
 //!
 //! This module is the only approved `fun_render` location that may touch wgpu
-//! HAL extraction for DX12. CEF accelerated paint, native DLSS, PIX naming, and
+//! HAL extraction for DX12. NATIVE_UI accelerated paint, native DLSS, PIX naming, and
 //! future debug tooling must call this boundary instead of calling
 //! `as_hal::<Dx12>()` or `as_hal_mut::<Dx12>()` directly.
 
-mod cef;
 mod command_encoder;
 mod diagnostics;
 mod handles;
 mod labels;
 #[cfg(feature = "dx12_mesh_shader_experiment")]
 mod mesh_shader;
+mod native_ui;
 mod states;
 
-pub use cef::{
-    DX12_CEF_SHARED_TEXTURE_RING_DEPTH_DEFAULT, DX12_CEF_TRANSPORT_SCHEMA_VERSION,
-    Dx12CefTransportPath, Dx12CefTransportPolicy, dx12_cef_transport_policy,
-};
 pub use command_encoder::{
     Dx12CommandListHandle, with_dx12_command_list, with_dx12_command_list_checked,
 };
@@ -45,6 +41,10 @@ pub use mesh_shader::{
     Dx12MeshShaderDispatchPlan, decide_dx12_mesh_shader_experiment,
     dx12_mesh_shader_native_boundary_valid, evaluate_dx12_mesh_shader_benchmark,
     plan_dx12_mesh_shader_experiment, summarize_funvg_lite_clusters,
+};
+pub use native_ui::{
+    DX12_NATIVE_UI_SHARED_TEXTURE_RING_DEPTH_DEFAULT, DX12_NATIVE_UI_TRANSPORT_SCHEMA_VERSION,
+    Dx12NativeUiTransportPath, Dx12NativeUiTransportPolicy, dx12_native_ui_transport_policy,
 };
 pub use states::{
     Dx12DlssResourceStatePlan, Dx12DlssResourceStateRules, Dx12NativeResourceState,

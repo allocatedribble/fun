@@ -90,7 +90,7 @@ pub struct Dx12MeshShaderAdmissionInput {
     pub compute_indirect_baseline_ready: bool,
     pub benchmark_scene: Dx12MeshShaderBenchmarkScene,
     pub clusters: Dx12MeshShaderClusterInputSummary,
-    pub cef_active: bool,
+    pub native_ui_active: bool,
     pub skinned_mesh_count: u32,
     pub transparent_cluster_count: u32,
 }
@@ -106,7 +106,7 @@ pub enum Dx12MeshShaderAdmissionDecision {
     RejectNoStaticOpaqueClusters,
     RejectUnknownClusterPages,
     RejectMultipleMaterialPaths,
-    RejectCefActive,
+    RejectNativeUiActive,
     RejectSkinnedMeshes,
     RejectTransparency,
     RejectSyntheticBenchmarkScene,
@@ -126,7 +126,7 @@ impl Dx12MeshShaderAdmissionDecision {
             Self::RejectNoStaticOpaqueClusters => "reject_no_static_opaque_clusters",
             Self::RejectUnknownClusterPages => "reject_unknown_cluster_pages",
             Self::RejectMultipleMaterialPaths => "reject_multiple_material_paths",
-            Self::RejectCefActive => "reject_cef_active",
+            Self::RejectNativeUiActive => "reject_native_ui_active",
             Self::RejectSkinnedMeshes => "reject_skinned_meshes",
             Self::RejectTransparency => "reject_transparency",
             Self::RejectSyntheticBenchmarkScene => "reject_synthetic_benchmark_scene",
@@ -154,7 +154,7 @@ pub struct Dx12MeshShaderDispatchPlan {
     pub compare_standard_raster: bool,
     pub compare_compute_indirect_raster: bool,
     pub compare_native_dx12_mesh_shader: bool,
-    pub cef_allowed: bool,
+    pub native_ui_allowed: bool,
     pub skinned_meshes_allowed: bool,
     pub transparency_allowed: bool,
 }
@@ -293,8 +293,8 @@ pub const fn decide_dx12_mesh_shader_experiment(
     if input.clusters.material_path_count != 1 {
         return Dx12MeshShaderAdmissionDecision::RejectMultipleMaterialPaths;
     }
-    if input.cef_active {
-        return Dx12MeshShaderAdmissionDecision::RejectCefActive;
+    if input.native_ui_active {
+        return Dx12MeshShaderAdmissionDecision::RejectNativeUiActive;
     }
     if input.skinned_mesh_count > 0 {
         return Dx12MeshShaderAdmissionDecision::RejectSkinnedMeshes;
@@ -327,7 +327,7 @@ pub const fn plan_dx12_mesh_shader_experiment(
         compare_standard_raster: input.standard_raster_baseline_ready,
         compare_compute_indirect_raster: input.compute_indirect_baseline_ready,
         compare_native_dx12_mesh_shader: decision.admitted(),
-        cef_allowed: false,
+        native_ui_allowed: false,
         skinned_meshes_allowed: false,
         transparency_allowed: false,
     }
@@ -496,7 +496,7 @@ mod tests {
             compute_indirect_baseline_ready: true,
             benchmark_scene: Dx12MeshShaderBenchmarkScene::DenseStaticOpaqueWorld,
             clusters: summarize_funvg_lite_clusters(&dense_static_asset(&[MATERIAL])),
-            cef_active: false,
+            native_ui_active: false,
             skinned_mesh_count: 0,
             transparent_cluster_count: 0,
         }
@@ -527,7 +527,7 @@ mod tests {
             plan.native_boundary,
             DX12_MESH_SHADER_EXPERIMENT_NATIVE_BOUNDARY
         );
-        assert!(!plan.cef_allowed);
+        assert!(!plan.native_ui_allowed);
         assert!(!plan.skinned_meshes_allowed);
         assert!(!plan.transparency_allowed);
     }
@@ -601,9 +601,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_cef_skinned_or_transparent_content() {
-        let cef = Dx12MeshShaderAdmissionInput {
-            cef_active: true,
+    fn rejects_native_ui_skinned_or_transparent_content() {
+        let native_ui = Dx12MeshShaderAdmissionInput {
+            native_ui_active: true,
             ..admitted_input()
         };
         let skinned = Dx12MeshShaderAdmissionInput {
@@ -616,8 +616,8 @@ mod tests {
         };
 
         assert_eq!(
-            decide_dx12_mesh_shader_experiment(cef),
-            Dx12MeshShaderAdmissionDecision::RejectCefActive
+            decide_dx12_mesh_shader_experiment(native_ui),
+            Dx12MeshShaderAdmissionDecision::RejectNativeUiActive
         );
         assert_eq!(
             decide_dx12_mesh_shader_experiment(skinned),

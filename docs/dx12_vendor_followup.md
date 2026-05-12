@@ -34,7 +34,7 @@ specific enough to act on.
 | --- | --- | --- |
 | descriptor churn | PIX descriptor heap switches or `render_churn_bind_group*` deltas | bindless-like material table evaluation where Bevy/wgpu permits it; fewer per-draw bind group changes; descriptor rollover inspection |
 | pipeline churn / PSO churn | runtime pipeline creation, cache-miss counters, or PIX PSO creation | stronger pipeline warmup; persistent PSO cache experiment; lower material key fragmentation |
-| upload-bound | `render_upload_*`, meshlet/world-stream upload, CEF upload/copy counters, or PIX copy evidence | persistent staging or native upload-heap prototype for measured callsites only |
+| upload-bound | `render_upload_*`, meshlet/world-stream upload, NATIVE_UI upload/copy counters, or PIX copy evidence | persistent staging or native upload-heap prototype for measured callsites only |
 | barrier/state-bound | PIX resource barrier summary naming the pass | collapse redundant transitions; fix pass ordering/resource-state ownership before queue experiments |
 | async scheduling / submission fragmentation | PIX/GPUView queue idle spans plus command-buffer/submit deltas | async copy/compute experiment only when overlap exists and p95 improves |
 | shader/pass GPU bound | pass-level GPU regression plus Nsight or driver shader analysis | inspect register pressure, wave occupancy, memory loads, and branch divergence before rewriting shaders |

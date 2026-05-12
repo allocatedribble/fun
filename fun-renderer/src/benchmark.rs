@@ -30,7 +30,7 @@ pub const RENDERER_PERF_GATE_COUNT: usize = 7;
 pub enum BenchmarkSceneKind {
     ClearPresent,
     StaticScene,
-    CefUiComposition,
+    NativeUiComposition,
     Dx12VulkanParity,
     UploadStress,
     PipelineWarmupHotLoop,
@@ -50,7 +50,7 @@ impl BenchmarkSceneKind {
         match self {
             Self::ClearPresent => "clear_present",
             Self::StaticScene => "static_scene",
-            Self::CefUiComposition => "cef_ui_composition",
+            Self::NativeUiComposition => "native_ui_composition",
             Self::Dx12VulkanParity => "dx12_vulkan_parity",
             Self::UploadStress => "upload_stress",
             Self::PipelineWarmupHotLoop => "pipeline_warmup_hot_loop",
@@ -71,7 +71,7 @@ pub struct BenchmarkSceneDescriptor {
     pub stable_id: &'static str,
     pub kind: BenchmarkSceneKind,
     pub display_name: &'static str,
-    pub requires_cef_gpu_transport: bool,
+    pub requires_native_ui_gpu_transport: bool,
     pub requires_backend_truth: bool,
     pub requires_upscaler_boundary: bool,
     pub requires_frame_generation_boundary: bool,
@@ -90,7 +90,10 @@ impl BenchmarkSceneDescriptor {
             stable_id,
             kind,
             display_name,
-            requires_cef_gpu_transport: matches!(kind, BenchmarkSceneKind::CefUiComposition),
+            requires_native_ui_gpu_transport: matches!(
+                kind,
+                BenchmarkSceneKind::NativeUiComposition
+            ),
             requires_backend_truth: matches!(kind, BenchmarkSceneKind::Dx12VulkanParity),
             requires_upscaler_boundary: matches!(
                 kind,
@@ -128,9 +131,9 @@ pub const RENDERER_BENCHMARK_SCENES: [BenchmarkSceneDescriptor; RENDERER_BENCHMA
         "static scene",
     ),
     BenchmarkSceneDescriptor::new(
-        "renderer.benchmark.scene.cef_ui_composition",
-        BenchmarkSceneKind::CefUiComposition,
-        "CEF UI composition",
+        "renderer.benchmark.scene.native_ui_composition",
+        BenchmarkSceneKind::NativeUiComposition,
+        "NATIVE_UI UI composition",
     ),
     BenchmarkSceneDescriptor::new(
         "renderer.benchmark.scene.dx12_vulkan_parity",
@@ -263,9 +266,9 @@ pub struct RendererBenchmarkMetrics {
     pub candidate_count: u32,
     pub shadow_pages_refreshed: u32,
     pub gi_cache_occupancy: u32,
-    pub cef_import_latency_us: u32,
-    pub cef_composite_latency_us: u32,
-    pub cef_cpu_fallback_attempts: u32,
+    pub native_ui_import_latency_us: u32,
+    pub native_ui_composite_latency_us: u32,
+    pub native_ui_cpu_fallback_attempts: u32,
     pub upscaler_time_us: u32,
     pub fg_generated_count: u32,
     pub fg_presented_count: u32,
@@ -293,9 +296,9 @@ impl RendererBenchmarkMetrics {
             candidate_count: 0,
             shadow_pages_refreshed: 0,
             gi_cache_occupancy: 0,
-            cef_import_latency_us: 0,
-            cef_composite_latency_us: 0,
-            cef_cpu_fallback_attempts: 0,
+            native_ui_import_latency_us: 0,
+            native_ui_composite_latency_us: 0,
+            native_ui_cpu_fallback_attempts: 0,
             upscaler_time_us: 0,
             fg_generated_count: 0,
             fg_presented_count: 0,
@@ -458,7 +461,7 @@ impl Default for RendererPerfGateConfig {
 pub enum RendererPerfGateKind {
     NoUnexpectedRuntimePipelineCreation,
     NoSilentBackendFallback,
-    NoProductCpuCefFallback,
+    NoProductCpuNativeUiFallback,
     NoUnboundedPageFaultStorm,
     NoUnsupportedFrameGeneration,
     NoHiddenBevyUiProductDependency,
@@ -469,7 +472,7 @@ impl RendererPerfGateKind {
     pub const ALL: [Self; RENDERER_PERF_GATE_COUNT] = [
         Self::NoUnexpectedRuntimePipelineCreation,
         Self::NoSilentBackendFallback,
-        Self::NoProductCpuCefFallback,
+        Self::NoProductCpuNativeUiFallback,
         Self::NoUnboundedPageFaultStorm,
         Self::NoUnsupportedFrameGeneration,
         Self::NoHiddenBevyUiProductDependency,
@@ -481,7 +484,7 @@ impl RendererPerfGateKind {
         match self {
             Self::NoUnexpectedRuntimePipelineCreation => "no_unexpected_runtime_pipeline_creation",
             Self::NoSilentBackendFallback => "no_silent_backend_fallback",
-            Self::NoProductCpuCefFallback => "no_product_cpu_cef_fallback",
+            Self::NoProductCpuNativeUiFallback => "no_product_cpu_native_ui_fallback",
             Self::NoUnboundedPageFaultStorm => "no_unbounded_page_fault_storm",
             Self::NoUnsupportedFrameGeneration => "no_unsupported_frame_generation",
             Self::NoHiddenBevyUiProductDependency => "no_hidden_bevy_ui_product_dependency",
@@ -652,7 +655,7 @@ pub fn evaluate_perf_gates(
 
     results.push(runtime_pipeline_gate(metrics, config));
     results.push(backend_fallback_gate(settings, capabilities, metrics));
-    results.push(product_cef_gate(scene, capabilities, metrics));
+    results.push(product_native_ui_gate(scene, capabilities, metrics));
     results.push(page_fault_gate(metrics, config));
     results.push(frame_generation_gate(settings, capabilities, metrics));
     results.push(bevy_ui_gate(metrics));
@@ -714,35 +717,35 @@ fn backend_fallback_gate(
     )
 }
 
-fn product_cef_gate(
+fn product_native_ui_gate(
     scene: &BenchmarkSceneDescriptor,
     capabilities: RendererCapabilityFacts,
     metrics: &RendererBenchmarkMetrics,
 ) -> RendererPerfGateResult {
-    let product_cef_required = scene.requires_cef_gpu_transport
+    let product_native_ui_required = scene.requires_native_ui_gpu_transport
         && capabilities.runtime_mode == RendererRuntimeMode::Product;
     let fallback_reason = metrics.fallback_reasons.iter().any(|reason| {
         matches!(
             *reason,
-            "cef_cpu_fallback" | "cpu_on_paint_upload" | "cef_transport_cpu_upload"
+            "native_ui_cpu_fallback" | "cpu_on_paint_upload" | "native_ui_transport_cpu_upload"
         )
     });
-    let attempted = metrics.cef_cpu_fallback_attempts > 0;
-    let unavailable = product_cef_required && !capabilities.cef_gpu_transport_available;
+    let attempted = metrics.native_ui_cpu_fallback_attempts > 0;
+    let unavailable = product_native_ui_required && !capabilities.native_ui_gpu_transport_available;
 
     if attempted || fallback_reason || unavailable {
         return RendererPerfGateResult::fail(
-            RendererPerfGateKind::NoProductCpuCefFallback,
-            u64::from(metrics.cef_cpu_fallback_attempts),
+            RendererPerfGateKind::NoProductCpuNativeUiFallback,
+            u64::from(metrics.native_ui_cpu_fallback_attempts),
             None,
-            "product_cef_gpu_transport_not_clean",
+            "product_native_ui_gpu_transport_not_clean",
         );
     }
 
     RendererPerfGateResult::pass(
-        RendererPerfGateKind::NoProductCpuCefFallback,
+        RendererPerfGateKind::NoProductCpuNativeUiFallback,
         0,
-        "product_cef_gpu_transport_clean_or_not_required",
+        "product_native_ui_gpu_transport_clean_or_not_required",
     )
 }
 
@@ -880,7 +883,7 @@ impl RendererBenchmarkMarkdownSummary {
         let _ = writeln!(content, "## Key Metrics");
         let _ = writeln!(
             content,
-            "| metric | value |\n| --- | ---: |\n| upload_bytes | {} |\n| allocation_count | {} |\n| runtime_pipeline_creation_count | {} |\n| page_faults | {} |\n| evictions | {} |\n| visible_cluster_count | {} |\n| drawn_cluster_count | {} |\n| light_count | {} |\n| candidate_count | {} |\n| shadow_pages_refreshed | {} |\n| gi_cache_occupancy | {} |\n| cef_import_latency_us | {} |\n| cef_composite_latency_us | {} |\n| upscaler_time_us | {} |\n| fg_generated_count | {} |\n| fg_presented_count | {} |",
+            "| metric | value |\n| --- | ---: |\n| upload_bytes | {} |\n| allocation_count | {} |\n| runtime_pipeline_creation_count | {} |\n| page_faults | {} |\n| evictions | {} |\n| visible_cluster_count | {} |\n| drawn_cluster_count | {} |\n| light_count | {} |\n| candidate_count | {} |\n| shadow_pages_refreshed | {} |\n| gi_cache_occupancy | {} |\n| native_ui_import_latency_us | {} |\n| native_ui_composite_latency_us | {} |\n| upscaler_time_us | {} |\n| fg_generated_count | {} |\n| fg_presented_count | {} |",
             artifact.metrics.upload_bytes,
             artifact.metrics.allocation_count,
             artifact.metrics.runtime_pipeline_creation_count,
@@ -892,8 +895,8 @@ impl RendererBenchmarkMarkdownSummary {
             artifact.metrics.candidate_count,
             artifact.metrics.shadow_pages_refreshed,
             artifact.metrics.gi_cache_occupancy,
-            artifact.metrics.cef_import_latency_us,
-            artifact.metrics.cef_composite_latency_us,
+            artifact.metrics.native_ui_import_latency_us,
+            artifact.metrics.native_ui_composite_latency_us,
             artifact.metrics.upscaler_time_us,
             artifact.metrics.fg_generated_count,
             artifact.metrics.fg_presented_count
@@ -923,11 +926,11 @@ impl RendererBenchmarkMarkdownSummary {
         let capabilities = artifact.capability_report;
         let _ = writeln!(
             content,
-            "actual_backend=`{}` vendor=`{}` runtime_mode=`{}` cef_gpu_transport_available=`{}` fg_ready=`{}`",
+            "actual_backend=`{}` vendor=`{}` runtime_mode=`{}` native_ui_gpu_transport_available=`{}` fg_ready=`{}`",
             capabilities.actual_backend.as_str(),
             capabilities.adapter_vendor.as_str(),
             capabilities.runtime_mode.as_str(),
-            capabilities.cef_gpu_transport_available,
+            capabilities.native_ui_gpu_transport_available,
             capabilities.frame_generation.ready()
         );
         let _ = writeln!(content);
@@ -1154,7 +1157,7 @@ mod tests {
     }
 
     fn selection_for(mut capabilities: RendererCapabilityFacts) -> RendererSettingsSelection {
-        capabilities.cef_gpu_transport_available = true;
+        capabilities.native_ui_gpu_transport_available = true;
         resolve_renderer_settings(RendererSettingsRequest::baseline(), capabilities)
     }
 
@@ -1167,7 +1170,7 @@ mod tests {
         for kind in [
             BenchmarkSceneKind::ClearPresent,
             BenchmarkSceneKind::StaticScene,
-            BenchmarkSceneKind::CefUiComposition,
+            BenchmarkSceneKind::NativeUiComposition,
             BenchmarkSceneKind::Dx12VulkanParity,
             BenchmarkSceneKind::UploadStress,
             BenchmarkSceneKind::PipelineWarmupHotLoop,
@@ -1186,7 +1189,7 @@ mod tests {
                     .any(|scene| scene.kind == kind)
             );
         }
-        assert!(scene(BenchmarkSceneKind::CefUiComposition).requires_cef_gpu_transport);
+        assert!(scene(BenchmarkSceneKind::NativeUiComposition).requires_native_ui_gpu_transport);
         assert!(scene(BenchmarkSceneKind::Dx12VulkanParity).requires_backend_truth);
         assert!(scene(BenchmarkSceneKind::FgEligibilityPacing).requires_frame_generation_boundary);
         assert!(renderer_benchmark_scene("renderer.benchmark.scene.many_light_stress").is_some());
@@ -1248,10 +1251,10 @@ mod tests {
         );
 
         let mut metrics = RendererBenchmarkMetrics::clean_smoke();
-        metrics.cef_cpu_fallback_attempts = 1;
+        metrics.native_ui_cpu_fallback_attempts = 1;
         assert!(
             evaluate_perf_gates(
-                scene(BenchmarkSceneKind::CefUiComposition),
+                scene(BenchmarkSceneKind::NativeUiComposition),
                 settings,
                 capabilities,
                 &metrics,
@@ -1259,7 +1262,7 @@ mod tests {
                 false,
                 RendererPerfGateConfig::STRICT,
             )
-            .failed_gate(RendererPerfGateKind::NoProductCpuCefFallback)
+            .failed_gate(RendererPerfGateKind::NoProductCpuNativeUiFallback)
             .is_some()
         );
 
@@ -1279,7 +1282,7 @@ mod tests {
         );
 
         let mut unsupported_fg = RendererCapabilityFacts::minimal();
-        unsupported_fg.cef_gpu_transport_available = true;
+        unsupported_fg.native_ui_gpu_transport_available = true;
         let mut fg_settings = settings;
         fg_settings.frame_generation = FrameGenerationSetting::DlssFrameGeneration;
         assert!(

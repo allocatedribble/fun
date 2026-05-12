@@ -85,7 +85,7 @@ pub enum VirtualGeometryAssetKind {
     Foliage,
     AlphaHeavyAggregate,
     Transparent,
-    CefUi,
+    NativeUi,
     ArbitraryRuntimeFracture,
 }
 
@@ -97,7 +97,7 @@ impl VirtualGeometryAssetKind {
             Self::Foliage => "foliage",
             Self::AlphaHeavyAggregate => "alpha_heavy_aggregate",
             Self::Transparent => "transparent",
-            Self::CefUi => "cef_ui",
+            Self::NativeUi => "native_ui",
             Self::ArbitraryRuntimeFracture => "arbitrary_runtime_fracture",
         }
     }
@@ -111,7 +111,7 @@ pub enum VirtualGeometryAssetDecision {
     NonStaticOpaqueUnsupported,
     PoorAggregateGeometry,
     TransparentUnsupported,
-    CefUiUnsupported,
+    NativeUiUnsupported,
     RuntimeFractureUnsupported,
 }
 
@@ -123,7 +123,7 @@ impl VirtualGeometryAssetDecision {
             Self::NonStaticOpaqueUnsupported => "non_static_opaque_unsupported",
             Self::PoorAggregateGeometry => "poor_aggregate_geometry",
             Self::TransparentUnsupported => "transparent_unsupported",
-            Self::CefUiUnsupported => "cef_ui_unsupported",
+            Self::NativeUiUnsupported => "native_ui_unsupported",
             Self::RuntimeFractureUnsupported => "runtime_fracture_unsupported",
         }
     }
@@ -315,7 +315,7 @@ pub const fn evaluate_virtual_geometry_asset(
         VirtualGeometryAssetKind::Transparent => {
             VirtualGeometryAssetDecision::TransparentUnsupported
         }
-        VirtualGeometryAssetKind::CefUi => VirtualGeometryAssetDecision::CefUiUnsupported,
+        VirtualGeometryAssetKind::NativeUi => VirtualGeometryAssetDecision::NativeUiUnsupported,
         VirtualGeometryAssetKind::ArbitraryRuntimeFracture => {
             VirtualGeometryAssetDecision::RuntimeFractureUnsupported
         }
@@ -1096,7 +1096,7 @@ pub struct VirtualGeometryBenchmarkSample {
     pub upload_budget_bytes: u64,
     pub missing_pages: u32,
     pub fallback_cluster_count: u32,
-    pub cef_or_present_pacing_artifact_detected: bool,
+    pub native_ui_or_present_pacing_artifact_detected: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1105,7 +1105,7 @@ pub struct VirtualGeometryAcceptanceReport {
     pub lower_cpu_submission: bool,
     pub stable_p95: bool,
     pub bounded_upload_spikes: bool,
-    pub no_cef_or_present_pacing_artifact: bool,
+    pub no_native_ui_or_present_pacing_artifact: bool,
     pub explainable_fallback_behavior: bool,
     pub accepted: bool,
     pub keep_opt_in: bool,
@@ -1118,21 +1118,22 @@ impl VirtualGeometryAcceptanceReport {
             sample.funvg_cpu_submission_ns < sample.standard_cpu_submission_ns;
         let stable_p95 = sample.p95_net_effect_ns <= 0;
         let bounded_upload_spikes = sample.upload_bytes <= sample.upload_budget_bytes;
-        let no_cef_or_present_pacing_artifact = !sample.cef_or_present_pacing_artifact_detected;
+        let no_native_ui_or_present_pacing_artifact =
+            !sample.native_ui_or_present_pacing_artifact_detected;
         let explainable_fallback_behavior =
             sample.missing_pages == 0 || sample.fallback_cluster_count >= sample.missing_pages;
         let accepted = fewer_draw_calls
             && lower_cpu_submission
             && stable_p95
             && bounded_upload_spikes
-            && no_cef_or_present_pacing_artifact
+            && no_native_ui_or_present_pacing_artifact
             && explainable_fallback_behavior;
         Self {
             fewer_draw_calls,
             lower_cpu_submission,
             stable_p95,
             bounded_upload_spikes,
-            no_cef_or_present_pacing_artifact,
+            no_native_ui_or_present_pacing_artifact,
             explainable_fallback_behavior,
             accepted,
             keep_opt_in: !accepted,
@@ -1627,7 +1628,7 @@ mod tests {
                 upload_budget_bytes: 2 * 1024 * 1024,
                 missing_pages: 2,
                 fallback_cluster_count: 2,
-                cef_or_present_pacing_artifact_detected: false,
+                native_ui_or_present_pacing_artifact_detected: false,
             },
         );
 
@@ -1635,14 +1636,14 @@ mod tests {
         assert!(report.lower_cpu_submission);
         assert!(report.stable_p95);
         assert!(report.bounded_upload_spikes);
-        assert!(report.no_cef_or_present_pacing_artifact);
+        assert!(report.no_native_ui_or_present_pacing_artifact);
         assert!(report.explainable_fallback_behavior);
         assert!(report.accepted);
         assert!(!report.keep_opt_in);
     }
 
     #[test]
-    fn acceptance_rejects_hidden_cef_or_present_pacing_artifact() {
+    fn acceptance_rejects_hidden_native_ui_or_present_pacing_artifact() {
         let report = VirtualGeometryAcceptanceReport::from_benchmark_sample(
             VirtualGeometryBenchmarkSample {
                 standard_dense_draw_calls: 600,
@@ -1654,11 +1655,11 @@ mod tests {
                 upload_budget_bytes: 2 * 1024 * 1024,
                 missing_pages: 0,
                 fallback_cluster_count: 0,
-                cef_or_present_pacing_artifact_detected: true,
+                native_ui_or_present_pacing_artifact_detected: true,
             },
         );
 
-        assert!(!report.no_cef_or_present_pacing_artifact);
+        assert!(!report.no_native_ui_or_present_pacing_artifact);
         assert!(!report.accepted);
         assert!(report.keep_opt_in);
     }

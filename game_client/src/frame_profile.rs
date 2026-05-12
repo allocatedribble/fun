@@ -57,7 +57,14 @@ pub(crate) use frame_profile_start;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 mod enabled {
     use std::{
-        borrow::Cow, collections::BTreeMap, fmt::Write as _, panic::Location, time::Instant,
+        borrow::Cow,
+        collections::BTreeMap,
+        ffi::OsString,
+        fmt::Write as _,
+        fs, io,
+        panic::Location,
+        path::{Path, PathBuf},
+        time::Instant,
     };
 
     use bevy::{
@@ -66,10 +73,12 @@ mod enabled {
         ecs::schedule::{Schedule, ScheduleLabel},
         prelude::*,
     };
+    use serde_json::{Value, json};
 
     const MAIN_THREAD_NAME: &str = "main-thread";
     const GPU_RENDER_THREAD_NAME: &str = "gpu-render";
     const DIAGNOSTICS_THREAD_NAME: &str = "diagnostics";
+    const FRAME_GRAPH_TRACE_SCHEMA: &str = "fun.frame_graph_trace.v1";
     const GPU_SAMPLE_STATUS_CODE_PATH: &str = "render/gpu_sample_status_code";
     const RENDER_FRAME_INDEX_PATH: &str = "render/render_frame_index";
     const GPU_QUERY_FRAME_INDEX_PATH: &str = "render/gpu_query_frame_index";
@@ -78,6 +87,7 @@ mod enabled {
     const DEFAULT_MAX_DEPTH: usize = 10;
     const DEFAULT_TOP_CHILDREN: usize = 16;
     const DEFAULT_TOP_SPANS: usize = 32;
+    const DEFAULT_FRAME_GRAPH_TRACE_MAX_NODES: usize = 4096;
 
     #[derive(Debug, Clone)]
     struct ProfileSource {
@@ -227,6 +237,7 @@ mod enabled {
         render_frame_index: Option<u64>,
         gpu_query_frame_index: Option<u64>,
         sample_latency_frames: Option<u64>,
+        graph_trace: FrameGraphTraceConfig,
     }
 
     impl Default for DetailedFrameProfiler {
@@ -240,8 +251,10 @@ mod enabled {
             let row_events = std::env::var_os("FUN_FRAME_TIME_DIAGNOSTIC_ROW_EVENTS").is_some();
             let text_reports =
                 !row_events || std::env::var_os("FUN_FRAME_TIME_DIAGNOSTIC_TEXT_REPORTS").is_some();
+            let graph_trace = FrameGraphTraceConfig::from_env();
             Self {
-                enabled: std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some(),
+                enabled: std::env::var_os("FUN_FRAME_TIME_DIAGNOSTICS").is_some()
+                    || graph_trace.enabled,
                 frame_index: 0,
                 interval_frames: env_u64(
                     "FUN_FRAME_TIME_DIAGNOSTIC_INTERVAL",
@@ -272,6 +285,7 @@ mod enabled {
                 render_frame_index: None,
                 gpu_query_frame_index: None,
                 sample_latency_frames: None,
+                graph_trace,
             }
         }
 
@@ -314,7 +328,9 @@ mod enabled {
             }
 
             let frame_ns = elapsed_ns(self.frame_started);
-            let should_emit = self.frame_index.is_multiple_of(self.interval_frames)
+            let graph_trace_due = self.graph_trace.should_emit();
+            let should_emit = graph_trace_due
+                || self.frame_index.is_multiple_of(self.interval_frames)
                 || (self.min_frame_ns > 0 && frame_ns >= self.min_frame_ns);
             if !should_emit {
                 return;
@@ -373,6 +389,37 @@ mod enabled {
             }
             let profiler_emit_ns = elapsed_ns(emit_started);
             self.record_diagnostics_ns(&["frame_profiler", "emit_ns"], profiler_emit_ns);
+            if graph_trace_due {
+                let graph_started = Instant::now();
+                match self.emit_frame_graph_trace(
+                    frame_ns,
+                    summary,
+                    profiler_record_ns,
+                    profiler_serialize_ns,
+                    profiler_emit_ns,
+                ) {
+                    Ok(paths) => {
+                        game_shared::fun_diag_info!(
+                            target: "fun::frame_time::graph",
+                            frame = self.frame_index,
+                            compressed = %paths.compressed.display(),
+                            json = %paths.json.display(),
+                            markdown = %paths.markdown.display(),
+                            "frame graph trace emitted"
+                        );
+                    }
+                    Err(error) => {
+                        game_shared::fun_diag_info!(
+                            target: "fun::frame_time::graph",
+                            frame = self.frame_index,
+                            %error,
+                            "frame graph trace emission failed"
+                        );
+                    }
+                }
+                let graph_export_ns = elapsed_ns(graph_started);
+                self.record_diagnostics_ns(&["frame_profiler", "graph_export_ns"], graph_export_ns);
+            }
             game_shared::fun_diag_info!(
                 target: "fun::frame_time::diagnostics",
                 frame = self.frame_index,
@@ -773,6 +820,410 @@ mod enabled {
                 "frame profiler summary row"
             );
         }
+
+        fn emit_frame_graph_trace(
+            &mut self,
+            frame_ns: u64,
+            summary: FrameProfileSummary,
+            profiler_record_ns: u64,
+            profiler_serialize_ns: u64,
+            profiler_emit_ns: u64,
+        ) -> io::Result<FrameGraphTracePaths> {
+            let frame_id = self.frame_index;
+            let scene_id = std::env::var("FUN_SCENE_ID")
+                .unwrap_or_else(|_| game_scene::DEFAULT_SCENE_ID.0.to_owned());
+            let renderer_backend =
+                std::env::var("FUN_RENDERER_BACKEND").unwrap_or_else(|_| "fun".to_owned());
+            let mut nodes = Vec::new();
+            let mut parent_child_edges = Vec::new();
+            let mut next_node_id = 1u64;
+            let mut truncated_node_count = 0u64;
+            for (thread_name, thread) in &self.threads {
+                append_graph_node(GraphNodeAppend {
+                    nodes: &mut nodes,
+                    parent_child_edges: &mut parent_child_edges,
+                    next_node_id: &mut next_node_id,
+                    truncated_node_count: &mut truncated_node_count,
+                    max_nodes: self.graph_trace.max_nodes,
+                    frame_id,
+                    scene_id: &scene_id,
+                    renderer_backend: &renderer_backend,
+                    thread: thread_name,
+                    parent_id: None,
+                    scope_path: thread_name,
+                    node: &thread.root,
+                    inclusive_override_ns: Some(if thread_name == MAIN_THREAD_NAME {
+                        frame_ns
+                    } else {
+                        thread.display_ns()
+                    }),
+                });
+            }
+
+            if !self.threads.contains_key(MAIN_THREAD_NAME)
+                && nodes.len() < self.graph_trace.max_nodes
+            {
+                nodes.push(json!({
+                    "id": next_node_id,
+                    "parent_id": Value::Null,
+                    "frame_id": frame_id,
+                    "scene_id": scene_id,
+                    "renderer_backend": renderer_backend,
+                    "thread": MAIN_THREAD_NAME,
+                    "domain": "client",
+                    "function_scope_path": "main-thread/unattributed",
+                    "source_file": Value::Null,
+                    "source_line": Value::Null,
+                    "source_function": Value::Null,
+                    "start_ns": 0,
+                    "end_ns": frame_ns,
+                    "inclusive_ns": frame_ns,
+                    "exclusive_ns": frame_ns,
+                    "call_count": 0,
+                    "scheduler_task_id": Value::Null,
+                    "render_pass_id": Value::Null,
+                    "gpu_sample_metadata": Value::Null
+                }));
+            }
+
+            let thread_buckets = self
+                .threads
+                .iter()
+                .map(|(thread, profile)| {
+                    json!({
+                        "thread": thread,
+                        "inclusive_ns": profile.display_ns()
+                    })
+                })
+                .collect::<Vec<_>>();
+            let graph = json!({
+                "schema": FRAME_GRAPH_TRACE_SCHEMA,
+                "frame_id": frame_id,
+                "scene_id": scene_id,
+                "renderer_backend": renderer_backend,
+                "compressed_stream_is_source_of_truth": true,
+                "thread_buckets": thread_buckets,
+                "nodes": nodes,
+                "parent_child_edges": parent_child_edges,
+                "domain_edges": frame_graph_domain_edges(),
+                "gpu_sample_metadata": {
+                    "status": summary.gpu_sample_status,
+                    "app_frame_index": summary.app_frame_index,
+                    "render_frame_index": summary.render_frame_index,
+                    "gpu_query_frame_index": summary.gpu_query_frame_index,
+                    "sample_latency_frames": summary.sample_latency_frames
+                },
+                "profiler_overhead": {
+                    "record_ns": profiler_record_ns,
+                    "serialize_ns": profiler_serialize_ns,
+                    "emit_ns": profiler_emit_ns
+                },
+                "dropped_node_count": 0,
+                "truncated_node_count": truncated_node_count,
+                "retention_class": "local_alpha_summary",
+                "redaction_class": "operational_no_raw_secrets"
+            });
+            let paths = self.graph_trace.paths_for_frame(frame_id);
+            let compact_json = serde_json::to_vec(&graph).map_err(io::Error::other)?;
+            if self.graph_trace.write_compressed {
+                let compressed = zstd::stream::encode_all(io::Cursor::new(&compact_json), 3)?;
+                atomic_write_bytes(&paths.compressed, &compressed)?;
+            }
+            if self.graph_trace.write_json {
+                let pretty = serde_json::to_vec_pretty(&graph).map_err(io::Error::other)?;
+                atomic_write_bytes(&paths.json, &pretty)?;
+            }
+            if self.graph_trace.write_markdown {
+                atomic_write_bytes(&paths.markdown, frame_graph_markdown(&graph).as_bytes())?;
+            }
+            self.graph_trace.emitted_frame_count =
+                self.graph_trace.emitted_frame_count.saturating_add(1);
+            Ok(paths)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct FrameGraphTraceConfig {
+        enabled: bool,
+        write_compressed: bool,
+        write_json: bool,
+        write_markdown: bool,
+        output_root: PathBuf,
+        max_nodes: usize,
+        emitted_frame_count: u32,
+    }
+
+    impl FrameGraphTraceConfig {
+        fn from_env() -> Self {
+            let enabled = env_flag("FUN_FRAME_GRAPH_TRACE");
+            let formats = std::env::var("FUN_FRAME_GRAPH_TRACE_FORMAT")
+                .unwrap_or_else(|_| "compressed,json,markdown".to_owned());
+            let mut write_compressed = false;
+            let mut write_json = false;
+            let mut write_markdown = false;
+            for format in formats.split(',').map(str::trim) {
+                if format.eq_ignore_ascii_case("compressed")
+                    || format.eq_ignore_ascii_case("funpb")
+                    || format.eq_ignore_ascii_case("funpb.zst")
+                {
+                    write_compressed = true;
+                } else if format.eq_ignore_ascii_case("json") {
+                    write_json = true;
+                } else if format.eq_ignore_ascii_case("markdown")
+                    || format.eq_ignore_ascii_case("md")
+                {
+                    write_markdown = true;
+                }
+            }
+            if enabled && !write_compressed && !write_json && !write_markdown {
+                write_compressed = true;
+            }
+            Self {
+                enabled,
+                write_compressed,
+                write_json,
+                write_markdown,
+                output_root: std::env::var("FUN_FRAME_GRAPH_TRACE_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| default_frame_graph_trace_dir()),
+                max_nodes: env_usize(
+                    "FUN_FRAME_GRAPH_TRACE_MAX_NODES",
+                    DEFAULT_FRAME_GRAPH_TRACE_MAX_NODES,
+                )
+                .max(1),
+                emitted_frame_count: 0,
+            }
+        }
+
+        const fn should_emit(&self) -> bool {
+            self.enabled && self.emitted_frame_count == 0
+        }
+
+        fn paths_for_frame(&self, frame_id: u64) -> FrameGraphTracePaths {
+            let stem = format!("frame-{frame_id:06}.graph");
+            FrameGraphTracePaths {
+                compressed: self.output_root.join(format!("{stem}.funpb.zst")),
+                json: self.output_root.join(format!("{stem}.json")),
+                markdown: self.output_root.join(format!("{stem}.md")),
+            }
+        }
+    }
+
+    fn default_frame_graph_trace_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|root| root.join("target").join("alpha").join("profiler"))
+            .unwrap_or_else(|| PathBuf::from("target/alpha/profiler"))
+    }
+
+    #[derive(Debug, Clone)]
+    struct FrameGraphTracePaths {
+        compressed: PathBuf,
+        json: PathBuf,
+        markdown: PathBuf,
+    }
+
+    struct GraphNodeAppend<'a> {
+        nodes: &'a mut Vec<Value>,
+        parent_child_edges: &'a mut Vec<Value>,
+        next_node_id: &'a mut u64,
+        truncated_node_count: &'a mut u64,
+        max_nodes: usize,
+        frame_id: u64,
+        scene_id: &'a str,
+        renderer_backend: &'a str,
+        thread: &'a str,
+        parent_id: Option<u64>,
+        scope_path: &'a str,
+        node: &'a FrameProfileNode,
+        inclusive_override_ns: Option<u64>,
+    }
+
+    fn append_graph_node(args: GraphNodeAppend<'_>) -> Option<u64> {
+        if args.nodes.len() >= args.max_nodes {
+            *args.truncated_node_count = (*args.truncated_node_count).saturating_add(1);
+            return None;
+        }
+
+        let id = *args.next_node_id;
+        *args.next_node_id = (*args.next_node_id).saturating_add(1);
+        let inclusive_ns = args
+            .inclusive_override_ns
+            .unwrap_or_else(|| args.node.display_ns());
+        let start_ns = args.node.first_start_ns.unwrap_or_default();
+        let end_ns = args
+            .node
+            .last_end_ns
+            .unwrap_or_else(|| start_ns.saturating_add(inclusive_ns));
+        let domain = frame_graph_domain(args.thread, args.scope_path);
+        args.nodes.push(json!({
+            "id": id,
+            "parent_id": args.parent_id,
+            "frame_id": args.frame_id,
+            "scene_id": args.scene_id,
+            "renderer_backend": args.renderer_backend,
+            "thread": args.thread,
+            "domain": domain,
+            "function_scope_path": args.scope_path,
+            "source_file": args.node.source.as_ref().map(|source| source.file),
+            "source_line": args.node.source.as_ref().map(|source| source.line),
+            "source_function": args.node.source.as_ref().map(|source| source.function),
+            "start_ns": start_ns,
+            "end_ns": end_ns,
+            "inclusive_ns": inclusive_ns,
+            "exclusive_ns": args.node.self_ns(),
+            "call_count": args.node.count,
+            "scheduler_task_id": scheduler_task_id(domain, args.scope_path),
+            "render_pass_id": render_pass_id(domain, args.scope_path),
+            "gpu_sample_metadata": if args.thread == GPU_RENDER_THREAD_NAME {
+                json!({ "thread_bucket": GPU_RENDER_THREAD_NAME })
+            } else {
+                Value::Null
+            }
+        }));
+        if let Some(parent_id) = args.parent_id {
+            args.parent_child_edges.push(json!({
+                "from": parent_id,
+                "to": id,
+                "kind": "parent_child"
+            }));
+        }
+
+        for child in args.node.children.values() {
+            let child_scope_path = format!("{}/{}", args.scope_path, child.name);
+            append_graph_node(GraphNodeAppend {
+                nodes: &mut *args.nodes,
+                parent_child_edges: &mut *args.parent_child_edges,
+                next_node_id: &mut *args.next_node_id,
+                truncated_node_count: &mut *args.truncated_node_count,
+                max_nodes: args.max_nodes,
+                frame_id: args.frame_id,
+                scene_id: args.scene_id,
+                renderer_backend: args.renderer_backend,
+                thread: args.thread,
+                parent_id: Some(id),
+                scope_path: &child_scope_path,
+                node: child,
+                inclusive_override_ns: None,
+            });
+        }
+        Some(id)
+    }
+
+    fn frame_graph_domain(thread: &str, scope_path: &str) -> &'static str {
+        let lower = scope_path.to_ascii_lowercase();
+        if lower.contains("rvelte") || lower.contains("native_ui") || lower.contains("/ui") {
+            "rvelte"
+        } else if lower.contains("lux") || lower.contains("solari") || lower.contains("lighting") {
+            "lux"
+        } else if thread == GPU_RENDER_THREAD_NAME
+            || thread == "render-cpu"
+            || lower.contains("render")
+        {
+            "render"
+        } else if lower.contains("server") || lower.contains("net") {
+            "server"
+        } else if lower.contains("schedule") || lower.contains("fixed") {
+            "scheduler"
+        } else {
+            "client"
+        }
+    }
+
+    fn scheduler_task_id<'a>(domain: &str, scope_path: &'a str) -> Option<&'a str> {
+        (domain == "scheduler").then_some(scope_path)
+    }
+
+    fn render_pass_id<'a>(domain: &str, scope_path: &'a str) -> Option<&'a str> {
+        (domain == "render" || domain == "lux").then_some(scope_path)
+    }
+
+    fn frame_graph_domain_edges() -> Vec<Value> {
+        vec![
+            json!({"from_domain": "scheduler", "to_domain": "client", "kind": "schedule_drives_client"}),
+            json!({"from_domain": "client", "to_domain": "server", "kind": "client_server_packets"}),
+            json!({"from_domain": "client", "to_domain": "rvelte", "kind": "native_ui_route_tick"}),
+            json!({"from_domain": "client", "to_domain": "render", "kind": "render_world_submission"}),
+            json!({"from_domain": "render", "to_domain": "lux", "kind": "lighting_graph"}),
+        ]
+    }
+
+    fn frame_graph_markdown(graph: &Value) -> String {
+        let mut output = String::new();
+        let _ = writeln!(output, "# Frame Graph Trace");
+        let _ = writeln!(output);
+        let _ = writeln!(output, "- Schema: `{}`", value_str(graph, "schema"));
+        let _ = writeln!(output, "- Frame ID: `{}`", value_u64(graph, "frame_id"));
+        let _ = writeln!(output, "- Scene ID: `{}`", value_str(graph, "scene_id"));
+        let _ = writeln!(
+            output,
+            "- Renderer backend: `{}`",
+            value_str(graph, "renderer_backend")
+        );
+        let _ = writeln!(
+            output,
+            "- Truncated nodes: `{}`",
+            value_u64(graph, "truncated_node_count")
+        );
+        let _ = writeln!(output);
+        let _ = writeln!(
+            output,
+            "| ID | Parent | Thread | Domain | Scope | Inclusive ns | Exclusive ns | Calls |"
+        );
+        let _ = writeln!(
+            output,
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: |"
+        );
+        if let Some(nodes) = graph.get("nodes").and_then(Value::as_array) {
+            for node in nodes.iter().take(64) {
+                let parent = node
+                    .get("parent_id")
+                    .and_then(Value::as_u64)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_owned());
+                let _ = writeln!(
+                    output,
+                    "| {} | {} | `{}` | `{}` | `{}` | {} | {} | {} |",
+                    value_u64(node, "id"),
+                    parent,
+                    value_str(node, "thread"),
+                    value_str(node, "domain"),
+                    value_str(node, "function_scope_path"),
+                    value_u64(node, "inclusive_ns"),
+                    value_u64(node, "exclusive_ns"),
+                    value_u64(node, "call_count")
+                );
+            }
+        }
+        output
+    }
+
+    fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut temp_name = path
+            .file_name()
+            .map(OsString::from)
+            .unwrap_or_else(|| OsString::from("artifact"));
+        temp_name.push(".tmp");
+        let temp_path = path.with_file_name(temp_name);
+        if temp_path.exists() {
+            fs::remove_file(&temp_path)?;
+        }
+        fs::write(&temp_path, bytes)?;
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        fs::rename(temp_path, path)
+    }
+
+    fn value_str<'a>(value: &'a Value, key: &str) -> &'a str {
+        value.get(key).and_then(Value::as_str).unwrap_or("unknown")
+    }
+
+    fn value_u64(value: &Value, key: &str) -> u64 {
+        value.get(key).and_then(Value::as_u64).unwrap_or_default()
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1069,6 +1520,12 @@ mod enabled {
             return default_value;
         };
         value.parse::<usize>().unwrap_or(default_value)
+    }
+
+    fn env_flag(name: &str) -> bool {
+        std::env::var(name).is_ok_and(|value| {
+            value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
+        })
     }
 
     pub(crate) fn end_detailed_frame_profile(mut profiler: ResMut<DetailedFrameProfiler>) {
@@ -1375,6 +1832,82 @@ mod enabled {
             assert_eq!(summary.render_cpu_ns, 10);
             assert_eq!(summary.total_profiled_ns, 75);
             assert_eq!(summary.thread_count, 3);
+        }
+
+        #[test]
+        fn frame_graph_trace_writes_compressed_json_and_markdown_views() {
+            let mut profiler = DetailedFrameProfiler::from_env();
+            profiler.enabled = true;
+            profiler.frame_index = 1;
+            profiler.graph_trace = FrameGraphTraceConfig {
+                enabled: true,
+                write_compressed: true,
+                write_json: true,
+                write_markdown: true,
+                output_root: default_frame_graph_trace_dir(),
+                max_nodes: DEFAULT_FRAME_GRAPH_TRACE_MAX_NODES,
+                emitted_frame_count: 0,
+            };
+            profiler.record_thread_ns(
+                MAIN_THREAD_NAME,
+                &["Update", "native_ui_route_tick"],
+                None,
+                1_000,
+                Some(0),
+            );
+            profiler.record_thread_ns(
+                "render-cpu",
+                &["render", "arena_blockout_extract"],
+                None,
+                2_000,
+                Some(1_000),
+            );
+            profiler.record_thread_ns(
+                GPU_RENDER_THREAD_NAME,
+                &["render", "arena_blockout_pass"],
+                None,
+                3_000,
+                Some(2_000),
+            );
+            profiler.record_gpu_sample_metadata("ready", Some(1), Some(1), Some(1), Some(0));
+
+            let summary = profiler.summary(8_000);
+            let paths = profiler
+                .emit_frame_graph_trace(8_000, summary, 10, 20, 30)
+                .expect("frame graph trace should write");
+
+            assert!(paths.compressed.exists());
+            assert!(paths.json.exists());
+            assert!(paths.markdown.exists());
+            assert!(
+                std::fs::metadata(&paths.compressed)
+                    .expect("compressed trace metadata should read")
+                    .len()
+                    > 0
+            );
+            let graph: Value = serde_json::from_slice(
+                &std::fs::read(&paths.json).expect("frame graph json should read"),
+            )
+            .expect("frame graph json should parse");
+            assert_eq!(graph["schema"], FRAME_GRAPH_TRACE_SCHEMA);
+            assert_eq!(graph["frame_id"], 1);
+            assert_eq!(graph["scene_id"], game_scene::DEFAULT_SCENE_ID.0);
+            assert_eq!(graph["renderer_backend"], "fun");
+            assert_eq!(graph["compressed_stream_is_source_of_truth"], true);
+            assert!(
+                graph["nodes"]
+                    .as_array()
+                    .expect("nodes should be an array")
+                    .iter()
+                    .any(|node| node["domain"] == "rvelte")
+            );
+            assert!(
+                graph["domain_edges"]
+                    .as_array()
+                    .expect("domain edges should be an array")
+                    .iter()
+                    .any(|edge| edge["from_domain"] == "client" && edge["to_domain"] == "rvelte")
+            );
         }
 
         #[test]

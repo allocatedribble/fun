@@ -1,18 +1,18 @@
-//! FS-11 page scheduler and virtual resource scheduling.
+//! FS-11 renderer artifact admission and virtual resource scheduling.
 //!
-//! Turns the renderer's typed page / virtual-resource policy into
-//! scheduler-executable work. The renderer's existing page-priority
-//! and virtual-resource code produces typed [`PageRequest`]s; this
-//! module admits, coalesces, defers, or cancels them per the FS-11
-//! scheduling rules, then emits a typed
+//! Turns ECS-derived render artifact demand into scheduler-executable
+//! renderer work. `fun-ecs` owns generic spatial pages, residency,
+//! dirty regions, and cross-domain handoff queues; this module is the
+//! renderer-side admission helper for GPU artifact realization. It
+//! admits, coalesces, defers, or cancels typed [`PageRequest`] values
+//! per the FS-11 scheduling rules, then emits a typed
 //! [`PageSchedulerReport`] with `p50` / `p95` / `p99` latency
 //! summaries.
 //!
 //! **Scope guard (FS-11)**: this module is contract + policy helper
-//! only. The renderer remains owner of page priority — the
-//! [`PagePriority`] value on a [`PageRequest`] is set by the
-//! renderer's policy layer and is read-only from this scheduler's
-//! perspective. The only priority transformation this module
+//! only. ECS/world state remains outside the renderer. The
+//! [`PagePriority`] value on a [`PageRequest`] is read-only from this
+//! scheduler's perspective. The only priority transformation this module
 //! performs is *aging* a pending request's effective priority based
 //! on how many ticks it has waited; the base priority the renderer
 //! supplied is preserved on the typed request record.
@@ -167,10 +167,9 @@ impl PagePriority {
 
 /// FS-11 typed page request.
 ///
-/// Constructed by the renderer's policy layer (page-priority
-/// predictor, virtual-resource feedback consumer, texture streaming
-/// budget owner) and handed to the [`PageScheduler`]'s `admit`
-/// method.
+/// Constructed from ECS-derived render artifact demand and handed to
+/// the [`PageScheduler`]'s `admit` method. The page id is renderer
+/// artifact identity, not authoritative world state.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct PageRequest {
     /// Stable page identifier (opaque to the scheduler).

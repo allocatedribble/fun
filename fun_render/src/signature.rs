@@ -103,7 +103,7 @@ pub enum FunRenderPath {
     MeshletDynamicDense,
     RayProxyOnly,
     Viewmodel,
-    CefUi,
+    NativeUi,
     DebugOnly,
 }
 
@@ -117,7 +117,7 @@ impl FunRenderPath {
             Self::MeshletDynamicDense => "meshlet_dynamic_dense",
             Self::RayProxyOnly => "ray_proxy_only",
             Self::Viewmodel => "viewmodel",
-            Self::CefUi => "cef_ui",
+            Self::NativeUi => "native_ui",
             Self::DebugOnly => "debug_only",
         }
     }
@@ -149,7 +149,7 @@ pub struct FunRenderPathInput {
     pub distance_band: FunRenderDistanceBand,
     pub ray_proxy_only: bool,
     pub viewmodel: bool,
-    pub cef_ui: bool,
+    pub native_ui: bool,
     pub debug_only: bool,
     pub msaa_required: bool,
 }
@@ -172,7 +172,7 @@ impl Default for FunRenderPathInput {
             distance_band: FunRenderDistanceBand::Mid,
             ray_proxy_only: false,
             viewmodel: false,
-            cef_ui: false,
+            native_ui: false,
             debug_only: false,
             msaa_required: false,
         }
@@ -212,8 +212,8 @@ impl FunRenderPathArbiter {
             return FunRenderPath::DebugOnly;
         }
 
-        if input.cef_ui || input.geometry_class == FunGeometryClass::Ui {
-            return FunRenderPath::CefUi;
+        if input.native_ui || input.geometry_class == FunGeometryClass::Ui {
+            return FunRenderPath::NativeUi;
         }
 
         if input.ray_proxy_only {

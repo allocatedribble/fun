@@ -2,13 +2,13 @@
 members = [
     "fun_editor_core",
     "fun_dx12_dlss",
+    "fun-ecs",
     "fun_host",
     "fun-lux",
     "fun-scene",
     "fun-scene-macros",
     "fun_render",
     "fun-renderer",
-    "fun_ui_cef",
     "game_client",
     "game_client/ui/rvelte_bridge",
     "game_launcher",
@@ -23,7 +23,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.0.1"
 
 [workspace.lints.clippy]
 print_stdout = "deny"
@@ -58,6 +58,7 @@ compactly = "0.1.6"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 fun_lux = { package = "fun-lux", path = "fun-lux" }
 fun_ai_core = { path = "../fun-ai/crates/fun_ai_core" }
+fun_ecs = { package = "fun-ecs", path = "fun-ecs" }
 fun_renderer = { package = "fun-renderer", path = "fun-renderer" }
 fun_scene = { package = "fun-scene", path = "fun-scene" }
 fun_scene_macros = { package = "fun-scene-macros", path = "fun-scene-macros" }
@@ -69,6 +70,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+smallvec = "1.15.1"
 thunder = { path = "../thunder" }
 tracing = "0.1"
 zeroize = "1"

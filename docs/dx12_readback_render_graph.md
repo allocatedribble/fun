@@ -12,7 +12,7 @@ Reordering or pass fusion needs PIX/benchmark evidence first.
 | `bevy_render::view::window::screenshot` | capture-only | screenshot | nonblocking `map_async`; completion is awaited in the async task, outside the render hot path |
 | `bevy_render::diagnostic::internal` | render diagnostics only | timestamp/query/value diagnostics | nonblocking query readback with submitted-frame reuse |
 | `bevy_render::diagnostic::tracy_gpu` | Tracy GPU context initialization | timestamp | one explicit wait during Tracy GPU startup only |
-| CEF GPU interop | UI transport only | native copy, not a readback | must not map to CPU in accelerated lanes |
+| NATIVE_UI GPU interop | UI transport only | native copy, not a readback | must not map to CPU in accelerated lanes |
 
 Normal performance lanes should have zero blocking readback waits. Any active
 readback, map, or device poll in a performance lane must be visible in benchmark
@@ -81,10 +81,10 @@ PIX barrier summary is imported.
 The intended ordering remains:
 
 ```text
-world render -> Solari/clouds/lighting -> post process -> CEF UI -> debug overlays -> present
+world render -> Solari/clouds/lighting -> post process -> NATIVE_UI UI -> debug overlays -> present
 ```
 
-CEF UI is modeled after post-processing and before debug/present. It must not
+NATIVE_UI UI is modeled after post-processing and before debug/present. It must not
 feed DLSS input color, motion vectors, depth, or Ray Reconstruction guide
 buffers.
 

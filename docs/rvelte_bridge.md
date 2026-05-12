@@ -89,7 +89,7 @@ cargo fmt -p fun-rvelte-bridge --check          # exit 0
 cargo check -p fun-rvelte-bridge                 # exit 0
 cargo clippy -p fun-rvelte-bridge --all-targets -- -D warnings   # exit 0
 cargo test -p fun-rvelte-bridge                  # 13/13 passing
-cargo tree -p fun-rvelte-bridge -e normal | grep -ciE "wgpu|vulkan|metal|dx12|d3d12|cef|swapchain|fun-renderer|fun_renderer"   # 0
+cargo tree -p fun-rvelte-bridge -e normal | grep -ciE "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer|fun_renderer"   # 0
 ```
 
 Plus regression: `cargo test --workspace` from `rvelte/` reports
@@ -100,9 +100,9 @@ Plus regression: `cargo test --workspace` from `rvelte/` reports
 Pass-72 invariant: zero concrete renderer dependency.
 
 - `Cargo.toml` does not list `fun-renderer`, `wgpu`, `ash`, `metal`,
-  `windows`, `cef`, `web-sys`, or `wasm-bindgen` as a dependency.
+  `windows`, `native_ui`, `web-sys`, or `wasm-bindgen` as a dependency.
 - `cargo tree -p fun-rvelte-bridge -e normal | grep -ciE
-  "wgpu|vulkan|metal|dx12|d3d12|cef|swapchain|fun-renderer|fun_renderer"`
+  "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer|fun_renderer"`
   returns 0.
 - The adapter is generic over `S: Renderer2DCommandSink`; only
   pass-73 will plug in a concrete `S`.
@@ -121,10 +121,10 @@ Per the pass-71 design's migration plan:
 - **Pass 76** — add `--rvelte-bridge=<route>` to the game-client
   binary so a single product binary can boot any of the six
   routes through the adapter.
-- **Pass 77+** — staged removal of legacy CEF / browser UI.
+- **Pass 77+** — staged removal of legacy NATIVE_UI / browser UI.
 
 Pass 72 explicitly does **not** authorize any change under
-`fun/game_client/ui/main`, `fun/fun_ui_cef`, or `fun/fun_host`.
+`fun/game_client/ui/main`, `fun/fun_ui_native_ui`, or `fun/fun_host`.
 
 ## Exit Criteria
 
@@ -132,5 +132,5 @@ Pass 72 explicitly does **not** authorize any change under
   `fun/game_client/ui/rvelte_bridge/` is a registered workspace
   member with the public surface from the pass-71 design.
 - Still no concrete renderer dependency: production tree contains
-  zero matches for `wgpu|vulkan|metal|dx12|d3d12|cef|swapchain|
+  zero matches for `wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|
   fun-renderer|fun_renderer`.

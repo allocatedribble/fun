@@ -715,43 +715,43 @@ impl UiDebugBorder {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Component)]
-pub enum CefTransportMode {
+pub enum NativeUiTransportMode {
     GpuSharedTexture,
     CpuDiagnosticOnly,
     Disabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct CefSurface {
+pub struct NativeUiSurface {
     pub surface_id: RenderStableId,
-    pub transport: CefTransportMode,
+    pub transport: NativeUiTransportMode,
     pub gpu_only: bool,
 }
 
-impl Default for CefSurface {
+impl Default for NativeUiSurface {
     fn default() -> Self {
         Self {
             surface_id: RenderStableId::INVALID,
-            transport: CefTransportMode::GpuSharedTexture,
+            transport: NativeUiTransportMode::GpuSharedTexture,
             gpu_only: true,
         }
     }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Component)]
-pub struct CefFrameProducer {
+pub struct NativeUiFrameProducer {
     pub producer_id: RenderStableId,
     pub max_frame_rate_hz: u16,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
-pub struct CefFrameToken {
+pub struct NativeUiFrameToken {
     pub frame_index: u64,
     pub fence_value: u64,
     pub producer: RenderStableId,
 }
 
-impl CefFrameToken {
+impl NativeUiFrameToken {
     pub const INVALID: Self = Self {
         frame_index: 0,
         fence_value: 0,
@@ -779,7 +779,7 @@ impl CefFrameToken {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CefHealthState {
+pub enum NativeUiHealthState {
     Healthy,
     WaitingForFrame,
     TransportDegraded,
@@ -787,14 +787,14 @@ pub enum CefHealthState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct CefSurfaceHealth {
-    pub state: CefHealthState,
+pub struct NativeUiSurfaceHealth {
+    pub state: NativeUiHealthState,
 }
 
-impl Default for CefSurfaceHealth {
+impl Default for NativeUiSurfaceHealth {
     fn default() -> Self {
         Self {
-            state: CefHealthState::WaitingForFrame,
+            state: NativeUiHealthState::WaitingForFrame,
         }
     }
 }
@@ -1407,27 +1407,27 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
         ChangeDetectionPolicy::BevyChanged,
     ),
     component(
-        "CefSurface",
+        "NativeUiSurface",
         ComponentTemperature::Cold,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
     ),
     component(
-        "CefFrameProducer",
+        "NativeUiFrameProducer",
         ComponentTemperature::Cold,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
     ),
     component(
-        "CefFrameToken",
+        "NativeUiFrameToken",
         ComponentTemperature::Hot,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
     ),
     component(
-        "CefTransportMode",
+        "NativeUiTransportMode",
         ComponentTemperature::Cold,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
     ),
     component(
-        "CefSurfaceHealth",
+        "NativeUiSurfaceHealth",
         ComponentTemperature::Cold,
         ChangeDetectionPolicy::DirtyBitsOrEvents,
     ),
@@ -1582,11 +1582,11 @@ mod tests {
         assert_component::<UiColorSpace>();
         assert_component::<UiTargetRect>();
         assert_component::<UiDebugBorder>();
-        assert_component::<CefTransportMode>();
-        assert_component::<CefSurface>();
-        assert_component::<CefFrameProducer>();
-        assert_component::<CefFrameToken>();
-        assert_component::<CefSurfaceHealth>();
+        assert_component::<NativeUiTransportMode>();
+        assert_component::<NativeUiSurface>();
+        assert_component::<NativeUiFrameProducer>();
+        assert_component::<NativeUiFrameToken>();
+        assert_component::<NativeUiSurfaceHealth>();
         assert_component::<ToneMappingSettings>();
         assert_component::<ExposureSettings>();
         assert_component::<ColorGradingSettings>();
@@ -1648,11 +1648,11 @@ mod tests {
             "UiColorSpace",
             "UiTargetRect",
             "UiDebugBorder",
-            "CefSurface",
-            "CefFrameProducer",
-            "CefFrameToken",
-            "CefTransportMode",
-            "CefSurfaceHealth",
+            "NativeUiSurface",
+            "NativeUiFrameProducer",
+            "NativeUiFrameToken",
+            "NativeUiTransportMode",
+            "NativeUiSurfaceHealth",
             "ToneMappingSettings",
             "ExposureSettings",
             "ColorGradingSettings",

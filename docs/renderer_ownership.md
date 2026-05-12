@@ -8,15 +8,17 @@ scope: fun-renderer, fun-lux, fun_render, fun-ai, bevy
 
 | package | crate | folder | owner | purpose |
 | --- | --- | --- | --- | --- |
+| `fun-ecs` | `fun_ecs` | `fun/fun-ecs` | ECS spatial declarations | generic spatial domains, terrain volume declarations, stream cameras/sources, hot SoA page tables, residency maps, dirty ledgers, derived artifact registries, authoring commands, and cross-domain handoff queues |
 | `fun-scene` | `fun_scene` | `fun/fun-scene` | scene authoring | FUN-owned `fun!`/`fun_list!` scene macros, deterministic scene manifests, runtime scene spawning, editor scene authoring, server scene authority, streaming declarations, renderer-facing scene components, lighting/GI authoring components |
-| `fun-renderer` | `fun_renderer` | `fun/fun-renderer` | renderer core | default renderer core, virtual geometry, virtual shadows, GPU scene database, frame graph, page scheduler, renderer-owned CEF compositor, upscaling/frame-generation orchestration, DX12/Vulkan/Metal backend abstraction, `bevy_ecs` extraction/scheduling/GPU-scene integration |
+| `fun-renderer` | `fun_renderer` | `fun/fun-renderer` | renderer core | default renderer core, virtual geometry, virtual shadows, GPU scene database, frame graph, ECS-derived render artifact realization, renderer-owned NATIVE_UI compositor, upscaling/frame-generation orchestration, DX12/Vulkan/Metal backend abstraction, `bevy_ecs` extraction/scheduling/GPU-scene integration |
 | `fun-lux` | `fun_lux` | `fun/fun-lux` | lighting | direct lighting, many-light sampling, virtual shadow policy, GI, reflections, denoising/reconstruction policy, radiance/surface/probe caches |
 | `fun_render` | `fun_render` | `fun/fun_render` | Bevy/game bridge | extraction, app/plugin integration, feature flags, legacy compatibility, diagnostics, benchmark integration |
 
-`fun-renderer` depends on `fun-scene` and `fun-lux`. `fun_render` depends on and
-re-exports `fun_renderer`, `fun_scene`, and `fun_lux` for Bevy/game integration.
-This makes Fun Scene and Fun Lux part of the renderer product/API while keeping
-scene authoring and lighting code in maintainable crates.
+`fun-renderer` depends on `fun-ecs`, `fun-scene`, and `fun-lux`. `fun_render`
+depends on and re-exports `fun_renderer`, `fun_scene`, and `fun_lux` for
+Bevy/game integration. This makes the ECS spatial declarations, Fun Scene, and
+Fun Lux part of the renderer product/API while keeping spatial authority, scene
+authoring, and lighting code in maintainable crates.
 
 ## ECS-First Scene Flow
 
@@ -26,16 +28,45 @@ the local Bevy fork's confirmed scene resolver and exposes FUN-owned `fun!` and
 
 ```text
 Bevy scene resolver
+  -> fun-ecs spatial domains, page resources, dirty ledgers, handoff queues
   -> fun-scene / fun!
   -> ECS entities, typed components, observers, stable identities
   -> fun_render extraction and RenderApp scheduling
-  -> fun-renderer GPU scene DB, frame graph, virtual geometry, virtual shadows
-  -> fun-lux light DB, virtual shadow policy, many-light sampling, GI/reflections
+  -> fun-renderer consumes ECS-derived render artifacts and realizes GPU resources
+  -> fun-lux consumes ECS/Lux inputs and emits backend-neutral lighting intents
 ```
 
 The renderer must not pull opaque scene blobs out of gameplay and mutate secret
 render objects. It consumes typed ECS components, archetypes, resources, events,
 observers, and change ticks.
+
+## ECS-First Spatial Streaming
+
+`fun-ecs` owns generic spatial streaming declarations. The product default
+terrain cell is one foot:
+
+```rust
+pub const FUN_DEFAULT_TERRAIN_VOXEL_EDGE_UM: u32 = 304_800;
+```
+
+Inch-scale voxels are allowed only as bounded fine-detail overlays. They are not
+the global world default.
+
+The ECS entity surface is high level: terrain volumes, stream cameras, stream
+sources, authoring tools, debug pins, and high-level world objects. Hot per-page
+state lives in ECS resources backed by dense tables:
+
+- `EcsSpatialPageTable`
+- `EcsPageResidencyMap`
+- `EcsDirtyRegionLedger`
+- `EcsDerivedArtifactRegistry`
+- `EcsStreamRequestQueue`
+- `EcsCrossDomainHandoffQueues`
+
+`fun-renderer` consumes `TerrainSurfacePackets` renderer-artifact rows and
+realizes GPU resources. `fun-lux` consumes lighting intent rows. Avis or the
+active physics runway consumes `PhysicsCollisionProxy` cook rows. Thunder
+consumes `NetworkDeltaRows` rows, not renderer page residency.
 
 ## Scene Authority And Streaming
 
@@ -155,7 +186,7 @@ instances must not invalidate unrelated stable histories.
 
 Extraction copies only compact deltas into `ExtractedSceneDeltas`: changed
 transforms, visibility flags, geometry refs, material refs, light refs, chunk
-load/unload, editor salience, added virtual geometry, removed renderables, CEF
+load/unload, editor salience, added virtual geometry, removed renderables, NATIVE_UI
 surfaces, viewport policies, and upscale policies. Runtime extraction must use
 Bevy change detection such as `Changed<Transform>`, `Changed<Renderable>`,
 `Changed<LuxLight>`, `Added<VirtualGeometryAuthoring>`, and
@@ -163,7 +194,7 @@ Bevy change detection such as `Changed<Transform>`, `Changed<Renderable>`,
 path.
 
 `FrameGraph` remains a renderer-owned resource, but ECS compiles it from active
-components and policies. `CefSurface` adds CEF GPU import and UI composite
+components and policies. `NativeUiSurface` adds NATIVE_UI GPU import and UI composite
 nodes, DLSS/FSR `UpscalePolicy` adds the corresponding super-resolution node,
 hybrid GI mode adds GI passes, and `VirtualGeometryAuthoring` adds virtual
 geometry passes.
@@ -175,7 +206,7 @@ persistent, imported, and readback/debug classes. `RendererResourceKind`
 enumerates the first required kinds: staging buffer pages, ring allocations,
 transient upload batches, frame-lifetime textures and buffers, pass-local
 scratch, material/mesh tables, page pools, shadow page pools, GI/radiance
-caches, texture residency pools, CEF shared textures, swapchain resources,
+caches, texture residency pools, NATIVE_UI shared textures, swapchain resources,
 vendor SDK resources, diagnostics readback, screenshots, and benchmark
 captures.
 
@@ -219,7 +250,7 @@ filtering, GI trace/cache update, reflection trace, and denoising.
 The first renderer ECS lane covers these stable events: scene spawned, scene
 patched, chunk loaded/unloaded, geometry changed, material changed, light
 changed, transform changed, page fault, shadow invalidated, GI cache
-invalidated, upscaler reset, device lost/restored, and CEF GPU frame available.
+invalidated, upscaler reset, device lost/restored, and NATIVE_UI GPU frame available.
 Change detection must route transform changes to motion data, material changes
 to material tables, geometry changes to page residency, light changes to
 `fun-lux` candidate tables plus shadow invalidation, and scene patches to
@@ -229,7 +260,7 @@ Scene authoring component names do not repeat the product prefix. The crate path
 already supplies context, so the first-party component taxonomy uses names such
 as `SceneStableIdentity`, `SceneRevision`, `SceneChunkId`, `Renderable`,
 `VirtualGeometryAuthoring`, `RendererBounds`, `LuxLight`, `LuxEmissive`,
-`LuxGiParticipant`, `CefSurface`, `ViewportUiTarget`, `UpscalePolicy`, and
+`LuxGiParticipant`, `NativeUiSurface`, `ViewportUiTarget`, `UpscalePolicy`, and
 `ViewportRenderPolicy`.
 
 ## Virtual Geometry And Shadows
@@ -315,13 +346,13 @@ editor selection, streaming priority, scene chunk membership, and temporal
 instability all remain visible to Bevy scheduling and tests.
 
 `HeuristicDebugOverlay` stores `HeuristicPriorityRecord` values with a
-`HeuristicCauseSet`. CEF/Svelte diagnostics can render which ECS inputs caused
+`HeuristicCauseSet`. NATIVE_UI/Svelte diagnostics can render which ECS inputs caused
 page, shadow, light, GI cache, shading-rate, or ML fallback priority without
 adding a runtime Bevy UI overlay.
 
 ## Editor Scene Operations
 
-The editor authoring path is typed and ECS-first. CEF/Svelte edits typed scene
+The editor authoring path is typed and ECS-first. NATIVE_UI/Svelte edits typed scene
 data and sends `scene.operation.apply` to the Rust host. The host validates a
 `fun_scene::EditorOperationEnvelope`, queues accepted operations into
 `EditorOperationQueue`, and the `fun-scene` operation systems apply supported
@@ -356,7 +387,7 @@ Canonical patch example:
 
 `.fun` assets are declarative. Asset files may reference typed values and scene
 assets, but dynamic Rust expressions remain macro-only. Editor viewport panels
-remain CEF/Svelte. Editor overlays are renderer debug primitives or CEF UI
+remain NATIVE_UI/Svelte. Editor overlays are renderer debug primitives or NATIVE_UI UI
 composited late; runtime Bevy UI is not a product/editor panel path.
 
 Observers are for local scene/editor behavior: selection changed, gizmo dragged,
@@ -394,7 +425,7 @@ Renderer bridge flags in `fun_render` forward into `fun-renderer`:
 - `dx12_native_interop`
 - `vulkan_backend`
 - `metal_backend`
-- `cef_gpu_only`
+- `native_ui_gpu_only`
 - `upscaling`
 - `dlss`
 - `fsr`
@@ -416,7 +447,7 @@ Compatibility aliases retained for one transition cycle:
 - `fun_renderer_dx12` -> `dx12_native_interop` in `fun-renderer`
 - `fun_renderer_vulkan` -> `vulkan_backend`
 - `fun_renderer_metal` -> `metal_backend`
-- `fun_renderer_cef_gpu_only` -> `cef_gpu_only`
+- `fun_renderer_native_ui_gpu_only` -> `native_ui_gpu_only`
 - `fun_renderer_upscale` -> `upscaling`
 - `fun_renderer_dlss` -> `dlss`
 - `fun_renderer_fsr` -> `fsr`
@@ -456,7 +487,7 @@ The compile-only API seams are:
 - `fun_renderer::FunRendererBackendSelection`
 - `fun_renderer::RENDERER_CORE_INTERFACE_MAP`
 - `fun_renderer::RENDERER_UPLOAD_ARENA_SEAM`
-- `fun_renderer::RENDERER_CEF_COMPOSITOR_INTERFACE`
+- `fun_renderer::RENDERER_NATIVE_UI_COMPOSITOR_INTERFACE`
 - `fun_renderer::RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE`
 - `fun_lux::LuxSettings`
 - `fun_lux::LuxFeatureToggles`
@@ -517,7 +548,7 @@ ECS schedule contract consumed by `fun_render::FunRenderCorePlugin`.
 Pass 3 adds the gameplay-facing component and asset surface in
 `fun_renderer::component_api`. This API is intentionally above the bridge:
 gameplay and scene systems express renderer intent through renderable, camera,
-light, UI/CEF, post-process, upscaler, material, texture, sampler, and shader
+light, UI/NATIVE_UI, post-process, upscaler, material, texture, sampler, and shader
 records without naming `wgpu`, `wgpu-core`, `wgpu-hal`, Naga, or backend-native
 handles.
 
@@ -541,7 +572,7 @@ World ECS data into compact Render World tables. It consumes the Pass 3 public
 components and assets, allocates generation-checked render IDs, tracks Bevy
 entity removals, rejects stale object handles, and writes dense backend-neutral
 tables for objects, transforms, bounds, materials, mesh instances, lights,
-views, UI surfaces, CEF surfaces, and post-process volumes.
+views, UI surfaces, NATIVE_UI surfaces, and post-process volumes.
 
 Extraction is incremental by default. Systems use Bevy changed-component
 filters, removed-component readers, asset-event queues, and explicit full
@@ -551,7 +582,7 @@ extraction. The `RendererExtract` plugin phase installs and runs these systems
 before prepare/queue/graph phases.
 
 `RenderWorldExtractionDiagnostics` is a compact in-memory counter record for
-queried entities, changed entities, extracted object/material/light/view/UI/CEF
+queried entities, changed entities, extracted object/material/light/view/UI/NATIVE_UI
 records, removals, full rebuild reason, extraction CPU nanoseconds, stale
 reference rejections, and Render World memory growth. If those diagnostics are
 persisted or sent across a process/backend boundary later, `fun-data`
@@ -628,7 +659,7 @@ instead of falling back silently. The current wgpu DX12 bridge deliberately
 reports `NativeCommandListUnavailable` because wgpu-hal 29 does not expose a
 sanctioned `ID3D12GraphicsCommandList` path.
 
-Native interop is policy-gated for CEF D3D11On12 copies,
+Native interop is policy-gated for NATIVE_UI D3D11On12 copies,
 DLSS/Streamline/NGX, vendor SDK hooks, PIX/native markers, and external texture
 import/export. It is rejected for arbitrary gameplay systems, frame-graph state
 bypass, hidden command submission, and graph-resource writes that were not
@@ -710,7 +741,7 @@ step, but pipeline churn policy and prepared IDs are now owned above wgpu.
 ## Ownership Rules
 
 - `fun-renderer` owns renderer-side feature interfaces, tensor input/output
-  schemas, GPU resource handles, fallback heuristic paths, renderer-owned CEF
+  schemas, GPU resource handles, fallback heuristic paths, renderer-owned NATIVE_UI
   composition, backend abstraction, frame graph, page scheduling, GPU scene
   data, virtual geometry, and virtual shadows.
 - `fun-lux` owns direct lighting, many-light sampling, virtual shadow policy,
@@ -730,36 +761,36 @@ step, but pipeline churn policy and prepared IDs are now owned above wgpu.
   for backend capability reporting, sanctioned native handle or command-list
   access, diagnostics, and unavoidable low-level scheduling primitives.
 
-## CEF Boundary
+## NATIVE_UI Boundary
 
-`fun_ui_cef` owns browser lifetime, page loading, JavaScript bridge messages,
+`fun_ui_native_ui` owns browser lifetime, page loading, JavaScript bridge messages,
 offscreen paint callbacks, and browser-facing command envelopes.
-`fun-renderer` owns the renderer-side compositor contract for CEF pixels and GPU
-resources. CEF UI remains a HUD/UI layer after world rendering, lighting,
+`fun-renderer` owns the renderer-side compositor contract for NATIVE_UI pixels and GPU
+resources. NATIVE_UI UI remains a HUD/UI layer after world rendering, lighting,
 upscaling/reconstruction, and post-processing; it must not feed temporal
 reconstruction inputs or Ray Reconstruction guide buffers.
 
-Product CEF UI is GPU-only. Accelerated shared-texture transport is required.
+Product NATIVE_UI UI is GPU-only. Accelerated shared-texture transport is required.
 If GPU transport fails, the UI subsystem fails with a clear diagnostic. Runtime
 lanes must not silently fall back to CPU `OnPaint` uploads. Temporary CPU
 golden-image fixtures may exist only when clearly test-only and not compiled
 into runtime/product lanes.
 
-The Pass 8 runtime seam is `fun_renderer::RendererCefCompositor`. CEF callback
-handles are copied/imported immediately into the DX12 ring owned by the CEF
+The Pass 8 runtime seam is `fun_renderer::RendererNativeUiCompositor`. NATIVE_UI callback
+handles are copied/imported immediately into the DX12 ring owned by the NATIVE_UI
 transport bridge; renderer-facing records contain only stable frame IDs, owned
 texture IDs, extents, alpha mode, dirty-rect metadata, copied bytes, and timing
-facts. `game_client` converts `Dx12CefReadyFrameToken` into
-`RendererCefImportedFrame` and never stores callback-lifetime handles.
+facts. `game_client` converts `Dx12NativeUiReadyFrameToken` into
+`RendererNativeUiImportedFrame` and never stores callback-lifetime handles.
 
-The frame graph imports this layer through `FrameGraphPassRole::CefGpuImport`
+The frame graph imports this layer through `FrameGraphPassRole::NativeUiGpuImport`
 and `FrameGraphResourceType::UiColorAlpha`, then composes UI after scene
 rendering/upscaling. Product UI policy is executable through
 `fun-quality check-code-shape`.
 
 ## UI Boundary
 
-CEF/Svelte is the only product UI surface. Runtime/product lanes must not use
+NATIVE_UI/Svelte is the only product UI surface. Runtime/product lanes must not use
 Bevy UI for launcher UI, editor UI, game HUD, diagnostics panels, or debug
 overlays. Bevy UI may exist only in temporary test-only code that is clearly not
 compiled into runtime/product lanes.
@@ -770,7 +801,7 @@ DLSS, FSR, and frame generation are renderer features. `fun-renderer` owns the
 presentation/upscale boundary. Scene color and UI color stay separate. Frame
 generation receives HUD-less scene color, UI color, depth, motion vectors, and
 valid present-time resource lifetimes. Editor viewports must be SR-capable and
-FG-capable where supported; docked/editor text and CEF UI must remain readable
+FG-capable where supported; docked/editor text and NATIVE_UI UI must remain readable
 and stable.
 
 ## Lighting Scale
@@ -804,11 +835,11 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::FunSceneLightingDeclaration`
 - `fun_renderer::FunRendererRuntimeBackend`
 - `fun_renderer::FUN_RENDERER_UI_RUNTIME_POLICY`
-- `fun_renderer::FUN_RENDERER_CEF_RUNTIME_POLICY`
-- `fun_renderer::RendererCefCompositor`
-- `fun_renderer::RendererCefCompositorDiagnostics`
-- `fun_renderer::RendererCefImportedFrame`
-- `fun_renderer::RendererCefUiLayer`
+- `fun_renderer::FUN_RENDERER_NATIVE_UI_RUNTIME_POLICY`
+- `fun_renderer::RendererNativeUiCompositor`
+- `fun_renderer::RendererNativeUiCompositorDiagnostics`
+- `fun_renderer::RendererNativeUiImportedFrame`
+- `fun_renderer::RendererNativeUiLayer`
 - `fun_renderer::FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS`
 - `fun_renderer::FUN_RENDERER_FRAME_GENERATION_CONTRACT`
 - `fun_renderer::FUN_RENDERER_LIGHTING_SCALE_POLICY`
@@ -911,7 +942,7 @@ The first executable contract is compile-checked in Rust:
 - `fun_scene::ShadowInvalidationPolicy`
 - `fun_scene::ShadowReceiverPriority`
 - `fun_scene::ShadowFilterPolicy`
-- `fun_scene::CefSurface`
+- `fun_scene::NativeUiSurface`
 - `fun_scene::ViewportUiTarget`
 - `fun_scene::UpscalePolicy`
 - `fun_scene::ViewportRenderPolicy`

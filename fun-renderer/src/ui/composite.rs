@@ -4,7 +4,7 @@ use crate::component_api::{
 use crate::extraction::ExtractedUiSurface;
 use crate::frame_graph::FrameGraphResourceType;
 
-use super::cef::{RendererCefAlphaMode, RendererCefUiLayer};
+use super::native_ui::{RendererNativeUiAlphaMode, RendererNativeUiLayer};
 
 pub const UI_COMPOSITE_SCHEMA_VERSION: u16 = 1;
 
@@ -84,7 +84,7 @@ pub struct UiCompositeLayerEntry {
     pub color_space: UiColorSpace,
     pub target_rect: UiTargetRect,
     pub debug_border: UiDebugBorder,
-    pub alpha_mode: RendererCefAlphaMode,
+    pub alpha_mode: RendererNativeUiAlphaMode,
     pub source_resource_type: FrameGraphResourceType,
     pub color_conversion: UiCompositeColorConversion,
 }
@@ -93,13 +93,13 @@ impl UiCompositeLayerEntry {
     #[must_use]
     pub fn from_extracted(
         extracted: ExtractedUiSurface,
-        cef_layer: Option<RendererCefUiLayer>,
+        native_ui_layer: Option<RendererNativeUiLayer>,
         output_policy: UiCompositeColorPolicy,
     ) -> Self {
-        let alpha_mode = cef_layer
+        let alpha_mode = native_ui_layer
             .map(|layer| layer.alpha_mode)
-            .unwrap_or(RendererCefAlphaMode::Premultiplied);
-        let source_resource_type = cef_layer
+            .unwrap_or(RendererNativeUiAlphaMode::Premultiplied);
+        let source_resource_type = native_ui_layer
             .map(|layer| layer.resource_type)
             .unwrap_or(FrameGraphResourceType::UiColorAlpha);
         Self {
@@ -187,7 +187,7 @@ impl UiCompositePlan {
 
     pub fn build(
         extracted_surfaces: &[ExtractedUiSurface],
-        active_cef_layer: Option<RendererCefUiLayer>,
+        active_native_ui_layer: Option<RendererNativeUiLayer>,
         contract: UiCompositeContract,
         output_policy: UiCompositeColorPolicy,
     ) -> Result<Self, UiCompositeError> {
@@ -205,8 +205,11 @@ impl UiCompositePlan {
             if surface.debug_border.is_enabled() && !surface.debug_border.thickness_px.is_finite() {
                 return Err(UiCompositeError::DebugBorderUnsupportedThickness);
             }
-            let entry =
-                UiCompositeLayerEntry::from_extracted(*surface, active_cef_layer, output_policy);
+            let entry = UiCompositeLayerEntry::from_extracted(
+                *surface,
+                active_native_ui_layer,
+                output_policy,
+            );
             if entry.debug_border.is_enabled() {
                 plan.debug_border_layer_count = plan.debug_border_layer_count.saturating_add(1);
             }
@@ -286,7 +289,7 @@ impl UiCompositePassDiagnostics {
         let uses_premultiplied_alpha = plan
             .layers
             .iter()
-            .any(|entry| matches!(entry.alpha_mode, RendererCefAlphaMode::Premultiplied));
+            .any(|entry| matches!(entry.alpha_mode, RendererNativeUiAlphaMode::Premultiplied));
         Self {
             schema_version: UI_COMPOSITE_SCHEMA_VERSION,
             layers_composited: u32::try_from(plan.layers.len()).unwrap_or(u32::MAX),

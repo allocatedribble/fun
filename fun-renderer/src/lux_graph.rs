@@ -263,6 +263,13 @@ pub const fn pass_type_for_lux_role(role: FrameGraphPassRole) -> FrameGraphPassT
         | FrameGraphPassRole::LuxShadowRequests
         | FrameGraphPassRole::LuxVirtualShadowPages
         | FrameGraphPassRole::LuxVirtualShadowFilter
+        | FrameGraphPassRole::LuxVoxelShadowDemandMark
+        | FrameGraphPassRole::LuxVoxelShadowPageBuild
+        | FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve
+        | FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate
+        | FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject
+        | FrameGraphPassRole::LuxVoxelTerrainAoResolve
+        | FrameGraphPassRole::LuxStormExtinctionInject
         | FrameGraphPassRole::LuxGiTrace
         | FrameGraphPassRole::LuxGiCacheUpdate
         | FrameGraphPassRole::LuxReflectionTrace
@@ -308,9 +315,24 @@ const fn renderer_owned_stable_id_for(resource_type: FrameGraphResourceType) -> 
         FrameGraphResourceType::LuxVirtualShadowPages => {
             "fun_renderer.lux.renderer_owned.virtual_shadow_pages"
         }
+        FrameGraphResourceType::LuxVoxelShadowPageTable => {
+            "fun_renderer.lux.renderer_owned.voxel_shadow_page_table"
+        }
+        FrameGraphResourceType::LuxVoxelTerrainSdfPool => {
+            "fun_renderer.lux.renderer_owned.voxel_terrain_sdf_pool"
+        }
         FrameGraphResourceType::LuxSurfaceCache => "fun_renderer.lux.renderer_owned.surface_cache",
         FrameGraphResourceType::LuxRadianceCache => {
             "fun_renderer.lux.renderer_owned.radiance_cache"
+        }
+        FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap => {
+            "fun_renderer.lux.renderer_owned.voxel_terrain_radiance_clipmap"
+        }
+        FrameGraphResourceType::LuxVoxelCanopyOpacityClipmap => {
+            "fun_renderer.lux.renderer_owned.voxel_canopy_opacity_clipmap"
+        }
+        FrameGraphResourceType::LuxStormExtinctionClipmap => {
+            "fun_renderer.lux.renderer_owned.storm_extinction_clipmap"
         }
         FrameGraphResourceType::LuxProbeCache => "fun_renderer.lux.renderer_owned.probe_cache",
         FrameGraphResourceType::LuxReflectionBuffer => {
@@ -438,6 +460,13 @@ mod tests {
             FrameGraphPassRole::LuxShadowRequests,
             FrameGraphPassRole::LuxVirtualShadowPages,
             FrameGraphPassRole::LuxVirtualShadowFilter,
+            FrameGraphPassRole::LuxVoxelShadowDemandMark,
+            FrameGraphPassRole::LuxVoxelShadowPageBuild,
+            FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve,
+            FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate,
+            FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject,
+            FrameGraphPassRole::LuxVoxelTerrainAoResolve,
+            FrameGraphPassRole::LuxStormExtinctionInject,
             FrameGraphPassRole::LuxDirectLighting,
             FrameGraphPassRole::LuxGiTrace,
             FrameGraphPassRole::LuxGiCacheUpdate,
@@ -539,6 +568,19 @@ mod tests {
                 LuxPassKind::BuildShadowRequests => FrameGraphPassRole::LuxShadowRequests,
                 LuxPassKind::RenderVirtualShadowPages => FrameGraphPassRole::LuxVirtualShadowPages,
                 LuxPassKind::FilterVirtualShadows => FrameGraphPassRole::LuxVirtualShadowFilter,
+                LuxPassKind::VoxelShadowDemandMark => FrameGraphPassRole::LuxVoxelShadowDemandMark,
+                LuxPassKind::VoxelShadowPageBuild => FrameGraphPassRole::LuxVoxelShadowPageBuild,
+                LuxPassKind::VoxelSdfDistantShadowResolve => {
+                    FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve
+                }
+                LuxPassKind::VoxelRadianceClipmapUpdate => {
+                    FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate
+                }
+                LuxPassKind::VoxelCanopyTransmittanceInject => {
+                    FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject
+                }
+                LuxPassKind::VoxelTerrainAoResolve => FrameGraphPassRole::LuxVoxelTerrainAoResolve,
+                LuxPassKind::StormExtinctionInject => FrameGraphPassRole::LuxStormExtinctionInject,
                 LuxPassKind::DirectLighting => FrameGraphPassRole::LuxDirectLighting,
                 LuxPassKind::GiTrace => FrameGraphPassRole::LuxGiTrace,
                 LuxPassKind::GiCacheUpdate => FrameGraphPassRole::LuxGiCacheUpdate,

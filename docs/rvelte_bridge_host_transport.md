@@ -24,7 +24,7 @@ wire types and `fun_host`'s `Message`-derived structs — is a
 trivial mapping the consumer (a Bevy plugin in `game_client` or
 `fun_host` itself) writes once. Pass 73 keeps that translation a
 typed pure-data surface so the bridge crate stays free of bevy,
-wgpu, dx12, vulkan, metal, cef, and swapchain references.
+wgpu, dx12, vulkan, metal, native_ui, and swapchain references.
 
 ## Wire-Format Mirror
 
@@ -105,7 +105,7 @@ cargo fmt -p fun-rvelte-bridge --check          # exit 0
 cargo check -p fun-rvelte-bridge                 # exit 0
 cargo clippy -p fun-rvelte-bridge --all-targets -- -D warnings   # exit 0
 cargo test -p fun-rvelte-bridge                  # 27/27 passing (13 smoke + 14 host transport)
-cargo tree -p fun-rvelte-bridge -e normal | grep -ciE "wgpu|vulkan|metal|dx12|d3d12|cef|swapchain|fun-renderer|fun_renderer|^bevy"   # 0
+cargo tree -p fun-rvelte-bridge -e normal | grep -ciE "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer|fun_renderer|^bevy"   # 0
 ```
 
 Plus regression: `cargo test --workspace` from `rvelte/` continues
@@ -119,7 +119,7 @@ dependency, zero browser dependency.
 - `Cargo.toml` adds `serde_json` for wire JSON encoding; nothing
   else.
 - `cargo tree -p fun-rvelte-bridge -e normal | grep -ciE
-  "wgpu|vulkan|metal|dx12|d3d12|cef|swapchain|fun-renderer
+  "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer
   |fun_renderer|^bevy"` returns 0.
 
 ## Forward Pointers

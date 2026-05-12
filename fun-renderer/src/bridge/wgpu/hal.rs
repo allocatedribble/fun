@@ -163,7 +163,7 @@ impl NativeInteropCapabilities {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeInteropUseCase {
-    CefD3d11On12Copy,
+    NativeUiD3d11On12Copy,
     DlssStreamlineNgx,
     VendorSdk,
     PixNativeMarkers,
@@ -178,7 +178,7 @@ impl NativeInteropUseCase {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::CefD3d11On12Copy => "cef_d3d11on12_copy",
+            Self::NativeUiD3d11On12Copy => "native_ui_d3d11on12_copy",
             Self::DlssStreamlineNgx => "dlss_streamline_ngx",
             Self::VendorSdk => "vendor_sdk",
             Self::PixNativeMarkers => "pix_native_markers",
@@ -194,7 +194,7 @@ impl NativeInteropUseCase {
     pub const fn is_allowed(self) -> bool {
         matches!(
             self,
-            Self::CefD3d11On12Copy
+            Self::NativeUiD3d11On12Copy
                 | Self::DlssStreamlineNgx
                 | Self::VendorSdk
                 | Self::PixNativeMarkers
@@ -247,7 +247,7 @@ impl NativeInteropPolicy {
     ) -> Result<(), HalInteropFailure> {
         Self::ensure_use_case_allowed(use_case, requested_backend, actual_backend)?;
         match use_case {
-            NativeInteropUseCase::CefD3d11On12Copy => {
+            NativeInteropUseCase::NativeUiD3d11On12Copy => {
                 capabilities.require(
                     NativeInteropCapabilityBit::NativeDeviceAvailable,
                     requested_backend,

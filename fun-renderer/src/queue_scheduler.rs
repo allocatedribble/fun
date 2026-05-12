@@ -683,7 +683,7 @@ pub struct UploadBatchPlan {
     pub texture_upload_count: u32,
     pub buffer_upload_count: u32,
     pub readback_count: u32,
-    pub cef_copy_count: u32,
+    pub native_ui_copy_count: u32,
     pub batched_before_submission: bool,
     pub uses_copy_queue: bool,
 }
@@ -694,7 +694,7 @@ impl UploadBatchPlan {
         texture_upload_count: 0,
         buffer_upload_count: 0,
         readback_count: 0,
-        cef_copy_count: 0,
+        native_ui_copy_count: 0,
         batched_before_submission: true,
         uses_copy_queue: false,
     };
@@ -706,7 +706,7 @@ impl UploadBatchPlan {
             texture_upload_count: 0,
             buffer_upload_count: 0,
             readback_count: 0,
-            cef_copy_count: 0,
+            native_ui_copy_count: 0,
             batched_before_submission: true,
             uses_copy_queue: policy.allows_copy_queue(),
         }

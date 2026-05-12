@@ -792,7 +792,7 @@ const fn phase_code(phase: FunRenderPhaseKind) -> u8 {
         FunRenderPhaseKind::Clouds => 8,
         FunRenderPhaseKind::Solari => 9,
         FunRenderPhaseKind::PostProcess => 10,
-        FunRenderPhaseKind::CefUi => 11,
+        FunRenderPhaseKind::NativeUi => 11,
         FunRenderPhaseKind::DebugOverlay => 12,
     }
 }
@@ -833,7 +833,7 @@ const fn render_path_code(render_path: FunRenderPath) -> u8 {
         FunRenderPath::MeshletDynamicDense => 5,
         FunRenderPath::RayProxyOnly => 6,
         FunRenderPath::Viewmodel => 7,
-        FunRenderPath::CefUi => 8,
+        FunRenderPath::NativeUi => 8,
         FunRenderPath::DebugOnly => 9,
     }
 }

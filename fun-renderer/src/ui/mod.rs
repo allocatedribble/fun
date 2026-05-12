@@ -1,10 +1,10 @@
-pub mod cef;
 #[cfg(feature = "bevy_ecs")]
 pub mod composite;
 #[cfg(feature = "bevy_ecs")]
 pub mod dx12_transport;
 #[cfg(feature = "native_ui_adapter")]
 pub mod native_adapter;
+pub mod native_ui;
 #[cfg(feature = "native_ui_adapter")]
 pub mod packet_consumer;
 #[cfg(feature = "bevy_ecs")]
@@ -12,13 +12,13 @@ pub mod producer;
 #[cfg(feature = "bevy_ecs")]
 pub mod telemetry;
 
-pub use cef::*;
 #[cfg(feature = "bevy_ecs")]
 pub use composite::*;
 #[cfg(feature = "bevy_ecs")]
 pub use dx12_transport::*;
 #[cfg(feature = "native_ui_adapter")]
 pub use native_adapter::*;
+pub use native_ui::*;
 #[cfg(feature = "native_ui_adapter")]
 pub use packet_consumer::*;
 #[cfg(feature = "bevy_ecs")]

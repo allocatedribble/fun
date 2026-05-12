@@ -11,7 +11,7 @@ workspace = true
 default = []
 # Feature flag for the experimental fun-renderer-backed packet
 # consumer. Off by default so the bridge's production tree stays
-# free of bevy / wgpu / dx12 / vulkan / metal / cef / swapchain
+# free of bevy / wgpu / dx12 / vulkan / metal / swapchain
 # until the product opts in. With the feature on, the bridge
 # imports `fun_renderer` (with its `native_ui_adapter` feature) and
 # exposes `fun_renderer_backend::FunRendererPacketConsumer`.

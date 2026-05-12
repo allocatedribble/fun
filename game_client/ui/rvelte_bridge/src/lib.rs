@@ -16,7 +16,7 @@
 //!
 //! Forbidden surface (enforced by `Cargo.toml`):
 //!
-//! - no CEF, no browser subprocess, no Vite bundle;
+//! - no browser subprocess, no Vite bundle;
 //! - no browser globals (`window`, `document`, `navigator`);
 //! - no JS bridge;
 //! - no concrete renderer API import (D3D12 / Metal / Vulkan /
@@ -25,7 +25,7 @@
 //!
 //! Schema label: [`PRODUCT_RVELTE_ADAPTER_SCHEMA`].
 
-#![doc(html_root_url = "https://docs.rs/fun-rvelte-bridge/0.1.0")]
+#![doc(html_root_url = "https://docs.rs/fun-rvelte-bridge/0.0.1")]
 
 pub mod diagnostics;
 #[cfg(feature = "fun_renderer_backend")]
@@ -40,24 +40,32 @@ use std::collections::BTreeMap;
 
 use fun_native_app::{FunNativeApp, FunNativeAppFixtureResolver, NativeRouteKind};
 use rvelte_fun_input::FunUiNativeInputEvent;
-use rvelte_fun_native_codegen::host_bridge::{
-    FunNativeHostCommandIntent, FunNativeHostPatch, FunNativeHostSnapshot,
-};
+use rvelte_fun_native_codegen::host_bridge::FunNativeHostCommandIntent;
 use rvelte_fun_render_adapter::{
     FunRenderUiAdapter, FunRenderUiSubmitResult, FunUiFramePacketConsumer,
 };
-use rvelte_fun_ui_core::{FunUiAccessibilityPacket, FunUiFramePacket, FunUiHitRegionPacket};
+use rvelte_fun_ui_core::{FunUiAccessibilityPacket, FunUiFramePacket};
 
 pub use diagnostics::{
     PRODUCT_RVELTE_ADAPTER_SCHEMA, PRODUCT_RVELTE_ADAPTER_SCHEMA_VERSION, ProductRvelteDiagnostic,
 };
-pub use input_translator::{ProductInputEvent, translate_product_input};
+pub use input_translator::{
+    ProductInputEvent, ProductKey, ProductPointerButton, translate_product_input,
+};
 pub use renderer_sink::{
     PRODUCT_RENDERER_SINK_SCHEMA, PRODUCT_RENDERER_SINK_SCHEMA_VERSION,
     ProductRenderer2DCommandSink, ProductRendererBackend,
 };
 pub use route_registry::{ProductRouteKind, ProductRouteRegistry};
 pub use runtime::FunNativeUiRuntime;
+pub use rvelte_fun_native_codegen::host_bridge::{
+    FUN_NATIVE_HOST_BRIDGE_SCHEMA, FunNativeHostPatch, FunNativeHostSnapshot,
+    FunNativeHostStateValue, HostAuthorizationContext,
+};
+pub use rvelte_fun_ui_core::{
+    FunUiHitRegionId, FunUiHitRegionKind, FunUiHitRegionPacket, FunUiHitRegionPolicy,
+    FunUiInputRouteId, FunUiLayerId, FunUiNodeId, FunUiRect,
+};
 
 /// Per-tick frame output handed back to the game-client scheduler.
 #[derive(Clone, Debug)]

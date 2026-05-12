@@ -15,9 +15,9 @@ impl ViewportId {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CefRoute(pub &'static str);
+pub struct NativeUiRoute(pub &'static str);
 
-impl CefRoute {
+impl NativeUiRoute {
     pub const ROOT: Self = Self("/");
     pub const LAUNCHER: Self = Self("/launcher");
     pub const EDITOR: Self = Self("/editor");
@@ -42,28 +42,28 @@ pub enum UiCompositionPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CefSurfaceValidationError {
+pub enum NativeUiSurfaceValidationError {
     ProductRequiresGpuOnly,
 }
 
 #[derive(Debug, Clone, FunFromTemplate, Component)]
-pub struct CefSurface {
-    pub route: CefRoute,
+pub struct NativeUiSurface {
+    pub route: NativeUiRoute,
     pub layer: UiLayer,
     pub composition: UiCompositionPolicy,
     pub gpu_only: bool,
 }
 
-impl CefSurface {
+impl NativeUiSurface {
     pub const PRODUCT_DEFAULT: Self = Self {
-        route: CefRoute::ROOT,
+        route: NativeUiRoute::ROOT,
         layer: UiLayer::Hud,
         composition: UiCompositionPolicy::FullWindow,
         gpu_only: true,
     };
 
     #[must_use]
-    pub const fn product(route: CefRoute, layer: UiLayer) -> Self {
+    pub const fn product(route: NativeUiRoute, layer: UiLayer) -> Self {
         Self {
             route,
             layer,
@@ -72,16 +72,16 @@ impl CefSurface {
         }
     }
 
-    pub const fn validate_product(&self) -> Result<(), CefSurfaceValidationError> {
+    pub const fn validate_product(&self) -> Result<(), NativeUiSurfaceValidationError> {
         if self.gpu_only {
             Ok(())
         } else {
-            Err(CefSurfaceValidationError::ProductRequiresGpuOnly)
+            Err(NativeUiSurfaceValidationError::ProductRequiresGpuOnly)
         }
     }
 }
 
-impl Default for CefSurface {
+impl Default for NativeUiSurface {
     fn default() -> Self {
         Self::PRODUCT_DEFAULT
     }
@@ -102,6 +102,6 @@ pub struct ViewportUiTarget {
 }
 
 #[must_use]
-pub fn product_scene_accepts_cef_surface(surface: &CefSurface) -> bool {
+pub fn product_scene_accepts_native_ui_surface(surface: &NativeUiSurface) -> bool {
     surface.validate_product().is_ok()
 }

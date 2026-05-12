@@ -147,7 +147,7 @@ pub fn renderer_settings_ui_model_from_bridge(
         runtime_backend,
         graphics_backend,
         fun_renderer::RendererRuntimeMode::Product,
-        settings.features.cef_gpu_only,
+        settings.features.native_ui_gpu_only,
     );
     let selection = select_capability_aware_renderer_defaults(capabilities);
     RendererSettingsUiModel::from_selection(&selection)
@@ -257,7 +257,7 @@ mod tests {
     use crate::{BridgeFeatureToggles, RendererBridgeSettings, install_renderer_bridge_api};
 
     #[test]
-    fn ui_model_contains_only_cef_safe_renderer_settings() {
+    fn ui_model_contains_only_native_ui_safe_renderer_settings() {
         let selection = select_capability_aware_renderer_defaults(
             RendererCapabilityFacts::high_end_dx12_nvidia(),
         );
@@ -285,7 +285,7 @@ mod tests {
         let model = app
             .world()
             .get_resource::<RendererSettingsUiModel>()
-            .expect("bridge should expose settings model to CEF/Svelte");
+            .expect("bridge should expose settings model to NATIVE_UI/Svelte");
 
         assert_eq!(model.schema, RENDERER_SETTINGS_UI_BRIDGE_SCHEMA);
         let expected_runtime_backend = if BridgeFeatureToggles::COMPILED.new_core {

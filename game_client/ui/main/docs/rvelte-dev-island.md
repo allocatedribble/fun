@@ -42,7 +42,7 @@ panel_source: src/lib/components/LogPanel.svelte
 | `rvelte.wasm_missing` | `/rvelte-dev/dev_panel.wasm` cannot be fetched or instantiated | island fails closed |
 | `rvelte.manifest_mismatch` | generated module manifest ID differs from `rvelte.manifest.diagnostics_log_panel_component.v1` | island fails closed |
 | `rvelte.facade_incompatible` | generated module is missing or facade ABI differs from `1` | island fails closed |
-| `rvelte.cef_bridge_unavailable` | `window.funHost` and `window.cefQuery` are unavailable | island mounts locally and reports host forwarding disabled |
+| `rvelte.host_bridge_unavailable` | `window.funHost` is unavailable | island mounts locally and reports host forwarding disabled |
 | `rvelte.host_payload_invalid` | Svelte-hosted mount payload fails schema/range validation | island fails closed |
 
 ## Migration Scan

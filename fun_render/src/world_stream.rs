@@ -1575,7 +1575,7 @@ fn render_geometry_class_for_path(
         FunRenderPath::StandardRaster | FunRenderPath::InstancedRaster => {
             RenderGeometryClass::SimpleRaster
         }
-        FunRenderPath::CefUi | FunRenderPath::DebugOnly => RenderGeometryClass::SimpleRaster,
+        FunRenderPath::NativeUi | FunRenderPath::DebugOnly => RenderGeometryClass::SimpleRaster,
     }
 }
 

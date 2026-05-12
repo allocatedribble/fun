@@ -43,7 +43,7 @@ pub enum VirtualGeometryAssetKind {
     Foliage,
     AlphaHeavyAggregate,
     Transparent,
-    CefUi,
+    NativeUi,
     ArbitraryRuntimeFracture,
 }
 
@@ -56,7 +56,7 @@ impl VirtualGeometryAssetKind {
             Self::Foliage => "foliage",
             Self::AlphaHeavyAggregate => "alpha_heavy_aggregate",
             Self::Transparent => "transparent",
-            Self::CefUi => "cef_ui",
+            Self::NativeUi => "native_ui",
             Self::ArbitraryRuntimeFracture => "arbitrary_runtime_fracture",
         }
     }
@@ -73,7 +73,7 @@ pub enum VirtualGeometryAssetDecision {
     NonStaticOpaqueUnsupported,
     PoorAggregateGeometry,
     TransparentUnsupported,
-    CefUiUnsupported,
+    NativeUiUnsupported,
     RuntimeFractureUnsupported,
 }
 
@@ -89,7 +89,7 @@ impl VirtualGeometryAssetDecision {
             Self::NonStaticOpaqueUnsupported => "non_static_opaque_unsupported",
             Self::PoorAggregateGeometry => "poor_aggregate_geometry",
             Self::TransparentUnsupported => "transparent_unsupported",
-            Self::CefUiUnsupported => "cef_ui_unsupported",
+            Self::NativeUiUnsupported => "native_ui_unsupported",
             Self::RuntimeFractureUnsupported => "runtime_fracture_unsupported",
         }
     }
@@ -938,7 +938,7 @@ pub fn evaluate_static_virtual_geometry_asset(
         VirtualGeometryAssetKind::Transparent => {
             VirtualGeometryAssetDecision::TransparentUnsupported
         }
-        VirtualGeometryAssetKind::CefUi => VirtualGeometryAssetDecision::CefUiUnsupported,
+        VirtualGeometryAssetKind::NativeUi => VirtualGeometryAssetDecision::NativeUiUnsupported,
         VirtualGeometryAssetKind::ArbitraryRuntimeFracture => {
             VirtualGeometryAssetDecision::RuntimeFractureUnsupported
         }

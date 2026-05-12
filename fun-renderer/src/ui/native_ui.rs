@@ -1,18 +1,19 @@
 use crate::frame_graph::FrameGraphResourceType;
 
-pub const CEF_COMPOSITOR_SCHEMA_VERSION: u16 = 1;
-pub const CEF_COMPOSITOR_PRODUCT_TRANSPORT: RendererCefTransportMode =
-    RendererCefTransportMode::D3d11On12SharedTexture;
-pub const CEF_COMPOSITOR_FRAME_GRAPH_RESOURCE: FrameGraphResourceType =
+pub const NATIVE_UI_COMPOSITOR_SCHEMA_VERSION: u16 = 1;
+pub const NATIVE_UI_COMPOSITOR_PRODUCT_TRANSPORT: RendererNativeUiTransportMode =
+    RendererNativeUiTransportMode::D3d11On12SharedTexture;
+pub const NATIVE_UI_COMPOSITOR_FRAME_GRAPH_RESOURCE: FrameGraphResourceType =
     FrameGraphResourceType::UiColorAlpha;
-pub const CEF_COMPOSITOR_IMPORT_ALLOCATION_SITE: &str = "fun_renderer.cef_compositor.imported_ui";
-pub const CEF_COMPOSITOR_TRANSIENT_ALLOCATION_SITE: &str =
-    "fun_renderer.cef_compositor.ui_color_alpha";
+pub const NATIVE_UI_COMPOSITOR_IMPORT_ALLOCATION_SITE: &str =
+    "fun_renderer.native_ui_compositor.imported_ui";
+pub const NATIVE_UI_COMPOSITOR_TRANSIENT_ALLOCATION_SITE: &str =
+    "fun_renderer.native_ui_compositor.ui_color_alpha";
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RendererCefFrameId(pub u64);
+pub struct RendererNativeUiFrameId(pub u64);
 
-impl RendererCefFrameId {
+impl RendererNativeUiFrameId {
     pub const INVALID: Self = Self(0);
 
     #[must_use]
@@ -22,12 +23,12 @@ impl RendererCefFrameId {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RendererCefTextureId {
+pub struct RendererNativeUiTextureId {
     pub index: u32,
     pub generation: u32,
 }
 
-impl RendererCefTextureId {
+impl RendererNativeUiTextureId {
     pub const INVALID: Self = Self {
         index: u32::MAX,
         generation: 0,
@@ -40,12 +41,12 @@ impl RendererCefTextureId {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RendererCefExtent {
+pub struct RendererNativeUiExtent {
     pub width: u32,
     pub height: u32,
 }
 
-impl RendererCefExtent {
+impl RendererNativeUiExtent {
     #[must_use]
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
@@ -63,14 +64,14 @@ impl RendererCefExtent {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RendererCefDirtyRect {
+pub struct RendererNativeUiDirtyRect {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
 }
 
-impl RendererCefDirtyRect {
+impl RendererNativeUiDirtyRect {
     #[must_use]
     pub const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self {
@@ -83,14 +84,14 @@ impl RendererCefDirtyRect {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RendererCefAlphaMode {
+pub enum RendererNativeUiAlphaMode {
     #[default]
     Premultiplied,
     Straight,
     Unknown,
 }
 
-impl RendererCefAlphaMode {
+impl RendererNativeUiAlphaMode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -102,7 +103,7 @@ impl RendererCefAlphaMode {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RendererCefTransportMode {
+pub enum RendererNativeUiTransportMode {
     #[default]
     Disabled,
     CpuOnPaint,
@@ -110,7 +111,7 @@ pub enum RendererCefTransportMode {
     VulkanExternalMemory,
 }
 
-impl RendererCefTransportMode {
+impl RendererNativeUiTransportMode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -131,7 +132,7 @@ impl RendererCefTransportMode {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RendererCefImportSyncStatus {
+pub enum RendererNativeUiImportSyncStatus {
     #[default]
     NotImported,
     CopiedIntoRendererTexture,
@@ -140,7 +141,7 @@ pub enum RendererCefImportSyncStatus {
     FailedClosed,
 }
 
-impl RendererCefImportSyncStatus {
+impl RendererNativeUiImportSyncStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -154,7 +155,7 @@ impl RendererCefImportSyncStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RendererCefFailClosedReason {
+pub enum RendererNativeUiFailClosedReason {
     CpuOnPaintRuntimeFallback,
     InvalidSharedTextureHandle,
     InvalidFrameExtent,
@@ -163,7 +164,7 @@ pub enum RendererCefFailClosedReason {
     SurfaceNotGpuOnly,
 }
 
-impl RendererCefFailClosedReason {
+impl RendererNativeUiFailClosedReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -178,15 +179,15 @@ impl RendererCefFailClosedReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RendererCefCompositorError {
+pub enum RendererNativeUiCompositorError {
     ProductSurfaceRequiresGpuOnly,
     ProductRequiresGpuTransport,
     InvalidFrameId,
     InvalidExtent,
-    CpuFallbackForbidden(RendererCefFailClosedReason),
+    CpuFallbackForbidden(RendererNativeUiFailClosedReason),
 }
 
-impl RendererCefCompositorError {
+impl RendererNativeUiCompositorError {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -200,23 +201,23 @@ impl RendererCefCompositorError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RendererCefSurfaceDescriptor {
-    pub route: fun_scene::CefRoute,
+pub struct RendererNativeUiSurfaceDescriptor {
+    pub route: fun_scene::NativeUiRoute,
     pub layer: fun_scene::UiLayer,
     pub composition: fun_scene::UiCompositionPolicy,
     pub gpu_only: bool,
 }
 
-impl RendererCefSurfaceDescriptor {
+impl RendererNativeUiSurfaceDescriptor {
     pub const PRODUCT_DEFAULT: Self = Self {
-        route: fun_scene::CefRoute::ROOT,
+        route: fun_scene::NativeUiRoute::ROOT,
         layer: fun_scene::UiLayer::Hud,
         composition: fun_scene::UiCompositionPolicy::FullWindow,
         gpu_only: true,
     };
 
     #[must_use]
-    pub const fn from_fun_scene(surface: &fun_scene::CefSurface) -> Self {
+    pub const fn from_fun_scene(surface: &fun_scene::NativeUiSurface) -> Self {
         Self {
             route: surface.route,
             layer: surface.layer,
@@ -225,36 +226,36 @@ impl RendererCefSurfaceDescriptor {
         }
     }
 
-    pub const fn validate_product(self) -> Result<(), RendererCefCompositorError> {
+    pub const fn validate_product(self) -> Result<(), RendererNativeUiCompositorError> {
         if self.gpu_only {
             Ok(())
         } else {
-            Err(RendererCefCompositorError::ProductSurfaceRequiresGpuOnly)
+            Err(RendererNativeUiCompositorError::ProductSurfaceRequiresGpuOnly)
         }
     }
 }
 
-impl Default for RendererCefSurfaceDescriptor {
+impl Default for RendererNativeUiSurfaceDescriptor {
     fn default() -> Self {
         Self::PRODUCT_DEFAULT
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RendererCefImportedFrame {
-    pub frame_id: RendererCefFrameId,
-    pub extent: RendererCefExtent,
-    pub transport: RendererCefTransportMode,
-    pub alpha_mode: RendererCefAlphaMode,
+pub struct RendererNativeUiImportedFrame {
+    pub frame_id: RendererNativeUiFrameId,
+    pub extent: RendererNativeUiExtent,
+    pub transport: RendererNativeUiTransportMode,
+    pub alpha_mode: RendererNativeUiAlphaMode,
     pub dirty_rect_count: u32,
-    pub dirty_rect_union: Option<RendererCefDirtyRect>,
+    pub dirty_rect_union: Option<RendererNativeUiDirtyRect>,
     pub callback_timestamp_ns: u64,
     pub import_begin_timestamp_ns: u64,
     pub import_complete_timestamp_ns: u64,
     pub copied_bytes: u64,
 }
 
-impl RendererCefImportedFrame {
+impl RendererNativeUiImportedFrame {
     #[must_use]
     pub const fn import_copy_duration_ns(self) -> u64 {
         self.import_complete_timestamp_ns
@@ -267,45 +268,45 @@ impl RendererCefImportedFrame {
             .saturating_sub(self.callback_timestamp_ns)
     }
 
-    pub const fn validate_product(self) -> Result<(), RendererCefCompositorError> {
+    pub const fn validate_product(self) -> Result<(), RendererNativeUiCompositorError> {
         if !self.frame_id.is_valid() {
-            return Err(RendererCefCompositorError::InvalidFrameId);
+            return Err(RendererNativeUiCompositorError::InvalidFrameId);
         }
         if !self.extent.is_valid() {
-            return Err(RendererCefCompositorError::InvalidExtent);
+            return Err(RendererNativeUiCompositorError::InvalidExtent);
         }
         if !self.transport.is_gpu_transport() {
-            return Err(RendererCefCompositorError::ProductRequiresGpuTransport);
+            return Err(RendererNativeUiCompositorError::ProductRequiresGpuTransport);
         }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RendererCefOwnedTexture {
-    pub texture_id: RendererCefTextureId,
-    pub frame_id: RendererCefFrameId,
-    pub extent: RendererCefExtent,
-    pub alpha_mode: RendererCefAlphaMode,
-    pub transport: RendererCefTransportMode,
+pub struct RendererNativeUiOwnedTexture {
+    pub texture_id: RendererNativeUiTextureId,
+    pub frame_id: RendererNativeUiFrameId,
+    pub extent: RendererNativeUiExtent,
+    pub alpha_mode: RendererNativeUiAlphaMode,
+    pub transport: RendererNativeUiTransportMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RendererCefUiLayer {
-    pub texture_id: RendererCefTextureId,
-    pub frame_id: RendererCefFrameId,
+pub struct RendererNativeUiLayer {
+    pub texture_id: RendererNativeUiTextureId,
+    pub frame_id: RendererNativeUiFrameId,
     pub layer: fun_scene::UiLayer,
     pub composition: fun_scene::UiCompositionPolicy,
     pub resource_type: FrameGraphResourceType,
-    pub alpha_mode: RendererCefAlphaMode,
+    pub alpha_mode: RendererNativeUiAlphaMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RendererCefCompositorDiagnostics {
+pub struct RendererNativeUiCompositorDiagnostics {
     pub schema_version: u16,
     pub frame_index: u64,
-    pub latest_frame_id: RendererCefFrameId,
-    pub active_texture: RendererCefTextureId,
+    pub latest_frame_id: RendererNativeUiFrameId,
+    pub active_texture: RendererNativeUiTextureId,
     pub imported_frame_count: u64,
     pub dropped_ui_frames: u64,
     pub stale_ui_frame_age_ns: u64,
@@ -317,17 +318,17 @@ pub struct RendererCefCompositorDiagnostics {
     pub fail_closed_count: u64,
     pub copied_bytes: u64,
     pub dirty_rect_count: u64,
-    pub last_sync_status: RendererCefImportSyncStatus,
-    pub last_fail_closed_reason: Option<RendererCefFailClosedReason>,
+    pub last_sync_status: RendererNativeUiImportSyncStatus,
+    pub last_fail_closed_reason: Option<RendererNativeUiFailClosedReason>,
 }
 
-impl Default for RendererCefCompositorDiagnostics {
+impl Default for RendererNativeUiCompositorDiagnostics {
     fn default() -> Self {
         Self {
-            schema_version: CEF_COMPOSITOR_SCHEMA_VERSION,
+            schema_version: NATIVE_UI_COMPOSITOR_SCHEMA_VERSION,
             frame_index: 0,
-            latest_frame_id: RendererCefFrameId::INVALID,
-            active_texture: RendererCefTextureId::INVALID,
+            latest_frame_id: RendererNativeUiFrameId::INVALID,
+            active_texture: RendererNativeUiTextureId::INVALID,
             imported_frame_count: 0,
             dropped_ui_frames: 0,
             stale_ui_frame_age_ns: 0,
@@ -339,7 +340,7 @@ impl Default for RendererCefCompositorDiagnostics {
             fail_closed_count: 0,
             copied_bytes: 0,
             dirty_rect_count: 0,
-            last_sync_status: RendererCefImportSyncStatus::NotImported,
+            last_sync_status: RendererNativeUiImportSyncStatus::NotImported,
             last_fail_closed_reason: None,
         }
     }
@@ -347,49 +348,49 @@ impl Default for RendererCefCompositorDiagnostics {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
-pub struct RendererCefCompositor {
+pub struct RendererNativeUiCompositor {
     next_texture_generation: u32,
-    active_texture: Option<RendererCefOwnedTexture>,
-    active_layer: Option<RendererCefUiLayer>,
-    diagnostics: RendererCefCompositorDiagnostics,
+    active_texture: Option<RendererNativeUiOwnedTexture>,
+    active_layer: Option<RendererNativeUiLayer>,
+    diagnostics: RendererNativeUiCompositorDiagnostics,
 }
 
-impl Default for RendererCefCompositor {
+impl Default for RendererNativeUiCompositor {
     fn default() -> Self {
         Self {
             next_texture_generation: 1,
             active_texture: None,
             active_layer: None,
-            diagnostics: RendererCefCompositorDiagnostics::default(),
+            diagnostics: RendererNativeUiCompositorDiagnostics::default(),
         }
     }
 }
 
-impl RendererCefCompositor {
+impl RendererNativeUiCompositor {
     pub fn begin_frame(&mut self, frame_index: u64) {
         self.diagnostics.frame_index = frame_index;
     }
 
     #[must_use]
-    pub const fn active_texture(&self) -> Option<RendererCefOwnedTexture> {
+    pub const fn active_texture(&self) -> Option<RendererNativeUiOwnedTexture> {
         self.active_texture
     }
 
     #[must_use]
-    pub const fn active_layer(&self) -> Option<RendererCefUiLayer> {
+    pub const fn active_layer(&self) -> Option<RendererNativeUiLayer> {
         self.active_layer
     }
 
     #[must_use]
-    pub const fn diagnostics(&self) -> RendererCefCompositorDiagnostics {
+    pub const fn diagnostics(&self) -> RendererNativeUiCompositorDiagnostics {
         self.diagnostics
     }
 
     pub fn import_accelerated_frame(
         &mut self,
-        surface: RendererCefSurfaceDescriptor,
-        frame: RendererCefImportedFrame,
-    ) -> Result<RendererCefUiLayer, RendererCefCompositorError> {
+        surface: RendererNativeUiSurfaceDescriptor,
+        frame: RendererNativeUiImportedFrame,
+    ) -> Result<RendererNativeUiLayer, RendererNativeUiCompositorError> {
         surface.validate_product()?;
         if let Err(error) = frame.validate_product() {
             self.record_import_rejection(error);
@@ -402,7 +403,7 @@ impl RendererCefCompositor {
         {
             self.diagnostics.dropped_ui_frames =
                 self.diagnostics.dropped_ui_frames.saturating_add(1);
-            self.diagnostics.last_sync_status = RendererCefImportSyncStatus::DroppedStaleFrame;
+            self.diagnostics.last_sync_status = RendererNativeUiImportSyncStatus::DroppedStaleFrame;
             self.diagnostics.stale_ui_frame_age_ns = self
                 .diagnostics
                 .frame_index
@@ -412,12 +413,12 @@ impl RendererCefCompositor {
         }
 
         let texture = self.renderer_owned_texture_for(frame);
-        let layer = RendererCefUiLayer {
+        let layer = RendererNativeUiLayer {
             texture_id: texture.texture_id,
             frame_id: frame.frame_id,
             layer: surface.layer,
             composition: surface.composition,
-            resource_type: CEF_COMPOSITOR_FRAME_GRAPH_RESOURCE,
+            resource_type: NATIVE_UI_COMPOSITOR_FRAME_GRAPH_RESOURCE,
             alpha_mode: frame.alpha_mode,
         };
 
@@ -437,24 +438,25 @@ impl RendererCefCompositor {
             .diagnostics
             .dirty_rect_count
             .saturating_add(u64::from(frame.dirty_rect_count));
-        self.diagnostics.last_sync_status = RendererCefImportSyncStatus::CopiedIntoRendererTexture;
+        self.diagnostics.last_sync_status =
+            RendererNativeUiImportSyncStatus::CopiedIntoRendererTexture;
         self.diagnostics.last_fail_closed_reason = None;
         Ok(layer)
     }
 
     pub fn record_cpu_fallback_attempt(
         &mut self,
-        reason: RendererCefFailClosedReason,
-    ) -> RendererCefCompositorError {
+        reason: RendererNativeUiFailClosedReason,
+    ) -> RendererNativeUiCompositorError {
         self.diagnostics.cpu_fallback_attempts =
             self.diagnostics.cpu_fallback_attempts.saturating_add(1);
         self.record_fail_closed(reason);
-        RendererCefCompositorError::CpuFallbackForbidden(reason)
+        RendererNativeUiCompositorError::CpuFallbackForbidden(reason)
     }
 
-    pub fn record_fail_closed(&mut self, reason: RendererCefFailClosedReason) {
+    pub fn record_fail_closed(&mut self, reason: RendererNativeUiFailClosedReason) {
         self.diagnostics.fail_closed_count = self.diagnostics.fail_closed_count.saturating_add(1);
-        self.diagnostics.last_sync_status = RendererCefImportSyncStatus::FailedClosed;
+        self.diagnostics.last_sync_status = RendererNativeUiImportSyncStatus::FailedClosed;
         self.diagnostics.last_fail_closed_reason = Some(reason);
     }
 
@@ -464,8 +466,8 @@ impl RendererCefCompositor {
 
     fn renderer_owned_texture_for(
         &mut self,
-        frame: RendererCefImportedFrame,
-    ) -> RendererCefOwnedTexture {
+        frame: RendererNativeUiImportedFrame,
+    ) -> RendererNativeUiOwnedTexture {
         let reuse = self
             .active_texture
             .filter(|texture| texture.extent == frame.extent)
@@ -475,13 +477,13 @@ impl RendererCefCompositor {
             None => {
                 let generation = self.next_texture_generation;
                 self.next_texture_generation = self.next_texture_generation.saturating_add(1);
-                RendererCefTextureId {
+                RendererNativeUiTextureId {
                     index: 0,
                     generation,
                 }
             }
         };
-        RendererCefOwnedTexture {
+        RendererNativeUiOwnedTexture {
             texture_id,
             frame_id: frame.frame_id,
             extent: frame.extent,
@@ -490,26 +492,26 @@ impl RendererCefCompositor {
         }
     }
 
-    fn record_import_rejection(&mut self, error: RendererCefCompositorError) {
+    fn record_import_rejection(&mut self, error: RendererNativeUiCompositorError) {
         match error {
-            RendererCefCompositorError::InvalidFrameId
-            | RendererCefCompositorError::InvalidExtent => {
+            RendererNativeUiCompositorError::InvalidFrameId
+            | RendererNativeUiCompositorError::InvalidExtent => {
                 self.diagnostics.invalid_handle_count =
                     self.diagnostics.invalid_handle_count.saturating_add(1);
                 self.record_fail_closed(match error {
-                    RendererCefCompositorError::InvalidExtent => {
-                        RendererCefFailClosedReason::InvalidFrameExtent
+                    RendererNativeUiCompositorError::InvalidExtent => {
+                        RendererNativeUiFailClosedReason::InvalidFrameExtent
                     }
-                    _ => RendererCefFailClosedReason::InvalidSharedTextureHandle,
+                    _ => RendererNativeUiFailClosedReason::InvalidSharedTextureHandle,
                 });
             }
-            RendererCefCompositorError::ProductRequiresGpuTransport => {
+            RendererNativeUiCompositorError::ProductRequiresGpuTransport => {
                 let _ = self.record_cpu_fallback_attempt(
-                    RendererCefFailClosedReason::CpuOnPaintRuntimeFallback,
+                    RendererNativeUiFailClosedReason::CpuOnPaintRuntimeFallback,
                 );
             }
-            RendererCefCompositorError::ProductSurfaceRequiresGpuOnly
-            | RendererCefCompositorError::CpuFallbackForbidden(_) => {}
+            RendererNativeUiCompositorError::ProductSurfaceRequiresGpuOnly
+            | RendererNativeUiCompositorError::CpuFallbackForbidden(_) => {}
         }
     }
 }
@@ -518,14 +520,14 @@ impl RendererCefCompositor {
 mod tests {
     use super::*;
 
-    fn gpu_frame(id: u64) -> RendererCefImportedFrame {
-        RendererCefImportedFrame {
-            frame_id: RendererCefFrameId(id),
-            extent: RendererCefExtent::new(1280, 720),
-            transport: RendererCefTransportMode::D3d11On12SharedTexture,
-            alpha_mode: RendererCefAlphaMode::Premultiplied,
+    fn gpu_frame(id: u64) -> RendererNativeUiImportedFrame {
+        RendererNativeUiImportedFrame {
+            frame_id: RendererNativeUiFrameId(id),
+            extent: RendererNativeUiExtent::new(1280, 720),
+            transport: RendererNativeUiTransportMode::D3d11On12SharedTexture,
+            alpha_mode: RendererNativeUiAlphaMode::Premultiplied,
             dirty_rect_count: 2,
-            dirty_rect_union: Some(RendererCefDirtyRect::new(0, 0, 1280, 720)),
+            dirty_rect_union: Some(RendererNativeUiDirtyRect::new(0, 0, 1280, 720)),
             callback_timestamp_ns: 10,
             import_begin_timestamp_ns: 30,
             import_complete_timestamp_ns: 80,
@@ -534,16 +536,16 @@ mod tests {
     }
 
     #[test]
-    fn cef_compositor_imports_gpu_frames_into_renderer_owned_texture() {
-        let mut compositor = RendererCefCompositor::default();
+    fn native_ui_compositor_imports_gpu_frames_into_renderer_owned_texture() {
+        let mut compositor = RendererNativeUiCompositor::default();
         compositor.begin_frame(12);
 
         let layer = compositor
-            .import_accelerated_frame(RendererCefSurfaceDescriptor::default(), gpu_frame(1))
+            .import_accelerated_frame(RendererNativeUiSurfaceDescriptor::default(), gpu_frame(1))
             .expect("gpu frame should import");
 
         assert!(layer.texture_id.is_valid());
-        assert_eq!(layer.frame_id, RendererCefFrameId(1));
+        assert_eq!(layer.frame_id, RendererNativeUiFrameId(1));
         assert_eq!(layer.resource_type, FrameGraphResourceType::UiColorAlpha);
 
         let diagnostics = compositor.diagnostics();
@@ -552,20 +554,21 @@ mod tests {
         assert_eq!(diagnostics.import_copy_duration_ns, 50);
         assert_eq!(
             diagnostics.last_sync_status,
-            RendererCefImportSyncStatus::CopiedIntoRendererTexture
+            RendererNativeUiImportSyncStatus::CopiedIntoRendererTexture
         );
         assert_eq!(diagnostics.fail_closed_count, 0);
     }
 
     #[test]
-    fn cef_compositor_rejects_cpu_on_paint_as_product_transport() {
-        let mut compositor = RendererCefCompositor::default();
+    fn native_ui_compositor_rejects_cpu_on_paint_as_product_transport() {
+        let mut compositor = RendererNativeUiCompositor::default();
         let mut frame = gpu_frame(2);
-        frame.transport = RendererCefTransportMode::CpuOnPaint;
+        frame.transport = RendererNativeUiTransportMode::CpuOnPaint;
 
         assert_eq!(
-            compositor.import_accelerated_frame(RendererCefSurfaceDescriptor::default(), frame),
-            Err(RendererCefCompositorError::ProductRequiresGpuTransport)
+            compositor
+                .import_accelerated_frame(RendererNativeUiSurfaceDescriptor::default(), frame),
+            Err(RendererNativeUiCompositorError::ProductRequiresGpuTransport)
         );
 
         let diagnostics = compositor.diagnostics();
@@ -573,54 +576,55 @@ mod tests {
         assert_eq!(diagnostics.fail_closed_count, 1);
         assert_eq!(
             diagnostics.last_fail_closed_reason,
-            Some(RendererCefFailClosedReason::CpuOnPaintRuntimeFallback)
+            Some(RendererNativeUiFailClosedReason::CpuOnPaintRuntimeFallback)
         );
     }
 
     #[test]
-    fn cef_compositor_rejects_non_gpu_scene_surface() {
-        let mut compositor = RendererCefCompositor::default();
-        let surface = RendererCefSurfaceDescriptor {
+    fn native_ui_compositor_rejects_non_gpu_scene_surface() {
+        let mut compositor = RendererNativeUiCompositor::default();
+        let surface = RendererNativeUiSurfaceDescriptor {
             gpu_only: false,
-            ..RendererCefSurfaceDescriptor::default()
+            ..RendererNativeUiSurfaceDescriptor::default()
         };
 
         assert_eq!(
             compositor.import_accelerated_frame(surface, gpu_frame(3)),
-            Err(RendererCefCompositorError::ProductSurfaceRequiresGpuOnly)
+            Err(RendererNativeUiCompositorError::ProductSurfaceRequiresGpuOnly)
         );
     }
 
     #[test]
-    fn cef_compositor_drops_stale_frames_without_reusing_callback_handles() {
-        let mut compositor = RendererCefCompositor::default();
+    fn native_ui_compositor_drops_stale_frames_without_reusing_callback_handles() {
+        let mut compositor = RendererNativeUiCompositor::default();
         let first = compositor
-            .import_accelerated_frame(RendererCefSurfaceDescriptor::default(), gpu_frame(9))
+            .import_accelerated_frame(RendererNativeUiSurfaceDescriptor::default(), gpu_frame(9))
             .expect("first import");
         let stale = compositor
-            .import_accelerated_frame(RendererCefSurfaceDescriptor::default(), gpu_frame(8))
+            .import_accelerated_frame(RendererNativeUiSurfaceDescriptor::default(), gpu_frame(8))
             .expect("stale frame reuses active layer");
 
         assert_eq!(first, stale);
         assert_eq!(compositor.diagnostics().dropped_ui_frames, 1);
         assert_eq!(
             compositor.diagnostics().last_sync_status,
-            RendererCefImportSyncStatus::DroppedStaleFrame
+            RendererNativeUiImportSyncStatus::DroppedStaleFrame
         );
     }
 
     #[test]
-    fn cef_compositor_records_ui_composite_benchmark_payload() {
-        let mut compositor = RendererCefCompositor::default();
+    fn native_ui_compositor_records_ui_composite_benchmark_payload() {
+        let mut compositor = RendererNativeUiCompositor::default();
         compositor
-            .import_accelerated_frame(RendererCefSurfaceDescriptor::default(), gpu_frame(4))
+            .import_accelerated_frame(RendererNativeUiSurfaceDescriptor::default(), gpu_frame(4))
             .expect("gpu frame");
         compositor.record_ui_composite_duration(440_000);
 
         let diagnostics = compositor.diagnostics();
         assert_eq!(diagnostics.ui_composite_pass_duration_ns, 440_000);
 
-        if let Some(path) = std::env::var_os("FUN_RENDERER_CEF_COMPOSITOR_BENCHMARK_ARTIFACT") {
+        if let Some(path) = std::env::var_os("FUN_RENDERER_NATIVE_UI_COMPOSITOR_BENCHMARK_ARTIFACT")
+        {
             let path = std::path::PathBuf::from(path);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).expect("artifact parent");
@@ -628,7 +632,7 @@ mod tests {
             let payload = format!(
                 concat!(
                     "{{\n",
-                    "  \"schema\": \"fun.renderer.cef_compositor.benchmark.v1\",\n",
+                    "  \"schema\": \"fun.renderer.native_ui_compositor.benchmark.v1\",\n",
                     "  \"ui_composite_pass_duration_ns\": {},\n",
                     "  \"callback_to_import_latency_ns\": {},\n",
                     "  \"import_copy_duration_ns\": {},\n",

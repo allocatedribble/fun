@@ -31,7 +31,7 @@
 //!    `PassGResourceResolutionRecord` carries a non-zero count of
 //!    successful glyph atlas lookups and image-id resolutions.
 //! 4. **UI graph pass executed in frame graph** — the typed
-//!    [`crate::FunRendererFrameGraphStage::CefComposition`] (the
+//!    [`crate::FunRendererFrameGraphStage::NativeUiComposition`] (the
 //!    legacy name; Pass A renamed the subsystem to `UiComposition`
 //!    and the stage retains the legacy ID for stable telemetry)
 //!    stage appears in the frame graph after the 3D-scene stages
@@ -56,7 +56,7 @@
 //!   `Tier6GlyphAtlasTable`.
 //! - **Pass 20 native UI adapter**
 //!   [`crate::ui::native_adapter::NativeUiProductPolicy::PRODUCT_DEFAULT`]
-//!   carrying `CefRenderRoleStatus::DemotedToLegacyDiagnostic`
+//!   carrying `NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic`
 //!   and the canonical `fun_ui_render_packet_v1` ingest schema.
 //! - **Pass A** lib-layer demotion mirrors
 //!   ([`crate::FUN_RENDERER_UI_RUNTIME_POLICY`]).
@@ -239,7 +239,7 @@ impl PassGFrameGraphIntegrationRecord {
         Self {
             schema_version: PASSG_NATIVE_UI_PRODUCT_ROUTE_SCHEMA_VERSION,
             ui_pass_present: true,
-            ui_pass_order_key: FunRendererFrameGraphStage::CefComposition.order_key(),
+            ui_pass_order_key: FunRendererFrameGraphStage::NativeUiComposition.order_key(),
             virtual_geometry_order_key: FunRendererFrameGraphStage::VirtualGeometry.order_key(),
             upscaling_order_key: FunRendererFrameGraphStage::UpscalingFrameGeneration.order_key(),
         }

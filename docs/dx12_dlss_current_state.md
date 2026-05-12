@@ -52,7 +52,7 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 - The current node falls back to a debug copy if evaluation fails, then disables the native SR path in render-world status after the failure budget is exhausted. Until support is reported ready, main-world camera setup removes native DLSS render-scale overrides and resets mip bias to native.
 - Native SDK evaluation still returns `native_shim_unavailable`; this is intentional until Streamline/NGX calls and a command-list accessor are linked into `fun_dx12_dlss`.
 
-## CEF HUD Composition Boundary
+## NATIVE_UI HUD Composition Boundary
 
 `fun_render::FunRenderCompositionStage` records the combined renderer ordering
 contract:
@@ -68,7 +68,7 @@ WorldRender
   -> Present
 ```
 
-The CEF/Svelte surface maps to `HudUi`. It is sampled only after DLSS SR/RR and
+The NATIVE_UI/Svelte surface maps to `HudUi`. It is sampled only after DLSS SR/RR and
 post-processing have produced the visible world image. It must not be bound as
 DLSS input color, depth, motion vectors, or Ray Reconstruction guide data.
 Browser pixels have no world-space motion-vector contract, so treating them as
@@ -149,7 +149,7 @@ The acceptance command fails if the estimated stress-frame count is below `-RrSt
 
 - `fun_render/src/dx12_native/handles.rs` and `fun_render/src/dx12_native/command_encoder.rs` are the only FUN-layer files allowed to call `Device::as_hal::<Dx12>()`, `Queue::as_hal::<Dx12>()`, `Texture::as_hal::<Dx12>()`, or `CommandEncoder::as_hal_mut::<Dx12>()`.
 - `with_dx12_device_queue_checked` validates the active wgpu backend is DX12, extracts borrowed `ID3D12Device` and `ID3D12CommandQueue` pointers, checks for null pointers, and logs each failure category once.
-- `docs/dx12_native_interop_governance.md` is the shared governance note for CEF, DLSS, PIX naming, and future debug tooling.
+- `docs/dx12_native_interop_governance.md` is the shared governance note for NATIVE_UI, DLSS, PIX naming, and future debug tooling.
 - `extract_dx12_texture_handle` validates single-layer, non-MSAA, non-zero 2D textures and maps only the texture formats currently expected for DLSS inputs and outputs.
 - The returned native pointers are borrowed. Rust-side `wgpu::Texture` resources must stay alive through native evaluation, and DLSS input and output resources must not alias during first bring-up.
 - `with_dx12_command_list_checked` validates DX12 command encoder HAL availability but returns `command_list_unavailable` until a sanctioned raw `ID3D12GraphicsCommandList` accessor exists.
@@ -182,7 +182,7 @@ The acceptance command fails if the estimated stress-frame count is below `-RrSt
 - Do not remove the explicit Vulkan comparison lane; Windows now defaults to
   DX12, but `FUN_RENDER_BACKEND=vulkan` and `--render-backend vulkan` must remain
   available for comparison and fallback captures.
-- Do not route DLSS work through CEF/Svelte or `fun_ui_cef`.
+- Do not route DLSS work through NATIVE_UI/Svelte or `fun_ui_native_ui`.
 - Do not re-enable RR through the native path until native Super Resolution is stable and benchmarked.
 - Do not scatter `as_hal::<Dx12>()`, `as_hal_mut::<Dx12>()`, raw COM pointers, or resource-handle extraction across `fun_render`.
 - Do not vendor NVIDIA redistributable binaries without an explicit SDK/license decision.

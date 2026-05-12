@@ -27,11 +27,13 @@ game-specific engine/networking use.
 ## Progress
 
 The game client, game server, shared protocol crate, launcher, renderer bridge,
-product renderer, scene layer, Lux lighting layer, and benchmark surfaces
-exist. Renderer identity and the V4 renderer doctrine exist. The scene, Lux,
-and render split is explicit: `fun-scene` owns scene declaration, `fun-lux`
-owns lighting and radiance policy, `fun-renderer` owns the product renderer
-core, and `fun_render` owns Bevy-facing extraction and integration.
+product renderer, ECS spatial declaration layer, scene layer, Lux lighting
+layer, and benchmark surfaces exist. Renderer identity and the V4 renderer
+doctrine exist. The ECS, scene, Lux, and render split is explicit: `fun-ecs`
+owns generic spatial streaming declarations and hot page-state resources,
+`fun-scene` owns scene declaration, `fun-lux` owns lighting and radiance policy,
+`fun-renderer` owns product renderer GPU realization, and `fun_render` owns
+Bevy-facing extraction and integration.
 
 The current physics data plane remains in `game_server` plus the Avian baseline
 while Avis matures. Runtime UI is moving toward native rvelte/FUN packets with
@@ -97,6 +99,7 @@ unbounded reads, runtime panics, and hidden process launches.
 - [game_client](game_client): client runtime and host pressure point.
 - [game_server](game_server): server authority and current physics baseline.
 - [game_shared](game_shared): shared game protocol contracts.
+- [fun-ecs](fun-ecs): ECS spatial streaming declarations and hot page tables.
 - [fun-renderer](fun-renderer): product renderer core.
 - [fun-scene](fun-scene): scene declarations and manifests.
 - [fun-lux](fun-lux): lighting and radiance policy.

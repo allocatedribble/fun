@@ -217,7 +217,7 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   buffers, view-visibility mask writes, and per-view reset CPU queue writes.
   Together these show whether static or transform-only scenes are avoiding
   whole-buffer uploads, full material scans, and CPU-side reset write spam.
-- `fun::perf::cef_ui`: CEF UI transport counters sampled separately from Bevy
+- `fun::perf::native_ui`: NATIVE_UI UI transport counters sampled separately from Bevy
   FPS: CPU `OnPaint` cadence, accelerated-paint cadence, CPU upload bytes, GPU
   copy bytes/ns/failures, GPU frame ready/not-ready/reused/blocking-wait counts,
   transport fallback count, published and sampled generations, and stale GPU

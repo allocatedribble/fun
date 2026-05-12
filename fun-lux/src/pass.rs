@@ -1,6 +1,6 @@
 //! Typed lighting pass requests.
 //!
-//! `LuxPassRequest` is the typed 17-variant enum a `fun-lux`
+//! `LuxPassRequest` is the typed 24-variant enum a `fun-lux`
 //! frame planner emits per scene. The renderer reads each
 //! variant and dispatches the matching live pipeline. Every
 //! variant carries:
@@ -18,7 +18,7 @@ use crate::frame_plan::LuxResourceIntent;
 use crate::quality::LuxQualityTier;
 
 pub const FUN_LUX_PASS_SCHEMA_VERSION: u16 = 1;
-pub const LUX_PASS_KIND_COUNT: usize = 17;
+pub const LUX_PASS_KIND_COUNT: usize = 24;
 
 /// Typed upstream dependency edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,6 +95,13 @@ pub enum LuxPassKind {
     BuildShadowRequests,
     RenderVirtualShadowPages,
     FilterVirtualShadows,
+    VoxelShadowDemandMark,
+    VoxelShadowPageBuild,
+    VoxelSdfDistantShadowResolve,
+    VoxelRadianceClipmapUpdate,
+    VoxelCanopyTransmittanceInject,
+    VoxelTerrainAoResolve,
+    StormExtinctionInject,
     DirectLighting,
     GiTrace,
     GiCacheUpdate,
@@ -116,6 +123,13 @@ impl LuxPassKind {
         Self::BuildShadowRequests,
         Self::RenderVirtualShadowPages,
         Self::FilterVirtualShadows,
+        Self::VoxelShadowDemandMark,
+        Self::VoxelShadowPageBuild,
+        Self::VoxelSdfDistantShadowResolve,
+        Self::VoxelRadianceClipmapUpdate,
+        Self::VoxelCanopyTransmittanceInject,
+        Self::VoxelTerrainAoResolve,
+        Self::StormExtinctionInject,
         Self::DirectLighting,
         Self::GiTrace,
         Self::GiCacheUpdate,
@@ -138,6 +152,13 @@ impl LuxPassKind {
             Self::BuildShadowRequests => "build_shadow_requests",
             Self::RenderVirtualShadowPages => "render_virtual_shadow_pages",
             Self::FilterVirtualShadows => "filter_virtual_shadows",
+            Self::VoxelShadowDemandMark => "voxel_shadow_demand_mark",
+            Self::VoxelShadowPageBuild => "voxel_shadow_page_build",
+            Self::VoxelSdfDistantShadowResolve => "voxel_sdf_distant_shadow_resolve",
+            Self::VoxelRadianceClipmapUpdate => "voxel_radiance_clipmap_update",
+            Self::VoxelCanopyTransmittanceInject => "voxel_canopy_transmittance_inject",
+            Self::VoxelTerrainAoResolve => "voxel_terrain_ao_resolve",
+            Self::StormExtinctionInject => "storm_extinction_inject",
             Self::DirectLighting => "direct_lighting",
             Self::GiTrace => "gi_trace",
             Self::GiCacheUpdate => "gi_cache_update",
@@ -197,6 +218,48 @@ pub struct RenderVirtualShadowPagesPass {
 pub struct FilterVirtualShadowsPass {
     pub common: LuxPassCommon,
     pub spatial_filter_kernel_radius: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelShadowDemandMarkPass {
+    pub common: LuxPassCommon,
+    pub dirty_row_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelShadowPageBuildPass {
+    pub common: LuxPassCommon,
+    pub max_pages_per_frame: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelSdfDistantShadowResolvePass {
+    pub common: LuxPassCommon,
+    pub sdf_page_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelRadianceClipmapUpdatePass {
+    pub common: LuxPassCommon,
+    pub dirty_row_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelCanopyTransmittanceInjectPass {
+    pub common: LuxPassCommon,
+    pub opacity_page_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelTerrainAoResolvePass {
+    pub common: LuxPassCommon,
+    pub sdf_page_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StormExtinctionInjectPass {
+    pub common: LuxPassCommon,
+    pub dirty_row_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,6 +385,13 @@ pub enum LuxPassRequest {
     BuildShadowRequests(BuildShadowRequestsPass),
     RenderVirtualShadowPages(RenderVirtualShadowPagesPass),
     FilterVirtualShadows(FilterVirtualShadowsPass),
+    VoxelShadowDemandMark(VoxelShadowDemandMarkPass),
+    VoxelShadowPageBuild(VoxelShadowPageBuildPass),
+    VoxelSdfDistantShadowResolve(VoxelSdfDistantShadowResolvePass),
+    VoxelRadianceClipmapUpdate(VoxelRadianceClipmapUpdatePass),
+    VoxelCanopyTransmittanceInject(VoxelCanopyTransmittanceInjectPass),
+    VoxelTerrainAoResolve(VoxelTerrainAoResolvePass),
+    StormExtinctionInject(StormExtinctionInjectPass),
     DirectLighting(DirectLightingPass),
     GiTrace(GiTracePass),
     GiCacheUpdate(GiCacheUpdatePass),
@@ -346,6 +416,13 @@ impl LuxPassRequest {
             Self::BuildShadowRequests(p) => &p.common,
             Self::RenderVirtualShadowPages(p) => &p.common,
             Self::FilterVirtualShadows(p) => &p.common,
+            Self::VoxelShadowDemandMark(p) => &p.common,
+            Self::VoxelShadowPageBuild(p) => &p.common,
+            Self::VoxelSdfDistantShadowResolve(p) => &p.common,
+            Self::VoxelRadianceClipmapUpdate(p) => &p.common,
+            Self::VoxelCanopyTransmittanceInject(p) => &p.common,
+            Self::VoxelTerrainAoResolve(p) => &p.common,
+            Self::StormExtinctionInject(p) => &p.common,
             Self::DirectLighting(p) => &p.common,
             Self::GiTrace(p) => &p.common,
             Self::GiCacheUpdate(p) => &p.common,
@@ -370,6 +447,13 @@ impl LuxPassRequest {
             Self::BuildShadowRequests(_) => LuxPassKind::BuildShadowRequests,
             Self::RenderVirtualShadowPages(_) => LuxPassKind::RenderVirtualShadowPages,
             Self::FilterVirtualShadows(_) => LuxPassKind::FilterVirtualShadows,
+            Self::VoxelShadowDemandMark(_) => LuxPassKind::VoxelShadowDemandMark,
+            Self::VoxelShadowPageBuild(_) => LuxPassKind::VoxelShadowPageBuild,
+            Self::VoxelSdfDistantShadowResolve(_) => LuxPassKind::VoxelSdfDistantShadowResolve,
+            Self::VoxelRadianceClipmapUpdate(_) => LuxPassKind::VoxelRadianceClipmapUpdate,
+            Self::VoxelCanopyTransmittanceInject(_) => LuxPassKind::VoxelCanopyTransmittanceInject,
+            Self::VoxelTerrainAoResolve(_) => LuxPassKind::VoxelTerrainAoResolve,
+            Self::StormExtinctionInject(_) => LuxPassKind::StormExtinctionInject,
             Self::DirectLighting(_) => LuxPassKind::DirectLighting,
             Self::GiTrace(_) => LuxPassKind::GiTrace,
             Self::GiCacheUpdate(_) => LuxPassKind::GiCacheUpdate,
@@ -402,8 +486,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pass_kind_count_is_17() {
-        assert_eq!(LUX_PASS_KIND_COUNT, 17);
+    fn pass_kind_count_matches_taxonomy() {
+        assert_eq!(LUX_PASS_KIND_COUNT, 24);
         assert_eq!(LuxPassKind::ALL.len(), LUX_PASS_KIND_COUNT);
     }
 
@@ -478,6 +562,34 @@ mod tests {
             LuxPassRequest::FilterVirtualShadows(FilterVirtualShadowsPass {
                 common: common.clone(),
                 spatial_filter_kernel_radius: 2,
+            }),
+            LuxPassRequest::VoxelShadowDemandMark(VoxelShadowDemandMarkPass {
+                common: common.clone(),
+                dirty_row_count: 4,
+            }),
+            LuxPassRequest::VoxelShadowPageBuild(VoxelShadowPageBuildPass {
+                common: common.clone(),
+                max_pages_per_frame: 16,
+            }),
+            LuxPassRequest::VoxelSdfDistantShadowResolve(VoxelSdfDistantShadowResolvePass {
+                common: common.clone(),
+                sdf_page_count: 8,
+            }),
+            LuxPassRequest::VoxelRadianceClipmapUpdate(VoxelRadianceClipmapUpdatePass {
+                common: common.clone(),
+                dirty_row_count: 6,
+            }),
+            LuxPassRequest::VoxelCanopyTransmittanceInject(VoxelCanopyTransmittanceInjectPass {
+                common: common.clone(),
+                opacity_page_count: 5,
+            }),
+            LuxPassRequest::VoxelTerrainAoResolve(VoxelTerrainAoResolvePass {
+                common: common.clone(),
+                sdf_page_count: 8,
+            }),
+            LuxPassRequest::StormExtinctionInject(StormExtinctionInjectPass {
+                common: common.clone(),
+                dirty_row_count: 3,
             }),
             LuxPassRequest::DirectLighting(DirectLightingPass {
                 common: common.clone(),

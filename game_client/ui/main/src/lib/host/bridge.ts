@@ -15,12 +15,6 @@ export type FunHostBridge = {
 
 declare global {
   interface Window {
-    cefQuery?: (request: {
-      request: string;
-      persistent?: boolean;
-      onSuccess?: (response: string) => void;
-      onFailure?: (errorCode: number, errorMessage: string) => void;
-    }) => void;
     funHost?: {
       postMessage: (envelope: unknown) => void;
     };
@@ -89,25 +83,6 @@ function hostBridgeUnavailable(command: string): Error {
 function postEnvelope(envelope: unknown, requestId: number, command: string): void {
   if (window.funHost?.postMessage) {
     window.funHost.postMessage(envelope);
-    return;
-  }
-
-  if (window.cefQuery) {
-    window.cefQuery({
-      request: JSON.stringify(envelope),
-      persistent: false,
-      onSuccess: (response) => {
-        if (!response) {
-          return;
-        }
-        window.fun.receiveFromHost(JSON.parse(response));
-      },
-      onFailure: (_errorCode, errorMessage) => {
-        const resolver = pendingRequests.get(requestId);
-        pendingRequests.delete(requestId);
-        resolver?.reject(new Error(errorMessage || `Fun host rejected ${command}.`));
-      }
-    });
     return;
   }
 
@@ -368,13 +343,6 @@ function emit(event: string, payload: unknown = null): void {
   dispatchHostEvent(event, payload);
   if (window.funHost?.postMessage) {
     window.funHost.postMessage(envelope);
-    return;
-  }
-  if (window.cefQuery) {
-    window.cefQuery({
-      request: JSON.stringify(envelope),
-      persistent: false
-    });
   }
 }
 

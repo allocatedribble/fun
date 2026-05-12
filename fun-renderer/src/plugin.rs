@@ -16,7 +16,7 @@ use crate::{
     },
     extraction::{
         begin_render_world_extraction_frame, extract_renderer_asset_events,
-        extract_renderer_cef_surfaces, extract_renderer_lights,
+        extract_renderer_lights, extract_renderer_native_ui_surfaces,
         extract_renderer_post_process_volumes, extract_renderer_renderables,
         extract_renderer_ui_surfaces, extract_renderer_views,
         install_render_world_extraction_resources,
@@ -353,7 +353,7 @@ pub struct RendererFeatureFlags {
     pub dx12: bool,
     pub vulkan: bool,
     pub metal: bool,
-    pub cef_gpu_only: bool,
+    pub native_ui_gpu_only: bool,
     pub upscaling: bool,
     pub dlss: bool,
     pub fsr: bool,
@@ -370,7 +370,7 @@ impl RendererFeatureFlags {
             dx12: toggles.dx12,
             vulkan: toggles.vulkan,
             metal: toggles.metal,
-            cef_gpu_only: toggles.cef_gpu_only,
+            native_ui_gpu_only: toggles.native_ui_gpu_only,
             upscaling: toggles.upscale,
             dlss: toggles.dlss,
             fsr: toggles.fsr,
@@ -694,7 +694,7 @@ where
                 extract_renderer_views,
                 extract_renderer_lights,
                 extract_renderer_ui_surfaces,
-                extract_renderer_cef_surfaces,
+                extract_renderer_native_ui_surfaces,
                 extract_renderer_post_process_volumes,
             )
                 .chain()
@@ -746,7 +746,7 @@ fn install_renderer_phase_systems_dynamic(app: &mut App) {
                 extract_renderer_views,
                 extract_renderer_lights,
                 extract_renderer_ui_surfaces,
-                extract_renderer_cef_surfaces,
+                extract_renderer_native_ui_surfaces,
                 extract_renderer_post_process_volumes,
             )
                 .chain()

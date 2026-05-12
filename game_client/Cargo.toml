@@ -7,7 +7,7 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["dlss", "volumetric_clouds"]
+default = ["dlss", "native_ui_routes", "volumetric_clouds"]
 release-telemetry = [
     "client-telemetry",
     "crash-telemetry",
@@ -36,17 +36,8 @@ benchmarks = [
     "telemetry-retention",
 ]
 bevy_debug = ["bevy/debug"]
-cef_ui = ["dep:fun_ui_cef"]
-cef_ui_dx12_accelerated_paint = [
-    "cef_ui",
-    "dep:wgpu",
-    "dep:windows",
-    "fun_render/dx12_native_interop",
-]
-dx12_native_object_names = [
-    "cef_ui_dx12_accelerated_paint",
-    "fun_render/dx12_native_object_names",
-]
+native_ui_routes = ["fun-rvelte-bridge/fun_renderer_backend"]
+dx12_native_object_names = ["fun_render/dx12_native_object_names"]
 diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
 dlss = ["bevy/dlss", "fun_render/dlss"]
 dx12_dlss_native = ["fun_render/dx12_dlss_native"]
@@ -72,7 +63,7 @@ fun_render = { path = "../fun_render", default-features = false, features = [
 fun_scene.workspace = true
 fun_telemetry_core = { workspace = true, optional = true }
 fun_host = { path = "../fun_host" }
-fun_ui_cef = { path = "../fun_ui_cef", optional = true }
+fun-rvelte-bridge = { path = "ui/rvelte_bridge", default-features = false }
 fun-warden-client = { path = "../../fun-warden/crates/fun-warden-client" }
 fun-warden-core = { path = "../../fun-warden/crates/fun-warden-core" }
 fun-warden-protocol = { path = "../../fun-warden/crates/fun-warden-protocol" }
@@ -83,17 +74,8 @@ log.workspace = true
 serde_json.workspace = true
 thunder.workspace = true
 tracing.workspace = true
-wgpu = { version = "29.0.3", default-features = false, features = ["dx12"], optional = true }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", optional = true, features = [
-    "Win32_Graphics_Direct3D",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Direct3D11on12",
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Dxgi_Common",
-] }
+zstd = "0.13.3"
 
 [dev-dependencies]
 criterion.workspace = true

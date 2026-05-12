@@ -1,7 +1,7 @@
 # DX12 Native Interop Governance
 
 status: active
-scope: `fun_render::dx12_native`, future `fun-renderer` backend boundary, CEF accelerated paint, native DLSS, PIX/Nsight naming
+scope: `fun_render::dx12_native`, future `fun-renderer` backend boundary, NATIVE_UI accelerated paint, native DLSS, PIX/Nsight naming
 
 ## Boundary
 
@@ -14,8 +14,8 @@ backend abstraction rather than spreading into callers.
 This boundary is step 6 of
 [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md). Do not add
 native DX12 calls to make the renderer "more Windowsy"; add them only after the
-observable/upload/CEF/churn/present gates prove a native interop boundary is the
-right tool or a feature such as CEF shared textures or DLSS requires it.
+observable/upload/NATIVE_UI/churn/present gates prove a native interop boundary is the
+right tool or a feature such as NATIVE_UI shared textures or DLSS requires it.
 
 Approved files:
 
@@ -24,7 +24,7 @@ Approved files:
 
 Callers must use the shared boundary:
 
-- CEF accelerated paint calls `with_dx12_device_queue_checked` and
+- NATIVE_UI accelerated paint calls `with_dx12_device_queue_checked` and
   `with_dx12_texture_checked`.
 - DLSS SR/RR calls `extract_dx12_texture_handle` and
   `with_dx12_command_list_checked`.
@@ -33,7 +33,7 @@ Callers must use the shared boundary:
 Validation check:
 
 ```text
-rg -n "as_hal::<|as_hal_mut::<|wgpu::hal::api::Dx12" --glob "*.rs" fun_render/src game_client/src fun_ui_cef/src
+rg -n "as_hal::<|as_hal_mut::<|wgpu::hal::api::Dx12" --glob "*.rs" fun_render/src game_client/src fun_ui_native_ui/src
 ```
 
 Every hit should be inside `fun_render/src/dx12_native`.
@@ -44,8 +44,8 @@ Every hit should be inside `fun_render/src/dx12_native`.
   native boundary.
 - `fun_render/dx12_dlss_native`: includes `dx12_native_interop` and remains the
   DLSS runtime feature.
-- `game_client/cef_ui_dx12_accelerated_paint`: includes
-  `fun_render/dx12_native_interop` and keeps CEF-specific D3D11On12 code in
+- `game_client/native_ui_dx12_accelerated_paint`: includes
+  `fun_render/dx12_native_interop` and keeps NATIVE_UI-specific D3D11On12 code in
   `game_client`.
 - `fun_render/dx12_native_object_names` and
   `game_client/dx12_native_object_names`: optional capture naming path.
@@ -66,11 +66,11 @@ future sanctioned command-list access centralized.
 Object naming is compile-time optional and must not enter hot paths unless
 `dx12_native_object_names` is enabled. Capture names use stable FUN prefixes:
 
-- `FUN.CEF.RingSlot[2].1280x720.BGRA8`
+- `FUN.NATIVE_UI.RingSlot[2].1280x720.BGRA8`
 - `FUN.Post.HDRColor.Main`
 - `FUN.Solari.Guide.Normals`
 - `FUN.DLSS.SR.Output.Quality`
 
-CEF currently labels its D3D12 queue, copy fence, copy command list, and ring
+NATIVE_UI currently labels its D3D12 queue, copy fence, copy command list, and ring
 textures when `game_client/dx12_native_object_names` is enabled. DLSS should use
 the same label helpers when the native shim starts owning real D3D12 resources.

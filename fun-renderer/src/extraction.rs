@@ -79,7 +79,7 @@ pub enum RenderStableIdKind {
     View,
     Light,
     UiSurface,
-    CefSurface,
+    NativeUiSurface,
     PostProcessVolume,
 }
 
@@ -94,7 +94,7 @@ impl RenderStableIdKind {
             Self::View => 5,
             Self::Light => 6,
             Self::UiSurface => 7,
-            Self::CefSurface => 8,
+            Self::NativeUiSurface => 8,
             Self::PostProcessVolume => 9,
         }
     }
@@ -109,7 +109,7 @@ impl RenderStableIdKind {
             Self::View => "view",
             Self::Light => "light",
             Self::UiSurface => "ui_surface",
-            Self::CefSurface => "cef_surface",
+            Self::NativeUiSurface => "native_ui_surface",
             Self::PostProcessVolume => "post_process_volume",
         }
     }
@@ -308,7 +308,7 @@ pub struct RenderStableIdAllocator {
     view_entities: EntityStableMap,
     light_entities: EntityStableMap,
     ui_entities: EntityStableMap,
-    cef_entities: EntityStableMap,
+    native_ui_entities: EntityStableMap,
     post_entities: EntityStableMap,
 }
 
@@ -381,7 +381,7 @@ impl RenderStableIdAllocator {
                 + self.view_entities.len()
                 + self.light_entities.len()
                 + self.ui_entities.len()
-                + self.cef_entities.len()
+                + self.native_ui_entities.len()
                 + self.post_entities.len()) as u32,
         }
     }
@@ -520,12 +520,12 @@ pub struct ExtractedUiSurface {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExtractedCefSurface {
+pub struct ExtractedNativeUiSurface {
     pub stable_id: RenderStableId,
-    pub surface: CefSurface,
-    pub producer: CefFrameProducer,
-    pub health: CefSurfaceHealth,
-    pub latest_frame_token: CefFrameToken,
+    pub surface: NativeUiSurface,
+    pub producer: NativeUiFrameProducer,
+    pub health: NativeUiSurfaceHealth,
+    pub latest_frame_token: NativeUiFrameToken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -552,7 +552,7 @@ pub struct RenderWorldTables {
     pub light_table: Vec<ExtractedLight>,
     pub view_table: Vec<ExtractedView>,
     pub ui_surface_table: Vec<ExtractedUiSurface>,
-    pub cef_surface_table: Vec<ExtractedCefSurface>,
+    pub native_ui_surface_table: Vec<ExtractedNativeUiSurface>,
     pub post_process_volume_table: Vec<ExtractedPostProcessVolume>,
 }
 
@@ -568,7 +568,7 @@ impl RenderWorldTables {
             lights: self.light_table.len() as u32,
             views: self.view_table.len() as u32,
             ui_surfaces: self.ui_surface_table.len() as u32,
-            cef_surfaces: self.cef_surface_table.len() as u32,
+            native_ui_surfaces: self.native_ui_surface_table.len() as u32,
             post_process_volumes: self.post_process_volume_table.len() as u32,
         }
     }
@@ -583,7 +583,7 @@ impl RenderWorldTables {
             + capacity_bytes::<ExtractedLight>(&self.light_table)
             + capacity_bytes::<ExtractedView>(&self.view_table)
             + capacity_bytes::<ExtractedUiSurface>(&self.ui_surface_table)
-            + capacity_bytes::<ExtractedCefSurface>(&self.cef_surface_table)
+            + capacity_bytes::<ExtractedNativeUiSurface>(&self.native_ui_surface_table)
             + capacity_bytes::<ExtractedPostProcessVolume>(&self.post_process_volume_table)
     }
 
@@ -653,8 +653,8 @@ impl RenderWorldTables {
         });
     }
 
-    fn upsert_cef_surface(&mut self, record: ExtractedCefSurface) {
-        upsert_by(&mut self.cef_surface_table, record, |record| {
+    fn upsert_native_ui_surface(&mut self, record: ExtractedNativeUiSurface) {
+        upsert_by(&mut self.native_ui_surface_table, record, |record| {
             record.stable_id
         });
     }
@@ -676,7 +676,7 @@ pub struct RenderWorldTableCounts {
     pub lights: u32,
     pub views: u32,
     pub ui_surfaces: u32,
-    pub cef_surfaces: u32,
+    pub native_ui_surfaces: u32,
     pub post_process_volumes: u32,
 }
 
@@ -755,7 +755,7 @@ pub struct RenderWorldExtractionDiagnostics {
     pub extracted_lights: u32,
     pub extracted_views: u32,
     pub extracted_ui_surfaces: u32,
-    pub extracted_cef_surfaces: u32,
+    pub extracted_native_ui_surfaces: u32,
     pub extracted_post_process_volumes: u32,
     pub removed_objects: u32,
     pub removed_views: u32,
@@ -783,7 +783,7 @@ impl RenderWorldExtractionDiagnostics {
         extracted_lights: 0,
         extracted_views: 0,
         extracted_ui_surfaces: 0,
-        extracted_cef_surfaces: 0,
+        extracted_native_ui_surfaces: 0,
         extracted_post_process_volumes: 0,
         removed_objects: 0,
         removed_views: 0,
@@ -1234,24 +1234,24 @@ pub fn extract_renderer_ui_surfaces(
 }
 
 #[allow(clippy::type_complexity)]
-pub fn extract_renderer_cef_surfaces(
+pub fn extract_renderer_native_ui_surfaces(
     query: Query<
         (
             Entity,
-            &CefSurface,
-            Option<&CefFrameProducer>,
-            Option<&CefSurfaceHealth>,
-            Option<&CefFrameToken>,
+            &NativeUiSurface,
+            Option<&NativeUiFrameProducer>,
+            Option<&NativeUiSurfaceHealth>,
+            Option<&NativeUiFrameToken>,
         ),
         Or<(
-            Added<CefSurface>,
-            Changed<CefSurface>,
-            Changed<CefFrameProducer>,
-            Changed<CefSurfaceHealth>,
-            Changed<CefFrameToken>,
+            Added<NativeUiSurface>,
+            Changed<NativeUiSurface>,
+            Changed<NativeUiFrameProducer>,
+            Changed<NativeUiSurfaceHealth>,
+            Changed<NativeUiFrameToken>,
         )>,
     >,
-    mut removed: RemovedComponents<CefSurface>,
+    mut removed: RemovedComponents<NativeUiSurface>,
     mut allocator: ResMut<RenderStableIdAllocator>,
     mut tables: ResMut<RenderWorldTables>,
     mut diagnostics: ResMut<RenderWorldExtractionDiagnostics>,
@@ -1260,23 +1260,25 @@ pub fn extract_renderer_cef_surfaces(
     for (entity, surface, producer, health, token) in query.iter() {
         diagnostics.queried_entities = diagnostics.queried_entities.saturating_add(1);
         diagnostics.changed_entities = diagnostics.changed_entities.saturating_add(1);
-        let (stable_id, _) =
-            allocator
-                .cef_entities
-                .bind(RenderStableIdKind::CefSurface, entity, surface.surface_id);
-        tables.upsert_cef_surface(ExtractedCefSurface {
+        let (stable_id, _) = allocator.native_ui_entities.bind(
+            RenderStableIdKind::NativeUiSurface,
+            entity,
+            surface.surface_id,
+        );
+        tables.upsert_native_ui_surface(ExtractedNativeUiSurface {
             stable_id,
             surface: *surface,
             producer: producer.copied().unwrap_or_default(),
             health: health.copied().unwrap_or_default(),
-            latest_frame_token: token.copied().unwrap_or(CefFrameToken::INVALID),
+            latest_frame_token: token.copied().unwrap_or(NativeUiFrameToken::INVALID),
         });
-        diagnostics.extracted_cef_surfaces = diagnostics.extracted_cef_surfaces.saturating_add(1);
+        diagnostics.extracted_native_ui_surfaces =
+            diagnostics.extracted_native_ui_surfaces.saturating_add(1);
     }
     for entity in removed.read() {
-        if let Some(stable_id) = allocator.cef_entities.remove(entity) {
+        if let Some(stable_id) = allocator.native_ui_entities.remove(entity) {
             tables
-                .cef_surface_table
+                .native_ui_surface_table
                 .retain(|surface| surface.stable_id != stable_id);
         }
     }
@@ -1657,7 +1659,7 @@ mod tests {
     }
 
     #[test]
-    fn view_light_ui_cef_and_post_extract_into_separate_dense_tables() {
+    fn view_light_ui_native_ui_and_post_extract_into_separate_dense_tables() {
         let mut world = World::new();
         install_resources(&mut world);
         world.spawn((
@@ -1690,17 +1692,17 @@ mod tests {
             UiColorSpace::Srgb,
         ));
         world.spawn((
-            CefSurface {
+            NativeUiSurface {
                 surface_id: RenderStableId::new(300),
-                transport: CefTransportMode::GpuSharedTexture,
+                transport: NativeUiTransportMode::GpuSharedTexture,
                 gpu_only: true,
             },
-            CefFrameProducer {
+            NativeUiFrameProducer {
                 producer_id: RenderStableId::new(301),
                 max_frame_rate_hz: 120,
             },
-            CefSurfaceHealth {
-                state: CefHealthState::Healthy,
+            NativeUiSurfaceHealth {
+                state: NativeUiHealthState::Healthy,
             },
         ));
 
@@ -1711,7 +1713,7 @@ mod tests {
                 extract_renderer_views,
                 extract_renderer_lights,
                 extract_renderer_ui_surfaces,
-                extract_renderer_cef_surfaces,
+                extract_renderer_native_ui_surfaces,
                 extract_renderer_post_process_volumes,
             )
                 .chain(),
@@ -1722,14 +1724,16 @@ mod tests {
         assert_eq!(counts.views, 1);
         assert_eq!(counts.lights, 1);
         assert_eq!(counts.ui_surfaces, 1);
-        assert_eq!(counts.cef_surfaces, 1);
+        assert_eq!(counts.native_ui_surfaces, 1);
         assert_eq!(counts.post_process_volumes, 1);
         assert_eq!(
             world.resource::<RenderWorldTables>().light_table[0].kind,
             ExtractedLightKind::Directional
         );
         assert_eq!(
-            world.resource::<RenderWorldTables>().cef_surface_table[0]
+            world
+                .resource::<RenderWorldTables>()
+                .native_ui_surface_table[0]
                 .producer
                 .max_frame_rate_hz,
             120
@@ -1776,7 +1780,7 @@ mod tests {
             "ExtractedMaterialInstance",
             "ExtractedLight",
             "ExtractedUiSurface",
-            "ExtractedCefSurface",
+            "ExtractedNativeUiSurface",
             "ExtractedPostProcessVolume",
             "RenderWorldTables",
             "RenderStableIdAllocator",

@@ -11,13 +11,13 @@ only after the normal parity campaign has controlled:
 
 - measurement and regression gates;
 - upload hot paths;
-- CEF accelerated transport;
+- NATIVE_UI accelerated transport;
 - barrier/resource-state churn;
 - descriptor and pipeline churn.
 
 They also come after the required sequence in
 [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md): observable
-DX12, upload cleanup, hardened CEF GPU transport, barrier/descriptor/PSO
+DX12, upload cleanup, hardened NATIVE_UI GPU transport, barrier/descriptor/PSO
 cleanup, evidence-based present pacing, centralized native interop, DLSS SR, and
 only then RR or moonshot work.
 

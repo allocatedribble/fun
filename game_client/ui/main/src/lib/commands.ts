@@ -118,7 +118,7 @@ export interface FunHostSnapshotPayload {
     lifecycle: 'booting' | 'ready' | 'shutting_down';
     state: FunHostState;
     previous_mode: FunHostMode | null;
-    cef_command_surface_ready: boolean;
+    native_ui_command_surface_ready: boolean;
   };
   command_catalog: HostCommandDescriptor[];
   editor_command_catalog: CommandDescriptor[];
@@ -224,7 +224,7 @@ export const fallbackStatus: EditorStatus = {
   target_fps_path: targetPath,
   fun_workspace_exists: false,
   expected_fun_crates: expectedCrates,
-  ui_stack: 'Svelte + strict TypeScript viewed through CEF',
+  ui_stack: 'Native rvelte/FUN packets with strict TypeScript browser preview',
   rust_service_status: 'fallback browser preview',
   bevy_demo_status: 'requires Fun-hosted Rust command',
   current_project: null,
@@ -442,7 +442,7 @@ export async function getHostSnapshot(): Promise<FunHostSnapshotPayload> {
           lifecycle: 'ready',
           state: fallbackFunHostState(),
           previous_mode: null,
-          cef_command_surface_ready: false
+          native_ui_command_surface_ready: false
         },
         command_catalog: fallbackCommands,
         editor_command_catalog: fallbackCommands
@@ -578,7 +578,7 @@ function previewStatusFromHostSnapshot(
       width,
       height,
       format: 'CurrentClient',
-      texture_usages: 'CEF_OVERLAY_ONLY'
+      texture_usages: 'NATIVE_UI_OVERLAY_ONLY'
     },
     signature_warning: null
   };
@@ -1315,7 +1315,7 @@ function fallbackPreviewStatus(sceneId: string | null, rect?: ViewportRect | nul
       width,
       height,
       format: 'CurrentClient',
-      texture_usages: 'CEF_OVERLAY_ONLY'
+      texture_usages: 'NATIVE_UI_OVERLAY_ONLY'
     },
     signature_warning: null
   };

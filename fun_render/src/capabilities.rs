@@ -47,8 +47,8 @@ pub struct RendererCapabilityReport {
     pub dx12_native_interop_support: &'static str,
     pub vulkan_backend_support: bool,
     pub d3d11on12_fallback_state: &'static str,
-    pub cef_accelerated_shared_texture_support: &'static str,
-    pub cef_cpu_runtime_upload_fallback_allowed: bool,
+    pub native_ui_accelerated_shared_texture_support: &'static str,
+    pub native_ui_cpu_runtime_upload_fallback_allowed: bool,
     pub bindless_resource_array_support: bool,
     pub descriptor_indexing_support: bool,
     pub sampler_feedback_support: &'static str,
@@ -93,7 +93,7 @@ pub struct BridgeFeatureFlagReport {
     pub fun_renderer_core: bool,
     pub dx12_native_interop: bool,
     pub vulkan_backend: bool,
-    pub cef_gpu_only: bool,
+    pub native_ui_gpu_only: bool,
     pub upscaling: bool,
     pub dlss: bool,
     pub fsr: bool,
@@ -139,8 +139,9 @@ impl RendererCapabilityReport {
         let actual_graphics_backend = adapter_info.backend;
         let warmup = pipeline_warmup::FunPipelineWarmupConfig::from_env();
         let native_dlss_config = NativeDlssConfig::from_env();
-        let cef_cpu_runtime_upload_fallback_allowed = cef_cpu_runtime_upload_fallback_allowed();
-        let d3d11on12_fallback_state = if cef_cpu_runtime_upload_fallback_allowed {
+        let native_ui_cpu_runtime_upload_fallback_allowed =
+            native_ui_cpu_runtime_upload_fallback_allowed();
+        let d3d11on12_fallback_state = if native_ui_cpu_runtime_upload_fallback_allowed {
             "cpu_fallback_opt_in"
         } else {
             "cpu_fallback_forbidden"
@@ -156,7 +157,7 @@ impl RendererCapabilityReport {
             );
         let dx12_native_handle_support =
             cfg!(all(target_os = "windows", feature = "dx12_native_interop")) && actual_is_dx12;
-        let cef_accelerated_shared_texture_support =
+        let native_ui_accelerated_shared_texture_support =
             if cfg!(target_os = "windows") && actual_is_dx12 && dx12_native_handle_support {
                 "renderer_prerequisites_supported"
             } else if !actual_is_dx12 {
@@ -198,8 +199,8 @@ impl RendererCapabilityReport {
             dx12_native_interop_support: dx12_native_interop_support(actual_is_dx12),
             vulkan_backend_support: actual_graphics_backend == wgpu::Backend::Vulkan,
             d3d11on12_fallback_state,
-            cef_accelerated_shared_texture_support,
-            cef_cpu_runtime_upload_fallback_allowed,
+            native_ui_accelerated_shared_texture_support,
+            native_ui_cpu_runtime_upload_fallback_allowed,
             bindless_resource_array_support,
             descriptor_indexing_support: bindless_resource_array_support,
             sampler_feedback_support: "not_exposed_by_wgpu",
@@ -255,7 +256,7 @@ impl RendererCapabilityReport {
             dx12_interop_support = self.dx12_native_interop_support,
             ui_transport_mode = self.ui_transport_mode,
             d3d11on12_fallback_state = self.d3d11on12_fallback_state,
-            cef_accelerated_shared_texture_support = self.cef_accelerated_shared_texture_support,
+            native_ui_accelerated_shared_texture_support = self.native_ui_accelerated_shared_texture_support,
             dlss_availability = self.dlss_availability,
             fsr_availability = self.fsr_availability,
             frame_generation_eligibility = self.frame_generation_eligibility,
@@ -265,7 +266,7 @@ impl RendererCapabilityReport {
         );
         info!(
             target: "fun::render",
-            "[fun render] startup capabilities: selected_renderer_lane={} actual_renderer_lane={} renderer_lane_reason={} requested_backend={} selected_backend={} actual_backend={} fallback_backend={} fallback_reason={} backend_selection_reason={} backend_truth_state={} dx12_interop_support={} ui_transport_mode={} d3d11on12_fallback_state={} cef_shared_texture={} dlss={} fsr={} frame_generation={} premium_rendering_gate={} pipeline_warmup={} pipeline_warmup_mode={}",
+            "[fun render] startup capabilities: selected_renderer_lane={} actual_renderer_lane={} renderer_lane_reason={} requested_backend={} selected_backend={} actual_backend={} fallback_backend={} fallback_reason={} backend_selection_reason={} backend_truth_state={} dx12_interop_support={} ui_transport_mode={} d3d11on12_fallback_state={} native_ui_shared_texture={} dlss={} fsr={} frame_generation={} premium_rendering_gate={} pipeline_warmup={} pipeline_warmup_mode={}",
             self.selected_renderer_lane,
             self.actual_renderer_lane,
             self.renderer_lane_selection_reason,
@@ -279,7 +280,7 @@ impl RendererCapabilityReport {
             self.dx12_native_interop_support,
             self.ui_transport_mode,
             self.d3d11on12_fallback_state,
-            self.cef_accelerated_shared_texture_support,
+            self.native_ui_accelerated_shared_texture_support,
             self.dlss_availability,
             self.fsr_availability,
             self.frame_generation_eligibility,
@@ -334,7 +335,7 @@ impl BridgeFeatureFlagReport {
             fun_renderer_core: features.new_core,
             dx12_native_interop: features.dx12,
             vulkan_backend: features.vulkan,
-            cef_gpu_only: features.cef_gpu_only,
+            native_ui_gpu_only: features.native_ui_gpu_only,
             upscaling: features.upscale,
             dlss: features.dlss,
             fsr: features.fsr,
@@ -366,13 +367,13 @@ fn collect_environment_overrides() -> BTreeMap<&'static str, String> {
         "FUN_RENDER_PRESENT_MODE",
         "FUN_RENDER_MAX_FRAME_LATENCY",
         "FUN_PRESENT_MAX_FRAME_LATENCY",
-        "FUN_CEF_UI_PAINT_TRANSPORT",
-        "FUN_CEF_UI_ACCELERATED_PAINT",
-        "FUN_CEF_UI_ACCELERATED_STRICT",
-        "FUN_CEF_UI_ALLOW_CPU_FALLBACK",
-        "FUN_CEF_UI_GPU_RING_DEPTH",
-        "FUN_CEF_UI_COPY_DIRTY_RECTS",
-        "FUN_CEF_UI_DEBUG_TIMINGS",
+        "FUN_NATIVE_UI_PAINT_TRANSPORT",
+        "FUN_NATIVE_UI_ACCELERATED_PAINT",
+        "FUN_NATIVE_UI_ACCELERATED_STRICT",
+        "FUN_NATIVE_UI_ALLOW_CPU_FALLBACK",
+        "FUN_NATIVE_UI_GPU_RING_DEPTH",
+        "FUN_NATIVE_UI_COPY_DIRTY_RECTS",
+        "FUN_NATIVE_UI_DEBUG_TIMINGS",
         "FUN_RENDER_PIPELINE_WARMUP",
         "FUN_RENDER_PIPELINE_WARMUP_BUDGET_MS",
         "FUN_DISABLE_DLSS_RR",
@@ -504,12 +505,12 @@ fn premium_rendering_gate(
     "dx12_foundation_eligible"
 }
 
-fn cef_cpu_runtime_upload_fallback_allowed() -> bool {
-    env_flag_enabled("FUN_CEF_UI_ALLOW_CPU_FALLBACK")
+fn native_ui_cpu_runtime_upload_fallback_allowed() -> bool {
+    env_flag_enabled("FUN_NATIVE_UI_ALLOW_CPU_FALLBACK")
 }
 
 fn ui_transport_mode() -> &'static str {
-    let Some(value) = std::env::var("FUN_CEF_UI_PAINT_TRANSPORT").ok() else {
+    let Some(value) = std::env::var("FUN_NATIVE_UI_PAINT_TRANSPORT").ok() else {
         return "not_requested";
     };
     match value.trim().to_ascii_lowercase().as_str() {
@@ -641,7 +642,7 @@ mod tests {
     fn capability_report_exposes_required_backend_parity_scene_catalog() {
         assert!(fun_renderer::BACKEND_PARITY_SCENE_IDS.contains(&"backend_parity.clear_present"));
         assert!(
-            fun_renderer::BACKEND_PARITY_SCENE_IDS.contains(&"backend_parity.cef_ui_composite")
+            fun_renderer::BACKEND_PARITY_SCENE_IDS.contains(&"backend_parity.native_ui_composite")
         );
         assert!(
             fun_renderer::BACKEND_PARITY_SCENE_IDS

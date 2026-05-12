@@ -15,7 +15,7 @@ feature into the rvelte bridge as a real
 [`FunUiFramePacketConsumer`]. The integration is feature-gated
 (`fun_renderer_backend`), default-off so the bridge's production
 dependency tree stays free of bevy / wgpu / dx12 / vulkan / metal /
-cef / swapchain crates. With the feature on the bridge gains the
+native_ui / swapchain crates. With the feature on the bridge gains the
 `fun_renderer_backend::FunRendererPacketConsumer` consumer, which
 lifts a `FunUiFramePacket` through fun-renderer's
 `NativeUiRendererDescriptors::from_packet` in one call — no
@@ -180,7 +180,7 @@ graphics-API crates. With the `fun_renderer_backend` feature off:
 - The `fun_renderer_backend` module is gated by
   `#[cfg(feature = "fun_renderer_backend")]` and inert by default.
 - `cargo tree -p fun-rvelte-bridge -e normal | grep -ciE
-  "wgpu|vulkan|metal|dx12|d3d12|cef|swapchain|fun-renderer|
+  "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer|
   fun_renderer"` returns 0.
 
 With the feature on, the production tree gains `fun_renderer` and
@@ -202,12 +202,12 @@ Per the pass-71 design's migration plan:
   through the adapter, switching between the fake renderer and the
   fun-renderer-backed consumer via a feature-flag-driven runtime
   selection.
-- **Pass 77+** — staged removal of legacy CEF / browser UI, gated
+- **Pass 77+** — staged removal of legacy NATIVE_UI / browser UI, gated
   on the fun-renderer-backed path being proven on every product
   route.
 
 Pass 73 explicitly does **not** authorize any change under
-`fun/game_client/ui/main`, `fun/fun_ui_cef`, or `fun/fun_host`.
+`fun/game_client/ui/main`, `fun/fun_ui_native_ui`, or `fun/fun_host`.
 
 ## Exit Criteria
 

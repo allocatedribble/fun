@@ -21,7 +21,9 @@ use fun_renderer::{
     CloudRenderSettings, CloudWeatherProfileId, CloudWorldShadowSettings,
 };
 
-use super::config::{FunCloudDebugOverlay, FunCloudInternalScale, FunCloudQuality, FunCloudSettings};
+use super::config::{
+    FunCloudDebugOverlay, FunCloudInternalScale, FunCloudQuality, FunCloudSettings,
+};
 use super::weather::FunWeatherProfileId;
 
 /// Typed conversion: legacy quality → renderer-owned

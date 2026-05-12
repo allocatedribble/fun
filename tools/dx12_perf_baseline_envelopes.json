@@ -15,22 +15,22 @@
           "message": "DX12 frame p95 worsened by more than 10 percent in the required lane."
         },
         {
-          "id": "accelerated_cef_cpu_upload",
-          "metric": "cef_cpu_upload_bytes",
+          "id": "accelerated_native_ui_cpu_upload",
+          "metric": "native_ui_cpu_upload_bytes",
           "field": "mean",
           "comparison": "max_absolute",
           "limit": 0.0,
-          "when": "accelerated_cef",
-          "message": "CPU upload bytes appeared in an accelerated CEF lane."
+          "when": "accelerated_native_ui",
+          "message": "CPU upload bytes appeared in an accelerated NATIVE_UI lane."
         },
         {
-          "id": "accelerated_cef_blocking_waits",
-          "metric": "cef_gpu_frame_blocking_wait_count",
+          "id": "accelerated_native_ui_blocking_waits",
+          "metric": "native_ui_gpu_frame_blocking_wait_count",
           "field": "p95",
           "comparison": "max_absolute",
           "limit": 0.0,
-          "when": "accelerated_cef",
-          "message": "Blocking waits appeared in an accelerated CEF lane."
+          "when": "accelerated_native_ui",
+          "message": "Blocking waits appeared in an accelerated NATIVE_UI lane."
         },
         {
           "id": "runtime_render_pipeline_creation",
@@ -113,34 +113,34 @@
           "message": "Transient buffer creates increased."
         },
         {
-          "id": "accelerated_cef_stale_frames",
-          "metric": "cef_stale_frame_count",
+          "id": "accelerated_native_ui_stale_frames",
+          "metric": "native_ui_stale_frame_count",
           "field": "p95",
           "comparison": "max_regression_absolute",
           "direction": "lower",
           "limit": 0.0,
-          "when": "accelerated_cef",
-          "message": "Stale CEF GPU frame count regressed."
+          "when": "accelerated_native_ui",
+          "message": "Stale NATIVE_UI GPU frame count regressed."
         },
         {
-          "id": "accelerated_cef_not_ready_frames",
-          "metric": "cef_gpu_frame_not_ready_count",
+          "id": "accelerated_native_ui_not_ready_frames",
+          "metric": "native_ui_gpu_frame_not_ready_count",
           "field": "p95",
           "comparison": "max_regression_absolute",
           "direction": "lower",
           "limit": 0.0,
-          "when": "accelerated_cef",
-          "message": "Not-ready CEF GPU frames regressed."
+          "when": "accelerated_native_ui",
+          "message": "Not-ready NATIVE_UI GPU frames regressed."
         },
         {
-          "id": "accelerated_cef_reused_frames",
-          "metric": "cef_gpu_frame_reused_count",
+          "id": "accelerated_native_ui_reused_frames",
+          "metric": "native_ui_gpu_frame_reused_count",
           "field": "p95",
           "comparison": "max_regression_absolute",
           "direction": "lower",
           "limit": 0.0,
-          "when": "accelerated_cef",
-          "message": "Reused CEF GPU frames regressed."
+          "when": "accelerated_native_ui",
+          "message": "Reused NATIVE_UI GPU frames regressed."
         }
       ]
     }

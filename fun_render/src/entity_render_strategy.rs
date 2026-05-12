@@ -14,7 +14,7 @@ pub enum FunEntityRenderClass {
     FoliageAggregate,
     Particle,
     TransparentGeometry,
-    CefUi,
+    NativeUi,
     DebugOverlay,
 }
 
@@ -29,7 +29,7 @@ impl FunEntityRenderClass {
             Self::FoliageAggregate => "foliage_aggregate",
             Self::Particle => "particle",
             Self::TransparentGeometry => "transparent_geometry",
-            Self::CefUi => "cef_ui",
+            Self::NativeUi => "native_ui",
             Self::DebugOverlay => "debug_overlay",
         }
     }
@@ -44,7 +44,7 @@ impl FunEntityRenderClass {
             Self::FoliageAggregate => 5,
             Self::Particle => 6,
             Self::TransparentGeometry => 7,
-            Self::CefUi => 8,
+            Self::NativeUi => 8,
             Self::DebugOverlay => 9,
         }
     }
@@ -59,7 +59,7 @@ pub enum FunEntityRenderPathTarget {
     FunVG,
     GpuParticleBuffers,
     TransparentPipeline,
-    CefPostWorldComposition,
+    NativeUiPostWorldComposition,
     DebugPhase,
 }
 
@@ -73,7 +73,7 @@ impl FunEntityRenderPathTarget {
             Self::FunVG => "fun_vg",
             Self::GpuParticleBuffers => "gpu_particle_buffers",
             Self::TransparentPipeline => "transparent_pipeline",
-            Self::CefPostWorldComposition => "cef_post_world_composition",
+            Self::NativeUiPostWorldComposition => "native_ui_post_world_composition",
             Self::DebugPhase => "debug_phase",
         }
     }
@@ -84,7 +84,7 @@ impl FunEntityRenderPathTarget {
             Self::InstancedRaster => Some(FunRenderPath::InstancedRaster),
             Self::GpuCulledIndirect => Some(FunRenderPath::GpuCulledIndirect),
             Self::MeshletStaticDense => Some(FunRenderPath::MeshletStaticDense),
-            Self::CefPostWorldComposition => Some(FunRenderPath::CefUi),
+            Self::NativeUiPostWorldComposition => Some(FunRenderPath::NativeUi),
             Self::DebugPhase => Some(FunRenderPath::DebugOnly),
             Self::FunVG | Self::GpuParticleBuffers | Self::TransparentPipeline => None,
         }
@@ -148,8 +148,8 @@ pub struct FunEntityRenderFeatureFlags {
     pub cpu_fallback_measured: bool,
     pub isolated_debug_phase: bool,
     pub disabled_in_perf_lanes: bool,
-    pub cef_excluded_from_temporal_reconstruction: bool,
-    pub cef_excluded_from_world_geometry_metrics: bool,
+    pub native_ui_excluded_from_temporal_reconstruction: bool,
+    pub native_ui_excluded_from_world_geometry_metrics: bool,
     pub never_virtual_geometry: bool,
 }
 
@@ -179,8 +179,8 @@ impl FunEntityRenderFeatureFlags {
         cpu_fallback_measured: false,
         isolated_debug_phase: false,
         disabled_in_perf_lanes: false,
-        cef_excluded_from_temporal_reconstruction: false,
-        cef_excluded_from_world_geometry_metrics: false,
+        native_ui_excluded_from_temporal_reconstruction: false,
+        native_ui_excluded_from_world_geometry_metrics: false,
         never_virtual_geometry: false,
     };
 }
@@ -228,8 +228,8 @@ const PARTICLE_TARGET_PATHS: &[FunEntityRenderPathTarget] =
 const TRANSPARENT_GEOMETRY_TARGET_PATHS: &[FunEntityRenderPathTarget] =
     &[FunEntityRenderPathTarget::TransparentPipeline];
 
-const CEF_UI_TARGET_PATHS: &[FunEntityRenderPathTarget] =
-    &[FunEntityRenderPathTarget::CefPostWorldComposition];
+const NATIVE_UI_TARGET_PATHS: &[FunEntityRenderPathTarget] =
+    &[FunEntityRenderPathTarget::NativeUiPostWorldComposition];
 
 const DEBUG_OVERLAY_TARGET_PATHS: &[FunEntityRenderPathTarget] =
     &[FunEntityRenderPathTarget::DebugPhase];
@@ -393,23 +393,23 @@ pub static FUN_ENTITY_RENDER_STRATEGIES: [FunEntityRenderStrategy; 10] = [
     },
     FunEntityRenderStrategy {
         schema_version: FUN_ENTITY_RENDER_STRATEGY_SCHEMA_VERSION,
-        entity_class: FunEntityRenderClass::CefUi,
-        target_paths: CEF_UI_TARGET_PATHS,
+        entity_class: FunEntityRenderClass::NativeUi,
+        target_paths: NATIVE_UI_TARGET_PATHS,
         draw_call_target: FunDrawCallScalingTarget::PostWorldComposition,
         features: FunEntityRenderFeatureFlags {
             post_world_composition: true,
             gpu_copy_path: true,
             cpu_fallback_measured: true,
-            cef_excluded_from_temporal_reconstruction: true,
-            cef_excluded_from_world_geometry_metrics: true,
+            native_ui_excluded_from_temporal_reconstruction: true,
+            native_ui_excluded_from_world_geometry_metrics: true,
             never_virtual_geometry: true,
             ..FunEntityRenderFeatureFlags::NONE
         },
         perf_lane_enabled_by_default: true,
-        benchmark_label: "cef_ui",
+        benchmark_label: "native_ui",
         notes: &[
-            "CEF/UI is composed after the world",
-            "CEF CPU fallback is measured explicitly and excluded from world geometry metrics",
+            "NATIVE_UI/UI is composed after the world",
+            "NATIVE_UI CPU fallback is measured explicitly and excluded from world geometry metrics",
         ],
     },
     FunEntityRenderStrategy {
@@ -524,7 +524,7 @@ pub fn evaluate_entity_render_strategy_budget(
         FunEntityRenderClass::FoliageAggregate => input.mesh_material_bucket_count,
         FunEntityRenderClass::Particle => input.particle_bucket_count,
         FunEntityRenderClass::TransparentGeometry => input.transparent_bucket_count,
-        FunEntityRenderClass::CefUi => u32::from(input.object_count > 0),
+        FunEntityRenderClass::NativeUi => u32::from(input.object_count > 0),
         FunEntityRenderClass::DebugOverlay => {
             if input.debug_requested {
                 input.material_bucket_count.max(1)
@@ -716,23 +716,31 @@ mod tests {
     }
 
     #[test]
-    fn cef_ui_is_post_world_and_excluded_from_temporal_and_world_metrics() {
-        let strategy = strategy_for_entity_render_class(FunEntityRenderClass::CefUi);
+    fn native_ui_is_post_world_and_excluded_from_temporal_and_world_metrics() {
+        let strategy = strategy_for_entity_render_class(FunEntityRenderClass::NativeUi);
         let report = evaluate_entity_render_strategy_budget(FunEntityRenderStrategyBudgetInput {
-            entity_class: FunEntityRenderClass::CefUi,
+            entity_class: FunEntityRenderClass::NativeUi,
             object_count: 1,
             ..Default::default()
         });
 
         assert_eq!(
             strategy.target_paths,
-            &[FunEntityRenderPathTarget::CefPostWorldComposition]
+            &[FunEntityRenderPathTarget::NativeUiPostWorldComposition]
         );
         assert!(strategy.features.post_world_composition);
         assert!(strategy.features.gpu_copy_path);
         assert!(strategy.features.cpu_fallback_measured);
-        assert!(strategy.features.cef_excluded_from_temporal_reconstruction);
-        assert!(strategy.features.cef_excluded_from_world_geometry_metrics);
+        assert!(
+            strategy
+                .features
+                .native_ui_excluded_from_temporal_reconstruction
+        );
+        assert!(
+            strategy
+                .features
+                .native_ui_excluded_from_world_geometry_metrics
+        );
         assert_eq!(report.max_expected_draw_calls, 1);
     }
 

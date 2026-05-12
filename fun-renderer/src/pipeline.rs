@@ -36,7 +36,7 @@ pub struct PipelineFeatureMask {
 
 impl PipelineFeatureMask {
     pub const NONE: Self = Self { bits: 0 };
-    pub const CEF_GPU_ONLY: Self = Self { bits: 1 << 0 };
+    pub const NATIVE_UI_GPU_ONLY: Self = Self { bits: 1 << 0 };
     pub const UPSCALING: Self = Self { bits: 1 << 1 };
     pub const DLSS: Self = Self { bits: 1 << 2 };
     pub const FSR: Self = Self { bits: 1 << 3 };
@@ -386,7 +386,7 @@ impl PipelineDescriptor {
 const COMPUTE_CULLING_FEATURES: PipelineFeatureMask =
     PipelineFeatureMask::COMPUTE_CULLING.union(PipelineFeatureMask::MESHLETS);
 const CLOUD_FEATURES: PipelineFeatureMask = PipelineFeatureMask::CLOUDS;
-const CEF_UI_FEATURES: PipelineFeatureMask = PipelineFeatureMask::CEF_GPU_ONLY
+const NATIVE_UI_FEATURES: PipelineFeatureMask = PipelineFeatureMask::NATIVE_UI_GPU_ONLY
     .union(PipelineFeatureMask::UI_COMPOSITE)
     .union(PipelineFeatureMask::FRAME_GENERATION);
 const VIRTUAL_GEOMETRY_FEATURES: PipelineFeatureMask =
@@ -402,7 +402,7 @@ const UPSCALE_FEATURES: PipelineFeatureMask = PipelineFeatureMask::UPSCALING
 
 const COMPUTE_CULLING_DEPS: &[&str] = &["gpu_scene_database", "virtual_geometry"];
 const CLOUD_DEPS: &[&str] = &["gpu_scene_database", "lighting"];
-const UI_COMPOSITE_DEPS: &[&str] = &["cef_gpu_import", "present"];
+const UI_COMPOSITE_DEPS: &[&str] = &["native_ui_gpu_import", "present"];
 const VIRTUAL_GEOMETRY_DEPS: &[&str] = &["gpu_scene_database", "visibility"];
 const VIRTUAL_SHADOW_DEPS: &[&str] = &["virtual_geometry", "lighting"];
 const LUX_DEPS: &[&str] = &["gpu_scene_database", "virtual_shadows"];
@@ -452,10 +452,10 @@ pub const SHADER_MODULES: [ShaderModuleDescriptor; 10] = [
         backend_mask: PipelineBackendMask::ALL,
     },
     ShaderModuleDescriptor {
-        stable_id: "shader.cef_compositor",
-        static_label: "renderer_cef_gpu_compositor_shader",
-        shader_path: "fun-renderer/shaders/cef_compositor.wgsl",
-        feature_mask: CEF_UI_FEATURES,
+        stable_id: "shader.native_ui_compositor",
+        static_label: "renderer_native_ui_gpu_compositor_shader",
+        shader_path: "fun-renderer/shaders/native_ui_compositor.wgsl",
+        feature_mask: NATIVE_UI_FEATURES,
         backend_mask: PipelineBackendMask::ALL,
     },
     ShaderModuleDescriptor {
@@ -533,12 +533,12 @@ pub const SHADER_VARIANTS: [ShaderVariantDescriptor; 12] = [
         quality_tier_mask: PipelineQualityTierMask::ALL,
     },
     ShaderVariantDescriptor {
-        stable_id: "variant.cef_compositor.present",
-        shader_module: "shader.cef_compositor",
+        stable_id: "variant.native_ui_compositor.present",
+        shader_module: "shader.native_ui_compositor",
         axes: ShaderVariantAxes::BACKEND
             .union(ShaderVariantAxes::HDR_LDR)
             .union(ShaderVariantAxes::UPSCALER_MODE),
-        feature_mask: CEF_UI_FEATURES,
+        feature_mask: NATIVE_UI_FEATURES,
         backend_mask: PipelineBackendMask::ALL,
         quality_tier_mask: PipelineQualityTierMask::ALL,
     },
@@ -583,7 +583,7 @@ pub const SHADER_VARIANTS: [ShaderVariantDescriptor; 12] = [
     },
     ShaderVariantDescriptor {
         stable_id: "variant.upscale.present_boundary",
-        shader_module: "shader.cef_compositor",
+        shader_module: "shader.native_ui_compositor",
         axes: ShaderVariantAxes::BACKEND
             .union(ShaderVariantAxes::HDR_LDR)
             .union(ShaderVariantAxes::UPSCALER_MODE),
@@ -699,13 +699,13 @@ pub const PIPELINES: [PipelineDescriptor; 23] = [
         runtime_creation_allowed_during_benchmark: false,
     },
     PipelineDescriptor {
-        stable_id: "pipeline.cef.gpu_composite",
+        stable_id: "pipeline.native_ui.gpu_composite",
         kind: PipelineKind::Render,
-        static_label: "renderer_cef_gpu_composite_pipeline",
-        shader_path: "fun-renderer/shaders/cef_compositor.wgsl",
-        entry_point: "fragment_cef_to_ui_color",
-        shader_variant: "variant.cef_compositor.present",
-        feature_mask: CEF_UI_FEATURES,
+        static_label: "renderer_native_ui_gpu_composite_pipeline",
+        shader_path: "fun-renderer/shaders/native_ui_compositor.wgsl",
+        entry_point: "fragment_native_ui_to_ui_color",
+        shader_variant: "variant.native_ui_compositor.present",
+        feature_mask: NATIVE_UI_FEATURES,
         backend_mask: PipelineBackendMask::ALL,
         quality_tier_mask: PipelineQualityTierMask::ALL,
         warmup_policy: PipelineWarmupPolicy {
@@ -1969,9 +1969,9 @@ pub const PASS12_WARMUP_MANIFEST_ENTRIES: [PipelineWarmupManifestEntry; 10] = [
     },
     PipelineWarmupManifestEntry {
         pass_kind: PipelineWarmupPassKind::Ui,
-        pipeline_static_label: "renderer_cef_gpu_composite_pipeline",
+        pipeline_static_label: "renderer_native_ui_gpu_composite_pipeline",
         required_before_measured_frames: true,
-        feature_mask: CEF_UI_FEATURES,
+        feature_mask: NATIVE_UI_FEATURES,
         quality_tier_mask: PipelineQualityTierMask::ALL,
         backend_mask: PipelineBackendMask::ALL,
     },

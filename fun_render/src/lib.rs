@@ -64,9 +64,9 @@ pub use catalog::{
 };
 pub use compiled_world::{CompiledStaticAsset, CompiledWorldPackage, CompiledWorldPackageId};
 pub use composition::{
-    FUN_RENDER_CEF_UI_STAGE, FUN_RENDER_CEF_UI_Z_INDEX, FUN_RENDER_COMPOSITION_ORDER,
-    FUN_RENDER_DEBUG_OVERLAY_STAGE, FUN_RENDER_DEBUG_OVERLAY_Z_INDEX, FUN_RENDER_HUD_UI_STAGE,
-    FUN_RENDER_HUD_UI_Z_INDEX, FunRenderCompositionStage,
+    FUN_RENDER_COMPOSITION_ORDER, FUN_RENDER_DEBUG_OVERLAY_STAGE, FUN_RENDER_DEBUG_OVERLAY_Z_INDEX,
+    FUN_RENDER_HUD_UI_STAGE, FUN_RENDER_HUD_UI_Z_INDEX, FUN_RENDER_NATIVE_UI_STAGE,
+    FUN_RENDER_NATIVE_UI_Z_INDEX, FunRenderCompositionStage,
 };
 pub use compute_culling::{
     FUN_COMPUTE_CULLING_BUFFER_PLAN, FUN_COMPUTE_CULLING_SCHEMA_VERSION,
@@ -115,20 +115,6 @@ pub use dx12_dlss_sr::{
     Dx12NativeDlssSrSupport, Dx12NativeDlssSrTransition, Dx12NativeDlssSrView,
     install_dx12_native_dlss_sr, log_dx12_native_dlss_sr_support_once,
 };
-#[cfg(all(target_os = "windows", feature = "dx12_native_interop"))]
-pub use dx12_native::{
-    DX12_CEF_SHARED_TEXTURE_RING_DEPTH_DEFAULT, DX12_CEF_TRANSPORT_SCHEMA_VERSION,
-    Dx12CefTransportPath, Dx12CefTransportPolicy, Dx12CommandListHandle, Dx12DeviceQueueHandles,
-    Dx12DlssResourceStatePlan, Dx12DlssResourceStateRules, Dx12NativeHandles,
-    Dx12NativeInteropError, Dx12NativeInteropFailure, Dx12NativeObjectKind,
-    Dx12NativeResourceState, Dx12ObjectLabel, Dx12ObjectNameOutcome, Dx12TextureHandle,
-    DxgiFormatLike, active_backend_is_dx12, dx12_cef_transport_policy, dx12_object_naming_enabled,
-    extract_dx12_native_handles, extract_dx12_texture_handle,
-    log_dx12_dlss_resource_state_plan_once, set_dx12_object_name, validate_dx12_backend,
-    validate_dx12_device_queue, validate_render_device_dx12_backend, with_dx12_command_list,
-    with_dx12_command_list_checked, with_dx12_device_queue, with_dx12_device_queue_checked,
-    with_dx12_texture, with_dx12_texture_checked,
-};
 #[cfg(all(
     target_os = "windows",
     feature = "dx12_native_interop",
@@ -143,6 +129,20 @@ pub use dx12_native::{
     Dx12MeshShaderDispatchPlan, decide_dx12_mesh_shader_experiment,
     dx12_mesh_shader_native_boundary_valid, evaluate_dx12_mesh_shader_benchmark,
     plan_dx12_mesh_shader_experiment, summarize_funvg_lite_clusters,
+};
+#[cfg(all(target_os = "windows", feature = "dx12_native_interop"))]
+pub use dx12_native::{
+    DX12_NATIVE_UI_SHARED_TEXTURE_RING_DEPTH_DEFAULT, DX12_NATIVE_UI_TRANSPORT_SCHEMA_VERSION,
+    Dx12CommandListHandle, Dx12DeviceQueueHandles, Dx12DlssResourceStatePlan,
+    Dx12DlssResourceStateRules, Dx12NativeHandles, Dx12NativeInteropError,
+    Dx12NativeInteropFailure, Dx12NativeObjectKind, Dx12NativeResourceState,
+    Dx12NativeUiTransportPath, Dx12NativeUiTransportPolicy, Dx12ObjectLabel, Dx12ObjectNameOutcome,
+    Dx12TextureHandle, DxgiFormatLike, active_backend_is_dx12, dx12_native_ui_transport_policy,
+    dx12_object_naming_enabled, extract_dx12_native_handles, extract_dx12_texture_handle,
+    log_dx12_dlss_resource_state_plan_once, set_dx12_object_name, validate_dx12_backend,
+    validate_dx12_device_queue, validate_render_device_dx12_backend, with_dx12_command_list,
+    with_dx12_command_list_checked, with_dx12_device_queue, with_dx12_device_queue_checked,
+    with_dx12_texture, with_dx12_texture_checked,
 };
 pub use entity_render_strategy::{
     FUN_ENTITY_RENDER_STRATEGIES, FUN_ENTITY_RENDER_STRATEGY_SCHEMA_VERSION,
@@ -174,33 +174,34 @@ pub use fun_renderer::{
     BackendCapabilities, ClearColorFrame, DeviceBackend, FUN_RENDER_BRIDGE_PACKAGE_NAME,
     FUN_RENDERER_AI_INTERFACE_DESCRIPTORS, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
     FUN_RENDERER_BACKEND_DESCRIPTORS, FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION,
-    FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME, FUN_RENDERER_CURRENT_AUTO_RESOLUTION,
+    FUN_RENDERER_CRATE_NAME, FUN_RENDERER_CURRENT_AUTO_RESOLUTION,
     FUN_RENDERER_DYNAMIC_SCENE_TARGET, FUN_RENDERER_FRAME_GENERATION_CONTRACT,
-    FUN_RENDERER_LIGHTING_SCALE_POLICY, FUN_RENDERER_PACKAGE_NAME,
-    FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS, FUN_RENDERER_PRODUCT_TOPOLOGY,
-    FUN_RENDERER_REQUIRES_BEVY_ECS, FUN_RENDERER_RUNTIME_BACKEND_ENV,
-    FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME, FUN_RENDERER_SCHEMA_VERSION,
-    FUN_RENDERER_SUBSYSTEM_DESCRIPTORS, FUN_RENDERER_UI_RUNTIME_POLICY, FrameGraphInterface,
-    FrameGraphSubmission, FunRendererAiInterfaceDescriptor, FunRendererAiInterfaceKind,
-    FunRendererAiOwnedSurface, FunRendererBackend, FunRendererBackendDescriptor,
-    FunRendererBackendSelection, FunRendererBackendSelectionReason, FunRendererBevyRole,
-    FunRendererCefRuntimePolicy, FunRendererDynamicSceneTarget, FunRendererFrameGenerationContract,
-    FunRendererFrameGraphStage, FunRendererLightingScalePolicy, FunRendererOwner,
-    FunRendererPresentationFeature, FunRendererPresentationFeatureDescriptor,
-    FunRendererProductTopology, FunRendererRuntimeBackend, FunRendererSubsystem,
-    FunRendererSubsystemDescriptor, FunRendererUiRuntimePolicy, NoopRendererCore, PassDescriptor,
-    PassHandle, PassKind, PassRegistry, PresentResult, Presentation,
-    RENDERER_CEF_COMPOSITOR_INTERFACE, RENDERER_CORE_API_SCHEMA_VERSION,
-    RENDERER_CORE_INTERFACE_MAP, RENDERER_UPLOAD_ARENA_SEAM,
-    RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE, RendererCoreBootReport, RendererCoreDiagnostics,
-    RendererCoreInterfaceMap, RendererCoreLifecycle, RendererCoreSettings,
-    RendererCoreShutdownReport, RendererFeatureToggles, ResourceAllocator, ResourceHandle,
-    ResourceKind, ResourceRequest, SceneDatabase, SceneInstanceId, SceneInstanceRecord,
-    owner_for_subsystem, pass_kind_for_frame_graph_role,
+    FUN_RENDERER_LIGHTING_SCALE_POLICY, FUN_RENDERER_NATIVE_UI_RUNTIME_POLICY,
+    FUN_RENDERER_PACKAGE_NAME, FUN_RENDERER_PRESENTATION_FEATURE_DESCRIPTORS,
+    FUN_RENDERER_PRODUCT_TOPOLOGY, FUN_RENDERER_REQUIRES_BEVY_ECS,
+    FUN_RENDERER_RUNTIME_BACKEND_ENV, FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME,
+    FUN_RENDERER_SCHEMA_VERSION, FUN_RENDERER_SUBSYSTEM_DESCRIPTORS,
+    FUN_RENDERER_UI_RUNTIME_POLICY, FrameGraphInterface, FrameGraphSubmission,
+    FunRendererAiInterfaceDescriptor, FunRendererAiInterfaceKind, FunRendererAiOwnedSurface,
+    FunRendererBackend, FunRendererBackendDescriptor, FunRendererBackendSelection,
+    FunRendererBackendSelectionReason, FunRendererBevyRole, FunRendererDynamicSceneTarget,
+    FunRendererFrameGenerationContract, FunRendererFrameGraphStage, FunRendererLightingScalePolicy,
+    FunRendererNativeUiRuntimePolicy, FunRendererOwner, FunRendererPresentationFeature,
+    FunRendererPresentationFeatureDescriptor, FunRendererProductTopology,
+    FunRendererRuntimeBackend, FunRendererSubsystem, FunRendererSubsystemDescriptor,
+    FunRendererUiRuntimePolicy, NoopRendererCore, PassDescriptor, PassHandle, PassKind,
+    PassRegistry, PresentResult, Presentation, RENDERER_CORE_API_SCHEMA_VERSION,
+    RENDERER_CORE_INTERFACE_MAP, RENDERER_NATIVE_UI_COMPOSITOR_INTERFACE,
+    RENDERER_UPLOAD_ARENA_SEAM, RENDERER_UPSCALE_FRAME_GENERATION_INTERFACE,
+    RendererCoreBootReport, RendererCoreDiagnostics, RendererCoreInterfaceMap,
+    RendererCoreLifecycle, RendererCoreSettings, RendererCoreShutdownReport,
+    RendererFeatureToggles, ResourceAllocator, ResourceHandle, ResourceKind, ResourceRequest,
+    SceneDatabase, SceneInstanceId, SceneInstanceRecord, owner_for_subsystem,
+    pass_kind_for_frame_graph_role,
 };
 pub use gpu_visibility::{
-    FUN_GPU_VISIBILITY_SCHEMA_VERSION, GPU_VIS_OBJECT_CEF_UI, GPU_VIS_OBJECT_DEBUG,
-    GPU_VIS_OBJECT_FOLIAGE, GPU_VIS_OBJECT_MESHLET, GPU_VIS_OBJECT_OCCLUDER,
+    FUN_GPU_VISIBILITY_SCHEMA_VERSION, GPU_VIS_OBJECT_DEBUG, GPU_VIS_OBJECT_FOLIAGE,
+    GPU_VIS_OBJECT_MESHLET, GPU_VIS_OBJECT_NATIVE_UI, GPU_VIS_OBJECT_OCCLUDER,
     GPU_VIS_OBJECT_PARTICLE, GPU_VIS_OBJECT_RASTER, GPU_VIS_OBJECT_SKINNED,
     GPU_VIS_OBJECT_STATIC_OPAQUE, GPU_VIS_OBJECT_TRANSPARENT, GPU_VIS_OBJECT_VIEWMODEL,
     GPU_VISIBILITY_BUFFER_PLAN, GPU_VISIBILITY_STATIC_OPAQUE_STAGES, GPU_VISIBILITY_WORKGROUP_SIZE,
@@ -324,13 +325,13 @@ pub use upload_budget::{
     FunUploadBudgetUsage, FunUploadSubsystem, FunUploadWriteIntent,
 };
 pub use upload_labels::{
-    FUN_UPLOAD_LABELS, FunUploadExpectedFrequency, FunUploadResourceKind,
-    UPLOAD_CEF_CPU_DIRTY_RECT, UPLOAD_CEF_CPU_FULL_FRAME, UPLOAD_CEF_GPU_COPY_METADATA,
-    UPLOAD_CEF_METADATA, UPLOAD_CLOUD_PARAMS, UPLOAD_DLSS_CONSTANTS, UPLOAD_DLSS_PARAMS,
-    UPLOAD_FRAME_CONSTANTS, UPLOAD_INSTANCE_DIRTY_RANGE, UPLOAD_MESHLET_INSTANCE_RANGE,
-    UPLOAD_MESHLET_MATERIAL_RANGE, UPLOAD_SOLARI_PARAMS, UPLOAD_TEXTURE_DIRTY_RECT,
-    UPLOAD_VIEW_CONSTANTS, UPLOAD_VIEW_VISIBILITY, UPLOAD_WORLD_STREAM_STATIC_MESH,
-    UploadLabelDescriptor, upload_label_descriptor, upload_label_descriptor_or_default,
+    FUN_UPLOAD_LABELS, FunUploadExpectedFrequency, FunUploadResourceKind, UPLOAD_CLOUD_PARAMS,
+    UPLOAD_DLSS_CONSTANTS, UPLOAD_DLSS_PARAMS, UPLOAD_FRAME_CONSTANTS, UPLOAD_INSTANCE_DIRTY_RANGE,
+    UPLOAD_MESHLET_INSTANCE_RANGE, UPLOAD_MESHLET_MATERIAL_RANGE, UPLOAD_NATIVE_UI_CPU_DIRTY_RECT,
+    UPLOAD_NATIVE_UI_CPU_FULL_FRAME, UPLOAD_NATIVE_UI_GPU_COPY_METADATA, UPLOAD_NATIVE_UI_METADATA,
+    UPLOAD_SOLARI_PARAMS, UPLOAD_TEXTURE_DIRTY_RECT, UPLOAD_VIEW_CONSTANTS, UPLOAD_VIEW_VISIBILITY,
+    UPLOAD_WORLD_STREAM_STATIC_MESH, UploadLabelDescriptor, upload_label_descriptor,
+    upload_label_descriptor_or_default,
 };
 pub use upload_ranges::{
     DEFAULT_DYNAMIC_UPLOAD_SLAB_BYTES, DEFAULT_STATIC_SLAB_RECORDS, DEFAULT_TEXTURE_DIRTY_RECT_CAP,
@@ -339,8 +340,8 @@ pub use upload_ranges::{
     PersistentBufferGrowthPolicy, PersistentBufferRangeUploadPlan, PersistentBufferUploadPath,
     TextureDirtyRect, TextureUploadPath, TextureUploadPlan, TextureUploadPolicy,
     TextureUploadRequest, instance_dirty_range_intent, merge_instance_dirty_ranges,
-    persistent_buffer_capacity_plan, plan_cef_cpu_dirty_rect_upload, plan_dynamic_texture_upload,
-    plan_instance_soa_uploads, plan_persistent_buffer_range_upload,
+    persistent_buffer_capacity_plan, plan_dynamic_texture_upload, plan_instance_soa_uploads,
+    plan_native_ui_cpu_dirty_rect_upload, plan_persistent_buffer_range_upload,
 };
 pub use upload_report::{
     FunUploadBudgetDecisionCounts, FunUploadFrameReport, FunUploadFrameReportBuilder,

@@ -19,11 +19,11 @@
 //!   truth, and the Pass A ledger's `Passes Landed` table is the
 //!   navigational view. This module also adds typed assertions
 //!   for the latest Pass F/G/H entries.
-//! - **6.3 Rename `CefComposition` graph stage or freeze it as
+//! - **6.3 Rename `NativeUiComposition` graph stage or freeze it as
 //!   stable telemetry.** The typed [`UiCompositionNamingPolicy`]
 //!   records that `FunRendererSubsystem::UiComposition` is the
-//!   product subsystem name while `FunRendererFrameGraphStage::CefComposition`
-//!   is the frozen legacy telemetry stage ID; CEF is never the
+//!   product subsystem name while `FunRendererFrameGraphStage::NativeUiComposition`
+//!   is the frozen legacy telemetry stage ID; NATIVE_UI is never the
 //!   product UI surface (Pass A demotion).
 //! - **6.4 Add typed integration test categories.** The typed
 //!   [`IntegrationTestCategory`] enum (HeadlessContract /
@@ -35,7 +35,7 @@ use bevy_ecs::prelude::Resource;
 
 use crate::FunRendererFrameGraphStage;
 use crate::FunRendererSubsystem;
-use crate::ui::CefRenderRoleStatus;
+use crate::ui::NativeUiRenderRoleStatus;
 
 pub const QUALITY_AUDIT_CONTRACT_SCHEMA_VERSION: u16 = 1;
 pub const EVIDENCE_KIND_COUNT: usize = 6;
@@ -364,34 +364,34 @@ impl RootGitlinkSyncExpectation {
 }
 
 // ============================================================================
-// Section 6.3 — UiComposition vs CefComposition naming policy
+// Section 6.3 — UiComposition vs NativeUiComposition naming policy
 // ============================================================================
 
 /// Typed naming convention for the renderer's UI composition
 /// surface. The user's 6.3 rule: "Product subsystem name:
-/// `UiComposition`; Legacy telemetry stage: `CefComposition`;
-/// CEF product role: never product UI."
+/// `UiComposition`; Legacy telemetry stage: `NativeUiComposition`;
+/// NATIVE_UI product role: never product UI."
 ///
 /// The policy is enforced by `lib.rs`:
 /// - `FunRendererSubsystem::UiComposition` (subsystem variant).
-/// - `FunRendererFrameGraphStage::CefComposition` (frame graph
+/// - `FunRendererFrameGraphStage::NativeUiComposition` (frame graph
 ///   stage; legacy ID retained for stable telemetry).
-/// - `CefRenderRoleStatus` enum forbids CEF as product UI under
+/// - `NativeUiRenderRoleStatus` enum forbids NATIVE_UI as product UI under
 ///   every variant (`is_product_ui_surface() == false` for all).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UiCompositionNamingPolicy {
     pub schema_version: u16,
     pub product_subsystem_name: &'static str,
     pub legacy_telemetry_stage_name: &'static str,
-    pub cef_role_status_str: &'static str,
+    pub native_ui_role_status_str: &'static str,
 }
 
 impl UiCompositionNamingPolicy {
     pub const PRODUCT_DEFAULT: Self = Self {
         schema_version: QUALITY_AUDIT_CONTRACT_SCHEMA_VERSION,
         product_subsystem_name: "ui_composition",
-        legacy_telemetry_stage_name: "cef_composition",
-        cef_role_status_str: "demoted_to_legacy_diagnostic",
+        legacy_telemetry_stage_name: "native_ui_composition",
+        native_ui_role_status_str: "demoted_to_legacy_diagnostic",
     };
 
     /// Typed predicate verifying the canonical lib-layer
@@ -399,8 +399,8 @@ impl UiCompositionNamingPolicy {
     #[must_use]
     pub fn lib_layer_aligns_with_policy() -> bool {
         FunRendererSubsystem::UiComposition.as_str() == "ui_composition"
-            && FunRendererFrameGraphStage::CefComposition.as_str() == "cef_composition"
-            && CefRenderRoleStatus::ALL
+            && FunRendererFrameGraphStage::NativeUiComposition.as_str() == "native_ui_composition"
+            && NativeUiRenderRoleStatus::ALL
                 .iter()
                 .all(|s| !s.is_product_ui_surface())
     }
@@ -833,7 +833,7 @@ mod tests {
         assert!(UiCompositionNamingPolicy::lib_layer_aligns_with_policy());
 
         // Defensive: the subsystem variant must literally be
-        // `UiComposition` (not `CefCompositor` — that's the old
+        // `UiComposition` (not `NativeUiCompositor` — that's the old
         // name Pass A renamed away from).
         assert_eq!(
             FunRendererSubsystem::UiComposition.as_str(),
@@ -841,19 +841,19 @@ mod tests {
         );
 
         // Defensive: the frame-graph stage variant retains the
-        // legacy `CefComposition` ID for stable telemetry. Don't
+        // legacy `NativeUiComposition` ID for stable telemetry. Don't
         // rename this without a coordinated telemetry migration.
         assert_eq!(
-            FunRendererFrameGraphStage::CefComposition.as_str(),
-            "cef_composition",
+            FunRendererFrameGraphStage::NativeUiComposition.as_str(),
+            "native_ui_composition",
         );
 
-        // CEF role never claims to be product UI under any
+        // NATIVE_UI role never claims to be product UI under any
         // status variant.
-        for status in CefRenderRoleStatus::ALL {
+        for status in NativeUiRenderRoleStatus::ALL {
             assert!(
                 !status.is_product_ui_surface(),
-                "CefRenderRoleStatus::{} must not be a product UI surface",
+                "NativeUiRenderRoleStatus::{} must not be a product UI surface",
                 status.as_str(),
             );
         }

@@ -63,7 +63,7 @@ pub enum FrameGraphPassRole {
     Clear,
     StaticScenePlaceholder,
     VirtualResourceFeedback,
-    CefGpuImport,
+    NativeUiGpuImport,
     UiImportPlaceholder,
     UpscaleBoundary,
     FrameGenerationBoundary,
@@ -102,6 +102,13 @@ pub enum FrameGraphPassRole {
     LuxShadowRequests,
     LuxVirtualShadowPages,
     LuxVirtualShadowFilter,
+    LuxVoxelShadowDemandMark,
+    LuxVoxelShadowPageBuild,
+    LuxVoxelSdfDistantShadowResolve,
+    LuxVoxelRadianceClipmapUpdate,
+    LuxVoxelCanopyTransmittanceInject,
+    LuxVoxelTerrainAoResolve,
+    LuxStormExtinctionInject,
     LuxDirectLighting,
     LuxGiTrace,
     LuxGiCacheUpdate,
@@ -144,7 +151,7 @@ impl FrameGraphPassRole {
             Self::Clear => "clear",
             Self::StaticScenePlaceholder => "static_scene_placeholder",
             Self::VirtualResourceFeedback => "virtual_resource_feedback",
-            Self::CefGpuImport => "cef_gpu_import",
+            Self::NativeUiGpuImport => "native_ui_gpu_import",
             Self::UiImportPlaceholder => "ui_import_placeholder",
             Self::UpscaleBoundary => "upscale_boundary",
             Self::FrameGenerationBoundary => "frame_generation_boundary",
@@ -171,6 +178,13 @@ impl FrameGraphPassRole {
             Self::LuxShadowRequests => "lux_shadow_requests",
             Self::LuxVirtualShadowPages => "lux_virtual_shadow_pages",
             Self::LuxVirtualShadowFilter => "lux_virtual_shadow_filter",
+            Self::LuxVoxelShadowDemandMark => "lux_voxel_shadow_demand_mark",
+            Self::LuxVoxelShadowPageBuild => "lux_voxel_shadow_page_build",
+            Self::LuxVoxelSdfDistantShadowResolve => "lux_voxel_sdf_distant_shadow_resolve",
+            Self::LuxVoxelRadianceClipmapUpdate => "lux_voxel_radiance_clipmap_update",
+            Self::LuxVoxelCanopyTransmittanceInject => "lux_voxel_canopy_transmittance_inject",
+            Self::LuxVoxelTerrainAoResolve => "lux_voxel_terrain_ao_resolve",
+            Self::LuxStormExtinctionInject => "lux_storm_extinction_inject",
             Self::LuxDirectLighting => "lux_direct_lighting",
             Self::LuxGiTrace => "lux_gi_trace",
             Self::LuxGiCacheUpdate => "lux_gi_cache_update",
@@ -202,6 +216,13 @@ impl FrameGraphPassRole {
                 | Self::LuxShadowRequests
                 | Self::LuxVirtualShadowPages
                 | Self::LuxVirtualShadowFilter
+                | Self::LuxVoxelShadowDemandMark
+                | Self::LuxVoxelShadowPageBuild
+                | Self::LuxVoxelSdfDistantShadowResolve
+                | Self::LuxVoxelRadianceClipmapUpdate
+                | Self::LuxVoxelCanopyTransmittanceInject
+                | Self::LuxVoxelTerrainAoResolve
+                | Self::LuxStormExtinctionInject
                 | Self::LuxDirectLighting
                 | Self::LuxGiTrace
                 | Self::LuxGiCacheUpdate
@@ -233,6 +254,8 @@ impl FrameGraphPassRole {
             Self::LuxShadowRequests => 120,
             Self::LuxVirtualShadowPages => 130,
             Self::LuxVirtualShadowFilter => 135,
+            Self::LuxVoxelShadowDemandMark => 136,
+            Self::LuxVoxelShadowPageBuild => 138,
             // Pass C7.2 — cloud shadow lane sits between
             // the typed virtual shadow filter (135) and
             // the typed direct lighting (200) so the typed
@@ -247,11 +270,16 @@ impl FrameGraphPassRole {
             Self::LuxCloudShadowFilter => 145,
             Self::LuxCloudShadowRegisterLayer => 150,
             Self::LuxDirectLighting => 200,
+            Self::LuxVoxelSdfDistantShadowResolve => 205,
             Self::LuxGiTrace => 210,
             Self::LuxGiCacheUpdate => 215,
+            Self::LuxVoxelRadianceClipmapUpdate => 216,
             Self::LuxReflectionTrace => 220,
+            Self::LuxVoxelTerrainAoResolve => 225,
             Self::LuxDenoise => 230,
             Self::LuxVolumetricFogInject => 300,
+            Self::LuxStormExtinctionInject => 302,
+            Self::LuxVoxelCanopyTransmittanceInject => 306,
             Self::LuxVolumetricLightInject => 310,
             Self::LuxVolumetricTemporalReproject => 320,
             Self::LuxVolumetricIntegrate => 330,
@@ -295,8 +323,13 @@ pub enum FrameGraphResourceType {
     LuxShadowRequestBuffer,
     LuxShadowAtlas,
     LuxVirtualShadowPages,
+    LuxVoxelShadowPageTable,
+    LuxVoxelTerrainSdfPool,
     LuxSurfaceCache,
     LuxRadianceCache,
+    LuxVoxelTerrainRadianceClipmap,
+    LuxVoxelCanopyOpacityClipmap,
+    LuxStormExtinctionClipmap,
     LuxProbeCache,
     LuxReflectionBuffer,
     LuxDenoiseHistory,
@@ -333,7 +366,7 @@ pub enum FrameGraphResourceType {
 }
 
 impl FrameGraphResourceType {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 45] = [
         Self::RenderResolutionSceneColor,
         Self::DisplayResolutionSceneColor,
         Self::Depth,
@@ -359,8 +392,13 @@ impl FrameGraphResourceType {
         Self::LuxShadowRequestBuffer,
         Self::LuxShadowAtlas,
         Self::LuxVirtualShadowPages,
+        Self::LuxVoxelShadowPageTable,
+        Self::LuxVoxelTerrainSdfPool,
         Self::LuxSurfaceCache,
         Self::LuxRadianceCache,
+        Self::LuxVoxelTerrainRadianceClipmap,
+        Self::LuxVoxelCanopyOpacityClipmap,
+        Self::LuxStormExtinctionClipmap,
         Self::LuxProbeCache,
         Self::LuxReflectionBuffer,
         Self::LuxDenoiseHistory,
@@ -408,8 +446,13 @@ impl FrameGraphResourceType {
             Self::LuxShadowRequestBuffer => "lux_shadow_request_buffer",
             Self::LuxShadowAtlas => "lux_shadow_atlas",
             Self::LuxVirtualShadowPages => "lux_virtual_shadow_pages",
+            Self::LuxVoxelShadowPageTable => "lux_voxel_shadow_page_table",
+            Self::LuxVoxelTerrainSdfPool => "lux_voxel_terrain_sdf_pool",
             Self::LuxSurfaceCache => "lux_surface_cache",
             Self::LuxRadianceCache => "lux_radiance_cache",
+            Self::LuxVoxelTerrainRadianceClipmap => "lux_voxel_terrain_radiance_clipmap",
+            Self::LuxVoxelCanopyOpacityClipmap => "lux_voxel_canopy_opacity_clipmap",
+            Self::LuxStormExtinctionClipmap => "lux_storm_extinction_clipmap",
             Self::LuxProbeCache => "lux_probe_cache",
             Self::LuxReflectionBuffer => "lux_reflection_buffer",
             Self::LuxDenoiseHistory => "lux_denoise_history",
@@ -439,8 +482,13 @@ impl FrameGraphResourceType {
                 | Self::LuxShadowRequestBuffer
                 | Self::LuxShadowAtlas
                 | Self::LuxVirtualShadowPages
+                | Self::LuxVoxelShadowPageTable
+                | Self::LuxVoxelTerrainSdfPool
                 | Self::LuxSurfaceCache
                 | Self::LuxRadianceCache
+                | Self::LuxVoxelTerrainRadianceClipmap
+                | Self::LuxVoxelCanopyOpacityClipmap
+                | Self::LuxStormExtinctionClipmap
                 | Self::LuxProbeCache
                 | Self::LuxReflectionBuffer
                 | Self::LuxDenoiseHistory
@@ -1024,13 +1072,13 @@ impl RendererFrameGraph {
 
         if description.include_ui_placeholder {
             let ui_import = graph.register_pass(FrameGraphPassDescriptor::new(
-                "fun_renderer.pass.cef_gpu_import",
+                "fun_renderer.pass.native_ui_gpu_import",
                 FrameGraphPassType::CopyImport,
-                FrameGraphPassRole::CefGpuImport,
-                "cef_gpu_import",
+                FrameGraphPassRole::NativeUiGpuImport,
+                "native_ui_gpu_import",
                 FrameGraphDiagnosticCategory::Ui,
                 Some(FrameGraphBenchmarkCategory::UiImport),
-                "fun_renderer::frame_graph::cef_gpu_import",
+                "fun_renderer::frame_graph::native_ui_gpu_import",
             ));
             graph.add_pass_write(ui_import, ui);
         }
@@ -1575,7 +1623,7 @@ impl RendererFrameGraph {
             let role = pass.descriptor.role;
             let allowed = matches!(
                 role,
-                FrameGraphPassRole::CefGpuImport
+                FrameGraphPassRole::NativeUiGpuImport
                     | FrameGraphPassRole::UiImportPlaceholder
                     | FrameGraphPassRole::FrameGenerationBoundary
                     | FrameGraphPassRole::Compose
@@ -1828,7 +1876,7 @@ mod tests {
             [
                 FrameGraphPassRole::Clear,
                 FrameGraphPassRole::StaticScenePlaceholder,
-                FrameGraphPassRole::CefGpuImport,
+                FrameGraphPassRole::NativeUiGpuImport,
                 FrameGraphPassRole::PostProcessToneMapping,
                 FrameGraphPassRole::PostProcessFinalOutputTransform,
                 FrameGraphPassRole::Compose,

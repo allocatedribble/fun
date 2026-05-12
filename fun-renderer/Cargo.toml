@@ -18,7 +18,7 @@ native_ui_adapter = [
     "dep:rvelte-fun-render-adapter",
     "dep:rvelte-fun-ui-core",
 ]
-cef_gpu_only = []
+native_ui_gpu_only = []
 dlss = []
 dx12_native_interop = []
 experimental_work_graphs = []
@@ -58,7 +58,7 @@ schedule_graph = ["schedule_contract", "dep:fun-scheduler-core"]
 fun_lux_hybrid_gi = ["hybrid_gi"]
 fun_lux_many_light = ["many_light"]
 fun_lux_virtual_shadows = ["virtual_shadows"]
-fun_renderer_cef_gpu_only = ["cef_gpu_only"]
+fun_renderer_native_ui_gpu_only = ["native_ui_gpu_only"]
 fun_renderer_dlss = ["dlss"]
 fun_renderer_dx12 = ["dx12_native_interop"]
 fun_renderer_experimental_ml = ["experimental_renderer_ml"]
@@ -77,6 +77,7 @@ bevy_ecs = { workspace = true, optional = true }
 bevy_transform = { workspace = true, optional = true }
 fun_lux.workspace = true
 fun_ai_core = { workspace = true, optional = true }
+fun_ecs.workspace = true
 fun_scene.workspace = true
 fun_telemetry_core.workspace = true
 flume.workspace = true

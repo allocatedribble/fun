@@ -10,7 +10,7 @@ pub struct FunUploadBudget {
     pub small_buffer_budget_bytes: u64,
     pub large_buffer_budget_bytes: u64,
     pub texture_budget_bytes: u64,
-    pub cef_budget_bytes: u64,
+    pub native_ui_budget_bytes: u64,
     pub readback_budget_bytes: u64,
     pub max_upload_calls_per_frame: u32,
     pub max_texture_uploads_per_frame: u32,
@@ -24,7 +24,7 @@ impl Default for FunUploadBudget {
             small_buffer_budget_bytes: 256 * 1024,
             large_buffer_budget_bytes: 4 * 1024 * 1024,
             texture_budget_bytes: 16 * 1024 * 1024,
-            cef_budget_bytes: 8 * 1024 * 1024,
+            native_ui_budget_bytes: 8 * 1024 * 1024,
             readback_budget_bytes: 0,
             max_upload_calls_per_frame: 512,
             max_texture_uploads_per_frame: 64,
@@ -52,8 +52,8 @@ pub enum FunUploadSubsystem {
     DynamicMesh,
     MaterialUniform,
     TextureAsset,
-    CefCpuPaint,
-    CefGpuInterop,
+    NativeUiCpuPaint,
+    NativeUiGpuInterop,
     Clouds,
     Solari,
     Dlss,
@@ -72,8 +72,8 @@ impl FunUploadSubsystem {
             Self::DynamicMesh => "dynamic_mesh",
             Self::MaterialUniform => "material_uniform",
             Self::TextureAsset => "texture_asset",
-            Self::CefCpuPaint => "cef_cpu_paint",
-            Self::CefGpuInterop => "cef_gpu_interop",
+            Self::NativeUiCpuPaint => "native_ui_cpu_paint",
+            Self::NativeUiGpuInterop => "native_ui_gpu_interop",
             Self::Clouds => "clouds",
             Self::Solari => "solari",
             Self::Dlss => "dlss",
@@ -88,7 +88,7 @@ pub enum FunUploadBudgetClass {
     SmallBuffer,
     LargeBuffer,
     Texture,
-    Cef,
+    NativeUi,
     Readback,
 }
 
@@ -98,7 +98,7 @@ impl FunUploadBudgetClass {
             Self::SmallBuffer => "small_buffer",
             Self::LargeBuffer => "large_buffer",
             Self::Texture => "texture",
-            Self::Cef => "cef",
+            Self::NativeUi => "native_ui",
             Self::Readback => "readback",
         }
     }
@@ -173,11 +173,11 @@ impl FunUploadWriteIntent {
         }
     }
 
-    pub const fn cef_cpu(label: UploadWriteLabel, bytes: u64) -> Self {
+    pub const fn native_ui_cpu(label: UploadWriteLabel, bytes: u64) -> Self {
         Self {
             label,
-            subsystem: FunUploadSubsystem::CefCpuPaint,
-            budget_class: FunUploadBudgetClass::Cef,
+            subsystem: FunUploadSubsystem::NativeUiCpuPaint,
+            budget_class: FunUploadBudgetClass::NativeUi,
             bytes,
             offset: 0,
             buffer_size: 0,
@@ -207,7 +207,7 @@ pub struct FunUploadBudgetUsage {
     pub small_buffer_bytes: u64,
     pub large_buffer_bytes: u64,
     pub texture_bytes: u64,
-    pub cef_bytes: u64,
+    pub native_ui_bytes: u64,
     pub readback_bytes: u64,
     pub deferred_calls: u32,
     pub deferred_bytes: u64,
@@ -231,7 +231,7 @@ impl FunUploadBudgetTracker {
                 small_buffer_bytes: 0,
                 large_buffer_bytes: 0,
                 texture_bytes: 0,
-                cef_bytes: 0,
+                native_ui_bytes: 0,
                 readback_bytes: 0,
                 deferred_calls: 0,
                 deferred_bytes: 0,
@@ -318,7 +318,7 @@ impl FunUploadBudgetTracker {
             FunUploadBudgetClass::SmallBuffer => self.budget.small_buffer_budget_bytes,
             FunUploadBudgetClass::LargeBuffer => self.budget.large_buffer_budget_bytes,
             FunUploadBudgetClass::Texture => self.budget.texture_budget_bytes,
-            FunUploadBudgetClass::Cef => self.budget.cef_budget_bytes,
+            FunUploadBudgetClass::NativeUi => self.budget.native_ui_budget_bytes,
             FunUploadBudgetClass::Readback => self.budget.readback_budget_bytes,
         }
     }
@@ -328,7 +328,7 @@ impl FunUploadBudgetTracker {
             FunUploadBudgetClass::SmallBuffer => self.usage.small_buffer_bytes,
             FunUploadBudgetClass::LargeBuffer => self.usage.large_buffer_bytes,
             FunUploadBudgetClass::Texture => self.usage.texture_bytes,
-            FunUploadBudgetClass::Cef => self.usage.cef_bytes,
+            FunUploadBudgetClass::NativeUi => self.usage.native_ui_bytes,
             FunUploadBudgetClass::Readback => self.usage.readback_bytes,
         }
     }
@@ -349,8 +349,8 @@ impl FunUploadBudgetTracker {
             FunUploadBudgetClass::Texture => {
                 self.usage.texture_bytes = self.usage.texture_bytes.saturating_add(bytes);
             }
-            FunUploadBudgetClass::Cef => {
-                self.usage.cef_bytes = self.usage.cef_bytes.saturating_add(bytes);
+            FunUploadBudgetClass::NativeUi => {
+                self.usage.native_ui_bytes = self.usage.native_ui_bytes.saturating_add(bytes);
             }
             FunUploadBudgetClass::Readback => {
                 self.usage.readback_bytes = self.usage.readback_bytes.saturating_add(bytes);
@@ -384,7 +384,8 @@ const fn full_buffer_write_allowed(intent: FunUploadWriteIntent) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        UPLOAD_CEF_CPU_FULL_FRAME, UPLOAD_MESHLET_INSTANCE_RANGE, UPLOAD_MESHLET_MATERIAL_RANGE,
+        UPLOAD_MESHLET_INSTANCE_RANGE, UPLOAD_MESHLET_MATERIAL_RANGE,
+        UPLOAD_NATIVE_UI_CPU_FULL_FRAME,
     };
 
     #[test]
@@ -436,21 +437,21 @@ mod tests {
     }
 
     #[test]
-    fn budget_counts_cef_separately_from_world_uploads() {
+    fn budget_counts_native_ui_separately_from_world_uploads() {
         let mut tracker = FunUploadBudgetTracker::new(FunUploadBudget {
             texture_budget_bytes: 0,
-            cef_budget_bytes: 4096,
+            native_ui_budget_bytes: 4096,
             ..Default::default()
         });
 
         assert_eq!(
-            tracker.decide(FunUploadWriteIntent::cef_cpu(
-                UPLOAD_CEF_CPU_FULL_FRAME,
+            tracker.decide(FunUploadWriteIntent::native_ui_cpu(
+                UPLOAD_NATIVE_UI_CPU_FULL_FRAME,
                 4096,
             )),
             FunUploadBudgetDecision::Admit
         );
-        assert_eq!(tracker.usage().cef_bytes, 4096);
+        assert_eq!(tracker.usage().native_ui_bytes, 4096);
         assert_eq!(tracker.usage().texture_bytes, 0);
         assert_eq!(tracker.usage().texture_uploads, 0);
     }

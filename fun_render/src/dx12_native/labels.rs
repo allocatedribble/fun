@@ -10,7 +10,7 @@ pub enum Dx12NativeObjectKind {
     CommandList,
     Fence,
     NativeInteropResource,
-    CefRingTexture,
+    NativeUiRingTexture,
     DlssInput,
     DlssOutput,
 }
@@ -24,7 +24,7 @@ impl Dx12NativeObjectKind {
             Self::CommandList => "command_list",
             Self::Fence => "fence",
             Self::NativeInteropResource => "native_interop_resource",
-            Self::CefRingTexture => "cef_ring_texture",
+            Self::NativeUiRingTexture => "native_ui_ring_texture",
             Self::DlssInput => "dlss_input",
             Self::DlssOutput => "dlss_output",
         }
@@ -43,7 +43,7 @@ pub enum Dx12ObjectLabel<'a> {
         height: Option<u32>,
         format: Option<&'a str>,
     },
-    CefRingTexture {
+    NativeUiRingTexture {
         slot_index: usize,
         width: u32,
         height: u32,
@@ -77,13 +77,13 @@ impl<'a> Dx12ObjectLabel<'a> {
         }
     }
 
-    pub const fn cef_ring_texture(
+    pub const fn native_ui_ring_texture(
         slot_index: usize,
         width: u32,
         height: u32,
         format: &'a str,
     ) -> Self {
-        Self::CefRingTexture {
+        Self::NativeUiRingTexture {
             slot_index,
             width,
             height,
@@ -133,14 +133,14 @@ impl fmt::Display for Dx12ObjectLabel<'_> {
                 }
                 Ok(())
             }
-            Self::CefRingTexture {
+            Self::NativeUiRingTexture {
                 slot_index,
                 width,
                 height,
                 format,
             } => write!(
                 f,
-                "FUN.CEF.RingSlot[{slot_index}].{width}x{height}.{format}"
+                "FUN.NATIVE_UI.RingSlot[{slot_index}].{width}x{height}.{format}"
             ),
             Self::DlssSrInput { surface, mode } => {
                 write!(f, "FUN.DLSS.SR.Input.{surface}.{mode}")
@@ -229,9 +229,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cef_ring_texture_label_matches_capture_contract() {
-        let label = Dx12ObjectLabel::cef_ring_texture(2, 1280, 720, "BGRA8");
-        assert_eq!(label.rendered_name(), "FUN.CEF.RingSlot[2].1280x720.BGRA8");
+    fn native_ui_ring_texture_label_matches_capture_contract() {
+        let label = Dx12ObjectLabel::native_ui_ring_texture(2, 1280, 720, "BGRA8");
+        assert_eq!(
+            label.rendered_name(),
+            "FUN.NATIVE_UI.RingSlot[2].1280x720.BGRA8"
+        );
     }
 
     #[test]

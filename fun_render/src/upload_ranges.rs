@@ -1,7 +1,7 @@
 use crate::{
     FunUploadBudgetDecision, FunUploadBudgetTracker, FunUploadSubsystem, FunUploadWriteIntent,
-    InstanceDirtyRange, InstanceRange, UPLOAD_CEF_CPU_DIRTY_RECT, UPLOAD_CEF_CPU_FULL_FRAME,
-    UPLOAD_INSTANCE_DIRTY_RANGE, UploadWriteLabel,
+    InstanceDirtyRange, InstanceRange, UPLOAD_INSTANCE_DIRTY_RANGE,
+    UPLOAD_NATIVE_UI_CPU_DIRTY_RECT, UPLOAD_NATIVE_UI_CPU_FULL_FRAME, UploadWriteLabel,
 };
 
 pub const FUN_UPLOAD_RANGE_SCHEMA_VERSION: u16 = 1;
@@ -479,7 +479,7 @@ pub fn plan_dynamic_texture_upload(
     }
 }
 
-pub fn plan_cef_cpu_dirty_rect_upload(
+pub fn plan_native_ui_cpu_dirty_rect_upload(
     budget: &mut FunUploadBudgetTracker,
     texture_width: u32,
     texture_height: u32,
@@ -491,8 +491,8 @@ pub fn plan_cef_cpu_dirty_rect_upload(
     policy.allow_full_frame_when_dirty_rects_explode = false;
     if !page_changed && !resized {
         return TextureUploadPlan {
-            label: UPLOAD_CEF_CPU_DIRTY_RECT,
-            subsystem: FunUploadSubsystem::CefCpuPaint,
+            label: UPLOAD_NATIVE_UI_CPU_DIRTY_RECT,
+            subsystem: FunUploadSubsystem::NativeUiCpuPaint,
             path: TextureUploadPath::NoopUnchanged,
             uploaded_rects: Vec::new(),
             deferred_rects: dirty_rects.to_vec(),
@@ -504,8 +504,8 @@ pub fn plan_cef_cpu_dirty_rect_upload(
         return plan_dynamic_texture_upload(
             budget,
             TextureUploadRequest {
-                label: UPLOAD_CEF_CPU_FULL_FRAME,
-                subsystem: FunUploadSubsystem::CefCpuPaint,
+                label: UPLOAD_NATIVE_UI_CPU_FULL_FRAME,
+                subsystem: FunUploadSubsystem::NativeUiCpuPaint,
                 texture_width,
                 texture_height,
                 dirty_rects,
@@ -514,10 +514,10 @@ pub fn plan_cef_cpu_dirty_rect_upload(
             },
         );
     }
-    plan_cef_dirty_rects_only(budget, dirty_rects, policy)
+    plan_native_ui_dirty_rects_only(budget, dirty_rects, policy)
 }
 
-fn plan_cef_dirty_rects_only(
+fn plan_native_ui_dirty_rects_only(
     budget: &mut FunUploadBudgetTracker,
     dirty_rects: &[TextureDirtyRect],
     policy: TextureUploadPolicy,
@@ -529,8 +529,8 @@ fn plan_cef_dirty_rects_only(
         .collect::<Vec<_>>();
     if clean_rects.is_empty() {
         return TextureUploadPlan {
-            label: UPLOAD_CEF_CPU_DIRTY_RECT,
-            subsystem: FunUploadSubsystem::CefCpuPaint,
+            label: UPLOAD_NATIVE_UI_CPU_DIRTY_RECT,
+            subsystem: FunUploadSubsystem::NativeUiCpuPaint,
             path: TextureUploadPath::NoopUnchanged,
             uploaded_rects: Vec::new(),
             deferred_rects: Vec::new(),
@@ -552,13 +552,13 @@ fn plan_cef_dirty_rects_only(
         .iter()
         .map(|rect| rect.bytes(policy.bytes_per_pixel))
         .sum::<u64>();
-    let decision = budget.decide(FunUploadWriteIntent::cef_cpu(
-        UPLOAD_CEF_CPU_DIRTY_RECT,
+    let decision = budget.decide(FunUploadWriteIntent::native_ui_cpu(
+        UPLOAD_NATIVE_UI_CPU_DIRTY_RECT,
         bytes,
     ));
     TextureUploadPlan {
-        label: UPLOAD_CEF_CPU_DIRTY_RECT,
-        subsystem: FunUploadSubsystem::CefCpuPaint,
+        label: UPLOAD_NATIVE_UI_CPU_DIRTY_RECT,
+        subsystem: FunUploadSubsystem::NativeUiCpuPaint,
         path: path_for_texture_decision(decision, TextureUploadPath::DirtyRects),
         uploaded_rects,
         deferred_rects,
@@ -724,9 +724,9 @@ mod tests {
     }
 
     #[test]
-    fn cef_cpu_upload_is_noop_when_page_is_unchanged() {
+    fn native_ui_cpu_upload_is_noop_when_page_is_unchanged() {
         let mut budget = FunUploadBudgetTracker::new(FunUploadBudget::default());
-        let plan = plan_cef_cpu_dirty_rect_upload(
+        let plan = plan_native_ui_cpu_dirty_rect_upload(
             &mut budget,
             1920,
             1080,
@@ -738,13 +738,13 @@ mod tests {
 
         assert_eq!(plan.path, TextureUploadPath::NoopUnchanged);
         assert_eq!(plan.bytes, 0);
-        assert_eq!(budget.usage().cef_bytes, 0);
+        assert_eq!(budget.usage().native_ui_bytes, 0);
     }
 
     #[test]
-    fn cef_cpu_upload_uses_dirty_rects_instead_of_full_frame_when_changed() {
+    fn native_ui_cpu_upload_uses_dirty_rects_instead_of_full_frame_when_changed() {
         let mut budget = FunUploadBudgetTracker::new(FunUploadBudget::default());
-        let plan = plan_cef_cpu_dirty_rect_upload(
+        let plan = plan_native_ui_cpu_dirty_rect_upload(
             &mut budget,
             1920,
             1080,
@@ -754,7 +754,7 @@ mod tests {
             TextureUploadPolicy::default(),
         );
 
-        assert_eq!(plan.label, UPLOAD_CEF_CPU_DIRTY_RECT);
+        assert_eq!(plan.label, UPLOAD_NATIVE_UI_CPU_DIRTY_RECT);
         assert_eq!(plan.path, TextureUploadPath::DirtyRects);
         assert_eq!(plan.bytes, 100 * 50 * 4);
         assert!(plan.uploaded_rects[0].width < 1920);

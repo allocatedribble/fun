@@ -4,7 +4,7 @@ pub enum BackendParitySceneKind {
     StaticMesh,
     Material,
     DepthMotionVector,
-    CefUiComposite,
+    NativeUiComposite,
     PostUpscalePlaceholder,
     BenchmarkCapture,
 }
@@ -17,7 +17,7 @@ impl BackendParitySceneKind {
             Self::StaticMesh => "static_mesh",
             Self::Material => "material",
             Self::DepthMotionVector => "depth_motion_vector",
-            Self::CefUiComposite => "cef_ui_composite",
+            Self::NativeUiComposite => "native_ui_composite",
             Self::PostUpscalePlaceholder => "post_upscale_placeholder",
             Self::BenchmarkCapture => "benchmark_capture",
         }
@@ -30,7 +30,7 @@ pub struct BackendParityScene {
     pub kind: BackendParitySceneKind,
     pub requires_depth: bool,
     pub requires_motion_vectors: bool,
-    pub requires_cef_gpu_transport: bool,
+    pub requires_native_ui_gpu_transport: bool,
     pub premium_gate: bool,
 }
 
@@ -41,7 +41,7 @@ impl BackendParityScene {
         kind: BackendParitySceneKind,
         requires_depth: bool,
         requires_motion_vectors: bool,
-        requires_cef_gpu_transport: bool,
+        requires_native_ui_gpu_transport: bool,
         premium_gate: bool,
     ) -> Self {
         Self {
@@ -49,7 +49,7 @@ impl BackendParityScene {
             kind,
             requires_depth,
             requires_motion_vectors,
-            requires_cef_gpu_transport,
+            requires_native_ui_gpu_transport,
             premium_gate,
         }
     }
@@ -60,7 +60,7 @@ pub const BACKEND_PARITY_SCENE_IDS: [&str; 7] = [
     "backend_parity.static_mesh",
     "backend_parity.material",
     "backend_parity.depth_motion_vector",
-    "backend_parity.cef_ui_composite",
+    "backend_parity.native_ui_composite",
     "backend_parity.post_upscale_placeholder",
     "backend_parity.benchmark_capture",
 ];
@@ -100,7 +100,7 @@ pub const BACKEND_PARITY_SCENES: [BackendParityScene; 7] = [
     ),
     BackendParityScene::new(
         BACKEND_PARITY_SCENE_IDS[4],
-        BackendParitySceneKind::CefUiComposite,
+        BackendParitySceneKind::NativeUiComposite,
         false,
         false,
         true,
@@ -161,7 +161,7 @@ mod tests {
         assert!(
             BACKEND_PARITY_SCENES
                 .iter()
-                .any(|scene| scene.requires_cef_gpu_transport)
+                .any(|scene| scene.requires_native_ui_gpu_transport)
         );
         assert!(BACKEND_PARITY_SCENES.iter().any(|scene| scene.premium_gate));
     }

@@ -390,7 +390,7 @@ pub struct FunClientHostState {
     pub lifecycle: FunClientHostLifecycle,
     pub state: FunHostState,
     pub previous_mode: Option<FunClientHostMode>,
-    pub cef_command_surface_ready: bool,
+    pub native_ui_command_surface_ready: bool,
     sequence: u64,
 }
 
@@ -446,7 +446,7 @@ impl FunClientHostState {
             lifecycle: self.lifecycle,
             state: &self.state,
             previous_mode: self.previous_mode,
-            cef_command_surface_ready: self.cef_command_surface_ready,
+            native_ui_command_surface_ready: self.native_ui_command_surface_ready,
         }
     }
 
@@ -1077,7 +1077,7 @@ impl Default for FunClientHostState {
             lifecycle: FunClientHostLifecycle::Ready,
             state: FunHostState::with_mode(FunHostMode::Launcher),
             previous_mode: None,
-            cef_command_surface_ready: true,
+            native_ui_command_surface_ready: true,
             sequence: 0,
         }
     }
@@ -1091,7 +1091,7 @@ pub struct FunHostRuntimeServices {
     pub project_index: FunHostServiceState,
     pub preview_renderer: FunHostServiceState,
     pub account_session: FunHostServiceState,
-    pub cef_command_router: FunHostServiceState,
+    pub native_ui_command_router: FunHostServiceState,
 }
 
 impl Default for FunHostRuntimeServices {
@@ -1103,7 +1103,7 @@ impl Default for FunHostRuntimeServices {
             project_index: FunHostServiceState::Ready,
             preview_renderer: FunHostServiceState::Ready,
             account_session: FunHostServiceState::NeedsBackendSession,
-            cef_command_router: FunHostServiceState::Ready,
+            native_ui_command_router: FunHostServiceState::Ready,
         }
     }
 }
@@ -1122,7 +1122,7 @@ pub struct FunClientHostSnapshot<'a> {
     pub lifecycle: FunClientHostLifecycle,
     pub state: &'a FunHostState,
     pub previous_mode: Option<FunClientHostMode>,
-    pub cef_command_surface_ready: bool,
+    pub native_ui_command_surface_ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1410,7 +1410,7 @@ pub const FUN_HOST_COMMANDS: &[FunHostCommandDescriptor] = &[
     FunHostCommandDescriptor {
         id: LAUNCHER_SHOW,
         category: FunHostCommandCategory::Launcher,
-        summary: "Switches the CEF surface to launcher mode.",
+        summary: "Switches the native UI surface to launcher mode.",
     },
     FunHostCommandDescriptor {
         id: LAUNCHER_HIDE,
@@ -1485,7 +1485,7 @@ pub const FUN_HOST_COMMANDS: &[FunHostCommandDescriptor] = &[
     FunHostCommandDescriptor {
         id: VIEWPORT_CLIENT_RESIZE,
         category: FunHostCommandCategory::Runtime,
-        summary: "Updates the CEF/game viewport layout state without resizing a child window.",
+        summary: "Updates the native UI/game viewport layout state without resizing a child window.",
     },
     FunHostCommandDescriptor {
         id: VIEWPORT_CLIENT_STOP,
@@ -2319,7 +2319,7 @@ mod tests {
     }
 
     #[test]
-    fn host_catalog_keeps_dot_command_ids_as_cef_surface_ids() {
+    fn host_catalog_keeps_dot_command_ids_as_native_ui_surface_ids() {
         for id in [
             HOST_COMMANDS_LIST,
             HOST_COMMANDBAR_EXECUTE,
@@ -2713,7 +2713,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_cef_payload_is_rejected_before_command_dispatch() {
+    fn oversized_native_ui_payload_is_rejected_before_command_dispatch() {
         let mut host = FunClientHostState::default();
         let response = host.handle_command(&FunHostCommandRequest::new(
             9,
@@ -2729,7 +2729,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_cef_payload_is_rejected_before_command_dispatch() {
+    fn malformed_native_ui_payload_is_rejected_before_command_dispatch() {
         let mut host = FunClientHostState::default();
         let response = host.handle_command(&FunHostCommandRequest::new(
             10,

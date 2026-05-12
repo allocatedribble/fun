@@ -64,13 +64,13 @@ pub const UPLOAD_WORLD_STREAM_STATIC_MESH: UploadWriteLabel =
     UploadWriteLabel("world_stream.static_mesh");
 pub const UPLOAD_TEXTURE_DIRTY_RECT: UploadWriteLabel =
     UploadWriteLabel("texture_asset.dirty_rect");
-pub const UPLOAD_CEF_CPU_FULL_FRAME: UploadWriteLabel =
-    UploadWriteLabel("cef_ui.cpu_paint.full_frame");
-pub const UPLOAD_CEF_CPU_DIRTY_RECT: UploadWriteLabel =
-    UploadWriteLabel("cef_ui.cpu_paint.dirty_rect");
-pub const UPLOAD_CEF_GPU_COPY_METADATA: UploadWriteLabel =
-    UploadWriteLabel("cef_ui.gpu_copy.metadata");
-pub const UPLOAD_CEF_METADATA: UploadWriteLabel = UploadWriteLabel("cef_ui.metadata");
+pub const UPLOAD_NATIVE_UI_CPU_FULL_FRAME: UploadWriteLabel =
+    UploadWriteLabel("native_ui.cpu_paint.full_frame");
+pub const UPLOAD_NATIVE_UI_CPU_DIRTY_RECT: UploadWriteLabel =
+    UploadWriteLabel("native_ui.cpu_paint.dirty_rect");
+pub const UPLOAD_NATIVE_UI_GPU_COPY_METADATA: UploadWriteLabel =
+    UploadWriteLabel("native_ui.gpu_copy.metadata");
+pub const UPLOAD_NATIVE_UI_METADATA: UploadWriteLabel = UploadWriteLabel("native_ui.metadata");
 pub const UPLOAD_CLOUD_PARAMS: UploadWriteLabel = UploadWriteLabel("clouds.params");
 pub const UPLOAD_SOLARI_PARAMS: UploadWriteLabel = UploadWriteLabel("solari.params");
 pub const UPLOAD_DLSS_CONSTANTS: UploadWriteLabel = UploadWriteLabel("dlss.constants");
@@ -142,35 +142,35 @@ pub const FUN_UPLOAD_LABELS: &[UploadLabelDescriptor] = &[
         hot_path_allowed: true,
     },
     UploadLabelDescriptor {
-        label: UPLOAD_CEF_CPU_FULL_FRAME,
-        subsystem: FunUploadSubsystem::CefCpuPaint,
+        label: UPLOAD_NATIVE_UI_CPU_FULL_FRAME,
+        subsystem: FunUploadSubsystem::NativeUiCpuPaint,
         resource_kind: FunUploadResourceKind::Texture,
         expected_frequency: FunUploadExpectedFrequency::OnResize,
-        budget_class: FunUploadBudgetClass::Cef,
+        budget_class: FunUploadBudgetClass::NativeUi,
         hot_path_allowed: false,
     },
     UploadLabelDescriptor {
-        label: UPLOAD_CEF_CPU_DIRTY_RECT,
-        subsystem: FunUploadSubsystem::CefCpuPaint,
+        label: UPLOAD_NATIVE_UI_CPU_DIRTY_RECT,
+        subsystem: FunUploadSubsystem::NativeUiCpuPaint,
         resource_kind: FunUploadResourceKind::Texture,
         expected_frequency: FunUploadExpectedFrequency::PerDirtyRange,
-        budget_class: FunUploadBudgetClass::Cef,
+        budget_class: FunUploadBudgetClass::NativeUi,
         hot_path_allowed: true,
     },
     UploadLabelDescriptor {
-        label: UPLOAD_CEF_METADATA,
-        subsystem: FunUploadSubsystem::CefCpuPaint,
+        label: UPLOAD_NATIVE_UI_METADATA,
+        subsystem: FunUploadSubsystem::NativeUiCpuPaint,
         resource_kind: FunUploadResourceKind::Metadata,
         expected_frequency: FunUploadExpectedFrequency::PerDirtyRange,
-        budget_class: FunUploadBudgetClass::Cef,
+        budget_class: FunUploadBudgetClass::NativeUi,
         hot_path_allowed: true,
     },
     UploadLabelDescriptor {
-        label: UPLOAD_CEF_GPU_COPY_METADATA,
-        subsystem: FunUploadSubsystem::CefGpuInterop,
+        label: UPLOAD_NATIVE_UI_GPU_COPY_METADATA,
+        subsystem: FunUploadSubsystem::NativeUiGpuInterop,
         resource_kind: FunUploadResourceKind::Metadata,
         expected_frequency: FunUploadExpectedFrequency::PerFrame,
-        budget_class: FunUploadBudgetClass::Cef,
+        budget_class: FunUploadBudgetClass::NativeUi,
         hot_path_allowed: true,
     },
     UploadLabelDescriptor {
@@ -231,14 +231,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cef_cpu_labels_are_not_generic_texture_asset_labels() {
-        let full = upload_label_descriptor(UPLOAD_CEF_CPU_FULL_FRAME).expect("cef full label");
-        let dirty = upload_label_descriptor(UPLOAD_CEF_CPU_DIRTY_RECT).expect("cef dirty label");
+    fn native_ui_cpu_labels_are_not_generic_texture_asset_labels() {
+        let full =
+            upload_label_descriptor(UPLOAD_NATIVE_UI_CPU_FULL_FRAME).expect("native_ui full label");
+        let dirty = upload_label_descriptor(UPLOAD_NATIVE_UI_CPU_DIRTY_RECT)
+            .expect("native_ui dirty label");
 
-        assert_eq!(full.subsystem, FunUploadSubsystem::CefCpuPaint);
-        assert_eq!(dirty.subsystem, FunUploadSubsystem::CefCpuPaint);
-        assert_eq!(full.budget_class, FunUploadBudgetClass::Cef);
-        assert_eq!(dirty.budget_class, FunUploadBudgetClass::Cef);
+        assert_eq!(full.subsystem, FunUploadSubsystem::NativeUiCpuPaint);
+        assert_eq!(dirty.subsystem, FunUploadSubsystem::NativeUiCpuPaint);
+        assert_eq!(full.budget_class, FunUploadBudgetClass::NativeUi);
+        assert_eq!(dirty.budget_class, FunUploadBudgetClass::NativeUi);
     }
 
     #[test]
@@ -247,8 +249,8 @@ mod tests {
         let view = upload_label_descriptor(UPLOAD_VIEW_CONSTANTS).expect("view constants label");
         let instance =
             upload_label_descriptor(UPLOAD_INSTANCE_DIRTY_RANGE).expect("instance range label");
-        let cef_metadata =
-            upload_label_descriptor(UPLOAD_CEF_METADATA).expect("cef metadata label");
+        let native_ui_metadata =
+            upload_label_descriptor(UPLOAD_NATIVE_UI_METADATA).expect("native_ui metadata label");
 
         assert_eq!(frame.budget_class, FunUploadBudgetClass::SmallBuffer);
         assert_eq!(
@@ -256,7 +258,10 @@ mod tests {
             FunUploadExpectedFrequency::PerFrame
         );
         assert_eq!(instance.budget_class, FunUploadBudgetClass::LargeBuffer);
-        assert_eq!(cef_metadata.subsystem, FunUploadSubsystem::CefCpuPaint);
+        assert_eq!(
+            native_ui_metadata.subsystem,
+            FunUploadSubsystem::NativeUiCpuPaint
+        );
         assert!(instance.hot_path_allowed);
     }
 }

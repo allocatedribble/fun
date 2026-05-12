@@ -59,7 +59,7 @@ Categories are intentionally coarse:
 - `solari`
 - `clouds`
 - `post_process`
-- `cef_copy`
+- `native_ui_copy`
 - `ui_composition`
 - `debug_overlay`
 - `uploads`
@@ -68,7 +68,7 @@ Categories are intentionally coarse:
 
 The first pass is not a full command encoder wrapper. It counts centralized
 encoder creation and queue submission, tracked render passes, selected direct
-pass/copy sites, and the CEF DX12 native interop insertion points. If a PIX
+pass/copy sites, and the NATIVE_UI DX12 native interop insertion points. If a PIX
 capture shows an important unlabeled pass under `other`, add a narrow label at
 that pass instead of wrapping every wgpu command.
 
@@ -103,7 +103,7 @@ FUN_DX12_ASYNC_COPY=0|1|auto
 
 Candidate work:
 
-- CEF GPU frame copy
+- NATIVE_UI GPU frame copy
 - large streaming texture uploads
 - readback/capture copies
 - large static asset upload

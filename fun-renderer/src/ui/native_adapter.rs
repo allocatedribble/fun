@@ -2,10 +2,10 @@
 //!
 //! This module is the renderer-owned boundary that consumes
 //! `rvelte_fun_ui_core::FunUiFramePacket` values and produces typed renderer
-//! descriptors. It is the product UI ingest path — CEF is demoted to
-//! legacy/diagnostic only (see [`CefRenderRoleStatus`]).
+//! descriptors. It is the product UI ingest path — NATIVE_UI is demoted to
+//! legacy/diagnostic only (see [`NativeUiRenderRoleStatus`]).
 //!
-//! The adapter never imports browser DOM, CEF, DX12, Vulkan, Metal, wgpu,
+//! The adapter never imports browser DOM, NATIVE_UI, DX12, Vulkan, Metal, wgpu,
 //! swapchains, or backend-specific texture/font-atlas handles. rvelte packets
 //! carry logical IDs only; the renderer side maps those to its own resource
 //! IDs through the registry.
@@ -696,10 +696,10 @@ fn classify_validation_error(
     }
 }
 
-/// CEF role under the native rvelte/FUN UI policy. Pass 20 demotes CEF from
+/// NATIVE_UI role under the native rvelte/FUN UI policy. Pass 20 demotes NATIVE_UI from
 /// "product UI surface" to one of the legacy/diagnostic roles below.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CefRenderRoleStatus {
+pub enum NativeUiRenderRoleStatus {
     #[default]
     DemotedToLegacyDiagnostic,
     ArchivedReferenceOnly,
@@ -708,8 +708,8 @@ pub enum CefRenderRoleStatus {
     TemporaryMigrationBridge,
 }
 
-impl CefRenderRoleStatus {
-    /// Typed roster of every CEF render-role status variant.  Used by
+impl NativeUiRenderRoleStatus {
+    /// Typed roster of every NATIVE_UI render-role status variant.  Used by
     /// quality-audit predicates that must enumerate all non-product roles.
     pub const ALL: [Self; 5] = [
         Self::DemotedToLegacyDiagnostic,
@@ -732,19 +732,19 @@ impl CefRenderRoleStatus {
 
     #[must_use]
     pub const fn is_product_ui_surface(self) -> bool {
-        // None of the demoted roles allow CEF to be the product UI surface.
+        // None of the demoted roles allow NATIVE_UI to be the product UI surface.
         false
     }
 }
 
 /// Single source of truth for "what is the product UI ingest path" under
-/// Pass 20: native rvelte/FUN UI packets, with CEF demoted.
+/// Pass 20: native rvelte/FUN UI packets, with NATIVE_UI demoted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeUiProductPolicy {
     pub schema_version: u16,
     pub product_packet_schema: &'static str,
     pub product_ui_path_is_native_rvelte: bool,
-    pub cef_status: CefRenderRoleStatus,
+    pub native_ui_status: NativeUiRenderRoleStatus,
     pub fun_render_adapter_owns_packet_ingest: bool,
     pub renderer_packet_validation_required: bool,
 }
@@ -754,7 +754,7 @@ impl NativeUiProductPolicy {
         schema_version: NATIVE_UI_ADAPTER_SCHEMA_VERSION,
         product_packet_schema: NATIVE_UI_ADAPTER_PRODUCT_DEFAULT,
         product_ui_path_is_native_rvelte: true,
-        cef_status: CefRenderRoleStatus::DemotedToLegacyDiagnostic,
+        native_ui_status: NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic,
         fun_render_adapter_owns_packet_ingest: true,
         renderer_packet_validation_required: true,
     };
@@ -889,19 +889,19 @@ mod tests {
     }
 
     #[test]
-    fn product_policy_demotes_cef_and_declares_rvelte_as_product_ui() {
+    fn product_policy_demotes_native_ui_and_declares_rvelte_as_product_ui() {
         let policy = NativeUiProductPolicy::PRODUCT_DEFAULT;
         assert!(policy.product_ui_path_is_native_rvelte);
         assert!(policy.fun_render_adapter_owns_packet_ingest);
         assert!(policy.renderer_packet_validation_required);
         assert_eq!(policy.product_packet_schema, "fun_ui_render_packet_v1");
-        assert!(!policy.cef_status.is_product_ui_surface());
+        assert!(!policy.native_ui_status.is_product_ui_surface());
         for variant in [
-            CefRenderRoleStatus::DemotedToLegacyDiagnostic,
-            CefRenderRoleStatus::ArchivedReferenceOnly,
-            CefRenderRoleStatus::StagedRemoval,
-            CefRenderRoleStatus::LegacyComparisonOnly,
-            CefRenderRoleStatus::TemporaryMigrationBridge,
+            NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic,
+            NativeUiRenderRoleStatus::ArchivedReferenceOnly,
+            NativeUiRenderRoleStatus::StagedRemoval,
+            NativeUiRenderRoleStatus::LegacyComparisonOnly,
+            NativeUiRenderRoleStatus::TemporaryMigrationBridge,
         ] {
             assert!(!variant.is_product_ui_surface());
         }

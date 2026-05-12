@@ -174,7 +174,7 @@ pub fn build_renderer_work_graph(
         &mut g,
         RendererWork {
             kind: RendererWorkKind::PrepareGpuSceneChunk,
-            class: RendererNodeClass::PageSchedule,
+            class: RendererNodeClass::ArtifactRealization,
             phase: RendererGraphPhase::RenderPrepareScene,
             pass_role: None,
             lux_kind: None,
@@ -301,7 +301,7 @@ pub fn build_renderer_work_graph(
 
 const fn record_work_kind_for_pass_role(role: FrameGraphPassRole) -> RendererWorkKind {
     match role {
-        FrameGraphPassRole::CefGpuImport
+        FrameGraphPassRole::NativeUiGpuImport
         | FrameGraphPassRole::UiImportPlaceholder
         | FrameGraphPassRole::VirtualResourceFeedback => RendererWorkKind::RecordCopyPass,
         FrameGraphPassRole::PostProcessExposure
@@ -627,7 +627,7 @@ mod tests {
         FrameGraphPassRole::Clear,
         FrameGraphPassRole::StaticScenePlaceholder,
         FrameGraphPassRole::VirtualResourceFeedback,
-        FrameGraphPassRole::CefGpuImport,
+        FrameGraphPassRole::NativeUiGpuImport,
         FrameGraphPassRole::UiImportPlaceholder,
         FrameGraphPassRole::UpscaleBoundary,
         FrameGraphPassRole::FrameGenerationBoundary,

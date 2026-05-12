@@ -14,5 +14,5 @@ export function emitHost(event: string, payload?: unknown): void {
 }
 
 export function isHostRuntime(): boolean {
-  return typeof window !== 'undefined' && (typeof window.funHost?.postMessage === 'function' || typeof window.cefQuery === 'function');
+  return typeof window !== 'undefined' && typeof window.funHost?.postMessage === 'function';
 }

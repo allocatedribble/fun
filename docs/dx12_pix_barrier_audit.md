@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Use this protocol when DX12 loses to Vulkan, when CEF accelerated paint changes
+Use this protocol when DX12 loses to Vulkan, when NATIVE_UI accelerated paint changes
 frame p95, or before adding another native DX12 interop path. The goal is to
 identify redundant resource transitions, queue idle bubbles, descriptor churn,
 and accidental synchronization around UI, post-process, clouds, Solari, and
@@ -20,9 +20,9 @@ attach PIX only to the DX12 run:
 scripts\fun-bench client `
   --render-backend dx12 `
   --present-mode immediate `
-  --cef-paint-transport d3d11on12 `
-  --cef-gpu-ring-depth 3 `
-  --cef-debug-timings `
+  --native_ui-paint-transport d3d11on12 `
+  --native_ui-gpu-ring-depth 3 `
+  --native_ui-debug-timings `
   --trace-diagnostics `
   --sample-seconds 20 `
   --warmup-seconds 5
@@ -34,7 +34,7 @@ For a CPU fallback comparison:
 scripts\fun-bench client `
   --render-backend dx12 `
   --present-mode immediate `
-  --cef-paint-transport cpu `
+  --native_ui-paint-transport cpu `
   --trace-diagnostics `
   --sample-seconds 20 `
   --warmup-seconds 5
@@ -46,7 +46,7 @@ For a render-only control:
 scripts\fun-bench client `
   --render-backend dx12 `
   --present-mode immediate `
-  --cef-paint-transport disabled `
+  --native_ui-paint-transport disabled `
   --trace-diagnostics `
   --sample-seconds 20 `
   --warmup-seconds 5
@@ -65,9 +65,9 @@ PIX capture window:
 Readable markers are required before a capture is considered useful. Current
 markers and tracing targets:
 
-- `fun.cef.copy_ring_source_to_bevy_image`: native DX12 copy from the CEF GPU
+- `fun.native_ui.copy_ring_source_to_bevy_image`: native DX12 copy from the NATIVE_UI GPU
   ring into the Bevy UI image.
-- `fun::perf::cef_ui`: CEF paint/copy/generation counters in client logs.
+- `fun::perf::native_ui`: NATIVE_UI paint/copy/generation counters in client logs.
 - `fun::render`: backend, present, DLSS, and renderer policy.
 - `fun::perf::clouds`: cloud pass costs and history state.
 - `fun::perf::solari`: Solari pass costs and denoiser guide costs.
@@ -129,8 +129,8 @@ No native DX12 path should touch a texture that is missing from this table.
 | Main HDR color | main scene lighting | post-process and DLSS SR input placeholder | render target | shader resource or render target for next post pass | wgpu/render graph | future DLSS may read | do not assume | no until audited |
 | Depth | depth/prepass and main scene | motion vectors, Solari, DLSS placeholder | depth write/read by pass | depth read or shader resource by consumer | wgpu/render graph | future DLSS may read | do not assume | no |
 | Motion vectors | motion-vector pass | temporal reconstruction, DLSS placeholder | render target/storage by pass | shader resource | wgpu/render graph | future DLSS may read | do not assume | no |
-| CEF UI image | CEF CPU upload or DX12 GPU copy | Bevy UI composition | pixel shader resource after creation, copy dest during native copy | pixel shader resource | CEF interop module for native copy, then wgpu | yes, CEF GPU path | no | no |
-| CEF GPU ring slot | `OnAcceleratedPaint` D3D11On12 copy | Bevy UI image native copy | free/copying ring state | copy source until consumed | `game_client::cef_ui_dx12` | yes | no | ring reuse only after fence |
+| NATIVE_UI UI image | NATIVE_UI CPU upload or DX12 GPU copy | Bevy UI composition | pixel shader resource after creation, copy dest during native copy | pixel shader resource | NATIVE_UI interop module for native copy, then wgpu | yes, NATIVE_UI GPU path | no | no |
+| NATIVE_UI GPU ring slot | `OnAcceleratedPaint` D3D11On12 copy | Bevy UI image native copy | free/copying ring state | copy source until consumed | `game_client::native_ui_dx12` | yes | no | ring reuse only after fence |
 | Post-process intermediates | post-process passes | next post pass or final composition | render target or shader resource per pass | shader resource or render target per pass | wgpu/render graph | no | do not assume | candidate after PIX proof |
 | Cloud transmittance/noise/history | cloud passes | cloud resolve/composite | shader/storage/render target per pass | shader resource/history | wgpu/render graph | no | do not assume | history resources no |
 | Solari guide surfaces | Solari guide resolve | denoiser/RR diagnostic path | render/storage by guide pass | shader resource | wgpu/render graph | future RR only | no | no |
@@ -138,24 +138,24 @@ No native DX12 path should touch a texture that is missing from this table.
 | DLSS SR output placeholder | native DLSS SR | post-process | unordered access or render target as SDK requires | shader resource/render target for post | future dx12 native module | yes, future only | no | no |
 | Readback/capture textures | copy pass | CPU readback/capture tooling | copy dest | map/readback | wgpu | no | no | no |
 
-## CEF Transition Intent
+## NATIVE_UI Transition Intent
 
-The current accelerated CEF copy is intentionally full-frame:
+The current accelerated NATIVE_UI copy is intentionally full-frame:
 
 ```text
-CEF D3D11 shared texture
+NATIVE_UI D3D11 shared texture
   -> D3D11On12 copy into ring slot
   -> ring slot final D3D12 state COPY_SOURCE
   -> native D3D12 CopyResource into Bevy UI image
   -> Bevy UI image restored to PIXEL_SHADER_RESOURCE
 ```
 
-Expected PIX result for the CEF pass:
+Expected PIX result for the NATIVE_UI pass:
 
 - no blocking fence wait in normal frames;
 - at most one transition of the Bevy UI image to `COPY_DEST`;
 - one transition back to `PIXEL_SHADER_RESOURCE`;
-- no transition of the CEF ring slot through `COMMON` unless PIX or validation
+- no transition of the NATIVE_UI ring slot through `COMMON` unless PIX or validation
   proves the bridge requires it;
 - no CPU `write_texture` upload bytes in accelerated lanes.
 
@@ -169,14 +169,14 @@ DX12 PIX barrier audit:
 - PIX capture: <path>
 - GPU/driver/Windows build:
 - Backend/present/frame latency:
-- CEF transport: requested=... selected=... ring_depth=... copy_mode=...
+- NATIVE_UI transport: requested=... selected=... ring_depth=... copy_mode=...
 - Worst pass by barrier count:
 - Worst pass by queue idle:
-- CEF pass barriers:
-- CEF blocking waits:
+- NATIVE_UI pass barriers:
+- NATIVE_UI blocking waits:
 - Redundant transition candidates:
 - State-table updates needed:
-- Verdict: present-bound | upload-bound | barrier-bound | pipeline-churn | CEF-sync | shader-bound | unknown
+- Verdict: present-bound | upload-bound | barrier-bound | pipeline-churn | NATIVE_UI-sync | shader-bound | unknown
 ```
 
 Only mark a pass barrier-bound when PIX shows redundant or excessive

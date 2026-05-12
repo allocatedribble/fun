@@ -27,8 +27,8 @@
 //!    `Tier6ProductInputEvent` taxonomy
 //!    (Pointer / Key / FocusChange / WindowResize),
 //!    `Tier6FeatureFlag` (FakeRenderer / FunRendererConsumer)
-//!    selector, and `Tier6CefStagedRemovalInventory` recording
-//!    typed CEF surface entries with their replacement status.
+//!    selector, and `Tier6NativeUiStagedRemovalInventory` recording
+//!    typed NATIVE_UI surface entries with their replacement status.
 //!
 //! Honest scope: the batching coalescer, the atlas eviction,
 //! and the route boot all execute as deterministic CPU
@@ -49,7 +49,7 @@ pub const TIER6_MISSING_GLYPH_FALLBACK_COUNT: usize = 3;
 pub const TIER6_PRODUCT_ROUTE_KIND_COUNT: usize = 6;
 pub const TIER6_PRODUCT_INPUT_EVENT_KIND_COUNT: usize = 4;
 pub const TIER6_FEATURE_FLAG_COUNT: usize = 2;
-pub const TIER6_CEF_REPLACEMENT_STATUS_COUNT: usize = 4;
+pub const TIER6_NATIVE_UI_REPLACEMENT_STATUS_COUNT: usize = 4;
 
 // ============================================================================
 // Section 1 — UI batching
@@ -769,17 +769,17 @@ impl Tier6FeatureFlag {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Tier6CefReplacementStatus {
+pub enum Tier6NativeUiReplacementStatus {
     #[default]
-    StillCefBacked,
+    StillNativeUiBacked,
     StagedForRemovalAfterRouteParity,
     ReplacedByNativeRoute,
     ArchivedReferenceOnly,
 }
 
-impl Tier6CefReplacementStatus {
-    pub const ALL: [Self; TIER6_CEF_REPLACEMENT_STATUS_COUNT] = [
-        Self::StillCefBacked,
+impl Tier6NativeUiReplacementStatus {
+    pub const ALL: [Self; TIER6_NATIVE_UI_REPLACEMENT_STATUS_COUNT] = [
+        Self::StillNativeUiBacked,
         Self::StagedForRemovalAfterRouteParity,
         Self::ReplacedByNativeRoute,
         Self::ArchivedReferenceOnly,
@@ -788,7 +788,7 @@ impl Tier6CefReplacementStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::StillCefBacked => "still_cef_backed",
+            Self::StillNativeUiBacked => "still_native_ui_backed",
             Self::StagedForRemovalAfterRouteParity => "staged_for_removal_after_route_parity",
             Self::ReplacedByNativeRoute => "replaced_by_native_route",
             Self::ArchivedReferenceOnly => "archived_reference_only",
@@ -796,29 +796,29 @@ impl Tier6CefReplacementStatus {
     }
 
     #[must_use]
-    pub const fn cef_still_active(self) -> bool {
-        matches!(self, Self::StillCefBacked)
+    pub const fn native_ui_still_active(self) -> bool {
+        matches!(self, Self::StillNativeUiBacked)
     }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Tier6CefSurfaceInventoryEntry {
+pub struct Tier6NativeUiSurfaceInventoryEntry {
     pub stable_id_hash: u64,
     pub debug_label_hash: u64,
-    pub status: Tier6CefReplacementStatus,
+    pub status: Tier6NativeUiReplacementStatus,
     pub planned_replacement_route: Tier6RouteIdOption,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Resource)]
-pub struct Tier6CefStagedRemovalInventory {
+pub struct Tier6NativeUiStagedRemovalInventory {
     pub schema_version: u16,
     pub canonical_path: &'static str,
-    pub entries: Vec<Tier6CefSurfaceInventoryEntry>,
+    pub entries: Vec<Tier6NativeUiSurfaceInventoryEntry>,
 }
 
-impl Tier6CefStagedRemovalInventory {
+impl Tier6NativeUiStagedRemovalInventory {
     pub const CANONICAL_ARTIFACT_PATH: &'static str =
-        "fun_renderer.tier6.cef_staged_removal.funpb.zst";
+        "fun_renderer.tier6.native_ui_staged_removal.funpb.zst";
 
     #[must_use]
     pub fn new() -> Self {
@@ -829,26 +829,26 @@ impl Tier6CefStagedRemovalInventory {
         }
     }
 
-    pub fn record(&mut self, entry: Tier6CefSurfaceInventoryEntry) {
+    pub fn record(&mut self, entry: Tier6NativeUiSurfaceInventoryEntry) {
         self.entries.push(entry);
     }
 
     #[must_use]
-    pub fn count_for(&self, status: Tier6CefReplacementStatus) -> u32 {
+    pub fn count_for(&self, status: Tier6NativeUiReplacementStatus) -> u32 {
         self.entries.iter().filter(|e| e.status == status).count() as u32
     }
 
     #[must_use]
-    pub fn cef_active_count(&self) -> u32 {
+    pub fn native_ui_active_count(&self) -> u32 {
         self.entries
             .iter()
-            .filter(|e| e.status.cef_still_active())
+            .filter(|e| e.status.native_ui_still_active())
             .count() as u32
     }
 
     #[must_use]
     pub fn replaced_count(&self) -> u32 {
-        self.count_for(Tier6CefReplacementStatus::ReplacedByNativeRoute)
+        self.count_for(Tier6NativeUiReplacementStatus::ReplacedByNativeRoute)
     }
 }
 
@@ -863,7 +863,7 @@ pub struct Tier6AcceptanceVerdict {
     pub passes_no_per_draw_pipeline: bool,
     pub passes_text_no_per_frame_alloc: bool,
     pub passes_route_renders_in_proof_scene_graph: bool,
-    pub passes_cef_inventory_complete: bool,
+    pub passes_native_ui_inventory_complete: bool,
 }
 
 impl Tier6AcceptanceVerdict {
@@ -883,9 +883,9 @@ impl Tier6AcceptanceVerdict {
     ///   booting. Must not be `NotProvided` (or
     ///   `UnknownArgValue`) for the route-renders-in-proof-scene
     ///   acceptance rule.
-    /// - `cef_inventory` — every CEF surface must have a typed
+    /// - `native_ui_inventory` — every NATIVE_UI surface must have a typed
     ///   replacement status (no surface left in
-    ///   `StillCefBacked` without a planned replacement route).
+    ///   `StillNativeUiBacked` without a planned replacement route).
     #[must_use]
     pub fn evaluate(
         batch_table: &Tier6UiBatchTable,
@@ -893,7 +893,7 @@ impl Tier6AcceptanceVerdict {
         unique_pipelines_observed: u32,
         glyph_atlas: &Tier6GlyphAtlasTable,
         selected_route: Tier6RvelteBridgeRouteSelection,
-        cef_inventory: &Tier6CefStagedRemovalInventory,
+        native_ui_inventory: &Tier6NativeUiStagedRemovalInventory,
     ) -> Self {
         let passes_batching_collapse = batch_table.passes_batch_collapse(max_expected_batches);
         // "No per-draw pipeline creation" = unique pipelines
@@ -903,11 +903,11 @@ impl Tier6AcceptanceVerdict {
             unique_pipelines_observed <= TIER6_UI_BATCH_KIND_COUNT as u32;
         let passes_text_no_per_frame_alloc = glyph_atlas.allocations_this_frame_is_zero();
         let passes_route = matches!(selected_route, Tier6RvelteBridgeRouteSelection::Selected(_));
-        // CEF inventory complete = every entry that is still
-        // `StillCefBacked` has a planned replacement route
+        // NATIVE_UI inventory complete = every entry that is still
+        // `StillNativeUiBacked` has a planned replacement route
         // (`NotRouted` is treated as incomplete).
-        let passes_cef = cef_inventory.entries.iter().all(|e| {
-            !e.status.cef_still_active()
+        let passes_native_ui = native_ui_inventory.entries.iter().all(|e| {
+            !e.status.native_ui_still_active()
                 || !matches!(e.planned_replacement_route, Tier6RouteIdOption::NotRouted)
         });
         Self {
@@ -916,7 +916,7 @@ impl Tier6AcceptanceVerdict {
             passes_no_per_draw_pipeline,
             passes_text_no_per_frame_alloc,
             passes_route_renders_in_proof_scene_graph: passes_route,
-            passes_cef_inventory_complete: passes_cef,
+            passes_native_ui_inventory_complete: passes_native_ui,
         }
     }
 
@@ -926,7 +926,7 @@ impl Tier6AcceptanceVerdict {
             && self.passes_no_per_draw_pipeline
             && self.passes_text_no_per_frame_alloc
             && self.passes_route_renders_in_proof_scene_graph
-            && self.passes_cef_inventory_complete
+            && self.passes_native_ui_inventory_complete
     }
 }
 
@@ -961,7 +961,7 @@ mod tests {
         assert_eq!(TIER6_PRODUCT_ROUTE_KIND_COUNT, 6);
         assert_eq!(TIER6_PRODUCT_INPUT_EVENT_KIND_COUNT, 4);
         assert_eq!(TIER6_FEATURE_FLAG_COUNT, 2);
-        assert_eq!(TIER6_CEF_REPLACEMENT_STATUS_COUNT, 4);
+        assert_eq!(TIER6_NATIVE_UI_REPLACEMENT_STATUS_COUNT, 4);
     }
 
     #[test]
@@ -1169,38 +1169,38 @@ mod tests {
     }
 
     #[test]
-    fn cef_replacement_status_active_classification() {
-        assert!(Tier6CefReplacementStatus::StillCefBacked.cef_still_active());
-        assert!(!Tier6CefReplacementStatus::ReplacedByNativeRoute.cef_still_active());
-        assert!(!Tier6CefReplacementStatus::ArchivedReferenceOnly.cef_still_active());
+    fn native_ui_replacement_status_active_classification() {
+        assert!(Tier6NativeUiReplacementStatus::StillNativeUiBacked.native_ui_still_active());
+        assert!(!Tier6NativeUiReplacementStatus::ReplacedByNativeRoute.native_ui_still_active());
+        assert!(!Tier6NativeUiReplacementStatus::ArchivedReferenceOnly.native_ui_still_active());
     }
 
     #[test]
-    fn cef_inventory_records_per_status_counts() {
-        let mut inv = Tier6CefStagedRemovalInventory::new();
-        inv.record(Tier6CefSurfaceInventoryEntry {
+    fn native_ui_inventory_records_per_status_counts() {
+        let mut inv = Tier6NativeUiStagedRemovalInventory::new();
+        inv.record(Tier6NativeUiSurfaceInventoryEntry {
             stable_id_hash: 1,
             debug_label_hash: 1,
-            status: Tier6CefReplacementStatus::StillCefBacked,
+            status: Tier6NativeUiReplacementStatus::StillNativeUiBacked,
             planned_replacement_route: Tier6RouteIdOption::LauncherShell,
         });
-        inv.record(Tier6CefSurfaceInventoryEntry {
+        inv.record(Tier6NativeUiSurfaceInventoryEntry {
             stable_id_hash: 2,
             debug_label_hash: 2,
-            status: Tier6CefReplacementStatus::ReplacedByNativeRoute,
+            status: Tier6NativeUiReplacementStatus::ReplacedByNativeRoute,
             planned_replacement_route: Tier6RouteIdOption::HudOverlay,
         });
-        inv.record(Tier6CefSurfaceInventoryEntry {
+        inv.record(Tier6NativeUiSurfaceInventoryEntry {
             stable_id_hash: 3,
             debug_label_hash: 3,
-            status: Tier6CefReplacementStatus::ArchivedReferenceOnly,
+            status: Tier6NativeUiReplacementStatus::ArchivedReferenceOnly,
             planned_replacement_route: Tier6RouteIdOption::NotRouted,
         });
-        assert_eq!(inv.cef_active_count(), 1);
+        assert_eq!(inv.native_ui_active_count(), 1);
         assert_eq!(inv.replaced_count(), 1);
         assert_eq!(
             inv.canonical_path,
-            Tier6CefStagedRemovalInventory::CANONICAL_ARTIFACT_PATH,
+            Tier6NativeUiStagedRemovalInventory::CANONICAL_ARTIFACT_PATH,
         );
     }
 
@@ -1225,11 +1225,11 @@ mod tests {
 
         let route = Tier6RvelteBridgeRouteSelection::parse_arg("--rvelte-bridge=hud_overlay");
 
-        let mut inv = Tier6CefStagedRemovalInventory::new();
-        inv.record(Tier6CefSurfaceInventoryEntry {
+        let mut inv = Tier6NativeUiStagedRemovalInventory::new();
+        inv.record(Tier6NativeUiSurfaceInventoryEntry {
             stable_id_hash: 1,
             debug_label_hash: 1,
-            status: Tier6CefReplacementStatus::StagedForRemovalAfterRouteParity,
+            status: Tier6NativeUiReplacementStatus::StagedForRemovalAfterRouteParity,
             planned_replacement_route: Tier6RouteIdOption::HudOverlay,
         });
 
@@ -1245,28 +1245,28 @@ mod tests {
         assert!(verdict.passes_no_per_draw_pipeline);
         assert!(verdict.passes_text_no_per_frame_alloc);
         assert!(verdict.passes_route_renders_in_proof_scene_graph);
-        assert!(verdict.passes_cef_inventory_complete);
+        assert!(verdict.passes_native_ui_inventory_complete);
         assert!(verdict.passes());
     }
 
     #[test]
-    fn tier6_acceptance_verdict_fails_on_unrouted_cef_surface() {
+    fn tier6_acceptance_verdict_fails_on_unrouted_native_ui_surface() {
         let stream: Vec<Tier6UiDrawRecord> =
             (0..10).map(|_| fill_quad_record(0, 0, 1024)).collect();
         let batch_table = Tier6UiBatchTable::from_stream(&stream);
         let mut atlas = Tier6GlyphAtlasTable::new(Tier6GlyphAtlasDescriptor::PRODUCT_DEFAULT);
         atlas.begin_frame();
         let route = Tier6RvelteBridgeRouteSelection::parse_arg("--rvelte-bridge=settings_shell");
-        let mut inv = Tier6CefStagedRemovalInventory::new();
-        // CEF-backed surface with NO planned replacement route.
-        inv.record(Tier6CefSurfaceInventoryEntry {
+        let mut inv = Tier6NativeUiStagedRemovalInventory::new();
+        // NATIVE_UI-backed surface with NO planned replacement route.
+        inv.record(Tier6NativeUiSurfaceInventoryEntry {
             stable_id_hash: 7,
             debug_label_hash: 7,
-            status: Tier6CefReplacementStatus::StillCefBacked,
+            status: Tier6NativeUiReplacementStatus::StillNativeUiBacked,
             planned_replacement_route: Tier6RouteIdOption::NotRouted,
         });
         let verdict = Tier6AcceptanceVerdict::evaluate(&batch_table, 4, 7, &atlas, route, &inv);
-        assert!(!verdict.passes_cef_inventory_complete);
+        assert!(!verdict.passes_native_ui_inventory_complete);
         assert!(!verdict.passes());
     }
 
@@ -1276,7 +1276,7 @@ mod tests {
         let batch_table = Tier6UiBatchTable::from_stream(&stream);
         let mut atlas = Tier6GlyphAtlasTable::new(Tier6GlyphAtlasDescriptor::PRODUCT_DEFAULT);
         atlas.begin_frame();
-        let inv = Tier6CefStagedRemovalInventory::new();
+        let inv = Tier6NativeUiStagedRemovalInventory::new();
         let verdict = Tier6AcceptanceVerdict::evaluate(
             &batch_table,
             4,

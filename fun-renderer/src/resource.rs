@@ -106,7 +106,7 @@ impl PersistentResourceKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ImportedResourceKind {
-    CefSharedTextures,
+    NativeUiSharedTextures,
     SwapchainResources,
     VendorSdkResources,
 }
@@ -115,7 +115,7 @@ impl ImportedResourceKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::CefSharedTextures => "cef_shared_textures",
+            Self::NativeUiSharedTextures => "native_ui_shared_textures",
             Self::SwapchainResources => "swapchain_resources",
             Self::VendorSdkResources => "vendor_sdk_resources",
         }
@@ -295,7 +295,7 @@ impl RendererResourceUsageFlags {
 pub enum ExternalTextureProducer {
     #[default]
     Swapchain,
-    Cef,
+    NativeUi,
     VendorSdk,
     CaptureTool,
     DirectBackend,
@@ -306,7 +306,7 @@ impl ExternalTextureProducer {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Swapchain => "swapchain",
-            Self::Cef => "cef",
+            Self::NativeUi => "native_ui",
             Self::VendorSdk => "vendor_sdk",
             Self::CaptureTool => "capture_tool",
             Self::DirectBackend => "direct_backend",
@@ -1198,7 +1198,7 @@ pub enum RendererResourceOwner {
     BevyGeneric,
     BevyLowLevel,
     GameClient,
-    FunUiCef,
+    FunUiNativeUi,
     VendorSdk,
 }
 
@@ -1211,7 +1211,7 @@ impl RendererResourceOwner {
             Self::BevyGeneric => "bevy_generic_render_resource",
             Self::BevyLowLevel => "bevy_low_level",
             Self::GameClient => "game_client",
-            Self::FunUiCef => "fun_ui_cef",
+            Self::FunUiNativeUi => "fun_ui_native_ui",
             Self::VendorSdk => "vendor_sdk",
         }
     }
@@ -1670,7 +1670,7 @@ mod tests {
             RendererResourceClass::Persistent
         );
         assert_eq!(
-            RendererResourceKind::Imported(ImportedResourceKind::CefSharedTextures).class(),
+            RendererResourceKind::Imported(ImportedResourceKind::NativeUiSharedTextures).class(),
             RendererResourceClass::Imported
         );
         assert_eq!(
@@ -1733,8 +1733,8 @@ mod tests {
             1,
         );
         diagnostics.record_allocation(
-            "import.cef",
-            RendererResourceKind::Imported(ImportedResourceKind::CefSharedTextures),
+            "import.native_ui",
+            RendererResourceKind::Imported(ImportedResourceKind::NativeUiSharedTextures),
             0,
             3,
         );
@@ -1780,7 +1780,8 @@ mod tests {
             TextureUsageFlags::RENDER_TARGET.union(TextureUsageFlags::SAMPLED),
         );
         let transient = TransientTextureDesc::new(texture, IrGraphResourceId::new(7));
-        let external = ExternalTextureDesc::new(texture, ExternalTextureProducer::Cef, true, false);
+        let external =
+            ExternalTextureDesc::new(texture, ExternalTextureProducer::NativeUi, true, false);
         let readback = ReadbackBufferDesc::new(
             BufferDesc::new(
                 crate::ir::IrBufferId::new(2),
@@ -1957,7 +1958,7 @@ mod tests {
         );
         let external_texture = TextureDesc::new_2d(
             crate::ir::IrTextureId::new(22),
-            "cef.external_color",
+            "native_ui.external_color",
             8,
             8,
             TextureFormat::Rgba8Unorm,
@@ -1984,7 +1985,12 @@ mod tests {
             "graph.transient_color",
         );
         registry.create_with_default_lifetime(RendererResourceDescriptor::ExternalTexture(
-            ExternalTextureDesc::new(external_texture, ExternalTextureProducer::Cef, true, false),
+            ExternalTextureDesc::new(
+                external_texture,
+                ExternalTextureProducer::NativeUi,
+                true,
+                false,
+            ),
         ));
         let debug_id = registry.create_with_default_lifetime(
             RendererResourceDescriptor::ReadbackBuffer(debug_readback),

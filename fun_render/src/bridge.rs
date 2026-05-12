@@ -26,7 +26,7 @@ pub struct BridgeFeatureToggles {
     pub dx12: bool,
     pub vulkan: bool,
     pub metal: bool,
-    pub cef_gpu_only: bool,
+    pub native_ui_gpu_only: bool,
     pub upscale: bool,
     pub dlss: bool,
     pub fsr: bool,
@@ -44,7 +44,8 @@ impl BridgeFeatureToggles {
         dx12: cfg!(feature = "dx12_native_interop") || cfg!(feature = "fun_renderer_dx12"),
         vulkan: cfg!(feature = "vulkan_backend") || cfg!(feature = "fun_renderer_vulkan"),
         metal: cfg!(feature = "metal_backend") || cfg!(feature = "fun_renderer_metal"),
-        cef_gpu_only: cfg!(feature = "cef_gpu_only") || cfg!(feature = "fun_renderer_cef_gpu_only"),
+        native_ui_gpu_only: cfg!(feature = "native_ui_gpu_only")
+            || cfg!(feature = "fun_renderer_native_ui_gpu_only"),
         upscale: cfg!(feature = "upscaling") || cfg!(feature = "fun_renderer_upscale"),
         dlss: cfg!(feature = "dlss") || cfg!(feature = "fun_renderer_dlss"),
         fsr: cfg!(feature = "fsr") || cfg!(feature = "fun_renderer_fsr"),
@@ -71,7 +72,7 @@ impl BridgeFeatureToggles {
             dx12: self.dx12,
             vulkan: self.vulkan,
             metal: self.metal,
-            cef_gpu_only: self.cef_gpu_only,
+            native_ui_gpu_only: self.native_ui_gpu_only,
             upscale: self.upscale,
             dlss: self.dlss,
             fsr: self.fsr,
@@ -584,8 +585,9 @@ mod tests {
             cfg!(feature = "dx12_native_interop") || cfg!(feature = "fun_renderer_dx12")
         );
         assert_eq!(
-            toggles.cef_gpu_only,
-            cfg!(feature = "cef_gpu_only") || cfg!(feature = "fun_renderer_cef_gpu_only")
+            toggles.native_ui_gpu_only,
+            cfg!(feature = "native_ui_gpu_only")
+                || cfg!(feature = "fun_renderer_native_ui_gpu_only")
         );
         assert_eq!(
             toggles.lux_many_light,

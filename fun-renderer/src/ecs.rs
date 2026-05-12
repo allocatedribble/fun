@@ -6,7 +6,7 @@ use bevy_ecs::{
 };
 use bevy_transform::components::Transform;
 use fun_scene::{
-    CefSurface, PagePriorityHint, Renderable, SceneStableHistoryKey, SuperResolutionMode,
+    NativeUiSurface, PagePriorityHint, Renderable, SceneStableHistoryKey, SuperResolutionMode,
     UpscalePolicy, ViewportRenderPolicy, VirtualGeometryAuthoring, VirtualGeometryMode,
 };
 
@@ -168,7 +168,7 @@ impl FunVirtualGeometryFlags {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-pub struct FunCefUiLayer {
+pub struct FunNativeUiLayer {
     pub layer_id: u16,
     pub z_index: i16,
     pub gpu_shared_texture_required: bool,
@@ -766,7 +766,7 @@ pub enum RendererExtractSet {
     ExtractRendererComponents,
     ExtractLuxComponents,
     ExtractViewports,
-    ExtractCefSurfaces,
+    ExtractNativeUiSurfaces,
 }
 
 impl RendererExtractSet {
@@ -775,7 +775,7 @@ impl RendererExtractSet {
         Self::ExtractRendererComponents,
         Self::ExtractLuxComponents,
         Self::ExtractViewports,
-        Self::ExtractCefSurfaces,
+        Self::ExtractNativeUiSurfaces,
     ];
 
     #[must_use]
@@ -785,7 +785,7 @@ impl RendererExtractSet {
             Self::ExtractRendererComponents => 20,
             Self::ExtractLuxComponents => 30,
             Self::ExtractViewports => 40,
-            Self::ExtractCefSurfaces => 50,
+            Self::ExtractNativeUiSurfaces => 50,
         }
     }
 
@@ -796,7 +796,7 @@ impl RendererExtractSet {
             Self::ExtractRendererComponents => "extract_renderer_components",
             Self::ExtractLuxComponents => "extract_lux_components",
             Self::ExtractViewports => "extract_viewports",
-            Self::ExtractCefSurfaces => "extract_cef_surfaces",
+            Self::ExtractNativeUiSurfaces => "extract_native_ui_surfaces",
         }
     }
 }
@@ -1169,7 +1169,7 @@ pub struct GpuSceneRevisionTable {
 pub struct FrameGraph {
     pub revision: u64,
     pub node_count: u16,
-    pub cef_gpu_import_nodes: u16,
+    pub native_ui_gpu_import_nodes: u16,
     pub ui_composite_nodes: u16,
     pub super_resolution_nodes: u16,
     pub gi_nodes: u16,
@@ -1183,8 +1183,8 @@ impl FrameGraph {
         self.node_count = self.node_count.saturating_add(1);
         self.compiled = true;
         match node {
-            FrameGraphNodeKind::CefGpuImport => {
-                self.cef_gpu_import_nodes = self.cef_gpu_import_nodes.saturating_add(1);
+            FrameGraphNodeKind::NativeUiGpuImport => {
+                self.native_ui_gpu_import_nodes = self.native_ui_gpu_import_nodes.saturating_add(1);
             }
             FrameGraphNodeKind::UiComposite => {
                 self.ui_composite_nodes = self.ui_composite_nodes.saturating_add(1);
@@ -1215,7 +1215,7 @@ pub enum RendererDeltaKind {
     EditorSalienceChanged,
     VirtualGeometryAdded,
     RenderableRemoved,
-    CefSurfaceChanged,
+    NativeUiSurfaceChanged,
     ViewportChanged,
     UpscalePolicyChanged,
 }
@@ -1234,7 +1234,7 @@ impl RendererDeltaKind {
             Self::EditorSalienceChanged => "editor_salience_changed",
             Self::VirtualGeometryAdded => "virtual_geometry_added",
             Self::RenderableRemoved => "renderable_removed",
-            Self::CefSurfaceChanged => "cef_surface_changed",
+            Self::NativeUiSurfaceChanged => "native_ui_surface_changed",
             Self::ViewportChanged => "viewport_changed",
             Self::UpscalePolicyChanged => "upscale_policy_changed",
         }
@@ -1253,7 +1253,7 @@ pub struct ExtractedSceneDeltas {
     pub changed_editor_salience: u32,
     pub added_virtual_geometry: u32,
     pub removed_renderables: u32,
-    pub changed_cef_surfaces: u32,
+    pub changed_native_ui_surfaces: u32,
     pub changed_viewports: u32,
     pub changed_upscale_policies: u32,
     pub full_scene_graph_clone_count: u32,
@@ -1292,8 +1292,8 @@ impl ExtractedSceneDeltas {
             RendererDeltaKind::RenderableRemoved => {
                 self.removed_renderables = self.removed_renderables.saturating_add(1);
             }
-            RendererDeltaKind::CefSurfaceChanged => {
-                self.changed_cef_surfaces = self.changed_cef_surfaces.saturating_add(1);
+            RendererDeltaKind::NativeUiSurfaceChanged => {
+                self.changed_native_ui_surfaces = self.changed_native_ui_surfaces.saturating_add(1);
             }
             RendererDeltaKind::ViewportChanged => {
                 self.changed_viewports = self.changed_viewports.saturating_add(1);
@@ -1312,7 +1312,7 @@ impl ExtractedSceneDeltas {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FrameGraphComponentTrigger {
-    CefSurface,
+    NativeUiSurface,
     UpscalePolicyDlss,
     UpscalePolicyFsr,
     LuxGiModeHybrid,
@@ -1321,7 +1321,7 @@ pub enum FrameGraphComponentTrigger {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FrameGraphNodeKind {
-    CefGpuImport,
+    NativeUiGpuImport,
     UiComposite,
     DlssSuperResolution,
     FsrSuperResolution,
@@ -1338,11 +1338,11 @@ pub struct FrameGraphComponentRule {
 
 pub const FRAME_GRAPH_COMPONENT_RULES: [FrameGraphComponentRule; 6] = [
     FrameGraphComponentRule {
-        trigger: FrameGraphComponentTrigger::CefSurface,
-        node: FrameGraphNodeKind::CefGpuImport,
+        trigger: FrameGraphComponentTrigger::NativeUiSurface,
+        node: FrameGraphNodeKind::NativeUiGpuImport,
     },
     FrameGraphComponentRule {
-        trigger: FrameGraphComponentTrigger::CefSurface,
+        trigger: FrameGraphComponentTrigger::NativeUiSurface,
         node: FrameGraphNodeKind::UiComposite,
     },
     FrameGraphComponentRule {
@@ -1451,7 +1451,7 @@ pub struct FunRenderCapabilityMatrix {
     pub vulkan: bool,
     pub super_resolution: bool,
     pub frame_generation: bool,
-    pub cef_gpu_shared_textures: bool,
+    pub native_ui_gpu_shared_textures: bool,
 }
 
 impl Default for FunRenderCapabilityMatrix {
@@ -1461,7 +1461,7 @@ impl Default for FunRenderCapabilityMatrix {
             vulkan: true,
             super_resolution: false,
             frame_generation: false,
-            cef_gpu_shared_textures: cfg!(target_os = "windows"),
+            native_ui_gpu_shared_textures: cfg!(target_os = "windows"),
         }
     }
 }
@@ -1548,7 +1548,7 @@ pub enum FunRendererEcsEventKind {
     UpscalerReset,
     DeviceLost,
     DeviceRestored,
-    CefGpuFrameAvailable,
+    NativeUiGpuFrameAvailable,
 }
 
 impl FunRendererEcsEventKind {
@@ -1567,7 +1567,7 @@ impl FunRendererEcsEventKind {
         Self::UpscalerReset,
         Self::DeviceLost,
         Self::DeviceRestored,
-        Self::CefGpuFrameAvailable,
+        Self::NativeUiGpuFrameAvailable,
     ];
 
     #[must_use]
@@ -1587,7 +1587,7 @@ impl FunRendererEcsEventKind {
             Self::UpscalerReset => "upscaler_reset",
             Self::DeviceLost => "device_lost",
             Self::DeviceRestored => "device_restored",
-            Self::CefGpuFrameAvailable => "cef_gpu_frame_available",
+            Self::NativeUiGpuFrameAvailable => "native_ui_gpu_frame_available",
         }
     }
 }
@@ -1707,12 +1707,12 @@ pub fn extract_viewports(
     }
 }
 
-pub fn extract_cef_surfaces(
-    query: Query<&CefSurface, Changed<CefSurface>>,
+pub fn extract_native_ui_surfaces(
+    query: Query<&NativeUiSurface, Changed<NativeUiSurface>>,
     mut deltas: ResMut<ExtractedSceneDeltas>,
 ) {
     for _ in query.iter() {
-        deltas.record(RendererDeltaKind::CefSurfaceChanged);
+        deltas.record(RendererDeltaKind::NativeUiSurfaceChanged);
     }
 }
 
@@ -1804,7 +1804,7 @@ pub fn update_motion_vectors(
 }
 
 pub fn build_frame_graph(
-    cef_surfaces: Query<&CefSurface>,
+    native_ui_surfaces: Query<&NativeUiSurface>,
     upscale_policies: Query<&UpscalePolicy>,
     gi_modes: Query<&LuxGiMode>,
     virtual_geometry: Query<&VirtualGeometryAuthoring>,
@@ -1812,8 +1812,8 @@ pub fn build_frame_graph(
 ) {
     *frame_graph = FrameGraph::default();
 
-    if !cef_surfaces.is_empty() {
-        frame_graph.compile_from_rule(FrameGraphNodeKind::CefGpuImport);
+    if !native_ui_surfaces.is_empty() {
+        frame_graph.compile_from_rule(FrameGraphNodeKind::NativeUiGpuImport);
         frame_graph.compile_from_rule(FrameGraphNodeKind::UiComposite);
     }
 
@@ -2302,7 +2302,7 @@ mod tests {
                 page_priority: PagePriorityHint::WorldCritical,
                 dynamic_policy: fun_scene::DynamicGeometryPolicy::StaticOnly,
             },
-            CefSurface::default(),
+            NativeUiSurface::default(),
             UpscalePolicy {
                 sr: SuperResolutionMode::Dlss,
                 ..Default::default()
@@ -2314,7 +2314,7 @@ mod tests {
         schedule.add_systems(
             (
                 update_page_requests,
-                extract_cef_surfaces,
+                extract_native_ui_surfaces,
                 build_frame_graph,
                 execute_frame_graph,
             )
@@ -2332,7 +2332,7 @@ mod tests {
         assert_eq!(gpu_scene.pages.highest_priority, u8::MAX);
         let frame_graph = world.resource::<FrameGraph>();
         assert!(frame_graph.compiled);
-        assert_eq!(frame_graph.cef_gpu_import_nodes, 1);
+        assert_eq!(frame_graph.native_ui_gpu_import_nodes, 1);
         assert_eq!(frame_graph.ui_composite_nodes, 1);
         assert_eq!(frame_graph.super_resolution_nodes, 1);
         assert_eq!(frame_graph.gi_nodes, 1);

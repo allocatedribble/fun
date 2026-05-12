@@ -20,7 +20,7 @@ use crate::quality::{LuxQualitySettings, LuxQualityTier};
 use crate::volumetric::FunLuxVolumetricSettings;
 
 pub const FUN_LUX_FRAME_PLAN_SCHEMA_VERSION: u16 = 1;
-pub const LUX_RESOURCE_INTENT_KIND_COUNT: usize = 17;
+pub const LUX_RESOURCE_INTENT_KIND_COUNT: usize = 22;
 
 // ============================================================================
 // Section 1 — Scene plan (per-scene record)
@@ -135,7 +135,7 @@ impl LuxSceneFramePlan {
 }
 
 // ============================================================================
-// Section 2 — 17-variant LuxResourceIntent
+// Section 2 — 22-variant LuxResourceIntent
 // ============================================================================
 
 /// Typed lux resource intent. The renderer reads the variant
@@ -180,11 +180,31 @@ pub enum LuxResourceIntent {
         stable_id: &'static str,
         page_count: u32,
     },
+    VoxelShadowPageTable {
+        stable_id: &'static str,
+        page_count: u32,
+    },
+    VoxelTerrainSdfPool {
+        stable_id: &'static str,
+        page_count: u32,
+    },
     SurfaceCache {
         stable_id: &'static str,
         surface_count: u32,
     },
     RadianceCache {
+        stable_id: &'static str,
+        voxel_count: u64,
+    },
+    VoxelTerrainRadianceClipmap {
+        stable_id: &'static str,
+        voxel_count: u64,
+    },
+    VoxelCanopyOpacityClipmap {
+        stable_id: &'static str,
+        voxel_count: u64,
+    },
+    StormExtinctionClipmap {
         stable_id: &'static str,
         voxel_count: u64,
     },
@@ -242,8 +262,13 @@ pub enum LuxResourceIntentKind {
     ShadowRequestBuffer,
     ShadowAtlas,
     VirtualShadowPageTable,
+    VoxelShadowPageTable,
+    VoxelTerrainSdfPool,
     SurfaceCache,
     RadianceCache,
+    VoxelTerrainRadianceClipmap,
+    VoxelCanopyOpacityClipmap,
+    StormExtinctionClipmap,
     ProbeCache,
     ReflectionTraceBuffer,
     DenoiseHistory,
@@ -263,8 +288,13 @@ impl LuxResourceIntentKind {
         Self::ShadowRequestBuffer,
         Self::ShadowAtlas,
         Self::VirtualShadowPageTable,
+        Self::VoxelShadowPageTable,
+        Self::VoxelTerrainSdfPool,
         Self::SurfaceCache,
         Self::RadianceCache,
+        Self::VoxelTerrainRadianceClipmap,
+        Self::VoxelCanopyOpacityClipmap,
+        Self::StormExtinctionClipmap,
         Self::ProbeCache,
         Self::ReflectionTraceBuffer,
         Self::DenoiseHistory,
@@ -285,8 +315,13 @@ impl LuxResourceIntentKind {
             Self::ShadowRequestBuffer => "shadow_request_buffer",
             Self::ShadowAtlas => "shadow_atlas",
             Self::VirtualShadowPageTable => "virtual_shadow_page_table",
+            Self::VoxelShadowPageTable => "voxel_shadow_page_table",
+            Self::VoxelTerrainSdfPool => "voxel_terrain_sdf_pool",
             Self::SurfaceCache => "surface_cache",
             Self::RadianceCache => "radiance_cache",
+            Self::VoxelTerrainRadianceClipmap => "voxel_terrain_radiance_clipmap",
+            Self::VoxelCanopyOpacityClipmap => "voxel_canopy_opacity_clipmap",
+            Self::StormExtinctionClipmap => "storm_extinction_clipmap",
             Self::ProbeCache => "probe_cache",
             Self::ReflectionTraceBuffer => "reflection_trace_buffer",
             Self::DenoiseHistory => "denoise_history",
@@ -311,8 +346,13 @@ impl LuxResourceIntent {
             | Self::ShadowRequestBuffer { stable_id, .. }
             | Self::ShadowAtlas { stable_id, .. }
             | Self::VirtualShadowPageTable { stable_id, .. }
+            | Self::VoxelShadowPageTable { stable_id, .. }
+            | Self::VoxelTerrainSdfPool { stable_id, .. }
             | Self::SurfaceCache { stable_id, .. }
             | Self::RadianceCache { stable_id, .. }
+            | Self::VoxelTerrainRadianceClipmap { stable_id, .. }
+            | Self::VoxelCanopyOpacityClipmap { stable_id, .. }
+            | Self::StormExtinctionClipmap { stable_id, .. }
             | Self::ProbeCache { stable_id, .. }
             | Self::ReflectionTraceBuffer { stable_id, .. }
             | Self::DenoiseHistory { stable_id, .. }
@@ -335,8 +375,17 @@ impl LuxResourceIntent {
             Self::ShadowRequestBuffer { .. } => LuxResourceIntentKind::ShadowRequestBuffer,
             Self::ShadowAtlas { .. } => LuxResourceIntentKind::ShadowAtlas,
             Self::VirtualShadowPageTable { .. } => LuxResourceIntentKind::VirtualShadowPageTable,
+            Self::VoxelShadowPageTable { .. } => LuxResourceIntentKind::VoxelShadowPageTable,
+            Self::VoxelTerrainSdfPool { .. } => LuxResourceIntentKind::VoxelTerrainSdfPool,
             Self::SurfaceCache { .. } => LuxResourceIntentKind::SurfaceCache,
             Self::RadianceCache { .. } => LuxResourceIntentKind::RadianceCache,
+            Self::VoxelTerrainRadianceClipmap { .. } => {
+                LuxResourceIntentKind::VoxelTerrainRadianceClipmap
+            }
+            Self::VoxelCanopyOpacityClipmap { .. } => {
+                LuxResourceIntentKind::VoxelCanopyOpacityClipmap
+            }
+            Self::StormExtinctionClipmap { .. } => LuxResourceIntentKind::StormExtinctionClipmap,
             Self::ProbeCache { .. } => LuxResourceIntentKind::ProbeCache,
             Self::ReflectionTraceBuffer { .. } => LuxResourceIntentKind::ReflectionTraceBuffer,
             Self::DenoiseHistory { .. } => LuxResourceIntentKind::DenoiseHistory,
@@ -518,7 +567,7 @@ mod tests {
     #[test]
     fn schema_versions_are_stable() {
         assert_eq!(FUN_LUX_FRAME_PLAN_SCHEMA_VERSION, 1);
-        assert_eq!(LUX_RESOURCE_INTENT_KIND_COUNT, 17);
+        assert_eq!(LUX_RESOURCE_INTENT_KIND_COUNT, 22);
         assert_eq!(
             LuxResourceIntentKind::ALL.len(),
             LUX_RESOURCE_INTENT_KIND_COUNT,
@@ -613,6 +662,14 @@ mod tests {
                 stable_id: "vshadow_page_table",
                 page_count: 1024,
             },
+            LuxResourceIntent::VoxelShadowPageTable {
+                stable_id: "voxel_shadow_page_table",
+                page_count: 1024,
+            },
+            LuxResourceIntent::VoxelTerrainSdfPool {
+                stable_id: "voxel_terrain_sdf_pool",
+                page_count: 512,
+            },
             LuxResourceIntent::SurfaceCache {
                 stable_id: "surface_cache",
                 surface_count: 256,
@@ -620,6 +677,18 @@ mod tests {
             LuxResourceIntent::RadianceCache {
                 stable_id: "radiance_cache",
                 voxel_count: 1_000_000,
+            },
+            LuxResourceIntent::VoxelTerrainRadianceClipmap {
+                stable_id: "voxel_terrain_radiance_clipmap",
+                voxel_count: 1_000_000,
+            },
+            LuxResourceIntent::VoxelCanopyOpacityClipmap {
+                stable_id: "voxel_canopy_opacity_clipmap",
+                voxel_count: 250_000,
+            },
+            LuxResourceIntent::StormExtinctionClipmap {
+                stable_id: "storm_extinction_clipmap",
+                voxel_count: 250_000,
             },
             LuxResourceIntent::ProbeCache {
                 stable_id: "probe_cache",

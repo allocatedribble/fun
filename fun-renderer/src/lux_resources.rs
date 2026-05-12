@@ -97,8 +97,23 @@ pub const fn map_intent_to_resource_type(intent: &LuxResourceIntent) -> FrameGra
         LuxResourceIntent::VirtualShadowPageTable { .. } => {
             FrameGraphResourceType::LuxVirtualShadowPages
         }
+        LuxResourceIntent::VoxelShadowPageTable { .. } => {
+            FrameGraphResourceType::LuxVoxelShadowPageTable
+        }
+        LuxResourceIntent::VoxelTerrainSdfPool { .. } => {
+            FrameGraphResourceType::LuxVoxelTerrainSdfPool
+        }
         LuxResourceIntent::SurfaceCache { .. } => FrameGraphResourceType::LuxSurfaceCache,
         LuxResourceIntent::RadianceCache { .. } => FrameGraphResourceType::LuxRadianceCache,
+        LuxResourceIntent::VoxelTerrainRadianceClipmap { .. } => {
+            FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap
+        }
+        LuxResourceIntent::VoxelCanopyOpacityClipmap { .. } => {
+            FrameGraphResourceType::LuxVoxelCanopyOpacityClipmap
+        }
+        LuxResourceIntent::StormExtinctionClipmap { .. } => {
+            FrameGraphResourceType::LuxStormExtinctionClipmap
+        }
         LuxResourceIntent::ProbeCache { .. } => FrameGraphResourceType::LuxProbeCache,
         LuxResourceIntent::ReflectionTraceBuffer { .. } => {
             FrameGraphResourceType::LuxReflectionBuffer
@@ -129,8 +144,13 @@ pub const fn lifetime_for(resource_type: FrameGraphResourceType) -> LuxResourceL
         FrameGraphResourceType::LuxLightBuffer
         | FrameGraphResourceType::LuxShadowAtlas
         | FrameGraphResourceType::LuxVirtualShadowPages
+        | FrameGraphResourceType::LuxVoxelShadowPageTable
+        | FrameGraphResourceType::LuxVoxelTerrainSdfPool
         | FrameGraphResourceType::LuxSurfaceCache
         | FrameGraphResourceType::LuxRadianceCache
+        | FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap
+        | FrameGraphResourceType::LuxVoxelCanopyOpacityClipmap
+        | FrameGraphResourceType::LuxStormExtinctionClipmap
         | FrameGraphResourceType::LuxProbeCache
         | FrameGraphResourceType::LuxDenoiseHistory
         | FrameGraphResourceType::LuxVolumetricHistory => LuxResourceLifetime::Persistent,

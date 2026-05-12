@@ -1,15 +1,15 @@
-use crate::component_api::{CefFrameToken, RenderStableId};
+use crate::component_api::{NativeUiFrameToken, RenderStableId};
 
-use super::cef::{
-    RendererCefAlphaMode, RendererCefDirtyRect, RendererCefExtent, RendererCefFailClosedReason,
-    RendererCefFrameId, RendererCefImportSyncStatus, RendererCefImportedFrame,
-    RendererCefTransportMode,
+use super::native_ui::{
+    RendererNativeUiAlphaMode, RendererNativeUiDirtyRect, RendererNativeUiExtent,
+    RendererNativeUiFailClosedReason, RendererNativeUiFrameId, RendererNativeUiImportSyncStatus,
+    RendererNativeUiImportedFrame, RendererNativeUiTransportMode,
 };
 
-pub const CEF_PRODUCER_SCHEMA_VERSION: u16 = 1;
+pub const NATIVE_UI_PRODUCER_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CefProducerSubmissionState {
+pub enum NativeUiProducerSubmissionState {
     Submitted,
     Replaced,
     Aged,
@@ -17,7 +17,7 @@ pub enum CefProducerSubmissionState {
     Rejected,
 }
 
-impl CefProducerSubmissionState {
+impl NativeUiProducerSubmissionState {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -31,7 +31,7 @@ impl CefProducerSubmissionState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CefProducerRejection {
+pub enum NativeUiProducerRejection {
     UnknownProducer,
     StaleSubmission,
     InvalidFrameId,
@@ -39,7 +39,7 @@ pub enum CefProducerRejection {
     NonGpuTransportRejected,
 }
 
-impl CefProducerRejection {
+impl NativeUiProducerRejection {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -53,43 +53,43 @@ impl CefProducerRejection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CefProducerSubmission {
+pub struct NativeUiProducerSubmission {
     pub producer: RenderStableId,
-    pub frame: RendererCefImportedFrame,
+    pub frame: RendererNativeUiImportedFrame,
 }
 
-impl CefProducerSubmission {
+impl NativeUiProducerSubmission {
     #[must_use]
-    pub const fn new(producer: RenderStableId, frame: RendererCefImportedFrame) -> Self {
+    pub const fn new(producer: RenderStableId, frame: RendererNativeUiImportedFrame) -> Self {
         Self { producer, frame }
     }
 
     #[must_use]
-    pub const fn token(self, fence_value: u64) -> CefFrameToken {
-        CefFrameToken::new(self.producer, self.frame.frame_id.0, fence_value)
+    pub const fn token(self, fence_value: u64) -> NativeUiFrameToken {
+        NativeUiFrameToken::new(self.producer, self.frame.frame_id.0, fence_value)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CefProducerEntry {
+pub struct NativeUiProducerEntry {
     pub producer: RenderStableId,
-    pub latest_frame: Option<RendererCefImportedFrame>,
-    pub latest_token: CefFrameToken,
-    pub last_consumed_frame_id: RendererCefFrameId,
+    pub latest_frame: Option<RendererNativeUiImportedFrame>,
+    pub latest_token: NativeUiFrameToken,
+    pub last_consumed_frame_id: RendererNativeUiFrameId,
     pub submitted_frame_count: u64,
     pub replaced_frame_count: u64,
     pub aged_frame_count: u64,
     pub rejected_count: u64,
 }
 
-impl CefProducerEntry {
+impl NativeUiProducerEntry {
     #[must_use]
     pub const fn new(producer: RenderStableId) -> Self {
         Self {
             producer,
             latest_frame: None,
-            latest_token: CefFrameToken::INVALID,
-            last_consumed_frame_id: RendererCefFrameId::INVALID,
+            latest_token: NativeUiFrameToken::INVALID,
+            last_consumed_frame_id: RendererNativeUiFrameId::INVALID,
             submitted_frame_count: 0,
             replaced_frame_count: 0,
             aged_frame_count: 0,
@@ -100,22 +100,22 @@ impl CefProducerEntry {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
-pub struct CefProducerEvents {
+pub struct NativeUiProducerEvents {
     schema_version: u16,
     next_fence_value: u64,
-    entries: Vec<CefProducerEntry>,
+    entries: Vec<NativeUiProducerEntry>,
     aged_frames: u64,
     replaced_frames: u64,
     rejected_submissions: u64,
     submitted_frames: u64,
-    last_submission_state: Option<CefProducerSubmissionState>,
+    last_submission_state: Option<NativeUiProducerSubmissionState>,
 }
 
-impl CefProducerEvents {
+impl NativeUiProducerEvents {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            schema_version: CEF_PRODUCER_SCHEMA_VERSION,
+            schema_version: NATIVE_UI_PRODUCER_SCHEMA_VERSION,
             next_fence_value: 1,
             entries: Vec::new(),
             aged_frames: 0,
@@ -126,9 +126,9 @@ impl CefProducerEvents {
         }
     }
 
-    pub fn register_producer(&mut self, producer: RenderStableId) -> &mut CefProducerEntry {
+    pub fn register_producer(&mut self, producer: RenderStableId) -> &mut NativeUiProducerEntry {
         if !self.entries.iter().any(|entry| entry.producer == producer) {
-            self.entries.push(CefProducerEntry::new(producer));
+            self.entries.push(NativeUiProducerEntry::new(producer));
         }
         self.entries
             .iter_mut()
@@ -138,27 +138,33 @@ impl CefProducerEvents {
 
     pub fn submit(
         &mut self,
-        submission: CefProducerSubmission,
-    ) -> Result<CefFrameToken, CefProducerRejection> {
+        submission: NativeUiProducerSubmission,
+    ) -> Result<NativeUiFrameToken, NativeUiProducerRejection> {
         if !submission.producer.is_valid() {
             self.rejected_submissions = self.rejected_submissions.saturating_add(1);
-            self.last_submission_state = Some(CefProducerSubmissionState::Rejected);
-            return Err(CefProducerRejection::UnknownProducer);
+            self.last_submission_state = Some(NativeUiProducerSubmissionState::Rejected);
+            return Err(NativeUiProducerRejection::UnknownProducer);
         }
         if !submission.frame.frame_id.is_valid() {
-            self.record_rejection_for(submission.producer, CefProducerRejection::InvalidFrameId);
-            return Err(CefProducerRejection::InvalidFrameId);
+            self.record_rejection_for(
+                submission.producer,
+                NativeUiProducerRejection::InvalidFrameId,
+            );
+            return Err(NativeUiProducerRejection::InvalidFrameId);
         }
         if !submission.frame.extent.is_valid() {
-            self.record_rejection_for(submission.producer, CefProducerRejection::InvalidExtent);
-            return Err(CefProducerRejection::InvalidExtent);
+            self.record_rejection_for(
+                submission.producer,
+                NativeUiProducerRejection::InvalidExtent,
+            );
+            return Err(NativeUiProducerRejection::InvalidExtent);
         }
         if !submission.frame.transport.is_gpu_transport() {
             self.record_rejection_for(
                 submission.producer,
-                CefProducerRejection::NonGpuTransportRejected,
+                NativeUiProducerRejection::NonGpuTransportRejected,
             );
-            return Err(CefProducerRejection::NonGpuTransportRejected);
+            return Err(NativeUiProducerRejection::NonGpuTransportRejected);
         }
 
         let fence_value = self.next_fence_value;
@@ -184,8 +190,8 @@ impl CefProducerEvents {
         };
         if stale {
             self.rejected_submissions = self.rejected_submissions.saturating_add(1);
-            self.last_submission_state = Some(CefProducerSubmissionState::Rejected);
-            return Err(CefProducerRejection::StaleSubmission);
+            self.last_submission_state = Some(NativeUiProducerSubmissionState::Rejected);
+            return Err(NativeUiProducerRejection::StaleSubmission);
         }
         if replaced {
             self.replaced_frames = self.replaced_frames.saturating_add(1);
@@ -193,36 +199,36 @@ impl CefProducerEvents {
         self.submitted_frames = self.submitted_frames.saturating_add(1);
         self.next_fence_value = self.next_fence_value.saturating_add(1);
         self.last_submission_state = Some(if replaced {
-            CefProducerSubmissionState::Replaced
+            NativeUiProducerSubmissionState::Replaced
         } else {
-            CefProducerSubmissionState::Submitted
+            NativeUiProducerSubmissionState::Submitted
         });
         Ok(token)
     }
 
-    pub fn consume_latest(&mut self, producer: RenderStableId) -> CefProducerConsumeOutcome {
+    pub fn consume_latest(&mut self, producer: RenderStableId) -> NativeUiProducerConsumeOutcome {
         let Some(entry) = self
             .entries
             .iter_mut()
             .find(|entry| entry.producer == producer)
         else {
-            return CefProducerConsumeOutcome::ProducerUnknown;
+            return NativeUiProducerConsumeOutcome::ProducerUnknown;
         };
         let Some(frame) = entry.latest_frame else {
-            return CefProducerConsumeOutcome::NoFrameAvailable {
+            return NativeUiProducerConsumeOutcome::NoFrameAvailable {
                 last_consumed_frame_id: entry.last_consumed_frame_id,
                 latest_token: entry.latest_token,
             };
         };
         if frame.frame_id <= entry.last_consumed_frame_id {
-            return CefProducerConsumeOutcome::ReusePrevious {
+            return NativeUiProducerConsumeOutcome::ReusePrevious {
                 latest_token: entry.latest_token,
                 last_consumed_frame_id: entry.last_consumed_frame_id,
             };
         }
         entry.last_consumed_frame_id = frame.frame_id;
-        self.last_submission_state = Some(CefProducerSubmissionState::Consumed);
-        CefProducerConsumeOutcome::FreshFrame {
+        self.last_submission_state = Some(NativeUiProducerSubmissionState::Consumed);
+        NativeUiProducerConsumeOutcome::FreshFrame {
             frame,
             token: entry.latest_token,
         }
@@ -246,18 +252,18 @@ impl CefProducerEvents {
         }
         if aged > 0 {
             self.aged_frames = self.aged_frames.saturating_add(aged);
-            self.last_submission_state = Some(CefProducerSubmissionState::Aged);
+            self.last_submission_state = Some(NativeUiProducerSubmissionState::Aged);
         }
         aged
     }
 
     #[must_use]
-    pub fn entry(&self, producer: RenderStableId) -> Option<&CefProducerEntry> {
+    pub fn entry(&self, producer: RenderStableId) -> Option<&NativeUiProducerEntry> {
         self.entries.iter().find(|entry| entry.producer == producer)
     }
 
     #[must_use]
-    pub fn entries(&self) -> &[CefProducerEntry] {
+    pub fn entries(&self) -> &[NativeUiProducerEntry] {
         &self.entries
     }
 
@@ -287,57 +293,63 @@ impl CefProducerEvents {
     }
 
     #[must_use]
-    pub const fn last_submission_state(&self) -> Option<CefProducerSubmissionState> {
+    pub const fn last_submission_state(&self) -> Option<NativeUiProducerSubmissionState> {
         self.last_submission_state
     }
 
-    fn record_rejection_for(&mut self, producer: RenderStableId, _reason: CefProducerRejection) {
+    fn record_rejection_for(
+        &mut self,
+        producer: RenderStableId,
+        _reason: NativeUiProducerRejection,
+    ) {
         let entry = self.register_producer(producer);
         entry.rejected_count = entry.rejected_count.saturating_add(1);
         self.rejected_submissions = self.rejected_submissions.saturating_add(1);
-        self.last_submission_state = Some(CefProducerSubmissionState::Rejected);
+        self.last_submission_state = Some(NativeUiProducerSubmissionState::Rejected);
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CefProducerConsumeOutcome {
+pub enum NativeUiProducerConsumeOutcome {
     FreshFrame {
-        frame: RendererCefImportedFrame,
-        token: CefFrameToken,
+        frame: RendererNativeUiImportedFrame,
+        token: NativeUiFrameToken,
     },
     ReusePrevious {
-        latest_token: CefFrameToken,
-        last_consumed_frame_id: RendererCefFrameId,
+        latest_token: NativeUiFrameToken,
+        last_consumed_frame_id: RendererNativeUiFrameId,
     },
     NoFrameAvailable {
-        last_consumed_frame_id: RendererCefFrameId,
-        latest_token: CefFrameToken,
+        last_consumed_frame_id: RendererNativeUiFrameId,
+        latest_token: NativeUiFrameToken,
     },
     ProducerUnknown,
 }
 
-impl CefProducerConsumeOutcome {
+impl NativeUiProducerConsumeOutcome {
     #[must_use]
-    pub const fn import_sync_status(self) -> RendererCefImportSyncStatus {
+    pub const fn import_sync_status(self) -> RendererNativeUiImportSyncStatus {
         match self {
-            Self::FreshFrame { .. } => RendererCefImportSyncStatus::CopiedIntoRendererTexture,
-            Self::ReusePrevious { .. } => RendererCefImportSyncStatus::ReusedPreviousFrame,
+            Self::FreshFrame { .. } => RendererNativeUiImportSyncStatus::CopiedIntoRendererTexture,
+            Self::ReusePrevious { .. } => RendererNativeUiImportSyncStatus::ReusedPreviousFrame,
             Self::NoFrameAvailable { .. } | Self::ProducerUnknown => {
-                RendererCefImportSyncStatus::NotImported
+                RendererNativeUiImportSyncStatus::NotImported
             }
         }
     }
 
     #[must_use]
-    pub const fn fail_closed_reason(self) -> Option<RendererCefFailClosedReason> {
+    pub const fn fail_closed_reason(self) -> Option<RendererNativeUiFailClosedReason> {
         match self {
-            Self::ProducerUnknown => Some(RendererCefFailClosedReason::SharedTextureUnavailable),
+            Self::ProducerUnknown => {
+                Some(RendererNativeUiFailClosedReason::SharedTextureUnavailable)
+            }
             _ => None,
         }
     }
 
     #[must_use]
-    pub const fn frame(self) -> Option<RendererCefImportedFrame> {
+    pub const fn frame(self) -> Option<RendererNativeUiImportedFrame> {
         match self {
             Self::FreshFrame { frame, .. } => Some(frame),
             _ => None,
@@ -345,7 +357,7 @@ impl CefProducerConsumeOutcome {
     }
 
     #[must_use]
-    pub const fn token(self) -> CefFrameToken {
+    pub const fn token(self) -> NativeUiFrameToken {
         match self {
             Self::FreshFrame { token, .. }
             | Self::ReusePrevious {
@@ -356,7 +368,7 @@ impl CefProducerConsumeOutcome {
                 latest_token: token,
                 ..
             } => token,
-            Self::ProducerUnknown => CefFrameToken::INVALID,
+            Self::ProducerUnknown => NativeUiFrameToken::INVALID,
         }
     }
 }
@@ -372,18 +384,18 @@ pub struct GpuSubmissionTimings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GpuSubmissionDirtyRects {
     pub count: u32,
-    pub union: Option<RendererCefDirtyRect>,
+    pub union: Option<RendererNativeUiDirtyRect>,
 }
 
 #[must_use]
 pub fn build_gpu_submission(
     producer: RenderStableId,
     frame_id: u64,
-    extent: RendererCefExtent,
-    alpha_mode: RendererCefAlphaMode,
+    extent: RendererNativeUiExtent,
+    alpha_mode: RendererNativeUiAlphaMode,
     timings: GpuSubmissionTimings,
     dirty: GpuSubmissionDirtyRects,
-) -> CefProducerSubmission {
+) -> NativeUiProducerSubmission {
     let GpuSubmissionTimings {
         callback_timestamp_ns,
         import_begin_timestamp_ns,
@@ -394,12 +406,12 @@ pub fn build_gpu_submission(
         count: dirty_rect_count,
         union: dirty_rect_union,
     } = dirty;
-    CefProducerSubmission::new(
+    NativeUiProducerSubmission::new(
         producer,
-        RendererCefImportedFrame {
-            frame_id: RendererCefFrameId(frame_id),
+        RendererNativeUiImportedFrame {
+            frame_id: RendererNativeUiFrameId(frame_id),
             extent,
-            transport: RendererCefTransportMode::D3d11On12SharedTexture,
+            transport: RendererNativeUiTransportMode::D3d11On12SharedTexture,
             alpha_mode,
             dirty_rect_count,
             dirty_rect_union,
@@ -415,12 +427,12 @@ pub fn build_gpu_submission(
 mod tests {
     use super::*;
 
-    fn submission(producer: u64, frame_id: u64) -> CefProducerSubmission {
+    fn submission(producer: u64, frame_id: u64) -> NativeUiProducerSubmission {
         build_gpu_submission(
             RenderStableId::new(producer),
             frame_id,
-            RendererCefExtent::new(1280, 720),
-            RendererCefAlphaMode::Premultiplied,
+            RendererNativeUiExtent::new(1280, 720),
+            RendererNativeUiAlphaMode::Premultiplied,
             GpuSubmissionTimings {
                 callback_timestamp_ns: 1_000,
                 import_begin_timestamp_ns: 1_500,
@@ -429,14 +441,14 @@ mod tests {
             },
             GpuSubmissionDirtyRects {
                 count: 1,
-                union: Some(RendererCefDirtyRect::new(0, 0, 1280, 720)),
+                union: Some(RendererNativeUiDirtyRect::new(0, 0, 1280, 720)),
             },
         )
     }
 
     #[test]
     fn producer_records_latest_frame_token_with_increasing_fence() {
-        let mut events = CefProducerEvents::new();
+        let mut events = NativeUiProducerEvents::new();
 
         let first = events.submit(submission(7, 1)).expect("first submit");
         let second = events.submit(submission(7, 2)).expect("second submit");
@@ -448,81 +460,84 @@ mod tests {
         assert_eq!(events.replaced_frames(), 1);
         assert_eq!(
             events.last_submission_state(),
-            Some(CefProducerSubmissionState::Replaced)
+            Some(NativeUiProducerSubmissionState::Replaced)
         );
     }
 
     #[test]
     fn consume_latest_returns_fresh_then_reuse_when_no_new_frame() {
-        let mut events = CefProducerEvents::new();
+        let mut events = NativeUiProducerEvents::new();
         events.submit(submission(9, 5)).expect("submit");
 
         let fresh = events.consume_latest(RenderStableId::new(9));
         assert!(matches!(
             fresh,
-            CefProducerConsumeOutcome::FreshFrame { .. }
+            NativeUiProducerConsumeOutcome::FreshFrame { .. }
         ));
         assert_eq!(
             fresh.import_sync_status(),
-            RendererCefImportSyncStatus::CopiedIntoRendererTexture
+            RendererNativeUiImportSyncStatus::CopiedIntoRendererTexture
         );
 
         let reuse = events.consume_latest(RenderStableId::new(9));
         assert!(matches!(
             reuse,
-            CefProducerConsumeOutcome::ReusePrevious { .. }
+            NativeUiProducerConsumeOutcome::ReusePrevious { .. }
         ));
         assert_eq!(
             reuse.import_sync_status(),
-            RendererCefImportSyncStatus::ReusedPreviousFrame
+            RendererNativeUiImportSyncStatus::ReusedPreviousFrame
         );
         assert_eq!(reuse.token().frame_index, 5);
     }
 
     #[test]
     fn unknown_producer_consume_reports_producer_unknown() {
-        let mut events = CefProducerEvents::new();
+        let mut events = NativeUiProducerEvents::new();
         let outcome = events.consume_latest(RenderStableId::new(42));
-        assert_eq!(outcome, CefProducerConsumeOutcome::ProducerUnknown);
+        assert_eq!(outcome, NativeUiProducerConsumeOutcome::ProducerUnknown);
         assert_eq!(
             outcome.import_sync_status(),
-            RendererCefImportSyncStatus::NotImported
+            RendererNativeUiImportSyncStatus::NotImported
         );
         assert_eq!(
             outcome.fail_closed_reason(),
-            Some(RendererCefFailClosedReason::SharedTextureUnavailable)
+            Some(RendererNativeUiFailClosedReason::SharedTextureUnavailable)
         );
     }
 
     #[test]
     fn cpu_on_paint_submission_is_rejected_at_producer_boundary() {
-        let mut events = CefProducerEvents::new();
+        let mut events = NativeUiProducerEvents::new();
         let mut sub = submission(1, 1);
-        sub.frame.transport = RendererCefTransportMode::CpuOnPaint;
+        sub.frame.transport = RendererNativeUiTransportMode::CpuOnPaint;
         let err = events.submit(sub).expect_err("cpu transport must reject");
-        assert_eq!(err, CefProducerRejection::NonGpuTransportRejected);
+        assert_eq!(err, NativeUiProducerRejection::NonGpuTransportRejected);
         assert_eq!(events.rejected_submissions(), 1);
         assert_eq!(events.submitted_frames(), 0);
     }
 
     #[test]
     fn out_of_order_submissions_are_rejected_as_stale_without_overwriting_latest() {
-        let mut events = CefProducerEvents::new();
+        let mut events = NativeUiProducerEvents::new();
         let token_two = events.submit(submission(11, 2)).expect("submit 2");
         let err = events
             .submit(submission(11, 1))
             .expect_err("frame 1 after 2 must be stale");
 
-        assert_eq!(err, CefProducerRejection::StaleSubmission);
+        assert_eq!(err, NativeUiProducerRejection::StaleSubmission);
         let entry = events.entry(RenderStableId::new(11)).expect("entry");
-        assert_eq!(entry.latest_frame.unwrap().frame_id, RendererCefFrameId(2));
+        assert_eq!(
+            entry.latest_frame.unwrap().frame_id,
+            RendererNativeUiFrameId(2)
+        );
         assert_eq!(entry.latest_token, token_two);
         assert_eq!(entry.rejected_count, 1);
     }
 
     #[test]
     fn age_unconsumed_drops_frames_older_than_budget_and_reports_count() {
-        let mut events = CefProducerEvents::new();
+        let mut events = NativeUiProducerEvents::new();
         events.submit(submission(3, 10)).expect("submit");
 
         let aged = events.age_unconsumed(8);
@@ -534,7 +549,7 @@ mod tests {
         assert_eq!(entry.aged_frame_count, 1);
         assert_eq!(
             events.last_submission_state(),
-            Some(CefProducerSubmissionState::Aged)
+            Some(NativeUiProducerSubmissionState::Aged)
         );
     }
 }

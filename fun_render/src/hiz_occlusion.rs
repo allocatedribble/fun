@@ -149,7 +149,7 @@ pub enum FunOccluderClass {
     #[default]
     TinyProp,
     TransparentSurface,
-    CefUi,
+    NativeUi,
 }
 
 impl FunOccluderClass {
@@ -165,7 +165,7 @@ impl FunOccluderClass {
             Self::Particle => "particle",
             Self::TinyProp => "tiny_prop",
             Self::TransparentSurface => "transparent_surface",
-            Self::CefUi => "cef_ui",
+            Self::NativeUi => "native_ui",
         }
     }
 
@@ -300,7 +300,7 @@ pub fn evaluate_occluder(
     if !candidate.opaque
         || matches!(
             candidate.occluder_class,
-            FunOccluderClass::TransparentSurface | FunOccluderClass::CefUi
+            FunOccluderClass::TransparentSurface | FunOccluderClass::NativeUi
         )
     {
         return FunOccluderSelectionDecision::RejectedTransparent;
@@ -944,7 +944,7 @@ const fn occluder_class_score(occluder_class: FunOccluderClass) -> i32 {
         | FunOccluderClass::Particle
         | FunOccluderClass::TinyProp
         | FunOccluderClass::TransparentSurface
-        | FunOccluderClass::CefUi => -2_000,
+        | FunOccluderClass::NativeUi => -2_000,
     }
 }
 

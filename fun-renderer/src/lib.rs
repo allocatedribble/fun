@@ -57,6 +57,7 @@ pub mod dx12_production;
 pub mod dynamic_geometry;
 #[cfg(feature = "bevy_ecs")]
 pub mod ecs;
+pub mod ecs_handoff;
 #[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
 pub mod exposure_pass;
 #[cfg(feature = "bevy_ecs")]
@@ -194,6 +195,8 @@ pub mod vendor_sdk_bridge;
 pub mod virtual_geometry;
 pub mod virtual_shadow;
 
+pub use ecs_handoff::*;
+pub use fun_ecs;
 pub use fun_lux;
 pub use fun_scene;
 pub use parity::*;
@@ -419,10 +422,10 @@ pub enum FunRendererSubsystem {
     VirtualShadows,
     GpuSceneDatabase,
     FrameGraph,
-    PageScheduler,
+    RenderArtifactRealization,
     /// Pass 20+ native rvelte/FUN UI composition is the product UI
-    /// composition path. Legacy CEF composition is demoted to
-    /// `CefRenderRoleStatus::DemotedToLegacyDiagnostic` and rendered
+    /// composition path. Legacy NATIVE_UI composition is demoted to
+    /// `NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic` and rendered
     /// via the same subsystem identity for legacy/diagnostic lanes
     /// only.
     UiComposition,
@@ -438,7 +441,7 @@ impl FunRendererSubsystem {
         Self::VirtualShadows,
         Self::GpuSceneDatabase,
         Self::FrameGraph,
-        Self::PageScheduler,
+        Self::RenderArtifactRealization,
         Self::UiComposition,
         Self::UpscalingFrameGeneration,
         Self::BackendAbstraction,
@@ -453,7 +456,7 @@ impl FunRendererSubsystem {
             Self::VirtualShadows => "virtual_shadows",
             Self::GpuSceneDatabase => "gpu_scene_database",
             Self::FrameGraph => "frame_graph",
-            Self::PageScheduler => "page_scheduler",
+            Self::RenderArtifactRealization => "render_artifact_realization",
             Self::UiComposition => "ui_composition",
             Self::UpscalingFrameGeneration => "upscaling_frame_generation",
             Self::BackendAbstraction => "backend_abstraction",
@@ -556,8 +559,8 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         reusable_model_runtime_allowed: false,
     },
     FunRendererSubsystemDescriptor {
-        stable_id: "fun_renderer.subsystem.page_scheduler",
-        subsystem: FunRendererSubsystem::PageScheduler,
+        stable_id: "fun_renderer.subsystem.render_artifact_realization",
+        subsystem: FunRendererSubsystem::RenderArtifactRealization,
         owner: FunRendererOwner::FunRenderer,
         bevy_role: FunRendererBevyRole::None,
         default_renderer_core: true,
@@ -597,13 +600,13 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
     },
 ];
 
-/// Lib-layer mirror of [`crate::ui::native_adapter::CefRenderRoleStatus`]
+/// Lib-layer mirror of [`crate::ui::native_adapter::NativeUiRenderRoleStatus`]
 /// `DemotedToLegacyDiagnostic`. The native UI adapter owns the
 /// authoritative typed enum; the lib policy carries the same stable
 /// string so the source-of-truth UI policy test can verify the two
 /// layers agree without crossing a feature-gate boundary at compile
 /// time.
-pub const FUN_RENDERER_LIB_LAYER_CEF_ROLE_STATUS: &str = "demoted_to_legacy_diagnostic";
+pub const FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS: &str = "demoted_to_legacy_diagnostic";
 
 /// Lib-layer mirror of [`crate::ui::native_adapter::NATIVE_UI_ADAPTER_PRODUCT_DEFAULT`].
 /// Pass 20 made `fun_ui_render_packet_v1` the canonical product UI
@@ -614,20 +617,20 @@ pub const FUN_RENDERER_LIB_LAYER_NATIVE_RVELTE_PACKET_SCHEMA: &str = "fun_ui_ren
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunRendererUiRuntimePolicy {
-    /// Pass 20 demoted CEF/Svelte from the product UI surface. This
+    /// Pass 20 demoted NATIVE_UI/Svelte from the product UI surface. This
     /// field is `true` to record the demotion explicitly. The product
     /// UI surface is the native rvelte/FUN UI path; see
     /// `native_rvelte_is_product_ui` below and
     /// [`crate::ui::native_adapter::NativeUiProductPolicy::PRODUCT_DEFAULT`]
     /// for the authoritative typed contract.
-    pub cef_svelte_legacy_only: bool,
+    pub native_ui_svelte_legacy_only: bool,
     /// Pass 20+ native rvelte/FUN UI is the product UI surface.
     pub native_rvelte_is_product_ui: bool,
     /// Lib-layer mirror of
-    /// [`crate::ui::native_adapter::CefRenderRoleStatus`] string form.
+    /// [`crate::ui::native_adapter::NativeUiRenderRoleStatus`] string form.
     /// Always equals
-    /// [`FUN_RENDERER_LIB_LAYER_CEF_ROLE_STATUS`].
-    pub cef_role_status: &'static str,
+    /// [`FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS`].
+    pub native_ui_role_status: &'static str,
     /// Lib-layer mirror of
     /// [`crate::ui::native_adapter::NATIVE_UI_ADAPTER_PRODUCT_DEFAULT`].
     /// Always equals
@@ -643,9 +646,9 @@ pub struct FunRendererUiRuntimePolicy {
 }
 
 pub const FUN_RENDERER_UI_RUNTIME_POLICY: FunRendererUiRuntimePolicy = FunRendererUiRuntimePolicy {
-    cef_svelte_legacy_only: true,
+    native_ui_svelte_legacy_only: true,
     native_rvelte_is_product_ui: true,
-    cef_role_status: FUN_RENDERER_LIB_LAYER_CEF_ROLE_STATUS,
+    native_ui_role_status: FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS,
     native_ui_product_packet_schema: FUN_RENDERER_LIB_LAYER_NATIVE_RVELTE_PACKET_SCHEMA,
     bevy_ui_runtime_product_allowed: false,
     bevy_ui_test_only_allowed: true,
@@ -657,15 +660,15 @@ pub const FUN_RENDERER_UI_RUNTIME_POLICY: FunRendererUiRuntimePolicy = FunRender
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FunRendererCefRuntimePolicy {
+pub struct FunRendererNativeUiRuntimePolicy {
     pub gpu_shared_texture_required: bool,
     pub cpu_on_paint_runtime_fallback_allowed: bool,
     pub cpu_golden_fixture_test_only_allowed: bool,
     pub failure_mode: &'static str,
 }
 
-pub const FUN_RENDERER_CEF_RUNTIME_POLICY: FunRendererCefRuntimePolicy =
-    FunRendererCefRuntimePolicy {
+pub const FUN_RENDERER_NATIVE_UI_RUNTIME_POLICY: FunRendererNativeUiRuntimePolicy =
+    FunRendererNativeUiRuntimePolicy {
         gpu_shared_texture_required: true,
         cpu_on_paint_runtime_fallback_allowed: false,
         cpu_golden_fixture_test_only_allowed: true,
@@ -729,7 +732,7 @@ pub struct FunRendererFrameGenerationContract {
     pub present_time_resource_lifetimes_required: bool,
     pub editor_viewports_sr_capable_where_supported: bool,
     pub editor_viewports_fg_capable_where_supported: bool,
-    pub cef_text_readability_required: bool,
+    pub native_ui_text_readability_required: bool,
 }
 
 pub const FUN_RENDERER_FRAME_GENERATION_CONTRACT: FunRendererFrameGenerationContract =
@@ -741,7 +744,7 @@ pub const FUN_RENDERER_FRAME_GENERATION_CONTRACT: FunRendererFrameGenerationCont
         present_time_resource_lifetimes_required: true,
         editor_viewports_sr_capable_where_supported: true,
         editor_viewports_fg_capable_where_supported: true,
-        cef_text_readability_required: true,
+        native_ui_text_readability_required: true,
     };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -848,7 +851,7 @@ pub enum FunRendererFrameGraphStage {
     VirtualShadows,
     Lighting,
     UpscalingFrameGeneration,
-    CefComposition,
+    NativeUiComposition,
     Present,
 }
 
@@ -859,7 +862,7 @@ impl FunRendererFrameGraphStage {
         Self::VirtualShadows,
         Self::Lighting,
         Self::UpscalingFrameGeneration,
-        Self::CefComposition,
+        Self::NativeUiComposition,
         Self::Present,
     ];
 
@@ -871,7 +874,7 @@ impl FunRendererFrameGraphStage {
             Self::VirtualShadows => 30,
             Self::Lighting => 40,
             Self::UpscalingFrameGeneration => 50,
-            Self::CefComposition => 60,
+            Self::NativeUiComposition => 60,
             Self::Present => 70,
         }
     }
@@ -884,7 +887,7 @@ impl FunRendererFrameGraphStage {
             Self::VirtualShadows => "virtual_shadows",
             Self::Lighting => "lighting",
             Self::UpscalingFrameGeneration => "upscaling_frame_generation",
-            Self::CefComposition => "cef_composition",
+            Self::NativeUiComposition => "native_ui_composition",
             Self::Present => "present",
         }
     }
@@ -990,6 +993,8 @@ pub const FUN_RENDERER_AI_INTERFACE_DESCRIPTORS: [FunRendererAiInterfaceDescript
 pub struct FunRendererProductTopology {
     pub renderer_package: &'static str,
     pub renderer_crate: &'static str,
+    pub ecs_package: &'static str,
+    pub ecs_crate: &'static str,
     pub scene_package: &'static str,
     pub scene_crate: &'static str,
     pub lighting_package: &'static str,
@@ -1001,6 +1006,8 @@ pub struct FunRendererProductTopology {
 pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendererProductTopology {
     renderer_package: FUN_RENDERER_PACKAGE_NAME,
     renderer_crate: FUN_RENDERER_CRATE_NAME,
+    ecs_package: fun_ecs::FUN_ECS_PACKAGE_NAME,
+    ecs_crate: fun_ecs::FUN_ECS_CRATE_NAME,
     scene_package: fun_scene::FUN_SCENE_PACKAGE_NAME,
     scene_crate: fun_scene::FUN_SCENE_CRATE_NAME,
     lighting_package: fun_lux::FUN_LUX_PACKAGE_NAME,
@@ -1195,7 +1202,7 @@ pub const fn owner_for_subsystem(subsystem: FunRendererSubsystem) -> FunRenderer
         | FunRendererSubsystem::VirtualShadows
         | FunRendererSubsystem::GpuSceneDatabase
         | FunRendererSubsystem::FrameGraph
-        | FunRendererSubsystem::PageScheduler
+        | FunRendererSubsystem::RenderArtifactRealization
         | FunRendererSubsystem::UiComposition
         | FunRendererSubsystem::UpscalingFrameGeneration
         | FunRendererSubsystem::BackendAbstraction => FunRendererOwner::FunRenderer,
@@ -1213,6 +1220,8 @@ mod tests {
             "fun-renderer"
         );
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.renderer_crate, "fun_renderer");
+        assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.ecs_package, "fun-ecs");
+        assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.ecs_crate, "fun_ecs");
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.scene_package, "fun-scene");
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.scene_crate, "fun_scene");
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.lighting_package, "fun-lux");
@@ -1276,14 +1285,14 @@ mod tests {
     fn product_ui_policy_prohibits_runtime_bevy_ui() {
         let policy = core::hint::black_box(FUN_RENDERER_UI_RUNTIME_POLICY);
 
-        // Pass 20 demoted CEF/Svelte from the product UI surface; the
+        // Pass 20 demoted NATIVE_UI/Svelte from the product UI surface; the
         // policy must record both the demotion *and* the native
         // rvelte/FUN UI replacement.
-        assert!(policy.cef_svelte_legacy_only);
+        assert!(policy.native_ui_svelte_legacy_only);
         assert!(policy.native_rvelte_is_product_ui);
         assert_eq!(
-            policy.cef_role_status,
-            FUN_RENDERER_LIB_LAYER_CEF_ROLE_STATUS
+            policy.native_ui_role_status,
+            FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS
         );
         assert!(!policy.bevy_ui_runtime_product_allowed);
         assert!(policy.bevy_ui_test_only_allowed);
@@ -1296,21 +1305,21 @@ mod tests {
 
     /// Pass A source-of-truth UI policy test. Pulls in
     /// (1) the lib-layer `FUN_RENDERER_UI_RUNTIME_POLICY` and its
-    ///     `FUN_RENDERER_LIB_LAYER_CEF_ROLE_STATUS` /
+    ///     `FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS` /
     ///     `FUN_RENDERER_LIB_LAYER_NATIVE_RVELTE_PACKET_SCHEMA`
     ///     mirrors,
     /// (2) the workspace-map / subsystem taxonomy
     ///     (`FunRendererSubsystem::UiComposition`), which replaces
-    ///     the older `CefCompositor` variant,
+    ///     the older `NativeUiCompositor` variant,
     /// (3) the rvelte bridge route selection
     ///     (`Tier6RvelteBridgeRouteSelection`), which is the typed
     ///     `--rvelte-bridge=<route>` ingest contract,
     /// (4) the native UI adapter
     ///     (`NativeUiProductPolicy::PRODUCT_DEFAULT`), which is the
     ///     authoritative typed contract, and
-    /// (5) the CEF role status (`CefRenderRoleStatus`), which is
+    /// (5) the NATIVE_UI role status (`NativeUiRenderRoleStatus`), which is
     ///     the typed legacy-status taxonomy,
-    /// and asserts that every source of truth agrees CEF/Svelte is
+    /// and asserts that every source of truth agrees NATIVE_UI/Svelte is
     /// demoted to legacy/diagnostic and the product UI surface is
     /// native rvelte/FUN UI.
     #[cfg(feature = "native_ui_adapter")]
@@ -1318,18 +1327,18 @@ mod tests {
     fn source_of_truth_ui_policy_aligns_across_lib_subsystem_adapter_and_rvelte_bridge() {
         use crate::tier6_native_ui_rendering::Tier6RvelteBridgeRouteSelection;
         use crate::ui::native_adapter::{
-            CefRenderRoleStatus, NATIVE_UI_ADAPTER_PRODUCT_DEFAULT, NativeUiProductPolicy,
+            NATIVE_UI_ADAPTER_PRODUCT_DEFAULT, NativeUiProductPolicy, NativeUiRenderRoleStatus,
         };
 
-        // (1) Lib-layer policy demotes CEF/Svelte and elevates native
+        // (1) Lib-layer policy demotes NATIVE_UI/Svelte and elevates native
         // rvelte.
         let lib_policy = FUN_RENDERER_UI_RUNTIME_POLICY;
-        assert!(lib_policy.cef_svelte_legacy_only);
+        assert!(lib_policy.native_ui_svelte_legacy_only);
         assert!(lib_policy.native_rvelte_is_product_ui);
 
         // (2) Subsystem taxonomy uses `UiComposition`. There is no
-        // `CefCompositor` variant; this `assert!` walks `ALL` so a
-        // re-introduction of a CEF-specific subsystem here would fail
+        // `NativeUiCompositor` variant; this `assert!` walks `ALL` so a
+        // re-introduction of a NATIVE_UI-specific subsystem here would fail
         // the test.
         let ui_composition_present = FunRendererSubsystem::ALL
             .iter()
@@ -1361,8 +1370,8 @@ mod tests {
         let adapter_policy = NativeUiProductPolicy::PRODUCT_DEFAULT;
         assert!(adapter_policy.product_ui_path_is_native_rvelte);
         assert_eq!(
-            adapter_policy.cef_status,
-            CefRenderRoleStatus::DemotedToLegacyDiagnostic
+            adapter_policy.native_ui_status,
+            NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic
         );
         assert!(adapter_policy.fun_render_adapter_owns_packet_ingest);
         assert!(adapter_policy.renderer_packet_validation_required);
@@ -1370,12 +1379,12 @@ mod tests {
         // (5) Lib-layer mirrors must match the typed adapter values
         // exactly, so the two sources of truth cannot drift.
         assert_eq!(
-            lib_policy.cef_role_status,
-            adapter_policy.cef_status.as_str()
+            lib_policy.native_ui_role_status,
+            adapter_policy.native_ui_status.as_str()
         );
         assert_eq!(
-            lib_policy.cef_role_status,
-            CefRenderRoleStatus::DemotedToLegacyDiagnostic.as_str()
+            lib_policy.native_ui_role_status,
+            NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic.as_str()
         );
         assert_eq!(
             lib_policy.native_ui_product_packet_schema,
@@ -1390,28 +1399,28 @@ mod tests {
             NATIVE_UI_ADAPTER_PRODUCT_DEFAULT
         );
         assert_eq!(
-            FUN_RENDERER_LIB_LAYER_CEF_ROLE_STATUS,
-            CefRenderRoleStatus::DemotedToLegacyDiagnostic.as_str()
+            FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS,
+            NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic.as_str()
         );
 
-        // CEF role status enum: every variant the native adapter
+        // NATIVE_UI role status enum: every variant the native adapter
         // exposes must report `is_product_ui_surface() == false`. If
-        // a future variant ever reintroduces CEF as a product UI
+        // a future variant ever reintroduces NATIVE_UI as a product UI
         // surface, this test fails immediately.
         for status in [
-            CefRenderRoleStatus::DemotedToLegacyDiagnostic,
-            CefRenderRoleStatus::ArchivedReferenceOnly,
-            CefRenderRoleStatus::StagedRemoval,
-            CefRenderRoleStatus::LegacyComparisonOnly,
-            CefRenderRoleStatus::TemporaryMigrationBridge,
+            NativeUiRenderRoleStatus::DemotedToLegacyDiagnostic,
+            NativeUiRenderRoleStatus::ArchivedReferenceOnly,
+            NativeUiRenderRoleStatus::StagedRemoval,
+            NativeUiRenderRoleStatus::LegacyComparisonOnly,
+            NativeUiRenderRoleStatus::TemporaryMigrationBridge,
         ] {
             assert!(!status.is_product_ui_surface(), "{}", status.as_str());
         }
     }
 
     #[test]
-    fn cef_runtime_policy_is_gpu_only_for_product_lanes() {
-        let policy = core::hint::black_box(FUN_RENDERER_CEF_RUNTIME_POLICY);
+    fn native_ui_runtime_policy_is_gpu_only_for_product_lanes() {
+        let policy = core::hint::black_box(FUN_RENDERER_NATIVE_UI_RUNTIME_POLICY);
 
         assert!(policy.gpu_shared_texture_required);
         assert!(!policy.cpu_on_paint_runtime_fallback_allowed);
@@ -1438,7 +1447,7 @@ mod tests {
         assert!(contract.present_time_resource_lifetimes_required);
         assert!(contract.editor_viewports_sr_capable_where_supported);
         assert!(contract.editor_viewports_fg_capable_where_supported);
-        assert!(contract.cef_text_readability_required);
+        assert!(contract.native_ui_text_readability_required);
     }
 
     #[test]
@@ -1509,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_graph_keeps_cef_after_reconstruction() {
+    fn frame_graph_keeps_native_ui_after_reconstruction() {
         let mut previous_key = 0;
         for stage in FunRendererFrameGraphStage::ORDER {
             assert!(stage.order_key() > previous_key, "{}", stage.as_str());
@@ -1517,10 +1526,10 @@ mod tests {
         }
 
         assert!(
-            FunRendererFrameGraphStage::CefComposition.order_key()
+            FunRendererFrameGraphStage::NativeUiComposition.order_key()
                 > FunRendererFrameGraphStage::UpscalingFrameGeneration.order_key()
         );
-        assert!(!FunRendererFrameGraphStage::CefComposition.feeds_temporal_reconstruction());
+        assert!(!FunRendererFrameGraphStage::NativeUiComposition.feeds_temporal_reconstruction());
     }
 
     #[test]

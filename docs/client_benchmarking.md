@@ -173,13 +173,13 @@ for the buckets that are currently measurable.
 
 Use the DX12 parity matrix when comparing Windows DX12 against the Vulkan
 control lane. It is measurement-first: every lane is routed through
-`fun-bench client`, every lane records backend, present mode, CEF
+`fun-bench client`, every lane records backend, present mode, NATIVE_UI
 visibility/transport, feature toggles, hardware, Windows build, manual display
 annotations, and metric presence.
 
 The controlling order of operations is in
 [`dx12_implementation_doctrine.md`](dx12_implementation_doctrine.md). In short:
-make DX12 observable, remove hot uploads, harden CEF GPU transport, reduce
+make DX12 observable, remove hot uploads, harden NATIVE_UI GPU transport, reduce
 barrier/descriptor/PSO churn, tune present pacing with evidence, centralize
 native interop, then bring up DLSS Super Resolution and only later consider Ray
 Reconstruction.
@@ -205,8 +205,8 @@ Use the present matrix before changing any Windows present defaults. It expands
 Vulkan/DX12 across `immediate`, `auto_no_vsync`, `fifo`, and `auto_vsync`,
 frame latency `1..4`, and the required decision scenarios:
 
-- `ui_hidden`: presentation floor with CEF hidden.
-- `ui_accelerated`: presentation floor requesting CEF D3D11On12 accelerated
+- `ui_hidden`: presentation floor with NATIVE_UI hidden.
+- `ui_accelerated`: presentation floor requesting NATIVE_UI D3D11On12 accelerated
   paint.
 - `representative_gameplay`: normal `full_runtime` gameplay lane.
 - `solari_cloud_heavy`: `full_runtime` with Solari cinematic target and
@@ -251,27 +251,27 @@ The declared lane vocabulary is:
 - Backend/present: `vulkan_immediate`, `vulkan_fifo`,
   `vulkan_auto_no_vsync`, `dx12_immediate`, `dx12_fifo`,
   `dx12_auto_no_vsync`, and `dx12_mailbox_if_available`.
-- CEF visibility: `ui_hidden`, `ui_static`, `ui_animated`,
+- NATIVE_UI visibility: `ui_hidden`, `ui_static`, `ui_animated`,
   `ui_animated_1440p_surface`, and `ui_animated_4k_surface`.
 - Feature isolation: `clouds_off`, `clouds_on`, `solari_off`, `solari_on`,
   `meshlets_off`, `meshlets_on`, `editor_preview_off`, `editor_preview_on`,
-  `cef_cpu_paint`, and `cef_gpu_accelerated`.
+  `native_ui_cpu_paint`, and `native_ui_gpu_accelerated`.
 - Stream pressure: `stream_pressure_dx12_control_budget2`,
   `stream_pressure_vulkan_control_budget2`, `stream_pressure_dx12_budget1`,
   `stream_pressure_dx12_budget2`, `stream_pressure_dx12_budget4`,
   `stream_pressure_dx12_budget8`, and
   `stream_pressure_dx12_budget2_max_chunks1|2|4|8`.
 
-CEF transport controls used by the matrix and direct client benchmark runs:
+NATIVE_UI transport controls used by the matrix and direct client benchmark runs:
 
-- `--cef-paint-transport disabled|cpu|auto|d3d11on12`
-- `--cef-accelerated-strict`
-- `--cef-gpu-ring-depth 2|3|4|5`
-- `--cef-copy-dirty-rects`
-- `--cef-debug-timings`
+- `--native_ui-paint-transport disabled|cpu|auto|d3d11on12`
+- `--native_ui-accelerated-strict`
+- `--native_ui-gpu-ring-depth 2|3|4|5`
+- `--native_ui-copy-dirty-rects`
+- `--native_ui-debug-timings`
 
 `auto` never fails the app just because accelerated setup is unavailable;
-`--cef-accelerated-strict` is the debugging lane that turns accelerated setup or
+`--native_ui-accelerated-strict` is the debugging lane that turns accelerated setup or
 copy failures into loud errors instead of quiet CPU fallback.
 
 Every matrix writes a compressed protobuf bundle first and rendered views only
@@ -299,14 +299,14 @@ explicit override, and startup logging all exist.
 The required metric contract includes `frame_ns.mean/p50/p95/p99`,
 `fps.mean/p95`, `present_wait_ns.mean/p95`,
 `post_process_gpu_ns`, cloud/Solari/meshlet GPU timings, transient
-resource request/create/reuse/alias counts, render scheduler pressure, and CEF
-transport counters: `cef_on_paint_fps`, `cef_on_accelerated_paint_fps`,
-`cef_cpu_upload_bytes`, `cef_gpu_copy_bytes`, `cef_gpu_copy_ns`,
-`cef_gpu_frame_ready_count`, `cef_gpu_frame_not_ready_count`,
-`cef_gpu_frame_reused_count`, `cef_gpu_frame_blocking_wait_count`,
-`cef_transport_fallback_count`, `cef_published_generation`,
-`cef_sampled_generation`, and `cef_stale_frame_count`. The benchmark bundle also
-records `cef_ui_transport_selection` with the requested transport, selected
+resource request/create/reuse/alias counts, render scheduler pressure, and NATIVE_UI
+transport counters: `native_ui_on_paint_fps`, `native_ui_on_accelerated_paint_fps`,
+`native_ui_cpu_upload_bytes`, `native_ui_gpu_copy_bytes`, `native_ui_gpu_copy_ns`,
+`native_ui_gpu_frame_ready_count`, `native_ui_gpu_frame_not_ready_count`,
+`native_ui_gpu_frame_reused_count`, `native_ui_gpu_frame_blocking_wait_count`,
+`native_ui_transport_fallback_count`, `native_ui_published_generation`,
+`native_ui_sampled_generation`, and `native_ui_stale_frame_count`. The benchmark bundle also
+records `native_ui_transport_selection` with the requested transport, selected
 transport, backend, bridge readiness, CPU fallback policy, ring depth, copy
 mode, strict flag, debug-timing flag, and fallback reason. Render upload
 counters are enabled by `--render-diagnostics` and recorded as
@@ -426,8 +426,8 @@ cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-data-cli --bin fun-data -
 Optional `--pix` and `--presentmon` CSV inputs are parsed into the report as
 external trace evidence. The dashboard marks red/yellow/green regressions,
 prints a likely bottleneck category when DX12 loses, calls out the special case
-where DX12 wins average FPS but loses frame p95, and fails accelerated CEF lanes
-that still report nonzero `cef_cpu_upload_bytes`. It also prints a
+where DX12 wins average FPS but loses frame p95, and fails accelerated NATIVE_UI lanes
+that still report nonzero `native_ui_cpu_upload_bytes`. It also prints a
 vendor-specific follow-up section. NVIDIA experiments are marked eligible only
 when the adapter is NVIDIA and the bottleneck is specific enough to act on; they
 remain optional and must not regress AMD, Intel, or Vulkan lanes.
@@ -445,7 +445,7 @@ CI and agent workflows call `fun-data report <kind>` directly.
 ## DX12 Perf Regression Gate
 
 Use the local gate when baseline and candidate `benchmark.funpb.zst` bundles
-are available from the same hardware, resolution, present mode, CEF mode, and
+are available from the same hardware, resolution, present mode, NATIVE_UI mode, and
 build profile:
 
 ```text
@@ -461,7 +461,7 @@ The checked-in envelope is
 Hard failures are:
 
 - `frame_ns.p95` regresses by more than 10 percent in the required DX12 lane;
-- `cef_cpu_upload_bytes.mean` is nonzero in an accelerated CEF lane;
+- `native_ui_cpu_upload_bytes.mean` is nonzero in an accelerated NATIVE_UI lane;
 - runtime render, compute, or shader pipeline creation appears after warmup.
 
 Warnings do not fail by default. They cover mean FPS regression over 3 percent,
@@ -476,7 +476,7 @@ cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-perf-regres
 
 ## DX12 Doctrine Gate
 
-Use the doctrine gate for hardware-free PR checks and to validate supplied CEF
+Use the doctrine gate for hardware-free PR checks and to validate supplied NATIVE_UI
 summary artifacts:
 
 ```text
@@ -487,8 +487,8 @@ cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- dx12-doctrine-ch
 
 The checker requires `.dx12_change_category`, blocks `dlss-sr` changes until
 `docs\dx12_dlss_boundary_gate.md` says the baseline is ready, denies raw DX12
-HAL extraction outside `fun_render\src\dx12_native`, and fails accelerated CEF
-summary artifacts that report nonzero `cef_cpu_upload_bytes`.
+HAL extraction outside `fun_render\src\dx12_native`, and fails accelerated NATIVE_UI
+summary artifacts that report nonzero `native_ui_cpu_upload_bytes`.
 
 The `.github/workflows/dx12-perf-gates.yml` hardware job is manual and
 non-blocking. It targets self-hosted runners labeled `windows` and `dx12-perf`;
@@ -511,7 +511,7 @@ For parser-only checks against an existing local debug view:
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --input-log target\run-stack\logs\game_client.out.log --dry-run
 ```
 
-For static CPU-vs-GPU CEF visual checks after capturing matched UI screenshots,
+For static CPU-vs-GPU NATIVE_UI visual checks after capturing matched UI screenshots,
 use `fun-data report dx12-parity` or a typed `fun-bench` visual comparison
 subcommand once that lane is wired. Do not add shell-script launchers for this
 analysis path.
@@ -564,7 +564,7 @@ IDs so agents can compare renderer progress without relying on memory:
 
 - `renderer.benchmark.scene.clear_present`
 - `renderer.benchmark.scene.static_scene`
-- `renderer.benchmark.scene.cef_ui_composition`
+- `renderer.benchmark.scene.native_ui_composition`
 - `renderer.benchmark.scene.dx12_vulkan_parity`
 - `renderer.benchmark.scene.upload_stress`
 - `renderer.benchmark.scene.pipeline_warmup_hot_loop`
@@ -581,7 +581,7 @@ Every artifact records active renderer settings, capability facts, git
 revisions, feature flags, optional captures, p50/p95/p99 CPU and GPU frame
 time, pass timings, upload bytes, allocation counts, runtime pipeline creation,
 page faults, evictions, visible/drawn clusters, light/candidate counts, shadow
-page refreshes, GI cache occupancy, CEF import/composite latency, upscaler
+page refreshes, GI cache occupancy, NATIVE_UI import/composite latency, upscaler
 time, FG generated/presented counts, Bevy UI dependency status, and fallback
 reasons.
 
@@ -589,7 +589,7 @@ The hard gates are:
 
 - no unexpected runtime pipeline creation in the hot loop;
 - no silent backend fallback;
-- no product CPU CEF fallback;
+- no product CPU NATIVE_UI fallback;
 - no unbounded page-fault storm;
 - no unsupported frame generation;
 - no hidden product Bevy UI dependency;
@@ -640,7 +640,7 @@ contract is now:
 
 - unset or `auto` resolves to `fun`;
 - explicit `legacy` remains loud and diagnostic-only;
-- product Bevy UI and CPU CEF fallback gates remain closed;
+- product Bevy UI and CPU NATIVE_UI fallback gates remain closed;
 - renderer ownership is recorded before any performance claim is made.
 
 Local validation:

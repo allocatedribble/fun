@@ -60,15 +60,6 @@
     "stream_render_prep_budget_ms": 0,
     "stream_render_prep_max_chunks_per_frame": 0
   },
-  "cef": {
-    "enabled": false,
-    "dx12_accelerated_paint": false,
-    "paint_transport": "default",
-    "accelerated_strict": false,
-    "gpu_ring_depth": 3,
-    "copy_dirty_rects": false,
-    "debug_timings": false
-  },
   "security": {
     "tls_mode": "development"
   }

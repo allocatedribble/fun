@@ -324,7 +324,9 @@ fn base_camera_scene() -> impl FunScene {
 fn cache_movement_input(
     keys: Res<ButtonInput<KeyCode>>,
     host_control: Option<Res<ClientHostControlState>>,
-    #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
+    #[cfg(feature = "native_ui_routes")] ui_input_gate: Option<
+        Res<crate::native_ui_routes::NativeUiGameplayInputGate>,
+    >,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
         ClientScheduleProfiler,
     >,
@@ -341,20 +343,23 @@ fn cache_movement_input(
         return;
     };
 
-    if host_control.as_deref().is_some_and(|control| {
-        control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
-    }) || {
-        #[cfg(feature = "cef_ui")]
+    let native_ui_blocks_movement = {
+        #[cfg(feature = "native_ui_routes")]
         {
             ui_input_gate
                 .as_deref()
                 .is_some_and(|gate| gate.blocks_movement())
         }
-        #[cfg(not(feature = "cef_ui"))]
+        #[cfg(not(feature = "native_ui_routes"))]
         {
             false
         }
-    } {
+    };
+
+    if host_control.as_deref().is_some_and(|control| {
+        control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
+    }) || native_ui_blocks_movement
+    {
         input_state.movement = Vec2::ZERO;
         input_state.jump_queued = false;
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -373,43 +378,46 @@ fn update_cursor_grab(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     host: Option<Res<FunClientHostState>>,
-    #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
+    #[cfg(feature = "native_ui_routes")] ui_input_gate: Option<
+        Res<crate::native_ui_routes::NativeUiGameplayInputGate>,
+    >,
 ) {
-    if host_input_owner_requires_free_cursor(host.as_deref()) || {
-        #[cfg(feature = "cef_ui")]
+    let native_ui_requires_free_cursor = {
+        #[cfg(feature = "native_ui_routes")]
         {
-            cef_ui_gate_requires_free_cursor(ui_input_gate.as_deref())
+            native_ui_gate_requires_free_cursor(ui_input_gate.as_deref())
         }
-        #[cfg(not(feature = "cef_ui"))]
+        #[cfg(not(feature = "native_ui_routes"))]
         {
             false
         }
-    } {
+    };
+    if host_input_owner_requires_free_cursor(host.as_deref()) || native_ui_requires_free_cursor {
         cursor_options.visible = true;
         cursor_options.grab_mode = CursorGrabMode::None;
         return;
     }
 
     let pointer_actions_blocked = {
-        #[cfg(feature = "cef_ui")]
+        #[cfg(feature = "native_ui_routes")]
         {
             ui_input_gate
                 .as_deref()
                 .is_some_and(|gate| gate.blocks_pointer_actions())
         }
-        #[cfg(not(feature = "cef_ui"))]
+        #[cfg(not(feature = "native_ui_routes"))]
         {
             false
         }
     };
     let keyboard_actions_blocked = {
-        #[cfg(feature = "cef_ui")]
+        #[cfg(feature = "native_ui_routes")]
         {
             ui_input_gate
                 .as_deref()
                 .is_some_and(|gate| gate.blocks_keyboard_actions())
         }
-        #[cfg(not(feature = "cef_ui"))]
+        #[cfg(not(feature = "native_ui_routes"))]
         {
             false
         }
@@ -430,13 +438,15 @@ fn host_input_owner_requires_free_cursor(host: Option<&FunClientHostState>) -> b
     host.is_some_and(|host| !matches!(host.state.input_owner, FunInputOwner::Gameplay))
 }
 
-#[cfg(feature = "cef_ui")]
-fn cef_ui_gate_requires_free_cursor(gate: Option<&crate::cef_ui::GameplayInputGate>) -> bool {
+#[cfg(feature = "native_ui_routes")]
+fn native_ui_gate_requires_free_cursor(
+    gate: Option<&crate::native_ui_routes::NativeUiGameplayInputGate>,
+) -> bool {
     gate.is_some_and(|gate| {
         matches!(
             gate.reason,
-            crate::cef_ui::GameplayInputBlockReason::UiModal
-                | crate::cef_ui::GameplayInputBlockReason::TextEntry
+            crate::native_ui_routes::NativeUiGameplayInputBlockReason::UiModal
+                | crate::native_ui_routes::NativeUiGameplayInputBlockReason::TextEntry
         )
     })
 }
@@ -449,7 +459,9 @@ fn apply_look(
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     cursor_options: Single<&CursorOptions>,
     host_control: Option<Res<ClientHostControlState>>,
-    #[cfg(feature = "cef_ui")] ui_input_gate: Option<Res<crate::cef_ui::GameplayInputGate>>,
+    #[cfg(feature = "native_ui_routes")] ui_input_gate: Option<
+        Res<crate::native_ui_routes::NativeUiGameplayInputGate>,
+    >,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))] mut schedule_profiler: ResMut<
         ClientScheduleProfiler,
     >,
@@ -462,20 +474,23 @@ fn apply_look(
 ) {
     crate::frame_profile_start!(started);
     crate::frame_profile_scope!(_scope, frame_profiler, "Update", "apply_look");
-    if host_control.as_deref().is_some_and(|control| {
-        control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
-    }) || {
-        #[cfg(feature = "cef_ui")]
+    let native_ui_blocks_look = {
+        #[cfg(feature = "native_ui_routes")]
         {
             ui_input_gate
                 .as_deref()
                 .is_some_and(|gate| gate.blocks_look())
         }
-        #[cfg(not(feature = "cef_ui"))]
+        #[cfg(not(feature = "native_ui_routes"))]
         {
             false
         }
-    } {
+    };
+
+    if host_control.as_deref().is_some_and(|control| {
+        control.input_owner == game_shared::EditorInputOwner::Editor || control.visual_paused
+    }) || native_ui_blocks_look
+    {
         #[cfg(all(feature = "render_diagnostics", debug_assertions))]
         schedule_profiler.record_elapsed(ClientScheduleSystem::Look, started);
         return;

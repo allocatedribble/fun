@@ -257,7 +257,7 @@ mod tests {
                     priority: ShadowReceiverPriority::High,
                     filter_policy: ShadowFilterPolicy::ContactAware,
                 },
-                CefSurface::product(CefRoute::HUD, UiLayer::Hud),
+                NativeUiSurface::product(NativeUiRoute::HUD, UiLayer::Hud),
                 ViewportUiTarget {
                     viewport: ViewportId::PRIMARY,
                     scale_policy: UiScalePolicy::DpiAware,
@@ -286,16 +286,16 @@ mod tests {
             ShadowInvalidationPolicy::OnTransformOrGeometryChange
         );
 
-        let cef = world
-            .get::<CefSurface>(entity)
-            .expect("CEF surface authoring should be an ECS component");
-        assert!(product_scene_accepts_cef_surface(cef));
+        let native_ui = world
+            .get::<NativeUiSurface>(entity)
+            .expect("NATIVE_UI surface authoring should be an ECS component");
+        assert!(product_scene_accepts_native_ui_surface(native_ui));
 
-        let mut invalid_cef = cef.clone();
-        invalid_cef.gpu_only = false;
+        let mut invalid_native_ui = native_ui.clone();
+        invalid_native_ui.gpu_only = false;
         assert_eq!(
-            invalid_cef.validate_product(),
-            Err(CefSurfaceValidationError::ProductRequiresGpuOnly)
+            invalid_native_ui.validate_product(),
+            Err(NativeUiSurfaceValidationError::ProductRequiresGpuOnly)
         );
 
         let upscale = world

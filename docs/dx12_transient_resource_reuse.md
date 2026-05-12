@@ -123,7 +123,7 @@ pub enum TransientTextureKind {
 
 Use this helper when a logical scratch resource has a stable family. The helper
 uses a safe usage superset for broad families so passes do not fragment reuse by
-toggling a pass-local bit. Native interop resources such as CEF/DLSS textures
+toggling a pass-local bit. Native interop resources such as NATIVE_UI/DLSS textures
 must stay outside this helper until their state and aliasing contracts are
 documented.
 
@@ -148,13 +148,13 @@ a render-graph lifetime map:
 | resource family | first use | last use | pool | native interop |
 |---|---:|---:|---|---|
 | meshlet dummy render target | 35 | 45 | `TinyRenderAttachment` | no |
-| CEF UI ring / Bevy UI image | n/a | n/a | excluded | yes |
+| NATIVE_UI UI ring / Bevy UI image | n/a | n/a | excluded | yes |
 | DLSS SR/RR input/output | n/a | n/a | excluded | yes |
 | Solari RR guide resources | n/a | n/a | excluded | future native DLSS input |
 | readback/capture resources | n/a | n/a | excluded | synchronization/capture |
 | raw DX12 command-list resources | n/a | n/a | excluded | yes |
 
-CEF ring textures, DLSS input/output, Solari RR guide resources,
+NATIVE_UI ring textures, DLSS input/output, Solari RR guide resources,
 readback/capture resources, and any resource touched by a raw DX12 command list
 remain excluded until PIX validation proves their state transitions, fences,
 and native handles cannot be invalidated by aliasing.

@@ -173,8 +173,13 @@ impl From<FrameGraphResourceType> for Tier4ResourceTypeOption {
             FrameGraphResourceType::LuxLightBuffer
             | FrameGraphResourceType::LuxShadowAtlas
             | FrameGraphResourceType::LuxVirtualShadowPages
+            | FrameGraphResourceType::LuxVoxelShadowPageTable
+            | FrameGraphResourceType::LuxVoxelTerrainSdfPool
             | FrameGraphResourceType::LuxSurfaceCache
             | FrameGraphResourceType::LuxRadianceCache
+            | FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap
+            | FrameGraphResourceType::LuxVoxelCanopyOpacityClipmap
+            | FrameGraphResourceType::LuxStormExtinctionClipmap
             | FrameGraphResourceType::LuxProbeCache
             | FrameGraphResourceType::LuxDenoiseHistory
             | FrameGraphResourceType::LuxVolumetricHistory => Self::LuxPersistent,
@@ -1516,8 +1521,13 @@ mod tests {
             FrameGraphResourceType::LuxLightBuffer,
             FrameGraphResourceType::LuxShadowAtlas,
             FrameGraphResourceType::LuxVirtualShadowPages,
+            FrameGraphResourceType::LuxVoxelShadowPageTable,
+            FrameGraphResourceType::LuxVoxelTerrainSdfPool,
             FrameGraphResourceType::LuxSurfaceCache,
             FrameGraphResourceType::LuxRadianceCache,
+            FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap,
+            FrameGraphResourceType::LuxVoxelCanopyOpacityClipmap,
+            FrameGraphResourceType::LuxStormExtinctionClipmap,
             FrameGraphResourceType::LuxProbeCache,
             FrameGraphResourceType::LuxDenoiseHistory,
             FrameGraphResourceType::LuxVolumetricHistory,

@@ -15,11 +15,13 @@
 //!
 //! Feature gate: `fun_renderer_backend`. With the gate off, the
 //! bridge crate stays free of bevy / wgpu / dx12 / vulkan / metal /
-//! cef / swapchain dependencies. With the gate on, this module is
+//! swapchain dependencies. With the gate on, this module is
 //! the *only* place fun-renderer enters the bridge.
 
+use fun_renderer::component_api::RenderTextureAssetId;
 use fun_renderer::ui::native_adapter::{
     NativeUiCompositeLayer, NativeUiRendererDescriptors, NativeUiResourceTable,
+    RendererUiGlyphResource, RendererUiImageFormat, RendererUiImageResource, RendererUiSize,
 };
 use rvelte_fun_render_adapter::{
     FunRenderUiAdapterError, FunRenderUiCapabilityReport, FunRenderUiSubmitResult,
@@ -51,6 +53,7 @@ pub struct FunRendererPacketConsumer {
     composite_into_layer: NativeUiCompositeLayer,
     last_descriptors: Option<NativeUiRendererDescriptors>,
     submit_count: u32,
+    auto_materialize_resources: bool,
 }
 
 impl FunRendererPacketConsumer {
@@ -66,6 +69,7 @@ impl FunRendererPacketConsumer {
             composite_into_layer: NativeUiCompositeLayer::AfterScene,
             last_descriptors: None,
             submit_count: 0,
+            auto_materialize_resources: false,
         }
     }
 
@@ -84,6 +88,17 @@ impl FunRendererPacketConsumer {
     #[must_use]
     pub const fn with_composite_layer(mut self, layer: NativeUiCompositeLayer) -> Self {
         self.composite_into_layer = layer;
+        self
+    }
+
+    /// Enables deterministic placeholder materialization for resource
+    /// deltas before validation. Product runtime callers use this so
+    /// route packets can flow into the native UI descriptor path before
+    /// the final atlas allocator lands; targeted tests keep it disabled
+    /// to prove missing-resource rejection.
+    #[must_use]
+    pub const fn with_auto_materialize_resources(mut self, enabled: bool) -> Self {
+        self.auto_materialize_resources = enabled;
         self
     }
 
@@ -136,6 +151,10 @@ impl FunUiFramePacketConsumer for FunRendererPacketConsumer {
         &mut self,
         frame: &FunUiFramePacket,
     ) -> Result<FunRenderUiSubmitResult, FunRenderUiAdapterError> {
+        if self.auto_materialize_resources {
+            self.materialize_resource_deltas(frame);
+        }
+
         // The rvelte adapter has already run schema / packet
         // validate / capability-limit gates. Hand the packet to
         // fun-renderer's whole-packet lowering directly.
@@ -230,6 +249,41 @@ impl FunUiFramePacketConsumer for FunRendererPacketConsumer {
             transform_pushes,
             opacity_pushes,
         })
+    }
+}
+
+impl FunRendererPacketConsumer {
+    fn materialize_resource_deltas(&mut self, frame: &FunUiFramePacket) {
+        for delta in &frame.resource_deltas {
+            match delta {
+                rvelte_fun_ui_core::FunUiResourceDelta::Glyph(glyph) => {
+                    if self.resource_table.glyph(glyph.glyph_run_id).is_none() {
+                        self.resource_table.record_glyph(
+                            glyph.glyph_run_id,
+                            RendererUiGlyphResource {
+                                atlas_texture: RenderTextureAssetId::default(),
+                                atlas_size: RendererUiSize {
+                                    width: 256,
+                                    height: 256,
+                                },
+                            },
+                        );
+                    }
+                }
+                rvelte_fun_ui_core::FunUiResourceDelta::Image(image) => {
+                    if self.resource_table.image(image.image_id).is_none() {
+                        self.resource_table.record_image(
+                            image.image_id,
+                            RendererUiImageResource {
+                                texture: RenderTextureAssetId::default(),
+                                size: RendererUiSize::from_packet(image.size),
+                                format: RendererUiImageFormat::from_packet(image.format),
+                            },
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 

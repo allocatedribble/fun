@@ -23,7 +23,7 @@ export type RvelteDevIslandDiagnosticCode =
   | 'rvelte.wasm_missing'
   | 'rvelte.manifest_mismatch'
   | 'rvelte.facade_incompatible'
-  | 'rvelte.cef_bridge_unavailable'
+  | 'rvelte.host_bridge_unavailable'
   | 'rvelte.host_payload_invalid';
 
 export type RvelteDevIslandDiagnostic = {
@@ -145,9 +145,9 @@ const diagnosticCatalog = {
     detail: `expected_abi=${RVELTE_DEV_EXPECTED_FACADE_ABI}`,
     next_action: 'Rebuild the rvelte dev panel assets with the matching facade.'
   },
-  'rvelte.cef_bridge_unavailable': {
+  'rvelte.host_bridge_unavailable': {
     severity: 'warn',
-    message: 'CEF host bridge is unavailable.',
+    message: 'Fun host bridge is unavailable.',
     detail: 'host_bridge=missing',
     next_action: 'The panel can run locally, but host forwarding is disabled.'
   },
@@ -212,7 +212,7 @@ export async function mountRvelteDevPanel(
     return { instance: null, diagnostics: [rvelteDevDiagnostic('rvelte.host_payload_invalid')] };
   }
   if (!payload.host_bridge_available) {
-    diagnostics.push(rvelteDevDiagnostic('rvelte.cef_bridge_unavailable'));
+    diagnostics.push(rvelteDevDiagnostic('rvelte.host_bridge_unavailable'));
   }
 
   const module = await importDevPanelModule();

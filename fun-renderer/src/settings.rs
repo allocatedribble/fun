@@ -718,7 +718,7 @@ pub struct RendererCompiledFeatureSupport {
     pub dx12: bool,
     pub vulkan: bool,
     pub metal: bool,
-    pub cef_gpu_only: bool,
+    pub native_ui_gpu_only: bool,
     pub upscaling: bool,
     pub dlss: bool,
     pub fsr: bool,
@@ -740,7 +740,7 @@ impl RendererCompiledFeatureSupport {
         dx12: cfg!(feature = "dx12_native_interop"),
         vulkan: cfg!(feature = "vulkan_backend"),
         metal: cfg!(feature = "metal_backend"),
-        cef_gpu_only: cfg!(feature = "cef_gpu_only"),
+        native_ui_gpu_only: cfg!(feature = "native_ui_gpu_only"),
         upscaling: cfg!(feature = "upscaling"),
         dlss: cfg!(feature = "dlss"),
         fsr: cfg!(feature = "fsr"),
@@ -763,7 +763,7 @@ impl RendererCompiledFeatureSupport {
             dx12: features.dx12,
             vulkan: features.vulkan,
             metal: features.metal,
-            cef_gpu_only: features.cef_gpu_only,
+            native_ui_gpu_only: features.native_ui_gpu_only,
             upscaling: features.upscale,
             dlss: features.dlss,
             fsr: features.fsr,
@@ -836,7 +836,7 @@ pub struct RendererCapabilityFacts {
     pub vram_mb: u32,
     pub display_mode: DisplayMode,
     pub runtime_mode: RendererRuntimeMode,
-    pub cef_gpu_transport_available: bool,
+    pub native_ui_gpu_transport_available: bool,
     pub bindless_supported: bool,
     pub descriptor_indexing_supported: bool,
     pub sampler_feedback_supported: bool,
@@ -860,7 +860,7 @@ impl RendererCapabilityFacts {
             vram_mb: 0,
             display_mode: DisplayMode::Sdr,
             runtime_mode: RendererRuntimeMode::Product,
-            cef_gpu_transport_available: false,
+            native_ui_gpu_transport_available: false,
             bindless_supported: false,
             descriptor_indexing_supported: false,
             sampler_feedback_supported: false,
@@ -881,7 +881,7 @@ impl RendererCapabilityFacts {
         runtime_backend: RuntimeBackendSetting,
         actual_backend: GraphicsBackendSetting,
         runtime_mode: RendererRuntimeMode,
-        cef_gpu_transport_available: bool,
+        native_ui_gpu_transport_available: bool,
     ) -> Self {
         let compiled_features = RendererCompiledFeatureSupport::from_renderer_features(features);
         Self {
@@ -891,7 +891,7 @@ impl RendererCapabilityFacts {
             vram_mb: 0,
             display_mode: DisplayMode::Sdr,
             runtime_mode,
-            cef_gpu_transport_available,
+            native_ui_gpu_transport_available,
             bindless_supported: false,
             descriptor_indexing_supported: false,
             sampler_feedback_supported: false,
@@ -929,7 +929,7 @@ impl RendererCapabilityFacts {
             vram_mb: 16_384,
             display_mode: DisplayMode::Hdr,
             runtime_mode: RendererRuntimeMode::Product,
-            cef_gpu_transport_available: true,
+            native_ui_gpu_transport_available: true,
             bindless_supported: true,
             descriptor_indexing_supported: true,
             sampler_feedback_supported: true,
@@ -959,7 +959,7 @@ impl RendererCapabilityFacts {
                 dx12: true,
                 vulkan: true,
                 metal: true,
-                cef_gpu_only: true,
+                native_ui_gpu_only: true,
                 upscaling: true,
                 dlss: true,
                 fsr: true,
@@ -1044,7 +1044,7 @@ impl RendererSettingKind {
 pub enum UnsupportedRendererSettingReason {
     RuntimeBackendUnavailable,
     GraphicsBackendUnavailable,
-    CefGpuTransportRequired,
+    NativeUiGpuTransportRequired,
     VirtualGeometryUnavailable,
     VirtualShadowsUnavailable,
     ManyLightUnavailable,
@@ -1062,7 +1062,7 @@ impl UnsupportedRendererSettingReason {
         match self {
             Self::RuntimeBackendUnavailable => "runtime_backend_unavailable",
             Self::GraphicsBackendUnavailable => "graphics_backend_unavailable",
-            Self::CefGpuTransportRequired => "cef_gpu_transport_required",
+            Self::NativeUiGpuTransportRequired => "native_ui_gpu_transport_required",
             Self::VirtualGeometryUnavailable => "virtual_geometry_unavailable",
             Self::VirtualShadowsUnavailable => "virtual_shadows_unavailable",
             Self::ManyLightUnavailable => "many_light_unavailable",
@@ -1299,8 +1299,8 @@ impl RendererSettingsCapabilityArtifact {
         );
         let _ = writeln!(
             content,
-            "capability cef_gpu_transport_available={}",
-            selection.capabilities.cef_gpu_transport_available
+            "capability native_ui_gpu_transport_available={}",
+            selection.capabilities.native_ui_gpu_transport_available
         );
         let _ = writeln!(
             content,
@@ -1398,13 +1398,13 @@ pub fn resolve_renderer_settings(
     }
 
     if capabilities.runtime_mode == RendererRuntimeMode::Product
-        && !capabilities.cef_gpu_transport_available
+        && !capabilities.native_ui_gpu_transport_available
     {
         adjustments.push(RendererSettingsAdjustment::new(
             RendererSettingKind::FallbackStrictness,
             FallbackStrictness::ProductFailClosed.as_str(),
             FallbackStrictness::ProductFailClosed.as_str(),
-            UnsupportedRendererSettingReason::CefGpuTransportRequired,
+            UnsupportedRendererSettingReason::NativeUiGpuTransportRequired,
         ));
         selected_internal.fallback_strictness = FallbackStrictness::ProductFailClosed;
     }
@@ -1438,7 +1438,7 @@ pub fn resolve_renderer_settings(
     let benchmark_repro =
         RendererBenchmarkReproSettings::from_selection(selected_user, selected_internal);
     let product_ui_usable = capabilities.runtime_mode != RendererRuntimeMode::Product
-        || capabilities.cef_gpu_transport_available;
+        || capabilities.native_ui_gpu_transport_available;
 
     RendererSettingsSelection {
         schema: RENDERER_SETTINGS_SCHEMA,
@@ -1454,7 +1454,7 @@ pub fn resolve_renderer_settings(
 }
 
 fn default_quality_tier(capabilities: RendererCapabilityFacts) -> RendererQualityTier {
-    if !capabilities.cef_gpu_transport_available || !capabilities.compiled_features.new_core {
+    if !capabilities.native_ui_gpu_transport_available || !capabilities.compiled_features.new_core {
         return RendererQualityTier::Baseline;
     }
     if capabilities.vram_mb >= 12_288
@@ -1983,7 +1983,7 @@ mod tests {
     fn unsupported_vendor_and_rt_settings_are_rejected_with_reasons() {
         let mut capabilities = RendererCapabilityFacts::minimal();
         capabilities.compiled_features.new_core = true;
-        capabilities.cef_gpu_transport_available = true;
+        capabilities.native_ui_gpu_transport_available = true;
         capabilities.upscalers = UpscalerCapabilities::software_only();
         let mut request = RendererSettingsRequest::for_tier(RendererQualityTier::RtAssisted);
         request.user.upscaler = UpscalerSetting::DlssSuperResolution;
@@ -2020,14 +2020,16 @@ mod tests {
     }
 
     #[test]
-    fn product_cef_gpu_transport_fails_closed_in_settings_selection() {
+    fn product_native_ui_gpu_transport_fails_closed_in_settings_selection() {
         let mut capabilities = RendererCapabilityFacts::high_end_dx12_nvidia();
-        capabilities.cef_gpu_transport_available = false;
+        capabilities.native_ui_gpu_transport_available = false;
 
         let selection = select_capability_aware_renderer_defaults(capabilities);
 
         assert!(!selection.product_ui_usable);
-        assert!(selection.has_reason(UnsupportedRendererSettingReason::CefGpuTransportRequired));
+        assert!(
+            selection.has_reason(UnsupportedRendererSettingReason::NativeUiGpuTransportRequired)
+        );
         assert_eq!(
             selection.selected_internal.fallback_strictness,
             FallbackStrictness::ProductFailClosed

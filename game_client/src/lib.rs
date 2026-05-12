@@ -1,13 +1,11 @@
 pub mod ai_presentation;
-#[cfg(all(feature = "cef_ui_dx12_accelerated_paint", not(target_os = "windows")))]
-compile_error!("game_client feature `cef_ui_dx12_accelerated_paint` is Windows-only");
-#[cfg(feature = "cef_ui")]
-pub mod cef_ui;
-#[cfg(all(target_os = "windows", feature = "cef_ui_dx12_accelerated_paint"))]
-pub mod cef_ui_dx12;
+#[cfg(feature = "native_ui_routes")]
+mod alpha_proof;
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
+#[cfg(feature = "native_ui_routes")]
+pub mod native_ui_routes;
 #[cfg(feature = "client-telemetry")]
 pub mod release_telemetry;
 pub mod telemetry_gate;
@@ -884,8 +882,10 @@ impl Plugin for GameClientPlugin {
 
         app.add_plugins(crate::ai_presentation::FunAiClientPresentationPlugin);
 
-        #[cfg(feature = "cef_ui")]
-        app.add_plugins(crate::cef_ui::GameCefUiPlugin);
+        #[cfg(feature = "native_ui_routes")]
+        app.add_plugins(crate::native_ui_routes::GameNativeUiRoutesPlugin);
+        #[cfg(feature = "native_ui_routes")]
+        app.add_systems(Startup, crate::alpha_proof::emit_alpha_render_proof);
 
         if self.options.mode.runs_gameplay_runtime() {
             app.add_plugins((

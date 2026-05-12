@@ -1,7 +1,7 @@
 schema_version: rvelte.generated.manifest.lock.v1
 component_id: diagnostics_log_panel
 generator: rvelte
-generator_version: 0.1.0
+generator_version: 0.0.1
 schema_version_number: 1
 source_hash: fnv64:e8c7eff41c184476
 manifest_hash: fnv64:72fda8f3ce13b37b

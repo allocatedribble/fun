@@ -1,12 +1,12 @@
 use crate::backend::NativeBackend;
 
-use super::cef::{
-    RendererCefCompositorDiagnostics, RendererCefFailClosedReason, RendererCefImportSyncStatus,
-    RendererCefTransportMode,
-};
 use super::composite::{UiCompositeColorPolicy, UiCompositePassDiagnostics};
-use super::dx12_transport::Dx12CefTransportConfig;
-use super::producer::{CefProducerEvents, CefProducerSubmissionState};
+use super::dx12_transport::Dx12NativeUiTransportConfig;
+use super::native_ui::{
+    RendererNativeUiCompositorDiagnostics, RendererNativeUiFailClosedReason,
+    RendererNativeUiImportSyncStatus, RendererNativeUiTransportMode,
+};
+use super::producer::{NativeUiProducerEvents, NativeUiProducerSubmissionState};
 
 pub const UI_TRANSPORT_TELEMETRY_SCHEMA_VERSION: u16 = 1;
 
@@ -51,7 +51,7 @@ impl UiTransportTelemetryMode {
 pub struct UiCpuUploadDebugMode {
     pub enabled: bool,
     pub upload_bytes: u64,
-    pub fallback_reason: Option<RendererCefFailClosedReason>,
+    pub fallback_reason: Option<RendererNativeUiFailClosedReason>,
 }
 
 impl UiCpuUploadDebugMode {
@@ -64,7 +64,7 @@ impl UiCpuUploadDebugMode {
     #[must_use]
     pub const fn enabled_for_diagnostics(
         upload_bytes: u64,
-        fallback_reason: RendererCefFailClosedReason,
+        fallback_reason: RendererNativeUiFailClosedReason,
     ) -> Self {
         Self {
             enabled: true,
@@ -118,8 +118,8 @@ pub struct UiTransportTelemetry {
     pub native_backend: NativeBackend,
     pub gpu_transport_default: bool,
     pub cpu_upload_debug: UiCpuUploadDebugMode,
-    pub last_sync_status: RendererCefImportSyncStatus,
-    pub last_fail_closed_reason: Option<RendererCefFailClosedReason>,
+    pub last_sync_status: RendererNativeUiImportSyncStatus,
+    pub last_fail_closed_reason: Option<RendererNativeUiFailClosedReason>,
     pub callback_to_import_latency_ns: u64,
     pub import_copy_duration_ns: u64,
     pub ui_composite_pass_duration_ns: u64,
@@ -133,7 +133,7 @@ pub struct UiTransportTelemetry {
     pub producer_replaced_frames: u64,
     pub producer_aged_frames: u64,
     pub producer_rejected_submissions: u64,
-    pub last_producer_submission_state: Option<CefProducerSubmissionState>,
+    pub last_producer_submission_state: Option<NativeUiProducerSubmissionState>,
     pub composite_layers_composited: u32,
     pub composite_debug_border_layers: u32,
     pub composite_color_conversion_count: u32,
@@ -147,8 +147,8 @@ impl UiTransportTelemetry {
         mode: UiTransportTelemetryMode,
         native_backend: NativeBackend,
         cpu_upload_debug: UiCpuUploadDebugMode,
-        compositor: &RendererCefCompositorDiagnostics,
-        producer: &CefProducerEvents,
+        compositor: &RendererNativeUiCompositorDiagnostics,
+        producer: &NativeUiProducerEvents,
         composite: UiCompositePassDiagnostics,
     ) -> Self {
         Self {
@@ -211,24 +211,24 @@ impl UiTransportTelemetry {
 
 #[must_use]
 pub fn telemetry_mode_from_compositor(
-    transport: RendererCefTransportMode,
-    bridge_config: Option<Dx12CefTransportConfig>,
+    transport: RendererNativeUiTransportMode,
+    bridge_config: Option<Dx12NativeUiTransportConfig>,
 ) -> UiTransportTelemetryMode {
     match transport {
-        RendererCefTransportMode::Disabled => UiTransportTelemetryMode::Disabled,
-        RendererCefTransportMode::CpuOnPaint => UiTransportTelemetryMode::CpuUploadDebug,
-        RendererCefTransportMode::D3d11On12SharedTexture => match bridge_config {
+        RendererNativeUiTransportMode::Disabled => UiTransportTelemetryMode::Disabled,
+        RendererNativeUiTransportMode::CpuOnPaint => UiTransportTelemetryMode::CpuUploadDebug,
+        RendererNativeUiTransportMode::D3d11On12SharedTexture => match bridge_config {
             Some(config)
                 if matches!(
                     config.bridge_mode,
-                    super::dx12_transport::Dx12CefBridgeMode::D3d12Direct
+                    super::dx12_transport::Dx12NativeUiBridgeMode::D3d12Direct
                 ) =>
             {
                 UiTransportTelemetryMode::Dx12GpuDirect
             }
             _ => UiTransportTelemetryMode::Dx12GpuD3d11On12,
         },
-        RendererCefTransportMode::VulkanExternalMemory => {
+        RendererNativeUiTransportMode::VulkanExternalMemory => {
             UiTransportTelemetryMode::VulkanExternalMemory
         }
     }
@@ -236,19 +236,20 @@ pub fn telemetry_mode_from_compositor(
 
 #[cfg(test)]
 mod tests {
-    use super::super::cef::{RendererCefAlphaMode, RendererCefDirtyRect};
     use super::super::composite::{
         UiCompositeContract, UiCompositePassDiagnostics, UiCompositePlan,
     };
-    use super::super::dx12_transport::Dx12CefBridgeMode;
+    use super::super::dx12_transport::Dx12NativeUiBridgeMode;
+    use super::super::native_ui::{RendererNativeUiAlphaMode, RendererNativeUiDirtyRect};
     use super::super::producer::{
-        CefProducerSubmission, GpuSubmissionDirtyRects, GpuSubmissionTimings, build_gpu_submission,
+        GpuSubmissionDirtyRects, GpuSubmissionTimings, NativeUiProducerSubmission,
+        build_gpu_submission,
     };
     use super::*;
     use crate::component_api::RenderStableId;
 
-    fn empty_compositor_diag() -> RendererCefCompositorDiagnostics {
-        RendererCefCompositorDiagnostics::default()
+    fn empty_compositor_diag() -> RendererNativeUiCompositorDiagnostics {
+        RendererNativeUiCompositorDiagnostics::default()
     }
 
     fn empty_composite_plan() -> UiCompositePlan {
@@ -258,12 +259,12 @@ mod tests {
         )
     }
 
-    fn submission(producer: u64, frame_id: u64) -> CefProducerSubmission {
+    fn submission(producer: u64, frame_id: u64) -> NativeUiProducerSubmission {
         build_gpu_submission(
             RenderStableId::new(producer),
             frame_id,
-            super::super::cef::RendererCefExtent::new(1280, 720),
-            RendererCefAlphaMode::Premultiplied,
+            super::super::native_ui::RendererNativeUiExtent::new(1280, 720),
+            RendererNativeUiAlphaMode::Premultiplied,
             GpuSubmissionTimings {
                 callback_timestamp_ns: 1_000,
                 import_begin_timestamp_ns: 1_500,
@@ -272,7 +273,7 @@ mod tests {
             },
             GpuSubmissionDirtyRects {
                 count: 1,
-                union: Some(RendererCefDirtyRect::new(0, 0, 1280, 720)),
+                union: Some(RendererNativeUiDirtyRect::new(0, 0, 1280, 720)),
             },
         )
     }
@@ -280,8 +281,8 @@ mod tests {
     #[test]
     fn dx12_gpu_transport_is_default_when_d3d11on12_is_active() {
         let mode = telemetry_mode_from_compositor(
-            RendererCefTransportMode::D3d11On12SharedTexture,
-            Some(Dx12CefTransportConfig::default()),
+            RendererNativeUiTransportMode::D3d11On12SharedTexture,
+            Some(Dx12NativeUiTransportConfig::default()),
         );
         assert_eq!(mode, UiTransportTelemetryMode::Dx12GpuD3d11On12);
         assert!(mode.is_gpu_transport());
@@ -292,7 +293,7 @@ mod tests {
     fn cpu_upload_is_never_default_on_dx12_production() {
         let cpu = UiCpuUploadDebugMode::enabled_for_diagnostics(
             1024,
-            RendererCefFailClosedReason::CpuOnPaintRuntimeFallback,
+            RendererNativeUiFailClosedReason::CpuOnPaintRuntimeFallback,
         );
         let err = cpu
             .validate_for_production(NativeBackend::Dx12)
@@ -307,7 +308,7 @@ mod tests {
             NativeBackend::Dx12,
             cpu,
             &empty_compositor_diag(),
-            &CefProducerEvents::new(),
+            &NativeUiProducerEvents::new(),
             UiCompositePassDiagnostics::from_plan(&empty_composite_plan()),
         );
         assert_eq!(
@@ -320,7 +321,7 @@ mod tests {
     fn cpu_upload_debug_mode_must_disclose_bytes_and_fallback_reason() {
         let cpu = UiCpuUploadDebugMode::enabled_for_diagnostics(
             512,
-            RendererCefFailClosedReason::CpuOnPaintRuntimeFallback,
+            RendererNativeUiFailClosedReason::CpuOnPaintRuntimeFallback,
         );
         let telemetry = UiTransportTelemetry {
             schema_version: UI_TRANSPORT_TELEMETRY_SCHEMA_VERSION,
@@ -328,8 +329,10 @@ mod tests {
             native_backend: NativeBackend::Vulkan,
             gpu_transport_default: false,
             cpu_upload_debug: cpu,
-            last_sync_status: RendererCefImportSyncStatus::NotImported,
-            last_fail_closed_reason: Some(RendererCefFailClosedReason::CpuOnPaintRuntimeFallback),
+            last_sync_status: RendererNativeUiImportSyncStatus::NotImported,
+            last_fail_closed_reason: Some(
+                RendererNativeUiFailClosedReason::CpuOnPaintRuntimeFallback,
+            ),
             callback_to_import_latency_ns: 0,
             import_copy_duration_ns: 0,
             ui_composite_pass_duration_ns: 0,
@@ -363,7 +366,7 @@ mod tests {
             NativeBackend::Dx12,
             UiCpuUploadDebugMode::DISABLED,
             &empty_compositor_diag(),
-            &CefProducerEvents::new(),
+            &NativeUiProducerEvents::new(),
             UiCompositePassDiagnostics::from_plan(&empty_composite_plan()),
         );
         assert_eq!(
@@ -374,13 +377,13 @@ mod tests {
 
     #[test]
     fn telemetry_aggregates_compositor_and_producer_metrics() {
-        let mut producer = CefProducerEvents::new();
+        let mut producer = NativeUiProducerEvents::new();
         producer.submit(submission(1, 1)).expect("submit");
         producer.submit(submission(1, 2)).expect("submit");
         let mut compositor = empty_compositor_diag();
         compositor.imported_frame_count = 5;
         compositor.copied_bytes = 1024;
-        compositor.last_sync_status = RendererCefImportSyncStatus::CopiedIntoRendererTexture;
+        compositor.last_sync_status = RendererNativeUiImportSyncStatus::CopiedIntoRendererTexture;
 
         let telemetry = UiTransportTelemetry::from_inputs(
             UiTransportTelemetryMode::Dx12GpuD3d11On12,
@@ -402,10 +405,10 @@ mod tests {
     #[test]
     fn d3d12_direct_bridge_reports_direct_dx12_telemetry_mode() {
         let mode = telemetry_mode_from_compositor(
-            RendererCefTransportMode::D3d11On12SharedTexture,
-            Some(Dx12CefTransportConfig {
-                bridge_mode: Dx12CefBridgeMode::D3d12Direct,
-                ..Dx12CefTransportConfig::default()
+            RendererNativeUiTransportMode::D3d11On12SharedTexture,
+            Some(Dx12NativeUiTransportConfig {
+                bridge_mode: Dx12NativeUiBridgeMode::D3d12Direct,
+                ..Dx12NativeUiTransportConfig::default()
             }),
         );
         assert_eq!(mode, UiTransportTelemetryMode::Dx12GpuDirect);

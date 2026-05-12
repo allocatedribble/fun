@@ -16,11 +16,11 @@ pub const EDITOR_OPERATION_OUTCOME_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EditorIntegrationPolicy {
-    pub cef_svelte_edits_typed_scene_data: bool,
+    pub native_ui_svelte_edits_typed_scene_data: bool,
     pub host_applies_operations_through_fun_scene: bool,
     pub runtime_bevy_ui_allowed: bool,
-    pub cef_gpu_only_required: bool,
-    pub overlays_are_renderer_debug_or_cef_late_composite: bool,
+    pub native_ui_gpu_only_required: bool,
+    pub overlays_are_renderer_debug_or_native_ui_late_composite: bool,
     pub fun_assets_are_declarative: bool,
     pub dynamic_rust_expressions_are_macro_only: bool,
     pub observers_drive_normal_ecs_changes_only: bool,
@@ -29,11 +29,11 @@ pub struct EditorIntegrationPolicy {
 
 impl EditorIntegrationPolicy {
     pub const DEFAULT: Self = Self {
-        cef_svelte_edits_typed_scene_data: true,
+        native_ui_svelte_edits_typed_scene_data: true,
         host_applies_operations_through_fun_scene: true,
         runtime_bevy_ui_allowed: false,
-        cef_gpu_only_required: true,
-        overlays_are_renderer_debug_or_cef_late_composite: true,
+        native_ui_gpu_only_required: true,
+        overlays_are_renderer_debug_or_native_ui_late_composite: true,
         fun_assets_are_declarative: true,
         dynamic_rust_expressions_are_macro_only: true,
         observers_drive_normal_ecs_changes_only: true,
@@ -148,17 +148,17 @@ pub const EDITOR_OPERATION_DESCRIPTORS: [EditorOperationDescriptor; 8] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EditorOverlaySurface {
     RendererDebugPrimitive,
-    CefLateComposite,
+    NativeUiLateComposite,
 }
 
 impl EditorOverlaySurface {
-    pub const ALL: [Self; 2] = [Self::RendererDebugPrimitive, Self::CefLateComposite];
+    pub const ALL: [Self; 2] = [Self::RendererDebugPrimitive, Self::NativeUiLateComposite];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RendererDebugPrimitive => "renderer_debug_primitive",
-            Self::CefLateComposite => "cef_late_composite",
+            Self::NativeUiLateComposite => "native_ui_late_composite",
         }
     }
 }
@@ -246,8 +246,8 @@ pub enum EditorComponentKind {
     VirtualShadowCaster,
     #[serde(alias = "virtual_shadow_receiver")]
     VirtualShadowReceiver,
-    #[serde(alias = "cef_surface")]
-    CefSurface,
+    #[serde(alias = "native_ui_surface")]
+    NativeUiSurface,
     #[serde(alias = "upscale_policy")]
     UpscalePolicy,
     #[serde(alias = "viewport_render_policy")]
@@ -274,7 +274,7 @@ impl EditorComponentKind {
             Self::LuxGiParticipant => "LuxGiParticipant",
             Self::VirtualShadowCaster => "VirtualShadowCaster",
             Self::VirtualShadowReceiver => "VirtualShadowReceiver",
-            Self::CefSurface => "CefSurface",
+            Self::NativeUiSurface => "NativeUiSurface",
             Self::UpscalePolicy => "UpscalePolicy",
             Self::ViewportRenderPolicy => "ViewportRenderPolicy",
             Self::GameplaySalient => "GameplaySalient",
@@ -329,7 +329,7 @@ impl EditorComponentKind {
                 EditorComponentField::ShadowReceiverPriority
                     | EditorComponentField::ShadowFilterPolicy
             ),
-            Self::CefSurface => matches!(field, EditorComponentField::Route),
+            Self::NativeUiSurface => matches!(field, EditorComponentField::Route),
             Self::UpscalePolicy => matches!(
                 field,
                 EditorComponentField::SuperResolution
@@ -1216,14 +1216,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn editor_policy_keeps_cef_svelte_and_fun_scene_authoritative() {
+    fn editor_policy_keeps_native_ui_svelte_and_fun_scene_authoritative() {
         let policy = EditorIntegrationPolicy::DEFAULT;
 
-        assert!(policy.cef_svelte_edits_typed_scene_data);
+        assert!(policy.native_ui_svelte_edits_typed_scene_data);
         assert!(policy.host_applies_operations_through_fun_scene);
         assert!(!policy.runtime_bevy_ui_allowed);
-        assert!(policy.cef_gpu_only_required);
-        assert!(policy.overlays_are_renderer_debug_or_cef_late_composite);
+        assert!(policy.native_ui_gpu_only_required);
+        assert!(policy.overlays_are_renderer_debug_or_native_ui_late_composite);
         assert!(policy.fun_assets_are_declarative);
         assert!(policy.dynamic_rust_expressions_are_macro_only);
     }

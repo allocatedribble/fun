@@ -490,7 +490,7 @@ pub struct TransientResourceDesc {
 pub enum ImportedResourceSource {
     #[default]
     Swapchain,
-    CefGpuSurface,
+    NativeUiGpuSurface,
     VendorSdk,
     ExternalTool,
 }

@@ -27,7 +27,7 @@ use crate::{
     FunSceneManifestRegistry, FunSkyPlugin, FunViewportRegistry, GeometryResidencyManager,
     GiCacheUpdatePriorities, GpuScene, GpuSceneDatabase, HeuristicDebugOverlay, LuxLightPriorities,
     MaterialResidencyManager, MlInferencePriorities, PagePriorities, RenderHeuristicScheduler,
-    RenderPathSignature, RendererCefCompositor, RendererFrameGraph, RendererViews,
+    RenderPathSignature, RendererFrameGraph, RendererNativeUiCompositor, RendererViews,
     ShadingRatePriorities, ShadowPagePriorities, StaticInstanceTable, TextureResidencyManager,
     VirtualGeometryResidency, begin_heuristic_frame,
     bridge::{
@@ -54,7 +54,7 @@ pub enum FunRenderPhaseKind {
     Clouds,
     Solari,
     PostProcess,
-    CefUi,
+    NativeUi,
     DebugOverlay,
 }
 
@@ -71,7 +71,7 @@ impl FunRenderPhaseKind {
             Self::Clouds => "clouds",
             Self::Solari => "solari",
             Self::PostProcess => "post_process",
-            Self::CefUi => "cef_ui",
+            Self::NativeUi => "native_ui",
             Self::DebugOverlay => "debug_overlay",
         }
     }
@@ -276,7 +276,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<ExtractedSceneDeltas>()
         .init_resource::<FrameGraph>()
         .init_resource::<RendererFrameGraph>()
-        .init_resource::<RendererCefCompositor>()
+        .init_resource::<RendererNativeUiCompositor>()
         .init_resource::<RendererViews>()
         .init_resource::<RenderHeuristicScheduler>()
         .init_resource::<PagePriorities>()
@@ -392,7 +392,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         render_app.init_resource::<ExtractedSceneDeltas>();
         render_app.init_resource::<FrameGraph>();
         render_app.init_resource::<RendererFrameGraph>();
-        render_app.init_resource::<RendererCefCompositor>();
+        render_app.init_resource::<RendererNativeUiCompositor>();
         render_app.init_resource::<RendererViews>();
         render_app.init_resource::<RenderHeuristicScheduler>();
         render_app.init_resource::<PagePriorities>();

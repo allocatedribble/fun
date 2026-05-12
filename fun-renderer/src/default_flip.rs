@@ -7,8 +7,8 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    FUN_RENDER_BRIDGE_PACKAGE_NAME, FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
-    FUN_RENDERER_CEF_RUNTIME_POLICY, FUN_RENDERER_CRATE_NAME, FUN_RENDERER_CURRENT_AUTO_RESOLUTION,
+    FUN_RENDER_BRIDGE_PACKAGE_NAME, FUN_RENDERER_AI_OWNER_PACKAGE_NAME, FUN_RENDERER_CRATE_NAME,
+    FUN_RENDERER_CURRENT_AUTO_RESOLUTION, FUN_RENDERER_NATIVE_UI_RUNTIME_POLICY,
     FUN_RENDERER_RUNTIME_BACKEND_ENV, FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME,
     FUN_RENDERER_UI_RUNTIME_POLICY, FunRendererRuntimeBackend, fun_lux,
 };
@@ -149,7 +149,7 @@ pub struct RendererLegacyRetirementPolicy {
     pub legacy_product_backend_allowed: bool,
     pub legacy_diagnostic_backend_allowed: bool,
     pub product_bevy_ui_allowed: bool,
-    pub product_cpu_cef_fallback_allowed: bool,
+    pub product_cpu_native_ui_fallback_allowed: bool,
     pub duplicate_upload_systems_allowed: bool,
     pub duplicate_lighting_shadow_policy_allowed: bool,
     pub stale_transition_feature_flags_allowed: bool,
@@ -160,7 +160,7 @@ pub const RENDERER_LEGACY_RETIREMENT_POLICY: RendererLegacyRetirementPolicy =
         legacy_product_backend_allowed: false,
         legacy_diagnostic_backend_allowed: true,
         product_bevy_ui_allowed: FUN_RENDERER_UI_RUNTIME_POLICY.bevy_ui_runtime_product_allowed,
-        product_cpu_cef_fallback_allowed: FUN_RENDERER_CEF_RUNTIME_POLICY
+        product_cpu_native_ui_fallback_allowed: FUN_RENDERER_NATIVE_UI_RUNTIME_POLICY
             .cpu_on_paint_runtime_fallback_allowed,
         duplicate_upload_systems_allowed: false,
         duplicate_lighting_shadow_policy_allowed: false,
@@ -178,7 +178,7 @@ pub struct RendererDefaultFlipStatus {
     pub legacy_product_backend_allowed: bool,
     pub legacy_diagnostic_backend_allowed: bool,
     pub product_bevy_ui_allowed: bool,
-    pub product_cpu_cef_fallback_allowed: bool,
+    pub product_cpu_native_ui_fallback_allowed: bool,
     pub renderer_core_owner: &'static str,
     pub bridge_owner: &'static str,
     pub scene_owner: &'static str,
@@ -201,8 +201,8 @@ impl RendererDefaultFlipStatus {
             legacy_diagnostic_backend_allowed: RENDERER_LEGACY_RETIREMENT_POLICY
                 .legacy_diagnostic_backend_allowed,
             product_bevy_ui_allowed: RENDERER_LEGACY_RETIREMENT_POLICY.product_bevy_ui_allowed,
-            product_cpu_cef_fallback_allowed: RENDERER_LEGACY_RETIREMENT_POLICY
-                .product_cpu_cef_fallback_allowed,
+            product_cpu_native_ui_fallback_allowed: RENDERER_LEGACY_RETIREMENT_POLICY
+                .product_cpu_native_ui_fallback_allowed,
             renderer_core_owner: FUN_RENDERER_CRATE_NAME,
             bridge_owner: FUN_RENDER_BRIDGE_PACKAGE_NAME,
             scene_owner: FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME,
@@ -251,8 +251,8 @@ impl RendererDefaultFlipArtifact {
         .expect("write to string");
         writeln!(
             content,
-            "product_cpu_cef_fallback_allowed={}",
-            status.product_cpu_cef_fallback_allowed
+            "product_cpu_native_ui_fallback_allowed={}",
+            status.product_cpu_native_ui_fallback_allowed
         )
         .expect("write to string");
         writeln!(
@@ -343,7 +343,7 @@ mod tests {
         assert!(!status.legacy_product_backend_allowed);
         assert!(status.legacy_diagnostic_backend_allowed);
         assert!(!status.product_bevy_ui_allowed);
-        assert!(!status.product_cpu_cef_fallback_allowed);
+        assert!(!status.product_cpu_native_ui_fallback_allowed);
         assert_eq!(status.renderer_core_owner, "fun_renderer");
         assert_eq!(status.lighting_owner, "fun_lux");
         assert_eq!(status.scene_owner, "fun-scene");
@@ -370,7 +370,7 @@ mod tests {
         assert!(
             artifact
                 .content
-                .contains("product_cpu_cef_fallback_allowed=false")
+                .contains("product_cpu_native_ui_fallback_allowed=false")
         );
         assert!(
             artifact

@@ -6,15 +6,15 @@ use bevy_transform::components::Transform;
 use crate::backend::NativeBackend;
 use crate::component_api::{
     AlphaMode, BloomSettings, CameraExposure, CameraHistory, CameraJitter, CameraProjection,
-    CameraRenderTarget, CameraRenderTargetKind, CefHealthState, CefSurface, CefSurfaceHealth,
-    CefTransportMode, ColorGradingSettings, DirectionalLight, ExposureSettings, HdrOutputSettings,
-    LightLayer, MainCamera, MaterialFeatureMask, RenderAabb, RenderBounds, RenderCamera,
-    RenderColor, RenderDirtyFlags, RenderDynamic, RenderExtent2d, RenderLayer, RenderLayerMask,
-    RenderMaterial, RenderMaterialAssetId, RenderMesh, RenderMeshAssetId, RenderObjectId,
-    RenderStableId, RenderStatic, RenderVec3, RenderVisibility, RenderVisibilityState, Renderable,
-    ShadowCaster, ShadowMode, SharpeningSettings, StandardMaterial, TaaSettings,
-    ToneMappingOperator, ToneMappingSettings, UiColorSpace, UiCompositeOrder, UiDebugBorder,
-    UiLayer, UiOpacity, UiSurface, UiTargetRect, UpscalerSettings,
+    CameraRenderTarget, CameraRenderTargetKind, ColorGradingSettings, DirectionalLight,
+    ExposureSettings, HdrOutputSettings, LightLayer, MainCamera, MaterialFeatureMask,
+    NativeUiHealthState, NativeUiSurface, NativeUiSurfaceHealth, NativeUiTransportMode, RenderAabb,
+    RenderBounds, RenderCamera, RenderColor, RenderDirtyFlags, RenderDynamic, RenderExtent2d,
+    RenderLayer, RenderLayerMask, RenderMaterial, RenderMaterialAssetId, RenderMesh,
+    RenderMeshAssetId, RenderObjectId, RenderStableId, RenderStatic, RenderVec3, RenderVisibility,
+    RenderVisibilityState, Renderable, ShadowCaster, ShadowMode, SharpeningSettings,
+    StandardMaterial, TaaSettings, ToneMappingOperator, ToneMappingSettings, UiColorSpace,
+    UiCompositeOrder, UiDebugBorder, UiLayer, UiOpacity, UiSurface, UiTargetRect, UpscalerSettings,
 };
 
 pub const PROOF_SCENE_SCHEMA_VERSION: u16 = 1;
@@ -177,7 +177,7 @@ pub fn spawn_proof_scene(world: &mut World, spec: ProofSceneSpec) -> ProofSceneE
             world
                 .spawn((
                     UiSurface {
-                        surface_id: RenderStableId::new(0xCEFC_0DE0),
+                        surface_id: RenderStableId::new(0xF00D_C0DE),
                         extent: spec.ui_surface_extent,
                     },
                     UiLayer { layer: 4 },
@@ -186,13 +186,13 @@ pub fn spawn_proof_scene(world: &mut World, spec: ProofSceneSpec) -> ProofSceneE
                     UiColorSpace::Linear,
                     UiTargetRect::FULL_WINDOW,
                     UiDebugBorder::OFF,
-                    CefSurface {
-                        surface_id: RenderStableId::new(0xCEFC_0DE0),
-                        transport: CefTransportMode::GpuSharedTexture,
+                    NativeUiSurface {
+                        surface_id: RenderStableId::new(0xF00D_C0DE),
+                        transport: NativeUiTransportMode::GpuSharedTexture,
                         gpu_only: true,
                     },
-                    CefSurfaceHealth {
-                        state: CefHealthState::Healthy,
+                    NativeUiSurfaceHealth {
+                        state: NativeUiHealthState::Healthy,
                     },
                 ))
                 .id(),
@@ -595,8 +595,8 @@ mod tests {
     use crate::backend::WgpuDx12Backend;
     use crate::extraction::{
         RenderStableIdAllocator, RenderWorldExtractionDiagnostics, RenderWorldTables,
-        begin_render_world_extraction_frame, extract_renderer_cef_surfaces,
-        extract_renderer_lights, extract_renderer_post_process_volumes,
+        begin_render_world_extraction_frame, extract_renderer_lights,
+        extract_renderer_native_ui_surfaces, extract_renderer_post_process_volumes,
         extract_renderer_renderables, extract_renderer_ui_surfaces, extract_renderer_views,
         install_render_world_extraction_resources,
     };
@@ -619,7 +619,7 @@ mod tests {
                 extract_renderer_views,
                 extract_renderer_lights,
                 extract_renderer_ui_surfaces,
-                extract_renderer_cef_surfaces,
+                extract_renderer_native_ui_surfaces,
                 extract_renderer_post_process_volumes,
             )
                 .chain(),
@@ -717,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_scene_with_ui_emits_extracted_ui_and_cef_surface_records() {
+    fn proof_scene_with_ui_emits_extracted_ui_and_native_ui_surface_records() {
         let mut app = baseline_app();
         let spec =
             ProofSceneSpec::default().with_kind(ProofSceneKind::SingleStaticMeshWithUiSurface);
@@ -727,7 +727,7 @@ mod tests {
         let tables = app.world().resource::<RenderWorldTables>();
         let counts = tables.table_counts();
         assert_eq!(counts.ui_surfaces, 1);
-        assert_eq!(counts.cef_surfaces, 1);
+        assert_eq!(counts.native_ui_surfaces, 1);
     }
 
     #[test]

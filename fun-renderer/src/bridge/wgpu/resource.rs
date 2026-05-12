@@ -349,13 +349,13 @@ mod tests {
             RendererResourceDescriptor::ExternalTexture(crate::resource::ExternalTextureDesc::new(
                 TextureDesc::new_2d(
                     IrTextureId::new(11),
-                    "cef.shared_texture",
+                    "native_ui.shared_texture",
                     1920,
                     1080,
                     TextureFormat::Rgba8Unorm,
                     TextureUsageFlags::SAMPLED.union(TextureUsageFlags::COPY_DST),
                 ),
-                crate::resource::ExternalTextureProducer::Cef,
+                crate::resource::ExternalTextureProducer::NativeUi,
                 true,
                 false,
             ));
@@ -374,7 +374,7 @@ mod tests {
         );
         assert_eq!(
             renderer_texture_descriptor(external).unwrap().label,
-            Some("cef.shared_texture")
+            Some("native_ui.shared_texture")
         );
         assert_eq!(
             bridge_handle_kind(external),

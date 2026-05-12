@@ -96,6 +96,8 @@ pub const fn pass_role_to_task_class(role: FrameGraphPassRole) -> TaskClass {
         | P::LuxShadowRequests
         | P::LuxVirtualShadowPages
         | P::LuxVirtualShadowFilter
+        | P::LuxVoxelShadowDemandMark
+        | P::LuxVoxelShadowPageBuild
         // Pass C7.2 — typed cloud shadow project / filter
         // / register-layer roles are typed shadow-setup
         // work that runs before the typed render-record
@@ -103,7 +105,8 @@ pub const fn pass_role_to_task_class(role: FrameGraphPassRole) -> TaskClass {
         | P::LuxCloudShadowProject
         | P::LuxCloudShadowFilter
         | P::LuxCloudShadowRegisterLayer
-        | P::LuxGiCacheUpdate => TaskClass::RenderPrepare,
+        | P::LuxGiCacheUpdate
+        | P::LuxVoxelRadianceClipmapUpdate => TaskClass::RenderPrepare,
 
         // Command-buffer recording: imports, upscaler / frame-generation
         // boundary, post-process chain (minus the final-output transform
@@ -114,7 +117,7 @@ pub const fn pass_role_to_task_class(role: FrameGraphPassRole) -> TaskClass {
         // prefilter / downsample / upsample / composite); they all
         // belong on `RenderRecord` like the umbrella `PostProcessExposure`
         // / `PostProcessBloom` roles they refine.
-        P::CefGpuImport
+        P::NativeUiGpuImport
         | P::UiImportPlaceholder
         | P::UpscaleBoundary
         | P::FrameGenerationBoundary
@@ -130,10 +133,14 @@ pub const fn pass_role_to_task_class(role: FrameGraphPassRole) -> TaskClass {
         | P::PostProcessColorGradingLut
         | P::PostProcessSharpening
         | P::LuxDirectLighting
+        | P::LuxVoxelSdfDistantShadowResolve
         | P::LuxGiTrace
         | P::LuxReflectionTrace
+        | P::LuxVoxelTerrainAoResolve
         | P::LuxDenoise
         | P::LuxVolumetricFogInject
+        | P::LuxStormExtinctionInject
+        | P::LuxVoxelCanopyTransmittanceInject
         | P::LuxVolumetricLightInject
         | P::LuxVolumetricTemporalReproject
         | P::LuxVolumetricIntegrate
@@ -161,8 +168,13 @@ pub const fn resource_intent_to_budget_origin(kind: LuxResourceIntentKind) -> Bu
         | K::ShadowRequestBuffer
         | K::ShadowAtlas
         | K::VirtualShadowPageTable
+        | K::VoxelShadowPageTable
+        | K::VoxelTerrainSdfPool
         | K::SurfaceCache
         | K::RadianceCache
+        | K::VoxelTerrainRadianceClipmap
+        | K::VoxelCanopyOpacityClipmap
+        | K::StormExtinctionClipmap
         | K::ProbeCache
         | K::ReflectionTraceBuffer
         | K::DenoiseHistory
@@ -458,10 +470,10 @@ pub enum RendererWorkKind {
     SubmitQueue = 19,
     /// Present the surface.
     PresentSurface = 20,
-    /// Admit visible/required pages.
-    PageSchedulerAdmit = 21,
-    /// Evict or shed optional pages.
-    PageSchedulerEvict = 22,
+    /// Import ECS-derived render artifacts into renderer realization work.
+    ImportEcsRenderArtifacts = 21,
+    /// Retire or shed optional GPU artifact realizations.
+    RetireGpuArtifacts = 22,
     /// Compose a native UI packet.
     NativeUiPacketCompose = 23,
     /// Capture renderer diagnostics.
@@ -494,8 +506,8 @@ impl RendererWorkKind {
             Self::RecordComputePass => "record_compute_pass",
             Self::SubmitQueue => "submit_queue",
             Self::PresentSurface => "present_surface",
-            Self::PageSchedulerAdmit => "page_scheduler_admit",
-            Self::PageSchedulerEvict => "page_scheduler_evict",
+            Self::ImportEcsRenderArtifacts => "import_ecs_render_artifacts",
+            Self::RetireGpuArtifacts => "retire_gpu_artifacts",
             Self::NativeUiPacketCompose => "native_ui_packet_compose",
             Self::DiagnosticCapture => "diagnostic_capture",
         }
@@ -526,8 +538,8 @@ impl RendererWorkKind {
             Self::RecordComputePass,
             Self::SubmitQueue,
             Self::PresentSurface,
-            Self::PageSchedulerAdmit,
-            Self::PageSchedulerEvict,
+            Self::ImportEcsRenderArtifacts,
+            Self::RetireGpuArtifacts,
             Self::NativeUiPacketCompose,
             Self::DiagnosticCapture,
         ]
@@ -546,11 +558,11 @@ impl RendererWorkKind {
             | Self::PrepareUploadBatch
             | Self::ShaderReflect
             | Self::PipelineWarmup
-            | Self::PageSchedulerEvict => RendererGraphPhase::RenderPrepareAssets,
+            | Self::RetireGpuArtifacts => RendererGraphPhase::RenderPrepareAssets,
             Self::PrepareGpuSceneChunk
             | Self::VisibilityCullChunk
             | Self::VirtualGeometryPageResolve
-            | Self::PageSchedulerAdmit
+            | Self::ImportEcsRenderArtifacts
             | Self::NativeUiPacketCompose => RendererGraphPhase::RenderPrepareScene,
             Self::ClusterBuild | Self::VirtualShadowPageResolve => {
                 RendererGraphPhase::RenderLuxPlan
@@ -582,8 +594,8 @@ impl RendererWorkKind {
             Self::PrepareGpuSceneChunk
             | Self::VisibilityCullChunk
             | Self::VirtualGeometryPageResolve
-            | Self::PageSchedulerAdmit
-            | Self::PageSchedulerEvict => RendererNodeClass::PageSchedule,
+            | Self::ImportEcsRenderArtifacts
+            | Self::RetireGpuArtifacts => RendererNodeClass::ArtifactRealization,
             Self::ClusterBuild | Self::VirtualShadowPageResolve => RendererNodeClass::LuxGraph,
             Self::FrameGraphBuild | Self::NativeUiPacketCompose => RendererNodeClass::PacketBuild,
             Self::FrameGraphCompile => RendererNodeClass::PassCompile,
@@ -605,7 +617,7 @@ impl RendererWorkKind {
             Self::DiagnosticCapture
                 | Self::PipelineWarmup
                 | Self::ShaderReflect
-                | Self::PageSchedulerEvict
+                | Self::RetireGpuArtifacts
         )
     }
 
@@ -655,7 +667,7 @@ impl RendererStaticPhaseProof {
             RendererWorkKind::RecordPass,
             RendererWorkKind::SubmitQueue,
             RendererWorkKind::PresentSurface,
-            RendererWorkKind::PageSchedulerEvict,
+            RendererWorkKind::RetireGpuArtifacts,
             RendererWorkKind::DiagnosticCapture,
         ]
     }
@@ -773,8 +785,8 @@ pub enum RendererNodeClass {
     Extraction = 0,
     /// Asset prep node (texture / mesh / shader).
     AssetPrepare = 1,
-    /// Page scheduling node (virtual-texture residency, streaming).
-    PageSchedule = 2,
+    /// Render artifact realization node fed by ECS-derived rows.
+    ArtifactRealization = 2,
     /// Lux graph build / dispatch node.
     LuxGraph = 3,
     /// Pass compilation node (pipeline materialization).
@@ -800,7 +812,7 @@ impl RendererNodeClass {
         match self {
             Self::Extraction => "extraction",
             Self::AssetPrepare => "asset_prepare",
-            Self::PageSchedule => "page_schedule",
+            Self::ArtifactRealization => "artifact_realization",
             Self::LuxGraph => "lux_graph",
             Self::PassCompile => "pass_compile",
             Self::PacketBuild => "packet_build",
@@ -818,7 +830,7 @@ impl RendererNodeClass {
         &[
             Self::Extraction,
             Self::AssetPrepare,
-            Self::PageSchedule,
+            Self::ArtifactRealization,
             Self::LuxGraph,
             Self::PassCompile,
             Self::PacketBuild,
@@ -838,7 +850,7 @@ impl RendererNodeClass {
         match self {
             Self::Extraction => RendererGraphPhase::RenderExtract,
             Self::AssetPrepare => RendererGraphPhase::RenderPrepareAssets,
-            Self::PageSchedule => RendererGraphPhase::RenderPrepareScene,
+            Self::ArtifactRealization => RendererGraphPhase::RenderPrepareScene,
             Self::LuxGraph => RendererGraphPhase::RenderLuxPlan,
             Self::PassCompile => RendererGraphPhase::RenderGraphCompile,
             Self::PacketBuild => RendererGraphPhase::RenderGraphBuild,
@@ -1609,8 +1621,8 @@ pub fn validate_renderer_graph_liveness(
         }
     }
 
-    for evict in nodes_with_kind(graph, RendererWorkKind::PageSchedulerEvict) {
-        for admit in nodes_with_kind(graph, RendererWorkKind::PageSchedulerAdmit) {
+    for evict in nodes_with_kind(graph, RendererWorkKind::RetireGpuArtifacts) {
+        for admit in nodes_with_kind(graph, RendererWorkKind::ImportEcsRenderArtifacts) {
             if reaches(graph, evict, admit) {
                 return Err(RendererGraphLivenessError::OptionalPageEvictBlocksAdmit {
                     evict,
@@ -1706,7 +1718,7 @@ mod tests {
         FrameGraphPassRole::Clear,
         FrameGraphPassRole::StaticScenePlaceholder,
         FrameGraphPassRole::VirtualResourceFeedback,
-        FrameGraphPassRole::CefGpuImport,
+        FrameGraphPassRole::NativeUiGpuImport,
         FrameGraphPassRole::UiImportPlaceholder,
         FrameGraphPassRole::UpscaleBoundary,
         FrameGraphPassRole::FrameGenerationBoundary,

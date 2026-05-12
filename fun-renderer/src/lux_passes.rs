@@ -34,6 +34,19 @@ pub const fn lux_role_for(request: &LuxPassRequest) -> FrameGraphPassRole {
         LuxPassRequest::BuildShadowRequests(_) => FrameGraphPassRole::LuxShadowRequests,
         LuxPassRequest::RenderVirtualShadowPages(_) => FrameGraphPassRole::LuxVirtualShadowPages,
         LuxPassRequest::FilterVirtualShadows(_) => FrameGraphPassRole::LuxVirtualShadowFilter,
+        LuxPassRequest::VoxelShadowDemandMark(_) => FrameGraphPassRole::LuxVoxelShadowDemandMark,
+        LuxPassRequest::VoxelShadowPageBuild(_) => FrameGraphPassRole::LuxVoxelShadowPageBuild,
+        LuxPassRequest::VoxelSdfDistantShadowResolve(_) => {
+            FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve
+        }
+        LuxPassRequest::VoxelRadianceClipmapUpdate(_) => {
+            FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate
+        }
+        LuxPassRequest::VoxelCanopyTransmittanceInject(_) => {
+            FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject
+        }
+        LuxPassRequest::VoxelTerrainAoResolve(_) => FrameGraphPassRole::LuxVoxelTerrainAoResolve,
+        LuxPassRequest::StormExtinctionInject(_) => FrameGraphPassRole::LuxStormExtinctionInject,
         LuxPassRequest::DirectLighting(_) => FrameGraphPassRole::LuxDirectLighting,
         LuxPassRequest::GiTrace(_) => FrameGraphPassRole::LuxGiTrace,
         LuxPassRequest::GiCacheUpdate(_) => FrameGraphPassRole::LuxGiCacheUpdate,
@@ -78,6 +91,25 @@ pub const fn typed_resource_inputs(role: FrameGraphPassRole) -> &'static [FrameG
         }
         FrameGraphPassRole::LuxVirtualShadowFilter => {
             &[FrameGraphResourceType::LuxVirtualShadowPages]
+        }
+        FrameGraphPassRole::LuxVoxelShadowDemandMark => &[],
+        FrameGraphPassRole::LuxVoxelShadowPageBuild => {
+            &[FrameGraphResourceType::LuxVoxelShadowPageTable]
+        }
+        FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve => {
+            &[FrameGraphResourceType::LuxVoxelTerrainSdfPool]
+        }
+        FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate => {
+            &[FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap]
+        }
+        FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject => {
+            &[FrameGraphResourceType::LuxVoxelCanopyOpacityClipmap]
+        }
+        FrameGraphPassRole::LuxVoxelTerrainAoResolve => {
+            &[FrameGraphResourceType::LuxVoxelTerrainSdfPool]
+        }
+        FrameGraphPassRole::LuxStormExtinctionInject => {
+            &[FrameGraphResourceType::LuxStormExtinctionClipmap]
         }
         FrameGraphPassRole::LuxDirectLighting => &[
             FrameGraphResourceType::LuxLightBuffer,
@@ -138,6 +170,28 @@ pub const fn typed_resource_outputs(role: FrameGraphPassRole) -> &'static [Frame
         ],
         FrameGraphPassRole::LuxVirtualShadowFilter => {
             &[FrameGraphResourceType::LuxVirtualShadowPages]
+        }
+        FrameGraphPassRole::LuxVoxelShadowDemandMark => {
+            &[FrameGraphResourceType::LuxVoxelShadowPageTable]
+        }
+        FrameGraphPassRole::LuxVoxelShadowPageBuild => &[
+            FrameGraphResourceType::LuxVirtualShadowPages,
+            FrameGraphResourceType::LuxShadowAtlas,
+        ],
+        FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve => {
+            &[FrameGraphResourceType::LuxVirtualShadowPages]
+        }
+        FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate => {
+            &[FrameGraphResourceType::LuxVoxelTerrainRadianceClipmap]
+        }
+        FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject => {
+            &[FrameGraphResourceType::LuxVolumetricFroxelScattering]
+        }
+        FrameGraphPassRole::LuxVoxelTerrainAoResolve => {
+            &[FrameGraphResourceType::RenderResolutionSceneColor]
+        }
+        FrameGraphPassRole::LuxStormExtinctionInject => {
+            &[FrameGraphResourceType::LuxVolumetricFroxelDensity]
         }
         FrameGraphPassRole::LuxDirectLighting => {
             &[FrameGraphResourceType::RenderResolutionSceneColor]
@@ -225,6 +279,38 @@ mod tests {
             LuxPassRequest::FilterVirtualShadows(fun_lux::FilterVirtualShadowsPass {
                 common: common.clone(),
                 spatial_filter_kernel_radius: 1,
+            }),
+            LuxPassRequest::VoxelShadowDemandMark(fun_lux::VoxelShadowDemandMarkPass {
+                common: common.clone(),
+                dirty_row_count: 1,
+            }),
+            LuxPassRequest::VoxelShadowPageBuild(fun_lux::VoxelShadowPageBuildPass {
+                common: common.clone(),
+                max_pages_per_frame: 1,
+            }),
+            LuxPassRequest::VoxelSdfDistantShadowResolve(
+                fun_lux::VoxelSdfDistantShadowResolvePass {
+                    common: common.clone(),
+                    sdf_page_count: 1,
+                },
+            ),
+            LuxPassRequest::VoxelRadianceClipmapUpdate(fun_lux::VoxelRadianceClipmapUpdatePass {
+                common: common.clone(),
+                dirty_row_count: 1,
+            }),
+            LuxPassRequest::VoxelCanopyTransmittanceInject(
+                fun_lux::VoxelCanopyTransmittanceInjectPass {
+                    common: common.clone(),
+                    opacity_page_count: 1,
+                },
+            ),
+            LuxPassRequest::VoxelTerrainAoResolve(fun_lux::VoxelTerrainAoResolvePass {
+                common: common.clone(),
+                sdf_page_count: 1,
+            }),
+            LuxPassRequest::StormExtinctionInject(fun_lux::StormExtinctionInjectPass {
+                common: common.clone(),
+                dirty_row_count: 1,
             }),
             LuxPassRequest::DirectLighting(fun_lux::DirectLightingPass {
                 common: common.clone(),
