@@ -6,10 +6,31 @@ version.workspace = true
 [lib]
 name = "fun_ecs"
 
+[features]
+default = []
+experimental-native-archetypes = []
+experimental-storage-promotion = []
+experimental-materialized-groups = []
+experimental-temporal-snapshots = []
+experimental-speculative-systems = []
+experimental-unsafe-storage = []
+
 [lints]
 workspace = true
 
 [dependencies]
 bevy_ecs.workspace = true
+fun-scheduler-core = { path = "../../fun-scheduler/crates/fun-scheduler-core" }
 fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types" }
 smallvec.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "spatial_baseline"
+harness = false
+
+[[bench]]
+name = "ecs_kernel"
+harness = false

@@ -7,7 +7,7 @@ use crate::{
     EcsStreamRequestQueue, FunWorldRevision, RevisionCategory, WorldRevisionLedger,
 };
 
-pub const FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT: u16 = 12;
+pub const FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT: u16 = 13;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FunWorldId(pub u64);
@@ -93,6 +93,78 @@ pub struct FunWorldDiagnostics {
     pub bevy_resources_mirrored: u16,
     pub storage_backend: FunWorldStorageBackend,
     pub scheduler_authority: FunWorldSchedulerAuthority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunWorldBuilder {
+    pub id: FunWorldId,
+    pub mode: FunWorldMode,
+    pub storage_backend: FunWorldStorageBackend,
+}
+
+impl Default for FunWorldBuilder {
+    fn default() -> Self {
+        Self {
+            id: FunWorldId::ROOT,
+            mode: FunWorldMode::Hybrid,
+            storage_backend: FunWorldStorageBackend::Hybrid,
+        }
+    }
+}
+
+impl FunWorldBuilder {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            id: FunWorldId::ROOT,
+            mode: FunWorldMode::Hybrid,
+            storage_backend: FunWorldStorageBackend::Hybrid,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_id(mut self, id: FunWorldId) -> Self {
+        self.id = id;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_mode(mut self, mode: FunWorldMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_storage_backend(mut self, storage_backend: FunWorldStorageBackend) -> Self {
+        self.storage_backend = storage_backend;
+        self
+    }
+
+    #[must_use]
+    pub const fn hybrid(mut self) -> Self {
+        self.mode = FunWorldMode::Hybrid;
+        self.storage_backend = FunWorldStorageBackend::Hybrid;
+        self
+    }
+
+    #[must_use]
+    pub const fn bevy_compatibility(mut self) -> Self {
+        self.mode = FunWorldMode::BevyCompatibility;
+        self.storage_backend = FunWorldStorageBackend::BevyWorld;
+        self
+    }
+
+    #[must_use]
+    pub const fn fun_native(mut self) -> Self {
+        self.mode = FunWorldMode::FunNative;
+        self.storage_backend = FunWorldStorageBackend::FunNative;
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> FunWorld {
+        FunWorld::new(self.id, self.mode, self.storage_backend)
+    }
 }
 
 pub struct FunWorld {

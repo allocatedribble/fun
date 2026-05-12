@@ -1,10 +1,11 @@
 use crate::FunEcsResourceKind;
 
-pub const FUN_WORLD_SPATIAL_RESOURCE_KINDS: [FunEcsResourceKind; 12] = [
+pub const FUN_WORLD_SPATIAL_RESOURCE_KINDS: [FunEcsResourceKind; 13] = [
     FunEcsResourceKind::SpatialPageTable,
     FunEcsResourceKind::PageResidencyTable,
     FunEcsResourceKind::DirtyRegionLedger,
     FunEcsResourceKind::StreamInterestTable,
+    FunEcsResourceKind::StreamWaveLedger,
     FunEcsResourceKind::StreamRequestQueue,
     FunEcsResourceKind::SourceAcquireQueue,
     FunEcsResourceKind::DecodedPageQueue,

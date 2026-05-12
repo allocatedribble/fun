@@ -1,6 +1,21 @@
+pub mod subsystems;
+
+pub use subsystems::{
+    AiEcsBridge, AiProposalPlan, AnimationEcsBridge, AnimationPoseArtifactManifest, AvisEcsBridge,
+    ConservativePhysicsFallback, LuxDirtyRow, LuxDirtyRowTable, LuxEcsBridge, LuxFallbackPolicy,
+    LuxHandoffImportPlan, NetworkDeltaManifest, NetworkRelevanceRow, NetworkRelevanceTable,
+    NetworkRollbackApplyPlan, PerPeerEcsBudgetBridge, PhysicsCookImportPlan, PhysicsProxyManifest,
+    PhysicsWritebackApplyPlan, RenderableDeclaration, RendererArtifactImportPlan,
+    RendererArtifactRetirePlan, RendererEcsBridge, RendererFrameSnapshot,
+    RendererPresentDependencyValidator, RvelteEcsBridge, RvelteGenerationSnapshot,
+    RvelteInputEnvelope, RveltePaintPacketManifest, RvelteRendererHandoffQueue,
+    RvelteStateResource, SubsystemContractError, TelemetryEcsBridge, TelemetryReport,
+    TelemetryReportKind, ThunderEcsBridge, WardenEcsBridge,
+};
+
 use crate::FunEcsSubsystem;
 
-pub const FUN_ECS_ADAPTER_CONTRACTS: [FunEcsAdapterContract; 6] = [
+pub const FUN_ECS_ADAPTER_CONTRACTS: [FunEcsAdapterContract; 10] = [
     FunEcsAdapterContract::new(
         FunEcsAdapterKind::BevyInterop,
         FunEcsSubsystem::FunEcs,
@@ -31,6 +46,26 @@ pub const FUN_ECS_ADAPTER_CONTRACTS: [FunEcsAdapterContract; 6] = [
         FunEcsSubsystem::Rvelte,
         FunEcsAdapterRole::ExtractionAdapter,
     ),
+    FunEcsAdapterContract::new(
+        FunEcsAdapterKind::Animation,
+        FunEcsSubsystem::Animation,
+        FunEcsAdapterRole::ExternalArtifactProducer,
+    ),
+    FunEcsAdapterContract::new(
+        FunEcsAdapterKind::Ai,
+        FunEcsSubsystem::Ai,
+        FunEcsAdapterRole::AgentProposalProducer,
+    ),
+    FunEcsAdapterContract::new(
+        FunEcsAdapterKind::Warden,
+        FunEcsSubsystem::Warden,
+        FunEcsAdapterRole::SecurityObserver,
+    ),
+    FunEcsAdapterContract::new(
+        FunEcsAdapterKind::Telemetry,
+        FunEcsSubsystem::Telemetry,
+        FunEcsAdapterRole::DiagnosticsSink,
+    ),
 ];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,6 +78,10 @@ pub enum FunEcsAdapterKind {
     Avis = 3,
     Thunder = 4,
     Rvelte = 5,
+    Animation = 6,
+    Ai = 7,
+    Warden = 8,
+    Telemetry = 9,
 }
 
 impl FunEcsAdapterKind {
@@ -55,6 +94,10 @@ impl FunEcsAdapterKind {
             Self::Avis => "avis",
             Self::Thunder => "thunder",
             Self::Rvelte => "rvelte",
+            Self::Animation => "animation",
+            Self::Ai => "ai",
+            Self::Warden => "warden",
+            Self::Telemetry => "telemetry",
         }
     }
 }
@@ -66,6 +109,10 @@ pub enum FunEcsAdapterRole {
     CompatibilityWorld = 0,
     ExtractionAdapter = 1,
     HandoffConsumer = 2,
+    ExternalArtifactProducer = 3,
+    AgentProposalProducer = 4,
+    SecurityObserver = 5,
+    DiagnosticsSink = 6,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -111,6 +158,12 @@ mod tests {
             FUN_ECS_ADAPTER_CONTRACTS
                 .iter()
                 .any(|contract| contract.kind == FunEcsAdapterKind::Rvelte)
+        );
+        assert!(
+            FUN_ECS_ADAPTER_CONTRACTS
+                .iter()
+                .any(|contract| contract.kind == FunEcsAdapterKind::Telemetry
+                    && contract.role == FunEcsAdapterRole::DiagnosticsSink)
         );
     }
 }

@@ -4,12 +4,28 @@ use fun_scheduler_types::{
     WorkNodeId,
 };
 
+pub mod node_runner;
+pub use node_runner::{
+    EcsChunkExecutionContext, EcsCommandApplyContext, EcsNodeContext, EcsNodeError,
+    EcsNodeExecutionMode, EcsNodeMetrics, EcsNodeOutcome, EcsNodeRunner, EcsSpatialFrameRunReport,
+    EcsSpatialWorldDigest,
+};
+
 use crate::{
     EcsSpatialCompiledScheduleNode, EcsSpatialCompiledScheduleNodeKind, ScheduleRevision,
     compile_spatial_schedule_graph,
 };
 
+pub mod frame;
 pub type FunEcsScheduleWorkGraph = WorkGraph<FunEcsRuntimeWork>;
+pub use frame::{
+    FUN_FRAME_STAGE_COUNT, FUN_FRAME_STAGES, FunFrameBudgetPressure, FunFrameCompileError,
+    FunFrameCompiler, FunFrameContext, FunFrameDigest, FunFrameExecutionMode,
+    FunFrameFallbackAvailability, FunFrameFallbackKind, FunFrameFallbackPlan, FunFrameGraph,
+    FunFrameImportedGraph, FunFrameIntent, FunFrameReport, FunFrameResourceReadPlan,
+    FunFrameResourceSource, FunFrameSchedule, FunFrameStage, FunFrameStageDeclaration,
+    FunFrameStageNode, FunFrameSubsystemReadiness, FunFrameWaitPlan, FunFrameWaitTokenKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunEcsRuntimeWork {

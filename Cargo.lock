@@ -3066,6 +3066,8 @@ name = "fun-ecs"
 version = "0.0.1"
 dependencies = [
  "bevy_ecs",
+ "criterion 0.8.2",
+ "fun-scheduler-core",
  "fun-scheduler-types",
  "smallvec",
 ]

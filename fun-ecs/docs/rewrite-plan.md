@@ -86,13 +86,57 @@ Next table work:
 - add real timing/trace capture before claiming performance wins
 - split actual SoA columns for hot page/artifact fields only after evidence
 
+## Pass 5: System Descriptors And Access Extraction
+
+Done in this frontier:
+
+- added `FunSystem`, `FunSystemParam`, `FunSystemDescriptor`,
+  `FunSystemAccess`, `FunSystemSet`, `FunRunCondition`,
+  `FunSystemExecutionContract`, and `FunSystemChunkPolicy`
+- added entity query, filter, resource, table, external slab, virtual resource,
+  external artifact, command, and event param marker types
+- added access extraction for component, component chunk, resource, resource
+  table, table chunk, virtual resource, external artifact, external slab,
+  command-buffer, and wait-token rows
+- added validation for direct world-structure writes, undeclared command
+  outputs, unsafe external waits, normal-system waits, and non-send main-thread
+  placement
+- added conversion from `FunSystemDescriptor` to scheduler-facing
+  `EcsSystemDescriptor`
+- added descriptors for every current spatial schedule set
+- added tests for spatial access rows, command buffer declarations, blocking
+  acquire, chunkable decode/artifact builds, and optional idle eviction /
+  diagnostics
+
+## Pass 6: Spatial WorkGraph Compiler
+
+Done in this frontier:
+
+- added `EcsSpatialScheduleCompiler`
+- added `EcsSpatialScheduleBuildInput` and
+  `EcsSpatialScheduleCompileOutput`
+- added build report, node spec, access plan, chunk plan, barrier plan, and
+  graph digest records
+- compile the 15 public spatial sets into `WorkGraph<EcsWork<ProductRegistry>>`
+- emit scalar nodes for control stages and publisher stages
+- emit chunk nodes for `decode_pages`
+- emit one `build_derived_artifacts` chunk per renderer, Lux, Avis, Thunder,
+  navigation, audio, telemetry, and editor consumer
+- emit request, artifact, dirty-propagation, handoff, and pre-diagnostics
+  barrier nodes
+- attach command-buffer IDs, scheduler access rows, wait-for edges, and writer
+  conflict sets
+- prove graph liveness at compile time
+- add graph tests for producerless waits, apply cycles, optional present-path
+  dependencies, blocking-lane isolation, and table-write conflict sets
+
 Next scheduler work:
 
-- attach budgets, deadlines, lanes, split hints, and blocking policy
-- validate graph liveness before execution
-- prove cancellation and barrier ordering with tests
+- thread cancellation tokens through command-buffer apply and blocking acquire
+- split acquire and handoff publication by source or region after trace data
+- add executor integration that consumes `EcsSpatialScheduleCompileOutput`
 
-## Pass 5: Subsystem Contracts
+## Pass 7: Subsystem Contracts
 
 Next handoff work:
 

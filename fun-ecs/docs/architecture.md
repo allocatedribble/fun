@@ -59,6 +59,17 @@ The control plane declares systems, extracts resource access, chunks resource
 tables by scheduler chunk key, and validates that required subsystem handoff
 consumers have typed queues.
 
+## Public API
+
+The first-class product-facing API is documented in
+[`public-api.md`](public-api.md). New product-critical paths should use
+`fun_ecs::api` for the stable world, storage, system, command, scheduler, and
+artifact surface.
+
+Storage experiments remain opt-in through named Cargo features and
+`fun_ecs::api::experimental`. They are not allowed to become required by
+product-critical server paths.
+
 ## World Wrapper
 
 `FunWorld` is the first kernel wrapper. Its default mode is `Hybrid`: Bevy hosts
@@ -118,6 +129,33 @@ The table layer supports `AoS`, `SoA`, and `HybridHotCold` layout declarations.
 `TableLayoutAdvisor` chooses an initial layout from the use case and table
 stats. The current page residency and artifact tables remain in place until a
 later promotion pass has benchmark evidence and migration tests.
+
+## System Descriptors
+
+`src/core/system.rs` is the generic ECS system declaration layer. It defines
+`FunSystem`, `FunSystemParam`, `FunSystemDescriptor`, `FunSystemAccess`,
+`FunSystemSet`, `FunRunCondition`, `FunSystemExecutionContract`, and
+`FunSystemChunkPolicy`.
+
+Params extract component, component chunk, resource, resource table, table
+chunk, virtual resource, external artifact, external slab, command-buffer, and
+wait-token access rows. Descriptors validate the hard rules before converting
+to scheduler-facing `EcsSystemDescriptor` values.
+
+See [system-descriptors.md](system-descriptors.md) for the param and bridge
+contract.
+
+## Spatial Schedule Compiler
+
+`src/spatial/schedule.rs` now treats `EcsSpatialScheduleSet` as compiler input,
+not only metadata. `EcsSpatialScheduleCompiler::compile()` emits
+`WorkGraph<EcsWork<ProductRegistry>>` with scheduler access rows, chunk nodes,
+apply/finalization barriers, cross-domain wait-for edges, writer conflict sets,
+a liveness proof, and a deterministic graph digest.
+
+This keeps `fun-ecs` as the declarative control plane. The graph is executable
+by `fun-scheduler`; subsystem hot data remains in renderer, Lux, Avis, Thunder,
+rvelte, and the other owning domains.
 
 ## Spatial Slice
 

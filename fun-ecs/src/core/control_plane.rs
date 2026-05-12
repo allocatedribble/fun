@@ -205,6 +205,7 @@ pub enum FunEcsResourceKind {
     WardenEvidenceQueue = 16,
     TelemetryEventQueue = 17,
     ArtifactManifest = 18,
+    StreamWaveLedger = 19,
 }
 
 impl FunEcsResourceKind {
@@ -230,6 +231,7 @@ impl FunEcsResourceKind {
             Self::WardenEvidenceQueue => "warden_evidence_queue",
             Self::TelemetryEventQueue => "telemetry_event_queue",
             Self::ArtifactManifest => "artifact_manifest",
+            Self::StreamWaveLedger => "stream_wave_ledger",
         }
     }
 }

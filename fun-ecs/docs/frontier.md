@@ -48,7 +48,15 @@ including:
 - `ScheduleDeadline`
 - `ScheduleDomain`
 - `ScheduleLane`
+- `ProductRegistry`
+- `WorkGraph`
+- `WorkGraphId`
+- `LivenessProof`
 - `WorkWaitToken`
+
+The spatial schedule now also exposes `EcsSpatialScheduleCompiler` and its
+build input, report, node spec, access plan, chunk plan, barrier plan, graph
+digest, and `EcsSpatialProductWorkGraph` output aliases.
 
 `fun-ecs` forbids unsafe code with `#![forbid(unsafe_code)]`.
 
@@ -77,8 +85,8 @@ The Pass 2 layout separates compatibility surface from ownership boundaries:
 
 - `src/lib.rs` is the public umbrella and stable re-export surface.
 - `src/core/` owns world identity, control-plane facts, resource sets, query
-  metadata, revision ledgers, dense resource-table primitives, and
-  command-buffer declarations.
+  metadata, system descriptors, access extraction, revision ledgers, dense
+  resource-table primitives, and command-buffer declarations.
 - `src/runtime/` lowers ECS schedule intent into `fun-scheduler` work graphs.
 - `src/spatial/` contains the current spatial vertical slice.
 - `src/adapters/` records Bevy and subsystem interop contracts.
@@ -88,4 +96,5 @@ The Pass 2 layout separates compatibility surface from ownership boundaries:
   plane state.
 
 See [resource-tables.md](resource-tables.md) for the dense-table contract and
-1M-row acceptance harness.
+1M-row acceptance harness. See [system-descriptors.md](system-descriptors.md)
+for the system descriptor and scheduler bridge contract.
