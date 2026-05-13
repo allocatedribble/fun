@@ -102,6 +102,11 @@ fn artifact_command_buffer(rows: u32) -> EcsSpatialCommandBuffer {
                     source_page: terrain_page(index, EcsPageChannel::Surface),
                     kind: EcsDerivedArtifactKind::TerrainSurfacePackets,
                     source_epoch: 1,
+                    source_digest: derived_artifact_source_digest(
+                        terrain_page(index, EcsPageChannel::Surface),
+                        1,
+                        index + 1,
+                    ),
                     artifact_epoch: index + 1,
                     state: EcsArtifactState::Ready,
                     requiredness: WorkRequiredness::Required,

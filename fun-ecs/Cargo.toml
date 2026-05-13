@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "ecs_kernel"
 harness = false
+
+[[bench]]
+name = "procedural_terrain"
+harness = false

@@ -17,10 +17,25 @@ pub use crate::{
 };
 pub use crate::{
     DeterministicMathMode, EcsBiomeRecipe, EcsProceduralTerrainSource, EcsProceduralWorldManifest,
-    EcsTerrainGeneratorVersion, NetworkPlayerId, ProceduralFeature, ProceduralFeatureMask,
-    ProceduralPageDigest, ProceduralPageDigestProbe, ProceduralTerrainProfileId,
-    ProceduralWorldAuthorityPolicy, ProceduralWorldSyncManifest, WorldOriginPolicy,
+    EcsTerrainGeneratorVersion, NetworkPlayerId, PageHeightRelation, ProceduralBiomeDesc,
+    ProceduralFeature, ProceduralFeatureDesc, ProceduralFeatureMask, ProceduralGeneratedPage,
+    ProceduralGeneratedPageClass, ProceduralGenerationBudget, ProceduralGenerationScratch,
+    ProceduralMaterialDesc, ProceduralPageDigest, ProceduralPageDigestMismatchReport,
+    ProceduralPageDigestProbe, ProceduralPageDigestSample, ProceduralSurfaceFace,
+    ProceduralTerrainDeltaLayerHeader, ProceduralTerrainGeneratorDesc, ProceduralTerrainPageRecipe,
+    ProceduralTerrainProfileId, ProceduralTerrainShapeDesc, ProceduralWorldAuthorityPolicy,
+    ProceduralWorldHandshake, ProceduralWorldHandshakeClientExpectation,
+    ProceduralWorldSyncManifest, WorldOriginPolicy, estimate_page_height_relation, fbm2_q16,
+    generate_procedural_generated_page, generate_procedural_generated_page_with_scratch,
     generate_procedural_page_digest, generate_procedural_terrain_page,
+    generate_procedural_terrain_page_with_scratch, hash2, hash3, initial_region_seed_table_digest,
+    page_seed, region_seed, terrain_height_ft, value_noise2_q16, value_noise3_q16,
+};
+pub use crate::{
+    ProceduralTerrainArtifactFlags, ProceduralTerrainCoarseProxy,
+    ProceduralTerrainLoadAnimationRecord, ProceduralTerrainLoadStage,
+    ProceduralTerrainMaterialPage, ProceduralTerrainSurfacePacket,
+    build_prototype_terrain_artifacts,
 };
 
 pub type World = FunWorld;
@@ -203,7 +218,7 @@ pub struct FunStableApiSymbol {
     pub name: &'static str,
 }
 
-pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
+pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 80] = [
     FunStableApiSymbol {
         area: FunStableApiArea::World,
         name: "World",
@@ -313,6 +328,34 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
         name: "CrossDomainHandoffQueue",
     },
     FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "ProceduralTerrainArtifactFlags",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "ProceduralTerrainCoarseProxy",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "ProceduralTerrainSurfacePacket",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "ProceduralTerrainMaterialPage",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "ProceduralTerrainLoadAnimationRecord",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "ProceduralTerrainLoadStage",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Artifacts,
+        name: "build_prototype_terrain_artifacts",
+    },
+    FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
         name: "EcsProceduralWorldManifest",
     },
@@ -330,6 +373,46 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
     },
     FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
+        name: "ProceduralTerrainGeneratorDesc",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralTerrainShapeDesc",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralBiomeDesc",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralMaterialDesc",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralFeatureDesc",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralGenerationBudget",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralGenerationScratch",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralSurfaceFace",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralTerrainPageRecipe",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "PageHeightRelation",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
         name: "ProceduralTerrainProfileId",
     },
     FunStableApiSymbol {
@@ -339,6 +422,18 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
     FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
         name: "ProceduralWorldSyncManifest",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralWorldHandshake",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralWorldHandshakeClientExpectation",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralTerrainDeltaLayerHeader",
     },
     FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
@@ -362,6 +457,14 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
     },
     FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
+        name: "ProceduralGeneratedPageClass",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralGeneratedPage",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
         name: "ProceduralPageDigest",
     },
     FunStableApiSymbol {
@@ -370,7 +473,67 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
     },
     FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
+        name: "ProceduralPageDigestSample",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "ProceduralPageDigestMismatchReport",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "hash2",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "hash3",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "value_noise2_q16",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "value_noise3_q16",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "fbm2_q16",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "region_seed",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "page_seed",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "initial_region_seed_table_digest",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "terrain_height_ft",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "estimate_page_height_relation",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
         name: "generate_procedural_terrain_page",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "generate_procedural_terrain_page_with_scratch",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "generate_procedural_generated_page",
+    },
+    FunStableApiSymbol {
+        area: FunStableApiArea::Terrain,
+        name: "generate_procedural_generated_page_with_scratch",
     },
     FunStableApiSymbol {
         area: FunStableApiArea::Terrain,
@@ -379,7 +542,7 @@ pub const FUN_ECS_STABLE_API_SYMBOLS: [FunStableApiSymbol; 43] = [
 ];
 
 #[must_use]
-pub const fn stable_api_symbols() -> &'static [FunStableApiSymbol; 43] {
+pub const fn stable_api_symbols() -> &'static [FunStableApiSymbol; 80] {
     &FUN_ECS_STABLE_API_SYMBOLS
 }
 
@@ -551,26 +714,63 @@ mod tests {
             "ArtifactManifest",
             "ArtifactReadinessToken",
             "CrossDomainHandoffQueue",
+            "ProceduralTerrainArtifactFlags",
+            "ProceduralTerrainCoarseProxy",
+            "ProceduralTerrainSurfacePacket",
+            "ProceduralTerrainMaterialPage",
+            "ProceduralTerrainLoadAnimationRecord",
+            "ProceduralTerrainLoadStage",
+            "build_prototype_terrain_artifacts",
             "EcsProceduralWorldManifest",
             "EcsBiomeRecipe",
             "EcsProceduralTerrainSource",
             "EcsTerrainGeneratorVersion",
+            "ProceduralTerrainGeneratorDesc",
+            "ProceduralTerrainShapeDesc",
+            "ProceduralBiomeDesc",
+            "ProceduralMaterialDesc",
+            "ProceduralFeatureDesc",
+            "ProceduralGenerationBudget",
+            "ProceduralGenerationScratch",
+            "ProceduralSurfaceFace",
+            "ProceduralTerrainPageRecipe",
+            "PageHeightRelation",
             "ProceduralTerrainProfileId",
             "NetworkPlayerId",
             "ProceduralWorldSyncManifest",
+            "ProceduralWorldHandshake",
+            "ProceduralWorldHandshakeClientExpectation",
+            "ProceduralTerrainDeltaLayerHeader",
             "WorldOriginPolicy",
             "DeterministicMathMode",
             "ProceduralFeature",
             "ProceduralFeatureMask",
             "ProceduralWorldAuthorityPolicy",
+            "ProceduralGeneratedPageClass",
+            "ProceduralGeneratedPage",
             "ProceduralPageDigest",
             "ProceduralPageDigestProbe",
+            "ProceduralPageDigestSample",
+            "ProceduralPageDigestMismatchReport",
+            "hash2",
+            "hash3",
+            "value_noise2_q16",
+            "value_noise3_q16",
+            "fbm2_q16",
+            "region_seed",
+            "page_seed",
+            "initial_region_seed_table_digest",
+            "terrain_height_ft",
+            "estimate_page_height_relation",
             "generate_procedural_terrain_page",
+            "generate_procedural_terrain_page_with_scratch",
+            "generate_procedural_generated_page",
+            "generate_procedural_generated_page_with_scratch",
             "generate_procedural_page_digest",
         ] {
             assert!(has_symbol(name), "missing stable API symbol {name}");
         }
-        assert_eq!(stable_api_symbols().len(), 43);
+        assert_eq!(stable_api_symbols().len(), 80);
     }
 
     #[test]

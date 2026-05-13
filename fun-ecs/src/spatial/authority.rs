@@ -880,6 +880,7 @@ mod tests {
             source_page: page(),
             kind: EcsDerivedArtifactKind::TerrainSurfacePackets,
             source_epoch: 1,
+            source_digest: crate::derived_artifact_source_digest(page(), 1, 1),
             artifact_epoch: 1,
             state: EcsArtifactState::Ready,
             requiredness: WorkRequiredness::Required,

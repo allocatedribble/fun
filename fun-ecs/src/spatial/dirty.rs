@@ -6,7 +6,7 @@ use crate::{
     EcsBoundsUm, EcsDerivedArtifactId, EcsDerivedArtifactKind, EcsDerivedArtifactRecord,
     EcsPageChannel, EcsPageResidencyTable, EcsSpatialCommand, EcsSpatialCommandBuffer,
     EcsSpatialDomainKind, EcsSpatialPageKey, EcsSpatialValidationError, FixedStepId, VoxelEditOp,
-    VoxelPhysicsCookRequest,
+    VoxelPhysicsCookRequest, derived_artifact_source_digest,
 };
 use fun_scheduler_types::WorkRequiredness;
 
@@ -372,6 +372,11 @@ fn push_dirty_artifact(
             source_page: options.source_page_for_kind(kind),
             kind,
             source_epoch: options.source_epoch,
+            source_digest: derived_artifact_source_digest(
+                options.source_page_for_kind(kind),
+                options.source_epoch,
+                options.dirty_epoch.max(1),
+            ),
             artifact_epoch: options.dirty_epoch.max(1),
             state: EcsArtifactState::Requested,
             requiredness,

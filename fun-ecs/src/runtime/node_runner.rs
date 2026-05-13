@@ -9,27 +9,27 @@ use fun_scheduler_types::{GraphExecutionMode, NodeOutcome};
 use crate::{
     CollisionCookMode, ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS, ECS_SPATIAL_DEFAULT_DECODE_CHUNKS,
     EcsArtifactConsumer, EcsCameraTransformSample, EcsChunkKey, EcsCommandBufferId,
-    EcsCrossDomainHandoff, EcsCrossDomainHandoffKind, EcsDecodeOverlay,
-    EcsDerivedArtifactBuildSystem, EcsDerivedArtifactRecord, EcsHandoffQueueId,
-    EcsPageResidencyRecord, EcsPageResidencyState, EcsProceduralTerrainSource, EcsSpatialCommand,
-    EcsSpatialCommandApplyDigest, EcsSpatialCommandApplyReport, EcsSpatialCommandBarrierKind,
-    EcsSpatialCommandBuffer, EcsSpatialCompilerBarrierKind, EcsSpatialPageKey,
-    EcsSpatialScheduleBuildInput, EcsSpatialScheduleCompileError, EcsSpatialScheduleCompileOutput,
-    EcsSpatialScheduleCompiler, EcsSpatialSourceId, EcsSpatialValidationError, EcsStreamCameraId,
-    EcsStreamPriority, EcsStreamRequest, EcsStreamRequestId, EcsStreamSourceDescriptor,
-    EcsStreamSourceId, EcsStreamWaveLedger, EcsStreamingSourceSnapshot, EcsSystemClass, EcsWork,
-    EcsWorkKind, FUN_COMMAND_BUFFER_ARTIFACTS, FUN_COMMAND_BUFFER_DIRTY_PROPAGATION,
-    FUN_COMMAND_BUFFER_HANDOFFS, FUN_COMMAND_BUFFER_SPATIAL_REQUESTS, FixedStepId, FunRevision,
-    FunWorld, GraphInvariantError, ProductRegistry, RendererVisibilityHint, RevisionCategory,
-    ScheduleDomain, ScheduleLane, SpatialStreamCamera, StreamWaveReason, WorkBlockingClass,
-    WorkNode, WorkNodeId, WorkWaitToken, acquire_sources, apply_artifact_commands_with_revisions,
-    apply_dirty_propagation_commands_with_revisions, apply_handoff_commands_with_revisions,
-    build_derived_artifacts, build_interest, decode_pages_with_procedural_manifest, diff_requests,
-    plan_stream_wave, publish_lux_handoffs, publish_physics_cooks, publish_renderer_handoffs,
-    sense_sources,
+    EcsCrossDomainHandoff, EcsCrossDomainHandoffKind, EcsDecodeOverlay, EcsDerivedArtifactRecord,
+    EcsHandoffQueueId, EcsPageResidencyRecord, EcsPageResidencyState, EcsProceduralTerrainSource,
+    EcsSpatialCommand, EcsSpatialCommandApplyDigest, EcsSpatialCommandApplyReport,
+    EcsSpatialCommandBarrierKind, EcsSpatialCommandBuffer, EcsSpatialCompilerBarrierKind,
+    EcsSpatialPageKey, EcsSpatialScheduleBuildInput, EcsSpatialScheduleCompileError,
+    EcsSpatialScheduleCompileOutput, EcsSpatialScheduleCompiler, EcsSpatialSourceId,
+    EcsSpatialValidationError, EcsStreamCameraId, EcsStreamPriority, EcsStreamRequest,
+    EcsStreamRequestId, EcsStreamSourceDescriptor, EcsStreamSourceId, EcsStreamWaveLedger,
+    EcsStreamingSourceSnapshot, EcsSystemClass, EcsWork, EcsWorkKind, FUN_COMMAND_BUFFER_ARTIFACTS,
+    FUN_COMMAND_BUFFER_DIRTY_PROPAGATION, FUN_COMMAND_BUFFER_HANDOFFS,
+    FUN_COMMAND_BUFFER_SPATIAL_REQUESTS, FixedStepId, FunRevision, FunWorld, GraphInvariantError,
+    ProceduralGenerationScratch, ProceduralTerrainArtifactFlags, ProductRegistry,
+    RendererVisibilityHint, RevisionCategory, ScheduleDomain, ScheduleLane, SpatialStreamCamera,
+    StreamWaveReason, WorkBlockingClass, WorkNode, WorkNodeId, WorkWaitToken, acquire_sources,
+    apply_artifact_commands_with_revisions, apply_dirty_propagation_commands_with_revisions,
+    apply_handoff_commands_with_revisions, build_interest, build_prototype_terrain_artifacts,
+    decode_pages_with_procedural_manifest_and_scratch, diff_requests, plan_stream_wave,
+    procedural_generation_default_chunk_key, publish_lux_handoffs, publish_physics_cooks,
+    publish_renderer_handoffs, sense_sources,
 };
 
-const DECODE_CHUNK_BASE: u64 = 0x0dec_0000;
 const ARTIFACT_CONSUMER_CHUNK_BASE: u64 = 0x0a7f_0000;
 const DEFAULT_SOURCE_ID: EcsSpatialSourceId = EcsSpatialSourceId::new(1);
 const DEFAULT_STREAM_SOURCE_ID: EcsStreamSourceId = EcsStreamSourceId::new(1);
@@ -76,6 +76,13 @@ pub struct EcsChunkExecutionContext {
     pub chunk_key: EcsChunkKey,
     pub chunk_index: u16,
     pub artifact_consumer: Option<EcsArtifactConsumer>,
+}
+
+impl EcsChunkExecutionContext {
+    #[must_use]
+    pub fn is_default_generation_chunk(self) -> bool {
+        self.chunk_key == procedural_generation_default_chunk_key(self.chunk_index)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -216,6 +223,7 @@ pub struct EcsNodeRunner<'a> {
     dirty_commands: EcsSpatialCommandBuffer,
     handoff_commands: EcsSpatialCommandBuffer,
     decode_overlays: Vec<EcsDecodeOverlay>,
+    procedural_generation_scratch: ProceduralGenerationScratch,
     sources: Vec<EcsStreamSourceDescriptor>,
     cameras: Vec<(SpatialStreamCamera, EcsCameraTransformSample)>,
     next_artifact_id: u64,
@@ -269,6 +277,7 @@ impl<'a> EcsNodeRunner<'a> {
             dirty_commands: EcsSpatialCommandBuffer::new(spatial_revision),
             handoff_commands: EcsSpatialCommandBuffer::new(handoff_revision),
             decode_overlays: Vec::new(),
+            procedural_generation_scratch: ProceduralGenerationScratch::default(),
             sources: Vec::new(),
             cameras: Vec::new(),
             next_artifact_id,
@@ -538,16 +547,27 @@ impl<'a> EcsNodeRunner<'a> {
         let chunk = chunk_context(context.work, self.decode_chunk_count);
         let before = self.world.decoded_page_queue.rows.len();
         let mut acquired = crate::EcsSourceAcquireQueue::default();
+        let exact_chunk_present = self
+            .world
+            .source_acquire_queue
+            .rows
+            .iter()
+            .any(|row| row.request.key.chunk_key() == chunk.chunk_key);
+        let use_modulo_fallback = !exact_chunk_present && chunk.is_default_generation_chunk();
         for (index, row) in self.world.source_acquire_queue.rows.iter().enumerate() {
-            if (index % usize::from(self.decode_chunk_count)) == usize::from(chunk.chunk_index) {
+            let in_page_chunk = row.request.key.chunk_key() == chunk.chunk_key;
+            let in_fallback_chunk =
+                (index % usize::from(self.decode_chunk_count)) == usize::from(chunk.chunk_index);
+            if in_page_chunk || (use_modulo_fallback && in_fallback_chunk) {
                 acquired.push(row.clone())?;
             }
         }
-        let report = decode_pages_with_procedural_manifest(
+        let report = decode_pages_with_procedural_manifest_and_scratch(
             &acquired,
             &self.decode_overlays,
             self.frame as u32,
             self.world.procedural_world_manifest,
+            &mut self.procedural_generation_scratch,
             &mut self.world.decoded_page_queue,
         )?;
         Ok(EcsNodeMetrics {
@@ -571,24 +591,36 @@ impl<'a> EcsNodeRunner<'a> {
         context: EcsNodeContext<'_>,
     ) -> Result<EcsNodeMetrics, EcsNodeError> {
         let chunk = chunk_context(context.work, self.decode_chunk_count);
-        let systems: Vec<EcsDerivedArtifactBuildSystem> = EcsDerivedArtifactBuildSystem::all()
+        let before = self.artifact_commands.commands.len();
+        let exact_chunk_present = self
+            .world
+            .decoded_page_queue
+            .rows
             .iter()
-            .copied()
-            .filter(|system| {
-                chunk
-                    .artifact_consumer
-                    .is_none_or(|consumer| system.consumer() == consumer)
+            .any(|row| row.key.chunk_key() == chunk.chunk_key);
+        let use_modulo_fallback = !exact_chunk_present && chunk.is_default_generation_chunk();
+        let decoded_pages: Vec<_> = self
+            .world
+            .decoded_page_queue
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let in_page_chunk = row.key.chunk_key() == chunk.chunk_key;
+                let in_fallback_chunk = (index % usize::from(self.decode_chunk_count))
+                    == usize::from(chunk.chunk_index);
+                (in_page_chunk || (use_modulo_fallback && in_fallback_chunk)).then_some(row.clone())
             })
             .collect();
-        let before = self.artifact_commands.commands.len();
-        let report = build_derived_artifacts(
-            &self.world.decoded_page_queue.rows,
-            &systems,
+        let report = build_prototype_terrain_artifacts(
+            &decoded_pages,
+            chunk.artifact_consumer,
+            ProceduralTerrainArtifactFlags::FIRST_VISUAL,
             &mut self.next_artifact_id,
             &mut self.artifact_commands,
         )?;
         Ok(EcsNodeMetrics {
-            rows_read: self.world.decoded_page_queue.rows.len() as u64,
+            rows_read: decoded_pages.len() as u64,
             rows_written: u64::from(report.artifacts_published),
             commands_emitted: self.artifact_commands.commands.len().saturating_sub(before) as u64,
             chunks_processed: 1,
@@ -987,7 +1019,9 @@ impl FunWorld {
         &self,
     ) -> Result<EcsSpatialScheduleCompileOutput, EcsSpatialScheduleCompileError> {
         EcsSpatialScheduleCompiler::compile(
-            EcsSpatialScheduleBuildInput::default().with_observed_revision(self.revision),
+            EcsSpatialScheduleBuildInput::default()
+                .with_observed_revision(self.revision)
+                .with_stream_requests(&self.stream_request_queue.requests),
         )
     }
 
@@ -1103,13 +1137,11 @@ fn chunk_context(
     decode_chunk_count: u16,
 ) -> EcsChunkExecutionContext {
     let chunk_key = work.chunk_key;
-    let raw = chunk_key.get();
     let artifact_consumer = artifact_consumer_from_chunk_key(chunk_key);
-    let chunk_index = if raw > DECODE_CHUNK_BASE && raw <= DECODE_CHUNK_BASE + 64 {
-        raw.saturating_sub(DECODE_CHUNK_BASE + 1) as u16
-    } else {
-        artifact_consumer.map_or(0, |consumer| consumer as u16)
-    };
+    let default_generation_index = (0..decode_chunk_count)
+        .find(|index| procedural_generation_default_chunk_key(*index) == chunk_key);
+    let chunk_index = default_generation_index
+        .unwrap_or_else(|| artifact_consumer.map_or(0, |consumer| consumer as u16));
     EcsChunkExecutionContext {
         chunk_key,
         chunk_index: chunk_index.min(decode_chunk_count.saturating_sub(1)),
@@ -1268,19 +1300,15 @@ mod tests {
     ) -> Result<EcsSpatialWorldDigest, EcsSpatialValidationError> {
         let mut next_artifact_id = 0;
         for consumer in ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS {
-            let systems: Vec<EcsDerivedArtifactBuildSystem> = EcsDerivedArtifactBuildSystem::all()
-                .iter()
-                .copied()
-                .filter(|system| system.consumer() == consumer)
-                .collect();
             let mut artifact_commands = EcsSpatialCommandBuffer::new(
                 world
                     .revision_ledger
                     .category_revision(RevisionCategory::Artifact),
             );
-            build_derived_artifacts(
+            build_prototype_terrain_artifacts(
                 &world.decoded_page_queue.rows,
-                &systems,
+                Some(consumer),
+                ProceduralTerrainArtifactFlags::FIRST_VISUAL,
                 &mut next_artifact_id,
                 &mut artifact_commands,
             )?;
@@ -1368,7 +1396,7 @@ mod tests {
     #[test]
     fn streaming_frame_generates_procedural_voxel_page_and_renderer_handoff() {
         let mut world = FunWorld::default();
-        let camera = main_stream_camera(IVec3::zero());
+        let camera = main_stream_camera(IVec3::new(0, 32, 0));
         let source = terrain_source();
         let report = world
             .run_spatial_frame_deterministic_with_streaming_inputs(&[camera], &[source])
@@ -1378,7 +1406,7 @@ mod tests {
         assert_eq!(world.source_acquire_queue.rows.len(), 1);
         assert!(matches!(
             world.source_acquire_queue.rows[0].request.payload,
-            crate::EcsSourcePayload::ProceduralRecipe(_)
+            crate::EcsSourcePayload::ProceduralTerrainRecipe(_)
         ));
         assert_eq!(world.decoded_page_queue.rows.len(), 1);
         let decoded = &world.decoded_page_queue.rows[0];

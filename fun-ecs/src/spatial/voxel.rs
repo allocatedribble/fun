@@ -113,13 +113,68 @@ impl Default for VoxelGridDesc {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+pub enum ProceduralGeneratedPageClass {
+    #[default]
+    EmptyAir = 0,
+    UniformSolid = 1,
+    MostlySolid = 2,
+    SurfaceMixed = 3,
+    MostlyAirWithFeatures = 4,
+    DebugOnly = 5,
+}
+
+impl ProceduralGeneratedPageClass {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::EmptyAir => "empty_air",
+            Self::UniformSolid => "uniform_solid",
+            Self::MostlySolid => "mostly_solid",
+            Self::SurfaceMixed => "surface_mixed",
+            Self::MostlyAirWithFeatures => "mostly_air_with_features",
+            Self::DebugOnly => "debug_only",
+        }
+    }
+
+    #[must_use]
+    pub const fn builds_surface_artifacts(self) -> bool {
+        matches!(self, Self::SurfaceMixed | Self::MostlyAirWithFeatures)
+    }
+
+    #[must_use]
+    pub const fn builds_coarse_proxy(self) -> bool {
+        matches!(
+            self,
+            Self::MostlySolid | Self::SurfaceMixed | Self::MostlyAirWithFeatures
+        )
+    }
+
+    #[must_use]
+    pub const fn builds_lux_invalidation(self) -> bool {
+        matches!(self, Self::SurfaceMixed | Self::MostlyAirWithFeatures)
+    }
+
+    #[must_use]
+    pub const fn builds_physics_proxy(self) -> bool {
+        matches!(
+            self,
+            Self::UniformSolid
+                | Self::MostlySolid
+                | Self::SurfaceMixed
+                | Self::MostlyAirWithFeatures
+        )
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum VoxelPagePayloadKind {
     #[default]
     Empty = 0,
     UniformSolid = 1,
     PaletteRle = 2,
     DenseFootCells = 3,
-    ProceduralRecipeRef = 4,
+    ProceduralTerrainRecipe = 4,
     CoarseProxyOnly = 5,
     SurfaceOnly = 6,
     SdfOnly = 7,
@@ -218,6 +273,7 @@ pub struct VoxelClusterSummary {
 pub struct VoxelBrickPayload {
     pub key: EcsSpatialPageKey,
     pub kind: VoxelPagePayloadKind,
+    pub generated_class: ProceduralGeneratedPageClass,
     pub occupancy: VoxelOccupancyStorage,
     pub material_palette: VoxelMaterialPalette,
     pub clusters: [VoxelClusterSummary; VOXEL_CLUSTER_SUMMARIES_PER_BRICK],
@@ -230,6 +286,7 @@ impl VoxelBrickPayload {
         Self {
             key,
             kind: VoxelPagePayloadKind::Empty,
+            generated_class: ProceduralGeneratedPageClass::EmptyAir,
             occupancy: VoxelOccupancyStorage::EMPTY,
             material_palette: VoxelMaterialPalette::EMPTY,
             clusters: [VoxelClusterSummary {
@@ -252,6 +309,7 @@ impl VoxelBrickPayload {
     pub fn uniform_solid(key: EcsSpatialPageKey, material: u16, edit_epoch: u32) -> Self {
         let mut payload = Self::empty(key, edit_epoch);
         payload.kind = VoxelPagePayloadKind::UniformSolid;
+        payload.generated_class = ProceduralGeneratedPageClass::UniformSolid;
         payload.occupancy = VoxelOccupancyStorage::UNIFORM_SOLID;
         payload.material_palette = VoxelMaterialPalette::single(material);
         for cluster in &mut payload.clusters {

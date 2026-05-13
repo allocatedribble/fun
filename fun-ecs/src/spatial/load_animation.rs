@@ -6,7 +6,7 @@ use crate::{
     EcsRendererHandoffQueue, EcsSpatialCommand, EcsSpatialCommandBuffer, EcsSpatialPageKey,
     EcsSpatialValidationError, EcsStreamWaveId, EcsStreamWaveRecord, IVec3,
     RendererArtifactHandoffKind, RendererVisibilityHint, WorkRequiredness,
-    publish_renderer_handoffs,
+    derived_artifact_source_digest, publish_renderer_handoffs,
 };
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -371,6 +371,7 @@ pub fn load_animation_artifact_record(
         source_page,
         kind: EcsDerivedArtifactKind::LoadAnimationRecord,
         source_epoch,
+        source_digest: derived_artifact_source_digest(source_page, source_epoch, artifact_epoch),
         artifact_epoch,
         state: EcsArtifactState::Ready,
         requiredness: WorkRequiredness::Optional,

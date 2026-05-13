@@ -5,8 +5,9 @@ use crate::{
     ECS_SPATIAL_MAX_SOURCE_PAYLOAD_BYTES, ECS_SPATIAL_MAX_SOURCE_QUEUE_ROWS, EcsPageChannelMask,
     EcsPageFailureCode, EcsProceduralWorldManifest, EcsSourceRequestId, EcsSpatialPageKey,
     EcsSpatialRegionKey, EcsSpatialSourceId, EcsSpatialValidationError, EcsStreamPriority,
+    ProceduralGenerationBudget, ProceduralGenerationScratch, ProceduralTerrainPageRecipe,
     VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelBrickPayload, VoxelClusterSummary,
-    generate_procedural_terrain_page,
+    generate_procedural_terrain_page, generate_procedural_terrain_page_with_scratch,
 };
 
 pub trait EcsSpatialSource {
@@ -95,7 +96,7 @@ pub enum EcsSourcePayloadCodec {
     #[default]
     Zstd = 1,
     Lz4 = 2,
-    ProceduralRecipe = 3,
+    ProceduralTerrainRecipe = 3,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,29 +139,6 @@ impl EcsCompressedPagePayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EcsProceduralRecipeRef {
-    pub key: EcsSpatialPageKey,
-    pub recipe_id: u64,
-    pub seed: u64,
-    pub generator_version: u32,
-    pub manifest_signature: u64,
-    pub checksum: EcsSourceChecksum,
-}
-
-impl EcsProceduralRecipeRef {
-    pub fn validate(self) -> Result<(), EcsSpatialValidationError> {
-        if self.recipe_id == 0
-            || self.generator_version == 0
-            || self.manifest_signature == 0
-            || self.checksum == EcsSourceChecksum::NONE
-        {
-            return Err(EcsSpatialValidationError::InvalidProceduralRecipe);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EcsSourceFailure {
     pub key: EcsSpatialPageKey,
     pub code: EcsPageFailureCode,
@@ -171,7 +149,7 @@ pub struct EcsSourceFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EcsSourcePayload {
     CompressedPage(EcsCompressedPagePayload),
-    ProceduralRecipe(EcsProceduralRecipeRef),
+    ProceduralTerrainRecipe(ProceduralTerrainPageRecipe),
     Failure(EcsSourceFailure),
 }
 
@@ -180,7 +158,7 @@ impl EcsSourcePayload {
     pub fn key(&self) -> EcsSpatialPageKey {
         match self {
             Self::CompressedPage(payload) => payload.key,
-            Self::ProceduralRecipe(recipe) => recipe.key,
+            Self::ProceduralTerrainRecipe(recipe) => recipe.page,
             Self::Failure(failure) => failure.key,
         }
     }
@@ -189,7 +167,7 @@ impl EcsSourcePayload {
     pub fn checksum(&self) -> EcsSourceChecksum {
         match self {
             Self::CompressedPage(payload) => payload.checksum,
-            Self::ProceduralRecipe(recipe) => recipe.checksum,
+            Self::ProceduralTerrainRecipe(recipe) => procedural_terrain_recipe_checksum(*recipe),
             Self::Failure(failure) => failure.checksum,
         }
     }
@@ -198,16 +176,23 @@ impl EcsSourcePayload {
     pub fn byte_len(&self) -> u32 {
         match self {
             Self::CompressedPage(payload) => payload.byte_len,
-            Self::ProceduralRecipe(_) | Self::Failure(_) => 0,
+            Self::ProceduralTerrainRecipe(_) | Self::Failure(_) => 0,
         }
     }
 
     pub fn validate(&self) -> Result<(), EcsSpatialValidationError> {
         match self {
             Self::CompressedPage(payload) => payload.validate(),
-            Self::ProceduralRecipe(recipe) => recipe.validate(),
+            Self::ProceduralTerrainRecipe(recipe) => recipe.validate(),
             Self::Failure(_) => Ok(()),
         }
+    }
+}
+
+fn procedural_terrain_recipe_checksum(recipe: ProceduralTerrainPageRecipe) -> EcsSourceChecksum {
+    EcsSourceChecksum {
+        algorithm: EcsSourceChecksumAlgorithm::Fnv1a64,
+        value: recipe.checksum_value(),
     }
 }
 
@@ -284,7 +269,7 @@ pub fn acquire_sources<S: EcsSpatialSource>(
         request.validate_for(source.source_id(), *page_key, region)?;
         match &request.payload {
             EcsSourcePayload::CompressedPage(_) => report.compressed_payloads += 1,
-            EcsSourcePayload::ProceduralRecipe(_) => report.procedural_recipes += 1,
+            EcsSourcePayload::ProceduralTerrainRecipe(_) => report.procedural_recipes += 1,
             EcsSourcePayload::Failure(_) => report.failures += 1,
         }
         output.push(EcsSourceAcquireRecord { request, manifest })?;
@@ -316,7 +301,7 @@ pub enum EcsDecodedPagePayloadKind {
     #[default]
     Empty = 0,
     VoxelBrick = 1,
-    ProceduralRecipeRef = 2,
+    ProceduralTerrainRecipe = 2,
     SourceFailed = 3,
 }
 
@@ -364,6 +349,14 @@ pub struct EcsDecodeReport {
     pub procedural: u32,
     pub failed: u32,
     pub overlays_read: u32,
+    pub generated_pages: u32,
+    pub budget_deferred: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EcsProceduralDecodeContext {
+    manifest: EcsProceduralWorldManifest,
+    budget: ProceduralGenerationBudget,
 }
 
 pub fn decode_pages(
@@ -372,7 +365,7 @@ pub fn decode_pages(
     decode_epoch: u32,
     output: &mut EcsDecodedPageQueue,
 ) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
-    decode_pages_inner(acquired, overlays, decode_epoch, None, output)
+    decode_pages_inner(acquired, overlays, decode_epoch, None, None, output)
 }
 
 pub fn decode_pages_with_procedural_manifest(
@@ -383,14 +376,86 @@ pub fn decode_pages_with_procedural_manifest(
     output: &mut EcsDecodedPageQueue,
 ) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
     manifest.validate()?;
-    decode_pages_inner(acquired, overlays, decode_epoch, Some(manifest), output)
+    let mut scratch = ProceduralGenerationScratch::default();
+    decode_pages_with_procedural_manifest_and_scratch(
+        acquired,
+        overlays,
+        decode_epoch,
+        manifest,
+        &mut scratch,
+        output,
+    )
+}
+
+pub fn decode_pages_with_procedural_manifest_and_scratch(
+    acquired: &EcsSourceAcquireQueue,
+    overlays: &[EcsDecodeOverlay],
+    decode_epoch: u32,
+    manifest: EcsProceduralWorldManifest,
+    scratch: &mut ProceduralGenerationScratch,
+    output: &mut EcsDecodedPageQueue,
+) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
+    manifest.validate()?;
+    decode_pages_with_procedural_manifest_budget_and_scratch(
+        acquired,
+        overlays,
+        decode_epoch,
+        manifest,
+        manifest.generator_desc().budgets,
+        scratch,
+        output,
+    )
+}
+
+pub fn decode_pages_with_procedural_manifest_and_budget(
+    acquired: &EcsSourceAcquireQueue,
+    overlays: &[EcsDecodeOverlay],
+    decode_epoch: u32,
+    manifest: EcsProceduralWorldManifest,
+    budget: ProceduralGenerationBudget,
+    output: &mut EcsDecodedPageQueue,
+) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
+    manifest.validate()?;
+    budget.validate()?;
+    let mut scratch = ProceduralGenerationScratch::default();
+    decode_pages_with_procedural_manifest_budget_and_scratch(
+        acquired,
+        overlays,
+        decode_epoch,
+        manifest,
+        budget,
+        &mut scratch,
+        output,
+    )
+}
+
+fn decode_pages_with_procedural_manifest_budget_and_scratch(
+    acquired: &EcsSourceAcquireQueue,
+    overlays: &[EcsDecodeOverlay],
+    decode_epoch: u32,
+    manifest: EcsProceduralWorldManifest,
+    budget: ProceduralGenerationBudget,
+    scratch: &mut ProceduralGenerationScratch,
+    output: &mut EcsDecodedPageQueue,
+) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
+    manifest.validate()?;
+    budget.validate()?;
+    decode_pages_inner(
+        acquired,
+        overlays,
+        decode_epoch,
+        Some(EcsProceduralDecodeContext { manifest, budget }),
+        Some(scratch),
+        output,
+    )
 }
 
 fn decode_pages_inner(
     acquired: &EcsSourceAcquireQueue,
     overlays: &[EcsDecodeOverlay],
     decode_epoch: u32,
-    procedural_manifest: Option<EcsProceduralWorldManifest>,
+    procedural_context: Option<EcsProceduralDecodeContext>,
+    mut procedural_scratch: Option<&mut ProceduralGenerationScratch>,
     output: &mut EcsDecodedPageQueue,
 ) -> Result<EcsDecodeReport, EcsSpatialValidationError> {
     if overlays.len() > ECS_SPATIAL_MAX_DECODE_OVERLAYS {
@@ -406,14 +471,32 @@ fn decode_pages_inner(
         if overlay_count > u16::MAX as usize {
             return Err(EcsSpatialValidationError::DecodeOverlayQueueFull);
         }
-        let record =
-            decode_page_record(row, overlay_count as u16, decode_epoch, procedural_manifest)?;
+        let generates_procedural_page = matches!(
+            &row.request.payload,
+            EcsSourcePayload::ProceduralTerrainRecipe(_)
+        ) && procedural_context.is_some();
+        if let (true, Some(context)) = (generates_procedural_page, procedural_context)
+            && report.generated_pages >= u32::from(context.budget.max_pages_generated_per_frame)
+        {
+            report.budget_deferred += 1;
+            continue;
+        }
+        let record = decode_page_record(
+            row,
+            overlay_count as u16,
+            decode_epoch,
+            procedural_context.map(|context| context.manifest),
+            procedural_scratch.as_deref_mut(),
+        )?;
         match record.payload_kind {
             EcsDecodedPagePayloadKind::VoxelBrick | EcsDecodedPagePayloadKind::Empty => {
                 report.decoded += 1;
             }
-            EcsDecodedPagePayloadKind::ProceduralRecipeRef => report.procedural += 1,
+            EcsDecodedPagePayloadKind::ProceduralTerrainRecipe => report.procedural += 1,
             EcsDecodedPagePayloadKind::SourceFailed => report.failed += 1,
+        }
+        if generates_procedural_page {
+            report.generated_pages += 1;
         }
         report.overlays_read += u32::from(overlay_count as u16);
         output.push(record)?;
@@ -426,6 +509,7 @@ fn decode_page_record(
     overlay_count: u16,
     decode_epoch: u32,
     procedural_manifest: Option<EcsProceduralWorldManifest>,
+    procedural_scratch: Option<&mut ProceduralGenerationScratch>,
 ) -> Result<EcsDecodedPageRecord, EcsSpatialValidationError> {
     row.request.payload.validate()?;
     let key = row.request.key;
@@ -465,22 +549,34 @@ fn decode_page_record(
                 },
             })
         }
-        EcsSourcePayload::ProceduralRecipe(recipe) => {
+        EcsSourcePayload::ProceduralTerrainRecipe(recipe) => {
             if let Some(manifest) = procedural_manifest {
-                generate_procedural_terrain_page(
-                    manifest,
-                    *recipe,
-                    row.request.source,
-                    row.request.source_epoch,
-                    decode_epoch,
-                    overlay_count,
-                )
+                if let Some(scratch) = procedural_scratch {
+                    generate_procedural_terrain_page_with_scratch(
+                        manifest,
+                        *recipe,
+                        row.request.source,
+                        row.request.source_epoch,
+                        decode_epoch,
+                        overlay_count,
+                        scratch,
+                    )
+                } else {
+                    generate_procedural_terrain_page(
+                        manifest,
+                        *recipe,
+                        row.request.source,
+                        row.request.source_epoch,
+                        decode_epoch,
+                        overlay_count,
+                    )
+                }
             } else {
                 Ok(EcsDecodedPageRecord {
                     key,
                     source: row.request.source,
                     source_epoch: row.request.source_epoch,
-                    payload_kind: EcsDecodedPagePayloadKind::ProceduralRecipeRef,
+                    payload_kind: EcsDecodedPagePayloadKind::ProceduralTerrainRecipe,
                     voxel_brick: None,
                     cluster_summaries: empty_clusters,
                     telemetry: EcsDecodeTelemetry {
@@ -490,7 +586,7 @@ fn decode_page_record(
                         source_bytes: 0,
                         overlay_count,
                         cluster_summary_count: 0,
-                        checksum: recipe.checksum,
+                        checksum: procedural_terrain_recipe_checksum(*recipe),
                         failure: None,
                     },
                 })

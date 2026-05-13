@@ -151,7 +151,7 @@ mod tests {
             report.nodes as usize,
             ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT
         );
-        assert_eq!(report.barriers, 4);
+        assert_eq!(report.barriers, 3);
         assert_eq!(report.dependency_edges, report.nodes - 1);
         assert_eq!(graph.domain, ScheduleDomain::FunEcs);
         assert!(graph.nodes.iter().any(|node| {

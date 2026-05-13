@@ -8,11 +8,38 @@ use crate::{
     DenseSlotMap, ECS_SPATIAL_MAX_DERIVED_ARTIFACTS, ECS_SPATIAL_MAX_HANDOFF_ROWS, EcsAabbF32,
     EcsDecodedPagePayloadKind, EcsDecodedPageRecord, EcsDerivedArtifactId, EcsHandoffQueueId,
     EcsSpatialCommand, EcsSpatialCommandBuffer, EcsSpatialPageKey, EcsSpatialValidationError,
-    FixedStepId, TerrainMaterialPaletteId, VoxelCollisionPolicy,
+    FixedStepId, ProceduralGeneratedPageClass, TerrainMaterialId, TerrainMaterialPaletteId,
+    VOXEL_BRICK_EDGE_CELLS, VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VoxelBrickPayload,
+    VoxelCollisionPolicy, VoxelMaterialPalette, VoxelOccupancyStorageKind,
     frame_graph::EcsCrossDomainWaitTokenKind,
 };
 
 pub const ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT: usize = 24;
+pub const ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_COUNT: usize = 4;
+pub const ECS_PROCEDURAL_TERRAIN_OPTIONAL_ARTIFACT_COUNT: usize = 3;
+
+pub const ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_KINDS: [EcsDerivedArtifactKind;
+    ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_COUNT] = [
+    EcsDerivedArtifactKind::TerrainCoarseProxy,
+    EcsDerivedArtifactKind::TerrainSurfacePackets,
+    EcsDerivedArtifactKind::TerrainMaterialPage,
+    EcsDerivedArtifactKind::LoadAnimationRecord,
+];
+
+pub const ECS_PROCEDURAL_TERRAIN_OPTIONAL_ARTIFACT_KINDS: [EcsDerivedArtifactKind;
+    ECS_PROCEDURAL_TERRAIN_OPTIONAL_ARTIFACT_COUNT] = [
+    EcsDerivedArtifactKind::TerrainSdf,
+    EcsDerivedArtifactKind::PhysicsCookRequests,
+    EcsDerivedArtifactKind::VirtualShadowInvalidation,
+];
+
+pub const ECS_PROCEDURAL_TERRAIN_REQUIRED_BUILD_SYSTEMS: [EcsDerivedArtifactBuildSystem;
+    ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_COUNT] = [
+    EcsDerivedArtifactBuildSystem::BuildTerrainCoarseProxy,
+    EcsDerivedArtifactBuildSystem::BuildTerrainSurfacePackets,
+    EcsDerivedArtifactBuildSystem::BuildTerrainMaterialPage,
+    EcsDerivedArtifactBuildSystem::BuildLoadAnimationRecord,
+];
 
 pub const ECS_DERIVED_ARTIFACT_BUILD_SYSTEMS: [EcsDerivedArtifactBuildSystem;
     ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT] = [
@@ -320,6 +347,93 @@ pub struct VoxelSurfacePacketArtifact {
     pub source_epoch: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralTerrainCoarseProxy {
+    pub source_page: EcsSpatialPageKey,
+    pub min_height_ft: i32,
+    pub max_height_ft: i32,
+    pub dominant_material: TerrainMaterialId,
+    pub occupied_cluster_mask: u64,
+    pub source_epoch: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralTerrainSurfacePacket {
+    pub source_page: EcsSpatialPageKey,
+    pub local_bounds: PackedAabb,
+    pub exposed_face_count: u32,
+    pub packet_range: PackedRange,
+    pub material_palette_id: TerrainMaterialPaletteId,
+    pub source_epoch: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainMaterialPage {
+    pub source_page: EcsSpatialPageKey,
+    pub palette: VoxelMaterialPalette,
+    pub dominant_material_per_cluster: [TerrainMaterialId; VOXEL_CLUSTER_SUMMARIES_PER_BRICK],
+    pub source_epoch: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ProceduralTerrainLoadStage {
+    #[default]
+    PageRequested = 0,
+    RecipeAcquired = 1,
+    PageDecoded = 2,
+    ArtifactReady = 3,
+    RendererPublished = 4,
+}
+
+impl ProceduralTerrainLoadStage {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PageRequested => "page_requested",
+            Self::RecipeAcquired => "recipe_acquired",
+            Self::PageDecoded => "page_decoded",
+            Self::ArtifactReady => "artifact_ready",
+            Self::RendererPublished => "renderer_published",
+        }
+    }
+
+    #[must_use]
+    pub const fn progress(self) -> f32 {
+        match self {
+            Self::PageRequested => 0.10,
+            Self::RecipeAcquired => 0.25,
+            Self::PageDecoded => 0.45,
+            Self::ArtifactReady => 0.75,
+            Self::RendererPublished => 1.00,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProceduralTerrainLoadAnimationRecord {
+    pub source_page: EcsSpatialPageKey,
+    pub stage: ProceduralTerrainLoadStage,
+    pub progress: f32,
+    pub source_epoch: u32,
+}
+
+impl ProceduralTerrainLoadAnimationRecord {
+    #[must_use]
+    pub fn new(
+        source_page: EcsSpatialPageKey,
+        stage: ProceduralTerrainLoadStage,
+        source_epoch: u32,
+    ) -> Self {
+        Self {
+            source_page,
+            stage,
+            progress: stage.progress(),
+            source_epoch,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum EcsDerivedArtifactBuildSystem {
@@ -350,10 +464,51 @@ pub enum EcsDerivedArtifactBuildSystem {
     BuildStormExtinctionDirtyRows = 23,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralTerrainArtifactFlags {
+    pub terrain_sdf: bool,
+    pub physics_cook_requests: bool,
+    pub virtual_shadow_invalidation: bool,
+}
+
+impl ProceduralTerrainArtifactFlags {
+    pub const FIRST_VISUAL: Self = Self {
+        terrain_sdf: false,
+        physics_cook_requests: false,
+        virtual_shadow_invalidation: false,
+    };
+
+    pub const ALL_OPTIONAL: Self = Self {
+        terrain_sdf: true,
+        physics_cook_requests: true,
+        virtual_shadow_invalidation: true,
+    };
+
+    #[must_use]
+    pub const fn allows_optional_kind(self, kind: EcsDerivedArtifactKind) -> bool {
+        match kind {
+            EcsDerivedArtifactKind::TerrainSdf => self.terrain_sdf,
+            EcsDerivedArtifactKind::PhysicsCookRequests => self.physics_cook_requests,
+            EcsDerivedArtifactKind::VirtualShadowInvalidation => self.virtual_shadow_invalidation,
+            EcsDerivedArtifactKind::TerrainCoarseProxy
+            | EcsDerivedArtifactKind::TerrainSurfacePackets
+            | EcsDerivedArtifactKind::TerrainMaterialPage
+            | EcsDerivedArtifactKind::LoadAnimationRecord => true,
+            _ => false,
+        }
+    }
+}
+
 impl EcsDerivedArtifactBuildSystem {
     #[must_use]
     pub const fn all() -> &'static [Self] {
         &ECS_DERIVED_ARTIFACT_BUILD_SYSTEMS
+    }
+
+    #[must_use]
+    pub const fn prototype_required()
+    -> &'static [Self; ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_COUNT] {
+        &ECS_PROCEDURAL_TERRAIN_REQUIRED_BUILD_SYSTEMS
     }
 
     #[must_use]
@@ -435,6 +590,27 @@ impl EcsDerivedArtifactBuildSystem {
     }
 
     #[must_use]
+    pub const fn prototype_artifact_kind(
+        self,
+        flags: ProceduralTerrainArtifactFlags,
+    ) -> Option<EcsDerivedArtifactKind> {
+        match self {
+            Self::BuildTerrainCoarseProxy => Some(EcsDerivedArtifactKind::TerrainCoarseProxy),
+            Self::BuildTerrainSurfacePackets => Some(EcsDerivedArtifactKind::TerrainSurfacePackets),
+            Self::BuildTerrainMaterialPage => Some(EcsDerivedArtifactKind::TerrainMaterialPage),
+            Self::BuildLoadAnimationRecord => Some(EcsDerivedArtifactKind::LoadAnimationRecord),
+            Self::BuildTerrainSdf if flags.terrain_sdf => Some(EcsDerivedArtifactKind::TerrainSdf),
+            Self::BuildPhysicsCookRequests if flags.physics_cook_requests => {
+                Some(EcsDerivedArtifactKind::PhysicsCookRequests)
+            }
+            Self::BuildShadowInvalidationRows if flags.virtual_shadow_invalidation => {
+                Some(EcsDerivedArtifactKind::VirtualShadowInvalidation)
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub const fn consumer(self) -> EcsArtifactConsumer {
         match self {
             Self::BuildTerrainSurfacePackets
@@ -469,11 +645,13 @@ impl EcsDerivedArtifactBuildSystem {
     pub const fn requiredness(self) -> WorkRequiredness {
         match self {
             Self::BuildLoadAnimationRecord
+            | Self::BuildTerrainSdf
             | Self::BuildFoliageSeeds
             | Self::BuildFoliageClusters
             | Self::BuildCanopyOpacity
             | Self::BuildShadowInvalidationRows
             | Self::BuildRadianceUpdateRows
+            | Self::BuildPhysicsCookRequests
             | Self::BuildFoliageTrunkBranchVirtualGeometry
             | Self::BuildFoliageGrassBrushInstanceClusters
             | Self::BuildFoliageCollisionLargeObjectProxy
@@ -486,12 +664,44 @@ impl EcsDerivedArtifactBuildSystem {
             | Self::BuildStormExtinctionDirtyRows => WorkRequiredness::Optional,
             Self::BuildTerrainSurfacePackets
             | Self::BuildTerrainCoarseProxy
-            | Self::BuildTerrainSdf
             | Self::BuildTerrainMaterialPage
-            | Self::BuildPhysicsCookRequests
             | Self::BuildCollisionSdfProxy
             | Self::BuildVoxelEditDeltaRows
             | Self::BuildNetworkRelevanceRows => WorkRequiredness::Required,
+        }
+    }
+
+    #[must_use]
+    pub const fn builds_for_generated_page_class(
+        self,
+        class: ProceduralGeneratedPageClass,
+    ) -> bool {
+        match self {
+            Self::BuildTerrainSurfacePackets
+            | Self::BuildTerrainMaterialPage
+            | Self::BuildLoadAnimationRecord => class.builds_surface_artifacts(),
+            Self::BuildTerrainCoarseProxy => class.builds_coarse_proxy(),
+            Self::BuildTerrainSdf
+            | Self::BuildShadowInvalidationRows
+            | Self::BuildRadianceUpdateRows => class.builds_lux_invalidation(),
+            Self::BuildPhysicsCookRequests | Self::BuildCollisionSdfProxy => {
+                class.builds_physics_proxy()
+            }
+            Self::BuildVoxelEditDeltaRows
+            | Self::BuildNetworkRelevanceRows
+            | Self::BuildFoliageSeeds
+            | Self::BuildFoliageClusters
+            | Self::BuildCanopyOpacity
+            | Self::BuildFoliageTrunkBranchVirtualGeometry
+            | Self::BuildFoliageGrassBrushInstanceClusters
+            | Self::BuildFoliageCollisionLargeObjectProxy
+            | Self::BuildFoliageCardsImpostors
+            | Self::BuildFoliageClusteredAnimation
+            | Self::BuildFoliageCanopyTransmittance
+            | Self::BuildFoliageBiomeTint
+            | Self::BuildFoliageHorizonImpostorField
+            | Self::BuildFoliageSdfOpacityShadows
+            | Self::BuildStormExtinctionDirtyRows => false,
         }
     }
 }
@@ -1460,6 +1670,7 @@ pub struct EcsDerivedArtifactRecord {
     pub source_page: EcsSpatialPageKey,
     pub kind: EcsDerivedArtifactKind,
     pub source_epoch: u32,
+    pub source_digest: u64,
     pub artifact_epoch: u32,
     pub state: EcsArtifactState,
     pub requiredness: WorkRequiredness,
@@ -1515,11 +1726,45 @@ impl EcsDerivedArtifactRegistry {
     }
 }
 
+#[must_use]
+pub fn derived_artifact_source_digest(
+    source_page: EcsSpatialPageKey,
+    source_epoch: u32,
+    content_epoch: u32,
+) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    hash = fnv1a_u64(hash, source_page.chunk_key().get());
+    hash = fnv1a_u32(hash, source_epoch);
+    hash = fnv1a_u32(hash, content_epoch);
+    hash.max(1)
+}
+
+const fn fnv1a_u8(hash: u64, value: u8) -> u64 {
+    (hash ^ value as u64).wrapping_mul(0x0000_0100_0000_01b3)
+}
+
+const fn fnv1a_u16(hash: u64, value: u16) -> u64 {
+    let hash = fnv1a_u8(hash, (value & 0xff) as u8);
+    fnv1a_u8(hash, (value >> 8) as u8)
+}
+
+const fn fnv1a_u32(hash: u64, value: u32) -> u64 {
+    let hash = fnv1a_u16(hash, (value & 0xffff) as u16);
+    fnv1a_u16(hash, (value >> 16) as u16)
+}
+
+const fn fnv1a_u64(hash: u64, value: u64) -> u64 {
+    let hash = fnv1a_u32(hash, (value & 0xffff_ffff) as u32);
+    fnv1a_u32(hash, (value >> 32) as u32)
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct EcsArtifactBuildReport {
     pub decoded_pages: u32,
     pub artifacts_published: u32,
     pub skipped_failed_pages: u32,
+    pub skipped_by_page_class: u32,
+    pub skipped_by_profile: u32,
 }
 
 pub fn build_derived_artifacts(
@@ -1535,13 +1780,19 @@ pub fn build_derived_artifacts(
             report.skipped_failed_pages += 1;
             continue;
         }
+        let class = generated_page_class(page);
         for system in systems {
+            if !system.builds_for_generated_page_class(class) {
+                report.skipped_by_page_class += 1;
+                continue;
+            }
             *next_artifact_id = next_artifact_id.saturating_add(1).max(1);
             let artifact = EcsDerivedArtifactRecord {
                 artifact_id: EcsDerivedArtifactId::new(*next_artifact_id),
                 source_page: page.key,
                 kind: system.artifact_kind(),
                 source_epoch: page.source_epoch,
+                source_digest: page.telemetry.checksum.value,
                 artifact_epoch: page.telemetry.decode_epoch,
                 state: EcsArtifactState::Ready,
                 requiredness: system.requiredness(),
@@ -1552,6 +1803,247 @@ pub fn build_derived_artifacts(
         }
     }
     Ok(report)
+}
+
+pub fn build_prototype_terrain_artifacts(
+    decoded_pages: &[EcsDecodedPageRecord],
+    consumer_filter: Option<EcsArtifactConsumer>,
+    flags: ProceduralTerrainArtifactFlags,
+    next_artifact_id: &mut u64,
+    commands: &mut EcsSpatialCommandBuffer,
+) -> Result<EcsArtifactBuildReport, EcsSpatialValidationError> {
+    let mut report = EcsArtifactBuildReport::default();
+    for page in decoded_pages {
+        report.decoded_pages += 1;
+        if page.payload_kind == EcsDecodedPagePayloadKind::SourceFailed {
+            report.skipped_failed_pages += 1;
+            continue;
+        }
+        let class = generated_page_class(page);
+        for system in EcsDerivedArtifactBuildSystem::all() {
+            if consumer_filter.is_some_and(|consumer| system.consumer() != consumer) {
+                continue;
+            }
+            let Some(kind) = system.prototype_artifact_kind(flags) else {
+                report.skipped_by_profile += 1;
+                continue;
+            };
+            if !system.builds_for_generated_page_class(class) {
+                report.skipped_by_page_class += 1;
+                continue;
+            }
+            *next_artifact_id = next_artifact_id.saturating_add(1).max(1);
+            let artifact = EcsDerivedArtifactRecord {
+                artifact_id: EcsDerivedArtifactId::new(*next_artifact_id),
+                source_page: page.key,
+                kind,
+                source_epoch: page.source_epoch,
+                source_digest: page.telemetry.checksum.value,
+                artifact_epoch: page.telemetry.decode_epoch,
+                state: EcsArtifactState::Ready,
+                requiredness: system.requiredness(),
+                consumer: system.consumer(),
+            };
+            commands.push(EcsSpatialCommand::PublishArtifact(artifact))?;
+            report.artifacts_published += 1;
+        }
+    }
+    Ok(report)
+}
+
+fn generated_page_class(page: &EcsDecodedPageRecord) -> ProceduralGeneratedPageClass {
+    if let Some(brick) = &page.voxel_brick {
+        brick.generated_class
+    } else if page.payload_kind == EcsDecodedPagePayloadKind::Empty {
+        ProceduralGeneratedPageClass::EmptyAir
+    } else {
+        ProceduralGeneratedPageClass::DebugOnly
+    }
+}
+
+#[must_use]
+pub fn procedural_terrain_coarse_proxy_from_decoded_page(
+    page: &EcsDecodedPageRecord,
+) -> Option<ProceduralTerrainCoarseProxy> {
+    let brick = page.voxel_brick.as_ref()?;
+    let mut occupied_cluster_mask = 0_u64;
+    let mut min_local_y = i16::MAX;
+    let mut max_local_y = i16::MIN;
+    let mut dominant_material = TerrainMaterialId::INVALID;
+    let mut dominant_material_count = 0_u16;
+
+    for (index, cluster) in brick.clusters.iter().enumerate() {
+        if cluster.occupancy_popcount == 0 {
+            continue;
+        }
+        occupied_cluster_mask |= 1_u64 << index;
+        min_local_y = min_local_y.min(cluster.min_height_local);
+        max_local_y = max_local_y.max(cluster.max_height_local);
+        if cluster.occupancy_popcount >= dominant_material_count && cluster.dominant_material != 0 {
+            dominant_material_count = cluster.occupancy_popcount;
+            dominant_material = TerrainMaterialId::new(u32::from(cluster.dominant_material));
+        }
+    }
+
+    if occupied_cluster_mask == 0 {
+        return None;
+    }
+    if !dominant_material.is_valid() {
+        dominant_material = first_palette_material(brick).unwrap_or(TerrainMaterialId::new(1));
+    }
+    let origin_y = page_origin_y_ft(page.key);
+    let cell_edge_ft = level_cell_edge_ft(page.key.level);
+    Some(ProceduralTerrainCoarseProxy {
+        source_page: page.key,
+        min_height_ft: clamp_i64_to_i32(
+            origin_y.saturating_add(i64::from(min_local_y).saturating_mul(cell_edge_ft)),
+        ),
+        max_height_ft: clamp_i64_to_i32(
+            origin_y.saturating_add(i64::from(max_local_y).saturating_mul(cell_edge_ft)),
+        ),
+        dominant_material,
+        occupied_cluster_mask,
+        source_epoch: page.source_epoch,
+    })
+}
+
+#[must_use]
+pub fn procedural_terrain_surface_packet_from_decoded_page(
+    page: &EcsDecodedPageRecord,
+) -> Option<ProceduralTerrainSurfacePacket> {
+    let brick = page.voxel_brick.as_ref()?;
+    let (local_bounds, exposed_face_count) = blocky_surface_bounds_and_faces(brick)?;
+    Some(ProceduralTerrainSurfacePacket {
+        source_page: page.key,
+        local_bounds,
+        exposed_face_count,
+        packet_range: PackedRange::new(0, exposed_face_count),
+        material_palette_id: material_palette_id_for_page(page.key),
+        source_epoch: page.source_epoch,
+    })
+}
+
+#[must_use]
+pub fn procedural_terrain_material_page_from_decoded_page(
+    page: &EcsDecodedPageRecord,
+) -> Option<ProceduralTerrainMaterialPage> {
+    let brick = page.voxel_brick.as_ref()?;
+    let mut dominant_material_per_cluster =
+        [TerrainMaterialId::INVALID; VOXEL_CLUSTER_SUMMARIES_PER_BRICK];
+    for (index, cluster) in brick.clusters.iter().enumerate() {
+        dominant_material_per_cluster[index] = if cluster.dominant_material == 0 {
+            TerrainMaterialId::INVALID
+        } else {
+            TerrainMaterialId::new(u32::from(cluster.dominant_material))
+        };
+    }
+    Some(ProceduralTerrainMaterialPage {
+        source_page: page.key,
+        palette: brick.material_palette,
+        dominant_material_per_cluster,
+        source_epoch: page.source_epoch,
+    })
+}
+
+fn blocky_surface_bounds_and_faces(brick: &VoxelBrickPayload) -> Option<(PackedAabb, u32)> {
+    let mut min = [i16::MAX; 3];
+    let mut max = [i16::MIN; 3];
+    let mut exposed_face_count = 0_u32;
+    for z in 0..VOXEL_BRICK_EDGE_CELLS {
+        for y in 0..VOXEL_BRICK_EDGE_CELLS {
+            for x in 0..VOXEL_BRICK_EDGE_CELLS {
+                if !voxel_is_solid(brick, x, y, z) {
+                    continue;
+                }
+                let local = [i16::from(x), i16::from(y), i16::from(z)];
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(local[axis]);
+                    max[axis] = max[axis].max(local[axis]);
+                }
+                exposed_face_count =
+                    exposed_face_count.saturating_add(exposed_faces_for_cell(brick, x, y, z));
+            }
+        }
+    }
+    (exposed_face_count != 0).then_some((PackedAabb::new(min, max), exposed_face_count))
+}
+
+fn exposed_faces_for_cell(brick: &VoxelBrickPayload, x: u8, y: u8, z: u8) -> u32 {
+    let x = i16::from(x);
+    let y = i16::from(y);
+    let z = i16::from(z);
+    let neighbors = [
+        (x.saturating_sub(1), y, z),
+        (x.saturating_add(1), y, z),
+        (x, y.saturating_sub(1), z),
+        (x, y.saturating_add(1), z),
+        (x, y, z.saturating_sub(1)),
+        (x, y, z.saturating_add(1)),
+    ];
+    neighbors
+        .iter()
+        .filter(|(nx, ny, nz)| !voxel_is_solid_i16(brick, *nx, *ny, *nz))
+        .count()
+        .min(u32::MAX as usize) as u32
+}
+
+fn voxel_is_solid_i16(brick: &VoxelBrickPayload, x: i16, y: i16, z: i16) -> bool {
+    if x < 0
+        || y < 0
+        || z < 0
+        || x >= i16::from(VOXEL_BRICK_EDGE_CELLS)
+        || y >= i16::from(VOXEL_BRICK_EDGE_CELLS)
+        || z >= i16::from(VOXEL_BRICK_EDGE_CELLS)
+    {
+        return false;
+    }
+    voxel_is_solid(brick, x as u8, y as u8, z as u8)
+}
+
+fn voxel_is_solid(brick: &VoxelBrickPayload, x: u8, y: u8, z: u8) -> bool {
+    match brick.occupancy.kind {
+        VoxelOccupancyStorageKind::Empty => false,
+        VoxelOccupancyStorageKind::UniformSolid => true,
+        VoxelOccupancyStorageKind::Bitset32 => {
+            let index = voxel_index(x, y, z);
+            let word = index / 64;
+            let bit = index % 64;
+            (brick.occupancy.words[word] & (1_u64 << bit)) != 0
+        }
+    }
+}
+
+fn voxel_index(x: u8, y: u8, z: u8) -> usize {
+    ((usize::from(z) * usize::from(VOXEL_BRICK_EDGE_CELLS) + usize::from(y))
+        * usize::from(VOXEL_BRICK_EDGE_CELLS))
+        + usize::from(x)
+}
+
+fn first_palette_material(brick: &VoxelBrickPayload) -> Option<TerrainMaterialId> {
+    (brick.material_palette.len != 0)
+        .then(|| TerrainMaterialId::new(u32::from(brick.material_palette.materials[0])))
+}
+
+fn material_palette_id_for_page(page: EcsSpatialPageKey) -> TerrainMaterialPaletteId {
+    TerrainMaterialPaletteId::new((page.chunk_key().get() as u32).max(1))
+}
+
+fn page_origin_y_ft(page: EcsSpatialPageKey) -> i64 {
+    i64::from(page.y)
+        .saturating_mul(i64::from(VOXEL_BRICK_EDGE_CELLS))
+        .saturating_mul(level_cell_edge_ft(page.level))
+}
+
+fn level_cell_edge_ft(level: u8) -> i64 {
+    if level >= 30 {
+        1_i64 << 30
+    } else {
+        1_i64 << u32::from(level)
+    }
+}
+
+fn clamp_i64_to_i32(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1586,6 +2078,7 @@ pub fn renderer_handoff_from_artifact(
         source_page: artifact.source_page,
         kind,
         source_epoch: artifact.source_epoch,
+        source_digest: artifact.source_digest,
         artifact_epoch: artifact.artifact_epoch,
         requiredness: artifact.requiredness,
         visibility_hint,
@@ -1971,6 +2464,7 @@ pub struct RendererArtifactHandoff {
     pub source_page: EcsSpatialPageKey,
     pub kind: RendererArtifactHandoffKind,
     pub source_epoch: u32,
+    pub source_digest: u64,
     pub artifact_epoch: u32,
     pub requiredness: WorkRequiredness,
     pub visibility_hint: RendererVisibilityHint,
@@ -2066,6 +2560,7 @@ mod tests {
             source_page: terrain_page(),
             kind: EcsDerivedArtifactKind::TerrainSurfacePackets,
             source_epoch: 2,
+            source_digest: derived_artifact_source_digest(terrain_page(), 2, generation),
             artifact_epoch: generation,
             state,
             requiredness: WorkRequiredness::Required,

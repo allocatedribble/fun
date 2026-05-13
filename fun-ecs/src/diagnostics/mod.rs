@@ -2,16 +2,26 @@ use fun_scheduler_types::{EcsWorkKind, WorkEdge};
 
 pub mod benchmarks;
 pub mod gates;
+pub mod procedural_terrain;
 
 pub use benchmarks::{
     ECS_BENCHMARK_TOTAL_WORKLOADS, ECS_ENTITY_KERNEL_BENCHMARKS,
-    ECS_RESOURCE_TABLE_KERNEL_BENCHMARKS, ECS_SCHEDULER_KERNEL_BENCHMARKS,
-    ECS_SPATIAL_BASELINE_BENCHMARKS, EcsBenchmarkConsumer, EcsBenchmarkSuiteKind,
-    EcsBenchmarkWorkload, EcsBenchmarkWorkloadKind, ecs_benchmark_workloads,
+    ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS, ECS_RESOURCE_TABLE_KERNEL_BENCHMARKS,
+    ECS_SCHEDULER_KERNEL_BENCHMARKS, ECS_SPATIAL_BASELINE_BENCHMARKS, EcsBenchmarkConsumer,
+    EcsBenchmarkSuiteKind, EcsBenchmarkWorkload, EcsBenchmarkWorkloadKind, ecs_benchmark_workloads,
 };
 pub use gates::{
     EcsReplacementGateCategory, EcsReplacementGateInput, EcsReplacementGateRejectReason,
     EcsReplacementGateReport,
+};
+pub use procedural_terrain::{
+    PROCEDURAL_TERRAIN_BENCHMARK_SEED, PROCEDURAL_TERRAIN_COLD_SPAWN_CAMERA_FT,
+    PROCEDURAL_TERRAIN_COLD_SPAWN_DESIRED_SHELLS, PROCEDURAL_TERRAIN_COLD_SPAWN_REQUIRED_SHELLS,
+    PROCEDURAL_TERRAIN_NEGATIVE_CAMERA_FT, PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS,
+    PROCEDURAL_TERRAIN_TELEPORT_DESTINATION_FT, PROCEDURAL_TERRAIN_TREADMILL_DESIRED_SHELLS,
+    PROCEDURAL_TERRAIN_TREADMILL_FRAMES, PROCEDURAL_TERRAIN_TREADMILL_REQUIRED_SHELLS,
+    PROCEDURAL_TERRAIN_TREADMILL_STEP_FT, ProceduralTerrainPrototypeBenchmarkKind,
+    ProceduralTerrainPrototypeBenchmarkReport, run_procedural_terrain_prototype_benchmark,
 };
 
 use crate::{
@@ -976,6 +986,7 @@ mod tests {
                     source_page: page,
                     kind: crate::EcsDerivedArtifactKind::TerrainSurfacePackets,
                     source_epoch: 1,
+                    source_digest: crate::derived_artifact_source_digest(page, 1, 1),
                     artifact_epoch: 1,
                     state,
                     requiredness,

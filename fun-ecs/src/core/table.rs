@@ -904,6 +904,7 @@ impl DenseResourceTableRow for EcsDerivedArtifactRecord {
         hash = fnv1a_u8(hash, self.consumer as u8);
         hash = fnv1a_u8(hash, requiredness_code(self.requiredness));
         hash = fnv1a_u32(hash, self.source_epoch);
+        hash = fnv1a_u64(hash, self.source_digest);
         hash = fnv1a_u32(hash, self.artifact_epoch);
         hash
     }
@@ -1253,6 +1254,11 @@ mod tests {
                 source_page: page,
                 kind,
                 source_epoch: index as u32,
+                source_digest: crate::derived_artifact_source_digest(
+                    page,
+                    index as u32,
+                    index as u32 + 1,
+                ),
                 artifact_epoch: index as u32 + 1,
                 state: if index.is_multiple_of(7) {
                     EcsArtifactState::Building

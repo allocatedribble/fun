@@ -5,6 +5,7 @@ pub enum EcsBenchmarkSuiteKind {
     EcsEntityKernel = 1,
     EcsResourceTableKernel = 2,
     EcsSchedulerKernel = 3,
+    ProceduralTerrainPrototype = 4,
 }
 
 impl EcsBenchmarkSuiteKind {
@@ -15,6 +16,7 @@ impl EcsBenchmarkSuiteKind {
             Self::EcsEntityKernel => "ecs_entity_kernel",
             Self::EcsResourceTableKernel => "ecs_resource_table_kernel",
             Self::EcsSchedulerKernel => "ecs_scheduler_kernel",
+            Self::ProceduralTerrainPrototype => "procedural_terrain_prototype",
         }
     }
 }
@@ -47,6 +49,11 @@ pub enum EcsBenchmarkWorkloadKind {
     SchedulerRunDeterministicGraph = 51,
     SchedulerRunDeterministicParallelGraph = 52,
     SchedulerApplyBarriers = 53,
+    ProceduralTerrainColdSpawn = 64,
+    ProceduralTerrainStreamingTreadmill = 65,
+    ProceduralTerrainTeleport = 66,
+    ProceduralTerrainMultiplayerDigest = 67,
+    ProceduralTerrainNegativeCoordinateWorld = 68,
 }
 
 impl EcsBenchmarkWorkloadKind {
@@ -82,6 +89,13 @@ impl EcsBenchmarkWorkloadKind {
                 "scheduler_run_deterministic_parallel_graph"
             }
             Self::SchedulerApplyBarriers => "scheduler_apply_barriers",
+            Self::ProceduralTerrainColdSpawn => "procedural_terrain_cold_spawn",
+            Self::ProceduralTerrainStreamingTreadmill => "procedural_terrain_streaming_treadmill",
+            Self::ProceduralTerrainTeleport => "procedural_terrain_teleport",
+            Self::ProceduralTerrainMultiplayerDigest => "procedural_terrain_multiplayer_digest",
+            Self::ProceduralTerrainNegativeCoordinateWorld => {
+                "procedural_terrain_negative_coordinate_world"
+            }
         }
     }
 }
@@ -181,6 +195,24 @@ impl EcsBenchmarkWorkload {
             rows: 0,
             systems,
             consumer: EcsBenchmarkConsumer::None,
+        }
+    }
+
+    #[must_use]
+    pub const fn procedural_terrain(
+        kind: EcsBenchmarkWorkloadKind,
+        label: &'static str,
+        cameras: u16,
+        rows: u32,
+    ) -> Self {
+        Self {
+            suite: EcsBenchmarkSuiteKind::ProceduralTerrainPrototype,
+            kind,
+            label,
+            cameras,
+            rows,
+            systems: 0,
+            consumer: EcsBenchmarkConsumer::Renderer,
         }
     }
 }
@@ -404,10 +436,44 @@ pub const ECS_SCHEDULER_KERNEL_BENCHMARKS: [EcsBenchmarkWorkload; 7] = [
     ),
 ];
 
+pub const ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS: [EcsBenchmarkWorkload; 5] = [
+    EcsBenchmarkWorkload::procedural_terrain(
+        EcsBenchmarkWorkloadKind::ProceduralTerrainColdSpawn,
+        "cold_spawn_required_2_desired_5",
+        1,
+        1_331,
+    ),
+    EcsBenchmarkWorkload::procedural_terrain(
+        EcsBenchmarkWorkloadKind::ProceduralTerrainStreamingTreadmill,
+        "streaming_treadmill_12_frames",
+        1,
+        343,
+    ),
+    EcsBenchmarkWorkload::procedural_terrain(
+        EcsBenchmarkWorkloadKind::ProceduralTerrainTeleport,
+        "teleport_far_region",
+        1,
+        1_331,
+    ),
+    EcsBenchmarkWorkload::procedural_terrain(
+        EcsBenchmarkWorkloadKind::ProceduralTerrainMultiplayerDigest,
+        "multiplayer_digest_server_two_clients",
+        3,
+        125,
+    ),
+    EcsBenchmarkWorkload::procedural_terrain(
+        EcsBenchmarkWorkloadKind::ProceduralTerrainNegativeCoordinateWorld,
+        "negative_coordinate_world",
+        1,
+        343,
+    ),
+];
+
 pub const ECS_BENCHMARK_TOTAL_WORKLOADS: usize = ECS_SPATIAL_BASELINE_BENCHMARKS.len()
     + ECS_ENTITY_KERNEL_BENCHMARKS.len()
     + ECS_RESOURCE_TABLE_KERNEL_BENCHMARKS.len()
-    + ECS_SCHEDULER_KERNEL_BENCHMARKS.len();
+    + ECS_SCHEDULER_KERNEL_BENCHMARKS.len()
+    + ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS.len();
 
 pub fn ecs_benchmark_workloads() -> impl Iterator<Item = &'static EcsBenchmarkWorkload> {
     ECS_SPATIAL_BASELINE_BENCHMARKS
@@ -415,6 +481,7 @@ pub fn ecs_benchmark_workloads() -> impl Iterator<Item = &'static EcsBenchmarkWo
         .chain(ECS_ENTITY_KERNEL_BENCHMARKS.iter())
         .chain(ECS_RESOURCE_TABLE_KERNEL_BENCHMARKS.iter())
         .chain(ECS_SCHEDULER_KERNEL_BENCHMARKS.iter())
+        .chain(ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS.iter())
 }
 
 #[cfg(test)]
@@ -518,5 +585,24 @@ mod tests {
             ecs_benchmark_workloads().count(),
             ECS_BENCHMARK_TOTAL_WORKLOADS
         );
+    }
+
+    #[test]
+    fn procedural_terrain_catalog_covers_requested_prototype_benchmarks() {
+        assert_eq!(ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS.len(), 5);
+        for kind in [
+            EcsBenchmarkWorkloadKind::ProceduralTerrainColdSpawn,
+            EcsBenchmarkWorkloadKind::ProceduralTerrainStreamingTreadmill,
+            EcsBenchmarkWorkloadKind::ProceduralTerrainTeleport,
+            EcsBenchmarkWorkloadKind::ProceduralTerrainMultiplayerDigest,
+            EcsBenchmarkWorkloadKind::ProceduralTerrainNegativeCoordinateWorld,
+        ] {
+            assert!(
+                ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS
+                    .iter()
+                    .any(|workload| workload.kind == kind
+                        && workload.suite == EcsBenchmarkSuiteKind::ProceduralTerrainPrototype)
+            );
+        }
     }
 }

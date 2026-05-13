@@ -19,6 +19,8 @@ pub mod frame_graph;
 pub mod load_animation;
 #[path = "spatial/page_table.rs"]
 pub mod page_table;
+#[path = "spatial/procedural.rs"]
+pub mod procedural;
 #[path = "spatial/residency.rs"]
 pub mod residency;
 pub mod runtime;
@@ -64,18 +66,25 @@ pub use artifact::{
     ArtifactDag, ArtifactDagError, ArtifactDependency, ArtifactFallbackPolicy, ArtifactInput,
     ArtifactNode, ArtifactNodeId, ArtifactOutput, ArtifactProducer, ArtifactReadinessToken,
     ArtifactRetirePlan, CollisionCookMode, ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT,
-    ECS_DERIVED_ARTIFACT_BUILD_SYSTEMS, EcsArtifactBuildReport, EcsArtifactConsumer,
-    EcsArtifactState, EcsCrossDomainHandoff, EcsCrossDomainHandoffKind,
-    EcsCrossDomainHandoffQueues, EcsDerivedArtifactBuildSystem, EcsDerivedArtifactKind,
-    EcsDerivedArtifactRecord, EcsDerivedArtifactRegistry, EcsLuxHandoffPublishReport,
-    EcsLuxHandoffQueue, EcsPhysicsCookPublishReport, EcsPhysicsCookQueue, EcsPhysicsSourceTruth,
-    EcsRendererHandoffPublishReport, EcsRendererHandoffQueue, EcsTerrainPhysicsRules,
-    FoliageArtifactLodBand, LuxArtifactHandoff, LuxArtifactHandoffKind, PackedAabb, PackedRange,
-    RendererArtifactHandoff, RendererArtifactHandoffKind, RendererVisibilityHint,
-    VoxelPhysicsCookRequest, VoxelSurfacePacketArtifact, artifact_virtual_resource_key,
-    build_derived_artifacts, lux_handoff_from_artifact, physics_cook_from_artifact,
-    publish_lux_handoffs, publish_physics_cooks, publish_renderer_handoffs,
-    renderer_handoff_from_artifact, rvelte_artifact_virtual_resource_key,
+    ECS_DERIVED_ARTIFACT_BUILD_SYSTEMS, ECS_PROCEDURAL_TERRAIN_OPTIONAL_ARTIFACT_KINDS,
+    ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_KINDS, ECS_PROCEDURAL_TERRAIN_REQUIRED_BUILD_SYSTEMS,
+    EcsArtifactBuildReport, EcsArtifactConsumer, EcsArtifactState, EcsCrossDomainHandoff,
+    EcsCrossDomainHandoffKind, EcsCrossDomainHandoffQueues, EcsDerivedArtifactBuildSystem,
+    EcsDerivedArtifactKind, EcsDerivedArtifactRecord, EcsDerivedArtifactRegistry,
+    EcsLuxHandoffPublishReport, EcsLuxHandoffQueue, EcsPhysicsCookPublishReport,
+    EcsPhysicsCookQueue, EcsPhysicsSourceTruth, EcsRendererHandoffPublishReport,
+    EcsRendererHandoffQueue, EcsTerrainPhysicsRules, FoliageArtifactLodBand, LuxArtifactHandoff,
+    LuxArtifactHandoffKind, PackedAabb, PackedRange, ProceduralTerrainArtifactFlags,
+    ProceduralTerrainCoarseProxy, ProceduralTerrainLoadAnimationRecord, ProceduralTerrainLoadStage,
+    ProceduralTerrainMaterialPage, ProceduralTerrainSurfacePacket, RendererArtifactHandoff,
+    RendererArtifactHandoffKind, RendererVisibilityHint, VoxelPhysicsCookRequest,
+    VoxelSurfacePacketArtifact, artifact_virtual_resource_key, build_derived_artifacts,
+    build_prototype_terrain_artifacts, derived_artifact_source_digest, lux_handoff_from_artifact,
+    physics_cook_from_artifact, procedural_terrain_coarse_proxy_from_decoded_page,
+    procedural_terrain_material_page_from_decoded_page,
+    procedural_terrain_surface_packet_from_decoded_page, publish_lux_handoffs,
+    publish_physics_cooks, publish_renderer_handoffs, renderer_handoff_from_artifact,
+    rvelte_artifact_virtual_resource_key,
 };
 pub use authority::{
     EcsAssetRef, EcsAuthoringCommandKind, EcsAuthoringEditCommand, EcsAuthoringTool, EcsDebugPin,
@@ -141,14 +150,22 @@ pub use core::{
 };
 pub use diagnostics::{
     ECS_BENCHMARK_TOTAL_WORKLOADS, ECS_DIAGNOSTICS_UI_VIEW_COUNT, ECS_DIAGNOSTICS_UI_VIEWS,
-    ECS_ENTITY_KERNEL_BENCHMARKS, ECS_RESOURCE_TABLE_KERNEL_BENCHMARKS,
-    ECS_SCHEDULER_KERNEL_BENCHMARKS, ECS_SPATIAL_BASELINE_BENCHMARKS, EcsArtifactReport,
-    EcsBenchmarkConsumer, EcsBenchmarkSuiteKind, EcsBenchmarkWorkload, EcsBenchmarkWorkloadKind,
-    EcsCommandReport, EcsCrossDomainReport, EcsDiagnosticsUiPacket, EcsDiagnosticsUiPacketSet,
-    EcsDiagnosticsUiView, EcsFrameReport, EcsHandoffReport, EcsQueryReport,
-    EcsReplacementGateCategory, EcsReplacementGateInput, EcsReplacementGateRejectReason,
-    EcsReplacementGateReport, EcsScheduleReport, EcsStorageReport, EcsTableReport,
-    FunEcsGraphDebugSnapshot, ecs_benchmark_workloads,
+    ECS_ENTITY_KERNEL_BENCHMARKS, ECS_PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS,
+    ECS_RESOURCE_TABLE_KERNEL_BENCHMARKS, ECS_SCHEDULER_KERNEL_BENCHMARKS,
+    ECS_SPATIAL_BASELINE_BENCHMARKS, EcsArtifactReport, EcsBenchmarkConsumer,
+    EcsBenchmarkSuiteKind, EcsBenchmarkWorkload, EcsBenchmarkWorkloadKind, EcsCommandReport,
+    EcsCrossDomainReport, EcsDiagnosticsUiPacket, EcsDiagnosticsUiPacketSet, EcsDiagnosticsUiView,
+    EcsFrameReport, EcsHandoffReport, EcsQueryReport, EcsReplacementGateCategory,
+    EcsReplacementGateInput, EcsReplacementGateRejectReason, EcsReplacementGateReport,
+    EcsScheduleReport, EcsStorageReport, EcsTableReport, FunEcsGraphDebugSnapshot,
+    PROCEDURAL_TERRAIN_BENCHMARK_SEED, PROCEDURAL_TERRAIN_COLD_SPAWN_CAMERA_FT,
+    PROCEDURAL_TERRAIN_COLD_SPAWN_DESIRED_SHELLS, PROCEDURAL_TERRAIN_COLD_SPAWN_REQUIRED_SHELLS,
+    PROCEDURAL_TERRAIN_NEGATIVE_CAMERA_FT, PROCEDURAL_TERRAIN_PROTOTYPE_BENCHMARKS,
+    PROCEDURAL_TERRAIN_TELEPORT_DESTINATION_FT, PROCEDURAL_TERRAIN_TREADMILL_DESIRED_SHELLS,
+    PROCEDURAL_TERRAIN_TREADMILL_FRAMES, PROCEDURAL_TERRAIN_TREADMILL_REQUIRED_SHELLS,
+    PROCEDURAL_TERRAIN_TREADMILL_STEP_FT, ProceduralTerrainPrototypeBenchmarkKind,
+    ProceduralTerrainPrototypeBenchmarkReport, ecs_benchmark_workloads,
+    run_procedural_terrain_prototype_benchmark,
 };
 pub use dirty::{
     EcsDirtyRegion, EcsDirtyRegionLedger, EcsVoxelEditImpactMask, EcsVoxelEditPropagationOptions,
@@ -191,6 +208,13 @@ pub use load_animation::{
     publish_load_animation_handoffs,
 };
 pub use page_table::{EcsPageResidencyTable, EcsSpatialPageTable};
+pub use procedural::{
+    EcsProceduralRecipeRef, PROCEDURAL_TERRAIN_DESC_SCHEMA_VERSION,
+    PROCEDURAL_TERRAIN_GENERATOR_VERSION_V1, PageHeightRelation, ProceduralBiomeDesc,
+    ProceduralFeatureDesc, ProceduralGenerationBudget, ProceduralMaterialDesc,
+    ProceduralTerrainGeneratorDesc, ProceduralTerrainPageRecipe, ProceduralTerrainShapeDesc,
+    fbm2_q16, hash2, hash3, value_noise2_q16, value_noise3_q16,
+};
 pub use residency::{
     EcsPageFailureCode, EcsPageResidencyMap, EcsPageResidencyRecord, EcsPageResidencyState,
 };
@@ -208,26 +232,35 @@ pub use runtime::{
     scheduler_bridge_report,
 };
 pub use schedule::{
-    ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT, ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS,
-    ECS_SPATIAL_COMPILED_SCHEDULE_FRAME_ORDER, ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT,
-    ECS_SPATIAL_DEFAULT_DECODE_CHUNKS, ECS_SPATIAL_MAX_COMPILE_CHUNKS,
-    ECS_SPATIAL_MAX_COMPILED_CHUNKS, ECS_SPATIAL_SCHEDULE_FRAME_ORDER,
-    ECS_SPATIAL_SCHEDULE_SET_COUNT, EcsSpatialAccessPlan, EcsSpatialBarrierPlan,
-    EcsSpatialChunkPlan, EcsSpatialCommandBarrierKind, EcsSpatialCompiledScheduleNode,
-    EcsSpatialCompiledScheduleNodeKind, EcsSpatialCompilerBarrierKind, EcsSpatialGraphDigest,
-    EcsSpatialProductWorkGraph, EcsSpatialScheduleBuildInput, EcsSpatialScheduleBuildReport,
-    EcsSpatialScheduleCompileError, EcsSpatialScheduleCompileOutput, EcsSpatialScheduleCompiler,
-    EcsSpatialScheduleSet, EcsSpatialWorkNodeKind, EcsSpatialWorkNodeSpec,
-    compile_spatial_schedule_graph, spatial_set_access, spatial_system_descriptor,
+    ECS_PROCEDURAL_GENERATION_ESTIMATED_VOXELS_PER_PAGE, ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT,
+    ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS, ECS_SPATIAL_COMPILED_SCHEDULE_FRAME_ORDER,
+    ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT, ECS_SPATIAL_DEFAULT_DECODE_CHUNKS,
+    ECS_SPATIAL_MAX_COMPILE_CHUNKS, ECS_SPATIAL_MAX_COMPILED_CHUNKS,
+    ECS_SPATIAL_SCHEDULE_FRAME_ORDER, ECS_SPATIAL_SCHEDULE_SET_COUNT, EcsSpatialAccessPlan,
+    EcsSpatialBarrierPlan, EcsSpatialChunkPlan, EcsSpatialCommandBarrierKind,
+    EcsSpatialCompiledScheduleNode, EcsSpatialCompiledScheduleNodeKind,
+    EcsSpatialCompilerBarrierKind, EcsSpatialGraphDigest, EcsSpatialProductWorkGraph,
+    EcsSpatialScheduleBuildInput, EcsSpatialScheduleBuildReport, EcsSpatialScheduleCompileError,
+    EcsSpatialScheduleCompileOutput, EcsSpatialScheduleCompiler, EcsSpatialScheduleSet,
+    EcsSpatialWorkNodeKind, EcsSpatialWorkNodeSpec, ProceduralGenerationChunk,
+    ProceduralGenerationChunkSpec, ProceduralTerrainCancellationContext,
+    ProceduralTerrainCancellationDecision, ProceduralTerrainSchedulerWorkClass,
+    compile_spatial_schedule_graph, procedural_generation_deadline,
+    procedural_generation_default_chunk_key, procedural_priority_requiredness,
+    procedural_terrain_artifact_deadline, procedural_terrain_artifact_requiredness,
+    procedural_terrain_cancellation_decision, procedural_terrain_work_deadline,
+    procedural_terrain_work_requiredness, spatial_set_access, spatial_system_descriptor,
     spatial_system_id, spatial_token,
 };
 pub use source::{
     EcsCompressedPagePayload, EcsDecodeOverlay, EcsDecodeOverlayKind, EcsDecodeReport,
     EcsDecodeTelemetry, EcsDecodedPagePayloadKind, EcsDecodedPageQueue, EcsDecodedPageRecord,
-    EcsProceduralRecipeRef, EcsSourceAcquireQueue, EcsSourceAcquireRecord, EcsSourceAcquireReport,
-    EcsSourceChecksum, EcsSourceChecksumAlgorithm, EcsSourceFailure, EcsSourcePayload,
-    EcsSourcePayloadCodec, EcsSourceRequest, EcsSpatialRegionManifest, EcsSpatialSource,
-    EcsSpatialSourceKind, acquire_sources, decode_pages, decode_pages_with_procedural_manifest,
+    EcsSourceAcquireQueue, EcsSourceAcquireRecord, EcsSourceAcquireReport, EcsSourceChecksum,
+    EcsSourceChecksumAlgorithm, EcsSourceFailure, EcsSourcePayload, EcsSourcePayloadCodec,
+    EcsSourceRequest, EcsSpatialRegionManifest, EcsSpatialSource, EcsSpatialSourceKind,
+    acquire_sources, decode_pages, decode_pages_with_procedural_manifest,
+    decode_pages_with_procedural_manifest_and_budget,
+    decode_pages_with_procedural_manifest_and_scratch,
 };
 pub use spatial::{
     DebugPinReason, EcsAabbF32, EcsAabbI64, EcsBoundsUm, EcsClipLevelDesc, EcsFineOverlayDecl,
@@ -252,18 +285,25 @@ pub use terrain::{
     DeterministicMathMode, ECS_PROCEDURAL_TERRAIN_DEFAULT_REGION_EDGE_PAGES,
     ECS_PROCEDURAL_TERRAIN_GENERATOR_VERSION_V1, ECS_PROCEDURAL_TERRAIN_SCHEMA_VERSION,
     EcsBiomeRecipe, EcsProceduralTerrainSource, EcsProceduralWorldManifest,
-    EcsTerrainGeneratorVersion, ProceduralFeature, ProceduralFeatureMask, ProceduralPageDigest,
-    ProceduralPageDigestProbe, ProceduralWorldAuthorityPolicy, ProceduralWorldSyncManifest,
-    WorldOriginPolicy, generate_procedural_page_digest, generate_procedural_terrain_page,
+    EcsTerrainGeneratorVersion, ProceduralFeature, ProceduralFeatureMask, ProceduralGeneratedPage,
+    ProceduralGenerationScratch, ProceduralPageDigest, ProceduralPageDigestMismatchReport,
+    ProceduralPageDigestProbe, ProceduralPageDigestSample, ProceduralSurfaceFace,
+    ProceduralTerrainDeltaLayerHeader, ProceduralWorldAuthorityPolicy, ProceduralWorldHandshake,
+    ProceduralWorldHandshakeClientExpectation, ProceduralWorldSyncManifest, WorldOriginPolicy,
+    estimate_page_height_relation, generate_procedural_generated_page,
+    generate_procedural_generated_page_with_scratch, generate_procedural_page_digest,
+    generate_procedural_terrain_page, generate_procedural_terrain_page_with_scratch,
+    initial_region_seed_table_digest, page_seed, region_seed, terrain_height_ft,
 };
 pub use voxel::{
     EcsFineOverlayLink, EcsFineOverlayOverride, EcsFineOverlayOverrideMask, MaterialPalettePolicy,
-    VOXEL_BRICK_EDGE_CELLS, VOXEL_BRICK_FOOT_CELL_COUNT, VOXEL_BRICK_OCCUPANCY_WORDS,
-    VOXEL_CELL_EDGE_UM, VOXEL_CLUSTER_EDGE_CELLS, VOXEL_CLUSTER_SUMMARIES_PER_BRICK,
-    VOXEL_CLUSTERS_PER_BRICK_AXIS, VOXEL_MATERIAL_PALETTE_CAPACITY, VOXEL_MEGAREGION_EDGE_CELLS,
-    VOXEL_MEGAREGION_EDGE_REGIONS, VOXEL_REGION_EDGE_BRICKS, VOXEL_REGION_EDGE_CELLS,
-    VoxelBrickPayload, VoxelClusterSummary, VoxelEditPolicy, VoxelGridDesc, VoxelMaterialPalette,
-    VoxelOccupancyStorage, VoxelOccupancyStorageKind, VoxelPagePayloadKind,
+    ProceduralGeneratedPageClass, VOXEL_BRICK_EDGE_CELLS, VOXEL_BRICK_FOOT_CELL_COUNT,
+    VOXEL_BRICK_OCCUPANCY_WORDS, VOXEL_CELL_EDGE_UM, VOXEL_CLUSTER_EDGE_CELLS,
+    VOXEL_CLUSTER_SUMMARIES_PER_BRICK, VOXEL_CLUSTERS_PER_BRICK_AXIS,
+    VOXEL_MATERIAL_PALETTE_CAPACITY, VOXEL_MEGAREGION_EDGE_CELLS, VOXEL_MEGAREGION_EDGE_REGIONS,
+    VOXEL_REGION_EDGE_BRICKS, VOXEL_REGION_EDGE_CELLS, VoxelBrickPayload, VoxelClusterSummary,
+    VoxelEditPolicy, VoxelGridDesc, VoxelMaterialPalette, VoxelOccupancyStorage,
+    VoxelOccupancyStorageKind, VoxelPagePayloadKind,
 };
 
 pub const FUN_ECS_SCHEMA_VERSION: u16 = 1;
@@ -547,6 +587,7 @@ mod tests {
                     source_page,
                     kind: artifact_kind,
                     source_epoch: 9,
+                    source_digest: derived_artifact_source_digest(source_page, 9, 10),
                     artifact_epoch: 10,
                     state: EcsArtifactState::Ready,
                     requiredness,
@@ -785,6 +826,7 @@ mod tests {
             source_page,
             kind: EcsDerivedArtifactKind::TerrainSurfacePackets,
             source_epoch: 1,
+            source_digest: derived_artifact_source_digest(source_page, 1, 2),
             artifact_epoch: 2,
             state: EcsArtifactState::Ready,
             requiredness: WorkRequiredness::Required,
@@ -795,6 +837,7 @@ mod tests {
             source_page,
             kind: RendererArtifactHandoffKind::TerrainSurfacePackets,
             source_epoch: artifact.source_epoch,
+            source_digest: artifact.source_digest,
             artifact_epoch: artifact.artifact_epoch,
             requiredness: artifact.requiredness,
             visibility_hint: RendererVisibilityHint::VisibleNear,
@@ -846,6 +889,7 @@ mod tests {
                 source_page,
                 kind: EcsDerivedArtifactKind::TerrainSurfacePackets,
                 source_epoch: 8,
+                source_digest: derived_artifact_source_digest(source_page, 8, 9),
                 artifact_epoch: 9,
                 state: EcsArtifactState::Ready,
                 requiredness: WorkRequiredness::Required,
@@ -856,6 +900,7 @@ mod tests {
                 source_page,
                 kind: EcsDerivedArtifactKind::RadianceUpdateRows,
                 source_epoch: 8,
+                source_digest: derived_artifact_source_digest(source_page, 8, 9),
                 artifact_epoch: 9,
                 state: EcsArtifactState::Ready,
                 requiredness: WorkRequiredness::Optional,
@@ -895,6 +940,7 @@ mod tests {
                 source_page,
                 kind: EcsDerivedArtifactKind::RadianceUpdateRows,
                 source_epoch: 8,
+                source_digest: derived_artifact_source_digest(source_page, 8, 13),
                 artifact_epoch: 13,
                 state: EcsArtifactState::Ready,
                 requiredness: WorkRequiredness::Optional,
@@ -905,6 +951,7 @@ mod tests {
                 source_page,
                 kind: EcsDerivedArtifactKind::TerrainSurfacePackets,
                 source_epoch: 8,
+                source_digest: derived_artifact_source_digest(source_page, 8, 13),
                 artifact_epoch: 13,
                 state: EcsArtifactState::Ready,
                 requiredness: WorkRequiredness::Required,
@@ -1126,6 +1173,7 @@ mod tests {
             source_page,
             kind: EcsDerivedArtifactKind::CollisionSdfProxy,
             source_epoch: 5,
+            source_digest: derived_artifact_source_digest(source_page, 5, 23),
             artifact_epoch: 23,
             state: EcsArtifactState::Ready,
             requiredness: WorkRequiredness::Required,
@@ -1236,6 +1284,19 @@ mod tests {
             ),
             kind: EcsDerivedArtifactKind::FoliageCollisionLargeObjectProxy,
             source_epoch: 4,
+            source_digest: derived_artifact_source_digest(
+                EcsSpatialPageKey::new(
+                    EcsSpatialDomainKind::Foliage,
+                    EcsSpatialGridId::new(1),
+                    0,
+                    0,
+                    0,
+                    0,
+                    EcsPageChannel::FoliageGeometry,
+                ),
+                4,
+                12,
+            ),
             artifact_epoch: 12,
             state: EcsArtifactState::Ready,
             requiredness: WorkRequiredness::Optional,
@@ -1267,11 +1328,11 @@ mod tests {
                 EcsSpatialScheduleSet::AcquireSources,
                 EcsSpatialScheduleSet::DecodePages,
                 EcsSpatialScheduleSet::BuildDerivedArtifacts,
-                EcsSpatialScheduleSet::PropagateDirtyRegions,
+                EcsSpatialScheduleSet::ApplyArtifactCommands,
                 EcsSpatialScheduleSet::PublishRendererHandoffs,
                 EcsSpatialScheduleSet::PublishLuxHandoffs,
                 EcsSpatialScheduleSet::PublishPhysicsHandoffs,
-                EcsSpatialScheduleSet::PublishNetworkHandoffs,
+                EcsSpatialScheduleSet::ApplyHandoffCommands,
                 EcsSpatialScheduleSet::EvictColdPages,
                 EcsSpatialScheduleSet::FlushDiagnostics,
             ]
@@ -1387,13 +1448,7 @@ mod tests {
             )
         );
         assert_eq!(
-            compiled[10].kind,
-            EcsSpatialCompiledScheduleNodeKind::Barrier(
-                EcsSpatialCommandBarrierKind::ApplyDirtyPropagationCommands
-            )
-        );
-        assert_eq!(
-            compiled[15].kind,
+            compiled[12].kind,
             EcsSpatialCompiledScheduleNodeKind::Barrier(
                 EcsSpatialCommandBarrierKind::ApplyHandoffCommands
             )
@@ -1439,12 +1494,20 @@ mod tests {
         let empty = VoxelBrickPayload::empty(key, 12);
         assert_eq!(empty.key, key);
         assert_eq!(empty.kind, VoxelPagePayloadKind::Empty);
+        assert_eq!(
+            empty.generated_class,
+            ProceduralGeneratedPageClass::EmptyAir
+        );
         assert_eq!(empty.occupancy.kind, VoxelOccupancyStorageKind::Empty);
         assert_eq!(empty.clusters.len(), VOXEL_CLUSTER_SUMMARIES_PER_BRICK);
         assert_eq!(empty.edit_epoch, 12);
 
         let solid = VoxelBrickPayload::uniform_solid(key, 7, 13);
         assert_eq!(solid.kind, VoxelPagePayloadKind::UniformSolid);
+        assert_eq!(
+            solid.generated_class,
+            ProceduralGeneratedPageClass::UniformSolid
+        );
         assert_eq!(
             solid.occupancy.kind,
             VoxelOccupancyStorageKind::UniformSolid
@@ -1836,6 +1899,58 @@ mod tests {
         )
     }
 
+    fn procedural_surface_decoded_page() -> EcsDecodedPageRecord {
+        let manifest = EcsProceduralWorldManifest::default();
+        let key = page_xyz(0, 1, 0);
+        generate_procedural_terrain_page(
+            manifest,
+            manifest.recipe_ref_for_page(key),
+            EcsSpatialSourceId::new(9),
+            manifest.source_epoch(),
+            8,
+            0,
+        )
+        .expect("procedural surface decoded page")
+    }
+
+    fn decoded_page_with_class(
+        key: EcsSpatialPageKey,
+        generated_class: ProceduralGeneratedPageClass,
+    ) -> EcsDecodedPageRecord {
+        let mut brick = if generated_class == ProceduralGeneratedPageClass::UniformSolid {
+            VoxelBrickPayload::uniform_solid(key, 3, 5)
+        } else {
+            VoxelBrickPayload::empty(key, 5)
+        };
+        brick.generated_class = generated_class;
+        if generated_class.builds_surface_artifacts() {
+            brick.kind = VoxelPagePayloadKind::DenseFootCells;
+        }
+        let clusters = brick.clusters;
+        EcsDecodedPageRecord {
+            key,
+            source: EcsSpatialSourceId::new(17),
+            source_epoch: 5,
+            payload_kind: if generated_class == ProceduralGeneratedPageClass::EmptyAir {
+                EcsDecodedPagePayloadKind::Empty
+            } else {
+                EcsDecodedPagePayloadKind::VoxelBrick
+            },
+            voxel_brick: Some(brick),
+            cluster_summaries: clusters,
+            telemetry: EcsDecodeTelemetry {
+                key,
+                source_epoch: 5,
+                decode_epoch: 8,
+                source_bytes: 0,
+                overlay_count: 0,
+                cluster_summary_count: VOXEL_CLUSTER_SUMMARIES_PER_BRICK as u16,
+                checksum: EcsSourceChecksum::NONE,
+                failure: None,
+            },
+        }
+    }
+
     #[test]
     fn generic_spatial_source_acquire_outputs_payload_recipe_failure_and_checksum() {
         let compressed_page = page_xyz(0, 0, 0);
@@ -1848,17 +1963,9 @@ mod tests {
             ),
             (
                 recipe_page,
-                EcsSourcePayload::ProceduralRecipe(EcsProceduralRecipeRef {
-                    key: recipe_page,
-                    recipe_id: 44,
-                    seed: 99,
-                    generator_version: 1,
-                    manifest_signature: 77,
-                    checksum: EcsSourceChecksum {
-                        algorithm: EcsSourceChecksumAlgorithm::Fnv1a64,
-                        value: 123,
-                    },
-                }),
+                EcsSourcePayload::ProceduralTerrainRecipe(
+                    EcsProceduralWorldManifest::default().recipe_ref_for_page(recipe_page),
+                ),
             ),
         ]);
 
@@ -1882,7 +1989,7 @@ mod tests {
         ));
         assert!(matches!(
             queue.rows[1].request.payload,
-            EcsSourcePayload::ProceduralRecipe(_)
+            EcsSourcePayload::ProceduralTerrainRecipe(_)
         ));
         assert!(matches!(
             queue.rows[2].request.payload,
@@ -1950,6 +2057,37 @@ mod tests {
     }
 
     #[test]
+    fn decode_pages_limits_procedural_generation_by_frame_budget() {
+        let manifest = EcsProceduralWorldManifest::default();
+        let source = EcsProceduralTerrainSource::new(EcsSpatialSourceId::new(9), manifest);
+        let first_page = page_xyz(0, 1, 0);
+        let second_page = page_xyz(1, 1, 0);
+        let mut acquired = EcsSourceAcquireQueue::default();
+        acquire_sources(&source, &[first_page, second_page], 8, &mut acquired)
+            .expect("acquire procedural source rows");
+
+        let mut budget = manifest.generator_desc().budgets;
+        budget.max_pages_generated_per_frame = 1;
+        let mut decoded = EcsDecodedPageQueue::default();
+        let report = decode_pages_with_procedural_manifest_and_budget(
+            &acquired,
+            &[],
+            6,
+            manifest,
+            budget,
+            &mut decoded,
+        )
+        .expect("decode with budget");
+
+        assert_eq!(report.generated_pages, 1);
+        assert_eq!(report.budget_deferred, 1);
+        assert_eq!(report.decoded, 1);
+        assert_eq!(report.procedural, 0);
+        assert_eq!(decoded.rows.len(), 1);
+        assert_eq!(decoded.rows[0].key, first_page);
+    }
+
+    #[test]
     fn decode_pages_rejects_malformed_source_payload_length() {
         let page = page_xyz(0, 0, 0);
         let malformed = EcsCompressedPagePayload {
@@ -2007,7 +2145,130 @@ mod tests {
     }
 
     #[test]
-    fn build_derived_artifacts_publishes_commands_for_consumers_without_mutating_registry() {
+    fn prototype_terrain_profile_builds_first_visual_artifacts_only() {
+        let decoded_page = procedural_surface_decoded_page();
+        let mut next_artifact_id = 0;
+        let mut commands = EcsSpatialCommandBuffer::default();
+        let report = build_prototype_terrain_artifacts(
+            &[decoded_page],
+            None,
+            ProceduralTerrainArtifactFlags::FIRST_VISUAL,
+            &mut next_artifact_id,
+            &mut commands,
+        )
+        .expect("build first visual artifacts");
+        let artifacts: Vec<EcsDerivedArtifactRecord> = commands
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                EcsSpatialCommand::PublishArtifact(artifact) => Some(*artifact),
+                _ => None,
+            })
+            .collect();
+        let kinds: Vec<EcsDerivedArtifactKind> =
+            artifacts.iter().map(|artifact| artifact.kind).collect();
+
+        assert_eq!(report.artifacts_published, 4);
+        assert_eq!(next_artifact_id, 4);
+        for kind in ECS_PROCEDURAL_TERRAIN_REQUIRED_ARTIFACT_KINDS {
+            assert!(kinds.contains(&kind), "missing required artifact {kind:?}");
+        }
+        for kind in ECS_PROCEDURAL_TERRAIN_OPTIONAL_ARTIFACT_KINDS {
+            assert!(
+                !kinds.contains(&kind),
+                "optional artifact {kind:?} must be flag gated"
+            );
+        }
+    }
+
+    #[test]
+    fn optional_prototype_artifact_flags_enable_refinement_without_requiredness() {
+        let decoded_page = procedural_surface_decoded_page();
+        let mut next_artifact_id = 0;
+        let mut commands = EcsSpatialCommandBuffer::default();
+        build_prototype_terrain_artifacts(
+            &[decoded_page],
+            None,
+            ProceduralTerrainArtifactFlags::ALL_OPTIONAL,
+            &mut next_artifact_id,
+            &mut commands,
+        )
+        .expect("build optional prototype artifacts");
+        let artifacts: Vec<EcsDerivedArtifactRecord> = commands
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                EcsSpatialCommand::PublishArtifact(artifact) => Some(*artifact),
+                _ => None,
+            })
+            .collect();
+
+        for kind in ECS_PROCEDURAL_TERRAIN_OPTIONAL_ARTIFACT_KINDS {
+            let artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.kind == kind)
+                .unwrap_or_else(|| panic!("missing optional artifact {kind:?}"));
+            assert_eq!(artifact.requiredness, WorkRequiredness::Optional);
+        }
+        assert!(artifacts.iter().any(|artifact| {
+            artifact.kind == EcsDerivedArtifactKind::VirtualShadowInvalidation
+                && artifact.consumer == EcsArtifactConsumer::Lux
+        }));
+        assert!(
+            !artifacts
+                .iter()
+                .any(|artifact| artifact.kind == EcsDerivedArtifactKind::ShadowInvalidationRows)
+        );
+    }
+
+    #[test]
+    fn procedural_terrain_payload_builders_extract_proxy_surface_and_material_data() {
+        let decoded_page = procedural_surface_decoded_page();
+        let coarse =
+            procedural_terrain_coarse_proxy_from_decoded_page(&decoded_page).expect("coarse proxy");
+        let surface = procedural_terrain_surface_packet_from_decoded_page(&decoded_page)
+            .expect("surface packet");
+        let material = procedural_terrain_material_page_from_decoded_page(&decoded_page)
+            .expect("material page");
+
+        assert_eq!(coarse.source_page, decoded_page.key);
+        assert!(coarse.min_height_ft <= coarse.max_height_ft);
+        assert_ne!(coarse.occupied_cluster_mask, 0);
+        assert!(coarse.dominant_material.is_valid());
+        assert_eq!(surface.source_page, decoded_page.key);
+        assert_ne!(surface.exposed_face_count, 0);
+        assert_eq!(surface.packet_range.count, surface.exposed_face_count);
+        assert!(surface.material_palette_id.is_valid());
+        assert_eq!(material.source_page, decoded_page.key);
+        assert_ne!(material.palette.len, 0);
+        assert!(
+            material
+                .dominant_material_per_cluster
+                .iter()
+                .any(|material| material.is_valid())
+        );
+    }
+
+    #[test]
+    fn procedural_load_animation_progress_matches_stream_pipeline_stages() {
+        let page = page_xyz(0, 1, 0);
+        let stages = [
+            (ProceduralTerrainLoadStage::PageRequested, 0.10),
+            (ProceduralTerrainLoadStage::RecipeAcquired, 0.25),
+            (ProceduralTerrainLoadStage::PageDecoded, 0.45),
+            (ProceduralTerrainLoadStage::ArtifactReady, 0.75),
+            (ProceduralTerrainLoadStage::RendererPublished, 1.00),
+        ];
+
+        for (stage, progress) in stages {
+            let record = ProceduralTerrainLoadAnimationRecord::new(page, stage, 7);
+            assert_eq!(record.progress, progress);
+            assert_eq!(record.stage.label(), stage.label());
+        }
+    }
+
+    #[test]
+    fn uniform_pages_publish_only_aggregate_physics_artifacts() {
         let page = page_xyz(0, 0, 0);
         let source = source_with_payloads(vec![(page, compressed_payload(page, vec![3]))]);
         let mut acquired = EcsSourceAcquireQueue::default();
@@ -2028,9 +2289,10 @@ mod tests {
 
         assert_eq!(registry.len(), 0);
         assert_eq!(report.decoded_pages, 1);
+        assert_eq!(report.artifacts_published, 2);
         assert_eq!(
-            report.artifacts_published as usize,
-            ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT
+            report.skipped_by_page_class as usize,
+            ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT - 2
         );
         let artifacts: Vec<EcsDerivedArtifactRecord> = commands
             .commands
@@ -2040,55 +2302,28 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(artifacts.len(), ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT);
-        assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::FoliageSeeds
-                && artifact.consumer == EcsArtifactConsumer::Renderer
-        }));
-        assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::ShadowInvalidationRows
-                && artifact.consumer == EcsArtifactConsumer::Lux
-                && artifact.requiredness == WorkRequiredness::Optional
-        }));
+        assert_eq!(artifacts.len(), 2);
         assert!(artifacts.iter().any(|artifact| {
             artifact.kind == EcsDerivedArtifactKind::PhysicsCookRequests
                 && artifact.consumer == EcsArtifactConsumer::AvisPhysics
         }));
         assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::NetworkRelevanceRows
-                && artifact.consumer == EcsArtifactConsumer::ThunderNetwork
-        }));
-        assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::FoliageTrunkBranchVirtualGeometry
-                && artifact.consumer == EcsArtifactConsumer::Renderer
-                && artifact.requiredness == WorkRequiredness::Optional
-        }));
-        assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::FoliageCanopyTransmittance
-                && artifact.consumer == EcsArtifactConsumer::Lux
-        }));
-        assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::FoliageCollisionLargeObjectProxy
+            artifact.kind == EcsDerivedArtifactKind::CollisionSdfProxy
                 && artifact.consumer == EcsArtifactConsumer::AvisPhysics
         }));
-        assert!(artifacts.iter().any(|artifact| {
-            artifact.kind == EcsDerivedArtifactKind::StormExtinctionDirtyRows
-                && artifact.consumer == EcsArtifactConsumer::Lux
-        }));
-        assert_eq!(
-            next_artifact_id as usize,
-            ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT
-        );
+        assert_eq!(next_artifact_id, 2);
     }
 
     #[test]
     fn artifact_publishers_need_deterministic_apply_before_renderer_handoffs() {
         let page = page_xyz(0, 0, 0);
-        let source = source_with_payloads(vec![(page, compressed_payload(page, vec![3]))]);
-        let mut acquired = EcsSourceAcquireQueue::default();
-        acquire_sources(&source, &[page], 8, &mut acquired).expect("acquire page");
         let mut decoded = EcsDecodedPageQueue::default();
-        decode_pages(&acquired, &[], 8, &mut decoded).expect("decode page");
+        decoded
+            .push(decoded_page_with_class(
+                page,
+                ProceduralGeneratedPageClass::SurfaceMixed,
+            ))
+            .expect("push surface page");
 
         let mut next_artifact_id = 0;
         let mut commands = EcsSpatialCommandBuffer::default();
@@ -2195,6 +2430,37 @@ mod tests {
 
         assert_eq!(report.skipped_failed_pages, 1);
         assert_eq!(report.artifacts_published, 0);
+        assert!(commands.commands.is_empty());
+    }
+
+    #[test]
+    fn empty_pages_emit_no_surface_physics_or_lux_artifacts() {
+        let page = page_xyz(0, 0, 4);
+        let mut decoded = EcsDecodedPageQueue::default();
+        decoded
+            .push(decoded_page_with_class(
+                page,
+                ProceduralGeneratedPageClass::EmptyAir,
+            ))
+            .expect("push empty page");
+
+        let mut next_artifact_id = 0;
+        let mut commands = EcsSpatialCommandBuffer::default();
+        let report = build_derived_artifacts(
+            &decoded.rows,
+            EcsDerivedArtifactBuildSystem::all(),
+            &mut next_artifact_id,
+            &mut commands,
+        )
+        .expect("build empty page");
+
+        assert_eq!(report.decoded_pages, 1);
+        assert_eq!(report.artifacts_published, 0);
+        assert_eq!(
+            report.skipped_by_page_class as usize,
+            ECS_DERIVED_ARTIFACT_BUILD_SYSTEM_COUNT
+        );
+        assert_eq!(next_artifact_id, 0);
         assert!(commands.commands.is_empty());
     }
 }

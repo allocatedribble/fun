@@ -102,6 +102,7 @@ pub struct RendererTerrainArtifactUploadTicket {
     pub source_page: EcsSpatialPageKey,
     pub kind: RendererArtifactHandoffKind,
     pub source_epoch: u32,
+    pub source_digest: u64,
     pub artifact_epoch: u32,
     pub requiredness: WorkRequiredness,
     pub visibility_hint: RendererVisibilityHint,
@@ -114,6 +115,7 @@ pub struct RendererTerrainArtifactRecord {
     pub source_page: EcsSpatialPageKey,
     pub kind: RendererArtifactHandoffKind,
     pub source_epoch: u32,
+    pub source_digest: u64,
     pub artifact_epoch: u32,
     pub requiredness: WorkRequiredness,
     pub visibility_hint: RendererVisibilityHint,
@@ -166,12 +168,427 @@ impl RendererTerrainArtifactTable {
     }
 }
 
+pub const PROCEDURAL_TERRAIN_RENDERER_GENERATES_TERRAIN_TRUTH: bool = false;
+pub const PROCEDURAL_TERRAIN_RENDERER_HANDOFF_KIND_COUNT: usize = 4;
+pub const PROCEDURAL_TERRAIN_RENDERER_HANDOFF_KINDS: [RendererArtifactHandoffKind;
+    PROCEDURAL_TERRAIN_RENDERER_HANDOFF_KIND_COUNT] = [
+    RendererArtifactHandoffKind::TerrainCoarseProxy,
+    RendererArtifactHandoffKind::TerrainSurfacePackets,
+    RendererArtifactHandoffKind::TerrainMaterialPage,
+    RendererArtifactHandoffKind::LoadAnimationRecords,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainRendererImportPlan {
+    pub source_page: EcsSpatialPageKey,
+    pub surface_artifact: Option<EcsDerivedArtifactId>,
+    pub coarse_artifact: Option<EcsDerivedArtifactId>,
+    pub material_artifact: Option<EcsDerivedArtifactId>,
+    pub load_animation_artifact: Option<EcsDerivedArtifactId>,
+    pub source_epoch: u32,
+}
+
+impl ProceduralTerrainRendererImportPlan {
+    #[must_use]
+    pub const fn empty_for_page(source_page: EcsSpatialPageKey, source_epoch: u32) -> Self {
+        Self {
+            source_page,
+            surface_artifact: None,
+            coarse_artifact: None,
+            material_artifact: None,
+            load_animation_artifact: None,
+            source_epoch,
+        }
+    }
+
+    #[must_use]
+    pub fn has_renderable_geometry(self) -> bool {
+        self.surface_artifact.is_some() || self.coarse_artifact.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainRendererPageStamp {
+    pub source_page: EcsSpatialPageKey,
+    pub source_epoch: u32,
+    pub source_digest: u64,
+}
+
+impl ProceduralTerrainRendererPageStamp {
+    #[must_use]
+    pub const fn new(
+        source_page: EcsSpatialPageKey,
+        source_epoch: u32,
+        source_digest: u64,
+    ) -> Self {
+        Self {
+            source_page,
+            source_epoch,
+            source_digest,
+        }
+    }
+
+    #[must_use]
+    pub fn matches_handoff(self, handoff: RendererArtifactHandoff) -> bool {
+        self.source_page == handoff.source_page
+            && self.source_epoch == handoff.source_epoch
+            && self.source_digest == handoff.source_digest
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainRendererImportPlanReport {
+    pub inspected: u32,
+    pub consumed_handoffs: u32,
+    pub plans_built: u32,
+    pub rejected_non_terrain_handoff: u32,
+    pub rejected_zero_epoch: u32,
+    pub rejected_zero_source_digest: u32,
+    pub rejected_stale_epoch: u32,
+    pub rejected_digest_mismatch: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProceduralTerrainImportAccumulator {
+    plan: ProceduralTerrainRendererImportPlan,
+    source_digest: u64,
+    surface_epoch: u32,
+    coarse_epoch: u32,
+    material_epoch: u32,
+    load_epoch: u32,
+}
+
+impl ProceduralTerrainImportAccumulator {
+    const fn new(stamp: ProceduralTerrainRendererPageStamp) -> Self {
+        Self {
+            plan: ProceduralTerrainRendererImportPlan::empty_for_page(
+                stamp.source_page,
+                stamp.source_epoch,
+            ),
+            source_digest: stamp.source_digest,
+            surface_epoch: 0,
+            coarse_epoch: 0,
+            material_epoch: 0,
+            load_epoch: 0,
+        }
+    }
+
+    fn attach(
+        &mut self,
+        handoff: RendererArtifactHandoff,
+        report: &mut ProceduralTerrainRendererImportPlanReport,
+    ) {
+        let (slot, epoch) = match handoff.kind {
+            RendererArtifactHandoffKind::TerrainSurfacePackets => {
+                (&mut self.plan.surface_artifact, &mut self.surface_epoch)
+            }
+            RendererArtifactHandoffKind::TerrainCoarseProxy => {
+                (&mut self.plan.coarse_artifact, &mut self.coarse_epoch)
+            }
+            RendererArtifactHandoffKind::TerrainMaterialPage => {
+                (&mut self.plan.material_artifact, &mut self.material_epoch)
+            }
+            RendererArtifactHandoffKind::LoadAnimationRecords => {
+                (&mut self.plan.load_animation_artifact, &mut self.load_epoch)
+            }
+            _ => unreachable!("procedural terrain handoff kind was prefiltered"),
+        };
+        if *epoch > handoff.artifact_epoch {
+            report.rejected_stale_epoch = report.rejected_stale_epoch.saturating_add(1);
+            return;
+        }
+        *slot = Some(handoff.artifact_id);
+        *epoch = handoff.artifact_epoch;
+        report.consumed_handoffs = report.consumed_handoffs.saturating_add(1);
+    }
+
+    fn stamp(&self) -> ProceduralTerrainRendererPageStamp {
+        ProceduralTerrainRendererPageStamp {
+            source_page: self.plan.source_page,
+            source_epoch: self.plan.source_epoch,
+            source_digest: self.source_digest,
+        }
+    }
+}
+
+#[must_use]
+pub fn procedural_terrain_renderer_consumes_handoff_kind(
+    kind: RendererArtifactHandoffKind,
+) -> bool {
+    matches!(
+        kind,
+        RendererArtifactHandoffKind::TerrainCoarseProxy
+            | RendererArtifactHandoffKind::TerrainSurfacePackets
+            | RendererArtifactHandoffKind::TerrainMaterialPage
+            | RendererArtifactHandoffKind::LoadAnimationRecords
+    )
+}
+
+#[must_use]
+pub fn build_procedural_terrain_renderer_import_plans(
+    handoffs: &[RendererArtifactHandoff],
+    expected_stamps: &[ProceduralTerrainRendererPageStamp],
+) -> (
+    Vec<ProceduralTerrainRendererImportPlan>,
+    ProceduralTerrainRendererImportPlanReport,
+) {
+    let mut report = ProceduralTerrainRendererImportPlanReport::default();
+    let mut accumulators: Vec<ProceduralTerrainImportAccumulator> = Vec::new();
+
+    for handoff in handoffs {
+        report.inspected = report.inspected.saturating_add(1);
+        if !procedural_terrain_renderer_consumes_handoff_kind(handoff.kind) {
+            report.rejected_non_terrain_handoff =
+                report.rejected_non_terrain_handoff.saturating_add(1);
+            continue;
+        }
+        if handoff.source_epoch == 0 || handoff.artifact_epoch == 0 {
+            report.rejected_zero_epoch = report.rejected_zero_epoch.saturating_add(1);
+            continue;
+        }
+        if handoff.source_digest == 0 {
+            report.rejected_zero_source_digest =
+                report.rejected_zero_source_digest.saturating_add(1);
+            continue;
+        }
+
+        if let Some(expected) = expected_stamps
+            .iter()
+            .find(|stamp| stamp.source_page == handoff.source_page)
+        {
+            if expected.source_epoch != handoff.source_epoch {
+                report.rejected_stale_epoch = report.rejected_stale_epoch.saturating_add(1);
+                continue;
+            }
+            if !expected.matches_handoff(*handoff) {
+                report.rejected_digest_mismatch = report.rejected_digest_mismatch.saturating_add(1);
+                continue;
+            }
+        }
+
+        let stamp = ProceduralTerrainRendererPageStamp::new(
+            handoff.source_page,
+            handoff.source_epoch,
+            handoff.source_digest,
+        );
+        let Some(index) = accumulators
+            .iter()
+            .position(|acc| acc.plan.source_page == handoff.source_page)
+        else {
+            let mut accumulator = ProceduralTerrainImportAccumulator::new(stamp);
+            accumulator.attach(*handoff, &mut report);
+            accumulators.push(accumulator);
+            continue;
+        };
+
+        let existing = accumulators[index].stamp();
+        if existing.source_epoch > handoff.source_epoch {
+            report.rejected_stale_epoch = report.rejected_stale_epoch.saturating_add(1);
+            continue;
+        }
+        if existing.source_epoch < handoff.source_epoch {
+            accumulators[index] = ProceduralTerrainImportAccumulator::new(stamp);
+        } else if existing.source_digest != handoff.source_digest {
+            report.rejected_digest_mismatch = report.rejected_digest_mismatch.saturating_add(1);
+            continue;
+        }
+        accumulators[index].attach(*handoff, &mut report);
+    }
+
+    let plans = accumulators
+        .into_iter()
+        .map(|accumulator| accumulator.plan)
+        .collect::<Vec<_>>();
+    report.plans_built = plans.len() as u32;
+    (plans, report)
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ProceduralTerrainRenderMode {
+    #[default]
+    SurfacePackets = 0,
+    CoarseProxy = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainDebugVisual {
+    pub material_color_rgba8: [u8; 4],
+    pub page_border_rgba8: [u8; 4],
+    pub stream_shell_rgba8: [u8; 4],
+    pub basic_light_dir_q8: [i8; 3],
+    pub ambient_q8: u8,
+    pub diffuse_q8: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainRenderItem {
+    pub source_page: EcsSpatialPageKey,
+    pub mode: ProceduralTerrainRenderMode,
+    pub geometry_artifact: EcsDerivedArtifactId,
+    pub material_artifact: Option<EcsDerivedArtifactId>,
+    pub load_animation_artifact: Option<EcsDerivedArtifactId>,
+    pub source_epoch: u32,
+    pub visual: ProceduralTerrainDebugVisual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainStreamingHole {
+    pub source_page: EcsSpatialPageKey,
+    pub source_epoch: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProceduralTerrainRendererRealizationReport {
+    pub inspected_plans: u32,
+    pub surface_items: u32,
+    pub coarse_items: u32,
+    pub streaming_holes_logged: u32,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProceduralTerrainRendererRealizationBatch {
+    pub render_items: Vec<ProceduralTerrainRenderItem>,
+    pub streaming_holes: Vec<ProceduralTerrainStreamingHole>,
+    pub report: ProceduralTerrainRendererRealizationReport,
+}
+
+#[must_use]
+pub fn realize_procedural_terrain_import_plans(
+    plans: &[ProceduralTerrainRendererImportPlan],
+    requested_pages: &[ProceduralTerrainRendererPageStamp],
+) -> ProceduralTerrainRendererRealizationBatch {
+    let mut batch = ProceduralTerrainRendererRealizationBatch::default();
+    for plan in plans {
+        batch.report.inspected_plans = batch.report.inspected_plans.saturating_add(1);
+        let Some((mode, geometry_artifact)) = render_mode_and_artifact(*plan) else {
+            push_streaming_hole(
+                &mut batch,
+                ProceduralTerrainStreamingHole {
+                    source_page: plan.source_page,
+                    source_epoch: plan.source_epoch,
+                },
+            );
+            continue;
+        };
+
+        match mode {
+            ProceduralTerrainRenderMode::SurfacePackets => {
+                batch.report.surface_items = batch.report.surface_items.saturating_add(1);
+            }
+            ProceduralTerrainRenderMode::CoarseProxy => {
+                batch.report.coarse_items = batch.report.coarse_items.saturating_add(1);
+            }
+        }
+        batch.render_items.push(ProceduralTerrainRenderItem {
+            source_page: plan.source_page,
+            mode,
+            geometry_artifact,
+            material_artifact: plan.material_artifact,
+            load_animation_artifact: plan.load_animation_artifact,
+            source_epoch: plan.source_epoch,
+            visual: debug_visual_for_plan(*plan, mode),
+        });
+    }
+
+    for requested in requested_pages {
+        if plans.iter().any(|plan| {
+            plan.source_page == requested.source_page
+                && plan.source_epoch == requested.source_epoch
+                && plan.has_renderable_geometry()
+        }) {
+            continue;
+        }
+        push_streaming_hole(
+            &mut batch,
+            ProceduralTerrainStreamingHole {
+                source_page: requested.source_page,
+                source_epoch: requested.source_epoch,
+            },
+        );
+    }
+
+    batch
+}
+
+fn render_mode_and_artifact(
+    plan: ProceduralTerrainRendererImportPlan,
+) -> Option<(ProceduralTerrainRenderMode, EcsDerivedArtifactId)> {
+    if let Some(surface) = plan.surface_artifact {
+        Some((ProceduralTerrainRenderMode::SurfacePackets, surface))
+    } else {
+        plan.coarse_artifact
+            .map(|coarse| (ProceduralTerrainRenderMode::CoarseProxy, coarse))
+    }
+}
+
+fn push_streaming_hole(
+    batch: &mut ProceduralTerrainRendererRealizationBatch,
+    hole: ProceduralTerrainStreamingHole,
+) {
+    if batch.streaming_holes.contains(&hole) {
+        return;
+    }
+    batch.streaming_holes.push(hole);
+    batch.report.streaming_holes_logged = batch.report.streaming_holes_logged.saturating_add(1);
+}
+
+fn debug_visual_for_plan(
+    plan: ProceduralTerrainRendererImportPlan,
+    mode: ProceduralTerrainRenderMode,
+) -> ProceduralTerrainDebugVisual {
+    ProceduralTerrainDebugVisual {
+        material_color_rgba8: material_color_for_plan(plan, mode),
+        page_border_rgba8: page_border_color(plan.source_page),
+        stream_shell_rgba8: stream_shell_color(plan.source_page),
+        basic_light_dir_q8: [-45, 96, -45],
+        ambient_q8: 48,
+        diffuse_q8: 176,
+    }
+}
+
+fn material_color_for_plan(
+    plan: ProceduralTerrainRendererImportPlan,
+    mode: ProceduralTerrainRenderMode,
+) -> [u8; 4] {
+    if plan.material_artifact.is_some() {
+        [86, 142, 72, 255]
+    } else {
+        match mode {
+            ProceduralTerrainRenderMode::SurfacePackets => [126, 104, 78, 255],
+            ProceduralTerrainRenderMode::CoarseProxy => [92, 110, 122, 255],
+        }
+    }
+}
+
+fn page_border_color(page: EcsSpatialPageKey) -> [u8; 4] {
+    let hash = page.chunk_key().get();
+    [
+        96_u8.saturating_add((hash & 0x3f) as u8),
+        96_u8.saturating_add(((hash >> 8) & 0x3f) as u8),
+        96_u8.saturating_add(((hash >> 16) & 0x3f) as u8),
+        255,
+    ]
+}
+
+fn stream_shell_color(page: EcsSpatialPageKey) -> [u8; 4] {
+    let shell = page.x.unsigned_abs() + page.y.unsigned_abs() + page.z.unsigned_abs();
+    match shell & 3 {
+        0 => [80, 165, 230, 255],
+        1 => [92, 196, 128, 255],
+        2 => [224, 184, 72, 255],
+        _ => [220, 112, 104, 255],
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RendererTerrainImportReport {
     pub inspected: u32,
     pub imported: u32,
     pub coalesced: u32,
     pub rejected_zero_epoch: u32,
+    pub rejected_zero_source_digest: u32,
+    pub rejected_digest_mismatch: u32,
     pub rejected_stale_epoch: u32,
     pub upload_tickets_created: u32,
 }
@@ -187,6 +604,11 @@ pub fn renderer_import_terrain_artifacts(
             report.rejected_zero_epoch = report.rejected_zero_epoch.saturating_add(1);
             continue;
         }
+        if handoff.source_digest == 0 {
+            report.rejected_zero_source_digest =
+                report.rejected_zero_source_digest.saturating_add(1);
+            continue;
+        }
         if let Some(existing) = table.get(handoff.artifact_id) {
             if existing.source_epoch > handoff.source_epoch
                 || existing.artifact_epoch > handoff.artifact_epoch
@@ -195,7 +617,14 @@ pub fn renderer_import_terrain_artifacts(
                 continue;
             }
             if existing.source_epoch == handoff.source_epoch
+                && existing.source_digest != handoff.source_digest
+            {
+                report.rejected_digest_mismatch = report.rejected_digest_mismatch.saturating_add(1);
+                continue;
+            }
+            if existing.source_epoch == handoff.source_epoch
                 && existing.artifact_epoch == handoff.artifact_epoch
+                && existing.source_digest == handoff.source_digest
                 && existing.upload_state != RendererTerrainUploadState::Retired
             {
                 report.coalesced = report.coalesced.saturating_add(1);
@@ -227,6 +656,7 @@ fn upload_ticket_from_handoff(
         source_page: handoff.source_page,
         kind: handoff.kind,
         source_epoch: handoff.source_epoch,
+        source_digest: handoff.source_digest,
         artifact_epoch: handoff.artifact_epoch,
         requiredness: handoff.requiredness,
         visibility_hint: handoff.visibility_hint,
@@ -242,6 +672,7 @@ fn record_from_ticket(
         source_page: ticket.source_page,
         kind: ticket.kind,
         source_epoch: ticket.source_epoch,
+        source_digest: ticket.source_digest,
         artifact_epoch: ticket.artifact_epoch,
         requiredness: ticket.requiredness,
         visibility_hint: ticket.visibility_hint,
@@ -548,13 +979,17 @@ mod tests {
     };
 
     fn page() -> EcsSpatialPageKey {
+        page_at(2, 3, 4)
+    }
+
+    fn page_at(x: i32, y: i32, z: i32) -> EcsSpatialPageKey {
         EcsSpatialPageKey::new(
             EcsSpatialDomainKind::Terrain,
             EcsSpatialGridId::new(1),
             0,
-            2,
-            3,
-            4,
+            x,
+            y,
+            z,
             EcsPageChannel::Surface,
         )
     }
@@ -565,6 +1000,7 @@ mod tests {
             source_page: page(),
             kind,
             source_epoch: 7,
+            source_digest: 0x1776_0000_0000_0007,
             artifact_epoch: 9,
             requiredness: WorkRequiredness::Required,
             visibility_hint: RendererVisibilityHint::VisibleNear,
@@ -652,6 +1088,36 @@ mod tests {
         stale_queue.push(stale).expect("stale handoff");
         let stale_report = renderer_import_terrain_artifacts(&stale_queue, &mut table);
         assert_eq!(stale_report.rejected_stale_epoch, 1);
+    }
+
+    #[test]
+    fn renderer_import_rejects_zero_digest_or_same_epoch_digest_mismatch() {
+        let mut zero_digest_queue = EcsRendererHandoffQueue::default();
+        let mut zero_digest = handoff(1, RendererArtifactHandoffKind::TerrainSurfacePackets);
+        zero_digest.source_digest = 0;
+        zero_digest_queue
+            .push(zero_digest)
+            .expect("zero digest handoff");
+        let mut table = RendererTerrainArtifactTable::default();
+        let zero_report = renderer_import_terrain_artifacts(&zero_digest_queue, &mut table);
+        assert_eq!(zero_report.rejected_zero_source_digest, 1);
+        assert!(table.records.is_empty());
+
+        let first = handoff(2, RendererArtifactHandoffKind::TerrainSurfacePackets);
+        let mut first_queue = EcsRendererHandoffQueue::default();
+        first_queue.push(first).expect("first handoff");
+        assert_eq!(
+            renderer_import_terrain_artifacts(&first_queue, &mut table).imported,
+            1
+        );
+
+        let mut mismatch = first;
+        mismatch.source_digest ^= 0x55;
+        mismatch.artifact_epoch = mismatch.artifact_epoch.saturating_add(1);
+        let mut mismatch_queue = EcsRendererHandoffQueue::default();
+        mismatch_queue.push(mismatch).expect("mismatch handoff");
+        let mismatch_report = renderer_import_terrain_artifacts(&mismatch_queue, &mut table);
+        assert_eq!(mismatch_report.rejected_digest_mismatch, 1);
     }
 
     #[test]
@@ -788,6 +1254,131 @@ mod tests {
                 .map(|record| record.realization),
             Some(RendererTerrainRealization::Retired)
         );
+    }
+
+    #[test]
+    fn procedural_terrain_renderer_import_plan_groups_required_handoffs_and_prefers_surface() {
+        let surface = handoff(10, RendererArtifactHandoffKind::TerrainSurfacePackets);
+        let coarse = handoff(11, RendererArtifactHandoffKind::TerrainCoarseProxy);
+        let material = handoff(12, RendererArtifactHandoffKind::TerrainMaterialPage);
+        let load = handoff(13, RendererArtifactHandoffKind::LoadAnimationRecords);
+        let expected = ProceduralTerrainRendererPageStamp::new(
+            surface.source_page,
+            surface.source_epoch,
+            surface.source_digest,
+        );
+
+        let (plans, report) = build_procedural_terrain_renderer_import_plans(
+            &[coarse, material, load, surface],
+            &[expected],
+        );
+        assert_eq!(report.consumed_handoffs, 4);
+        assert_eq!(report.plans_built, 1);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].surface_artifact,
+            Some(EcsDerivedArtifactId::new(10))
+        );
+        assert_eq!(
+            plans[0].coarse_artifact,
+            Some(EcsDerivedArtifactId::new(11))
+        );
+        assert_eq!(
+            plans[0].material_artifact,
+            Some(EcsDerivedArtifactId::new(12))
+        );
+        assert_eq!(
+            plans[0].load_animation_artifact,
+            Some(EcsDerivedArtifactId::new(13))
+        );
+
+        let batch = realize_procedural_terrain_import_plans(&plans, &[expected]);
+        assert_eq!(batch.render_items.len(), 1);
+        assert!(batch.streaming_holes.is_empty());
+        assert_eq!(
+            batch.render_items[0].mode,
+            ProceduralTerrainRenderMode::SurfacePackets
+        );
+        assert_eq!(
+            batch.render_items[0].geometry_artifact,
+            EcsDerivedArtifactId::new(10)
+        );
+        assert_eq!(
+            batch.render_items[0].visual.material_color_rgba8,
+            [86, 142, 72, 255]
+        );
+        assert!(batch.render_items[0].visual.diffuse_q8 > batch.render_items[0].visual.ambient_q8);
+    }
+
+    #[test]
+    fn procedural_terrain_renderer_uses_coarse_proxy_and_logs_streaming_holes() {
+        let coarse = handoff(21, RendererArtifactHandoffKind::TerrainCoarseProxy);
+        let missing_stamp = ProceduralTerrainRendererPageStamp::new(
+            page_at(9, 0, 1),
+            coarse.source_epoch,
+            coarse.source_digest,
+        );
+        let expected = ProceduralTerrainRendererPageStamp::new(
+            coarse.source_page,
+            coarse.source_epoch,
+            coarse.source_digest,
+        );
+        let (plans, report) =
+            build_procedural_terrain_renderer_import_plans(&[coarse], &[expected, missing_stamp]);
+
+        assert_eq!(report.plans_built, 1);
+        let batch = realize_procedural_terrain_import_plans(&plans, &[expected, missing_stamp]);
+        assert_eq!(batch.render_items.len(), 1);
+        assert_eq!(batch.streaming_holes.len(), 1);
+        assert_eq!(
+            batch.render_items[0].mode,
+            ProceduralTerrainRenderMode::CoarseProxy
+        );
+        assert_eq!(batch.report.coarse_items, 1);
+        assert_eq!(batch.report.streaming_holes_logged, 1);
+    }
+
+    #[test]
+    fn procedural_terrain_renderer_import_rejects_epoch_and_digest_mismatches() {
+        let mut digest_mismatch = handoff(31, RendererArtifactHandoffKind::TerrainSurfacePackets);
+        let expected = ProceduralTerrainRendererPageStamp::new(
+            digest_mismatch.source_page,
+            digest_mismatch.source_epoch,
+            digest_mismatch.source_digest ^ 0xff,
+        );
+        let mut stale_epoch = digest_mismatch;
+        stale_epoch.artifact_id = EcsDerivedArtifactId::new(32);
+        stale_epoch.source_epoch = stale_epoch.source_epoch.saturating_sub(1);
+        digest_mismatch.source_digest ^= 0xaa;
+
+        let (plans, report) = build_procedural_terrain_renderer_import_plans(
+            &[digest_mismatch, stale_epoch],
+            &[expected],
+        );
+
+        assert!(plans.is_empty());
+        assert_eq!(report.rejected_digest_mismatch, 1);
+        assert_eq!(report.rejected_stale_epoch, 1);
+    }
+
+    #[test]
+    fn procedural_terrain_renderer_policy_consumes_artifacts_without_generating_truth() {
+        assert!(!PROCEDURAL_TERRAIN_RENDERER_GENERATES_TERRAIN_TRUTH);
+        assert_eq!(
+            PROCEDURAL_TERRAIN_RENDERER_HANDOFF_KINDS,
+            [
+                RendererArtifactHandoffKind::TerrainCoarseProxy,
+                RendererArtifactHandoffKind::TerrainSurfacePackets,
+                RendererArtifactHandoffKind::TerrainMaterialPage,
+                RendererArtifactHandoffKind::LoadAnimationRecords,
+            ]
+        );
+        assert!(procedural_terrain_renderer_consumes_handoff_kind(
+            RendererArtifactHandoffKind::TerrainSurfacePackets
+        ));
+        assert!(!procedural_terrain_renderer_consumes_handoff_kind(
+            RendererArtifactHandoffKind::TerrainSdfPage
+        ));
     }
 
     #[test]

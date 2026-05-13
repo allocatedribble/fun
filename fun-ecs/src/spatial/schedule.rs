@@ -10,14 +10,16 @@ use fun_scheduler_types::{
 };
 
 use crate::{
-    EcsArtifactConsumer, FUN_COMMAND_BUFFER_ARTIFACTS, FUN_COMMAND_BUFFER_DIRTY_PROPAGATION,
-    FUN_COMMAND_BUFFER_HANDOFFS, FUN_COMMAND_BUFFER_SPATIAL_REQUESTS, FunEcsComponentKind,
-    FunEcsResourceKind, FunResourceTableId, FunRevision, FunSchedulerEcsRegistry, FunSystemAccess,
-    FunSystemChunkPolicy, FunSystemDescriptor, FunSystemId, FunSystemValidationError,
+    EcsArtifactConsumer, EcsDerivedArtifactKind, EcsPageChannel, EcsSpatialGridId,
+    EcsSpatialPageKey, EcsStreamInterestKind, EcsStreamPriority, EcsStreamRequest,
+    FUN_COMMAND_BUFFER_ARTIFACTS, FUN_COMMAND_BUFFER_HANDOFFS, FUN_COMMAND_BUFFER_SPATIAL_REQUESTS,
+    FunEcsComponentKind, FunEcsResourceKind, FunResourceTableId, FunRevision,
+    FunSchedulerEcsRegistry, FunSystemAccess, FunSystemChunkPolicy, FunSystemDescriptor,
+    FunSystemId, FunSystemValidationError,
 };
 
 pub const ECS_SPATIAL_SCHEDULE_SET_COUNT: usize = 15;
-pub const ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT: usize = 18;
+pub const ECS_SPATIAL_COMPILED_SCHEDULE_NODE_COUNT: usize = 15;
 
 pub const ECS_SPATIAL_SCHEDULE_FRAME_ORDER: [EcsSpatialScheduleSet;
     ECS_SPATIAL_SCHEDULE_SET_COUNT] = [
@@ -29,11 +31,11 @@ pub const ECS_SPATIAL_SCHEDULE_FRAME_ORDER: [EcsSpatialScheduleSet;
     EcsSpatialScheduleSet::AcquireSources,
     EcsSpatialScheduleSet::DecodePages,
     EcsSpatialScheduleSet::BuildDerivedArtifacts,
-    EcsSpatialScheduleSet::PropagateDirtyRegions,
+    EcsSpatialScheduleSet::ApplyArtifactCommands,
     EcsSpatialScheduleSet::PublishRendererHandoffs,
     EcsSpatialScheduleSet::PublishLuxHandoffs,
     EcsSpatialScheduleSet::PublishPhysicsHandoffs,
-    EcsSpatialScheduleSet::PublishNetworkHandoffs,
+    EcsSpatialScheduleSet::ApplyHandoffCommands,
     EcsSpatialScheduleSet::EvictColdPages,
     EcsSpatialScheduleSet::FlushDiagnostics,
 ];
@@ -57,23 +59,16 @@ pub const ECS_SPATIAL_COMPILED_SCHEDULE_FRAME_ORDER: [EcsSpatialCompiledSchedule
         EcsSpatialCommandBarrierKind::ApplyArtifactCommands,
         EcsSpatialScheduleSet::BuildDerivedArtifacts,
     ),
-    EcsSpatialCompiledScheduleNode::set(9, EcsSpatialScheduleSet::PropagateDirtyRegions),
+    EcsSpatialCompiledScheduleNode::set(9, EcsSpatialScheduleSet::PublishRendererHandoffs),
+    EcsSpatialCompiledScheduleNode::set(10, EcsSpatialScheduleSet::PublishLuxHandoffs),
+    EcsSpatialCompiledScheduleNode::set(11, EcsSpatialScheduleSet::PublishPhysicsHandoffs),
     EcsSpatialCompiledScheduleNode::barrier(
-        10,
-        EcsSpatialCommandBarrierKind::ApplyDirtyPropagationCommands,
-        EcsSpatialScheduleSet::PropagateDirtyRegions,
-    ),
-    EcsSpatialCompiledScheduleNode::set(11, EcsSpatialScheduleSet::PublishRendererHandoffs),
-    EcsSpatialCompiledScheduleNode::set(12, EcsSpatialScheduleSet::PublishLuxHandoffs),
-    EcsSpatialCompiledScheduleNode::set(13, EcsSpatialScheduleSet::PublishPhysicsHandoffs),
-    EcsSpatialCompiledScheduleNode::set(14, EcsSpatialScheduleSet::PublishNetworkHandoffs),
-    EcsSpatialCompiledScheduleNode::barrier(
-        15,
+        12,
         EcsSpatialCommandBarrierKind::ApplyHandoffCommands,
-        EcsSpatialScheduleSet::PublishNetworkHandoffs,
+        EcsSpatialScheduleSet::PublishPhysicsHandoffs,
     ),
-    EcsSpatialCompiledScheduleNode::set(16, EcsSpatialScheduleSet::EvictColdPages),
-    EcsSpatialCompiledScheduleNode::set(17, EcsSpatialScheduleSet::FlushDiagnostics),
+    EcsSpatialCompiledScheduleNode::set(13, EcsSpatialScheduleSet::EvictColdPages),
+    EcsSpatialCompiledScheduleNode::set(14, EcsSpatialScheduleSet::FlushDiagnostics),
 ];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -88,11 +83,11 @@ pub enum EcsSpatialScheduleSet {
     AcquireSources = 5,
     DecodePages = 6,
     BuildDerivedArtifacts = 7,
-    PropagateDirtyRegions = 8,
+    ApplyArtifactCommands = 8,
     PublishRendererHandoffs = 9,
     PublishLuxHandoffs = 10,
     PublishPhysicsHandoffs = 11,
-    PublishNetworkHandoffs = 12,
+    ApplyHandoffCommands = 12,
     EvictColdPages = 13,
     FlushDiagnostics = 14,
 }
@@ -109,11 +104,11 @@ impl EcsSpatialScheduleSet {
             Self::AcquireSources => "acquire_sources",
             Self::DecodePages => "decode_pages",
             Self::BuildDerivedArtifacts => "build_derived_artifacts",
-            Self::PropagateDirtyRegions => "propagate_dirty_regions",
+            Self::ApplyArtifactCommands => "apply_artifact_commands",
             Self::PublishRendererHandoffs => "publish_renderer_handoffs",
             Self::PublishLuxHandoffs => "publish_lux_handoffs",
             Self::PublishPhysicsHandoffs => "publish_physics_handoffs",
-            Self::PublishNetworkHandoffs => "publish_network_handoffs",
+            Self::ApplyHandoffCommands => "apply_handoff_commands",
             Self::EvictColdPages => "evict_cold_pages",
             Self::FlushDiagnostics => "flush_diagnostics",
         }
@@ -139,12 +134,12 @@ impl EcsSpatialScheduleSet {
             Self::ApplyStreamCommands => Some(Self::AcquireSources),
             Self::AcquireSources => Some(Self::DecodePages),
             Self::DecodePages => Some(Self::BuildDerivedArtifacts),
-            Self::BuildDerivedArtifacts => Some(Self::PropagateDirtyRegions),
-            Self::PropagateDirtyRegions => Some(Self::PublishRendererHandoffs),
+            Self::BuildDerivedArtifacts => Some(Self::ApplyArtifactCommands),
+            Self::ApplyArtifactCommands => Some(Self::PublishRendererHandoffs),
             Self::PublishRendererHandoffs => Some(Self::PublishLuxHandoffs),
             Self::PublishLuxHandoffs => Some(Self::PublishPhysicsHandoffs),
-            Self::PublishPhysicsHandoffs => Some(Self::PublishNetworkHandoffs),
-            Self::PublishNetworkHandoffs => Some(Self::EvictColdPages),
+            Self::PublishPhysicsHandoffs => Some(Self::ApplyHandoffCommands),
+            Self::ApplyHandoffCommands => Some(Self::EvictColdPages),
             Self::EvictColdPages => Some(Self::FlushDiagnostics),
             Self::FlushDiagnostics => None,
         }
@@ -161,11 +156,11 @@ impl EcsSpatialScheduleSet {
             Self::AcquireSources => EcsSystemClass::SourceAcquire,
             Self::DecodePages => EcsSystemClass::Decode,
             Self::BuildDerivedArtifacts => EcsSystemClass::DerivedArtifactBuild,
-            Self::PropagateDirtyRegions => EcsSystemClass::DirtyPropagation,
+            Self::ApplyArtifactCommands => EcsSystemClass::DerivedArtifactBuild,
             Self::PublishRendererHandoffs => EcsSystemClass::RendererHandoff,
             Self::PublishLuxHandoffs => EcsSystemClass::LuxHandoff,
             Self::PublishPhysicsHandoffs => EcsSystemClass::PhysicsHandoff,
-            Self::PublishNetworkHandoffs => EcsSystemClass::NetworkHandoff,
+            Self::ApplyHandoffCommands => EcsSystemClass::RendererHandoff,
             Self::EvictColdPages => EcsSystemClass::Eviction,
             Self::FlushDiagnostics => EcsSystemClass::Diagnostics,
         }
@@ -174,7 +169,9 @@ impl EcsSpatialScheduleSet {
     #[must_use]
     pub const fn work_kind(self) -> EcsWorkKind {
         match self {
-            Self::ApplyStreamCommands => EcsWorkKind::ApplyCommands,
+            Self::ApplyStreamCommands
+            | Self::ApplyArtifactCommands
+            | Self::ApplyHandoffCommands => EcsWorkKind::ApplyCommands,
             Self::DecodePages | Self::BuildDerivedArtifacts => EcsWorkKind::RunSystemChunk,
             Self::FlushDiagnostics => EcsWorkKind::ScheduleDiagnostics,
             Self::SenseSources
@@ -182,11 +179,9 @@ impl EcsSpatialScheduleSet {
             | Self::PlanStreamWave
             | Self::DiffRequests
             | Self::AcquireSources
-            | Self::PropagateDirtyRegions
             | Self::PublishRendererHandoffs
             | Self::PublishLuxHandoffs
             | Self::PublishPhysicsHandoffs
-            | Self::PublishNetworkHandoffs
             | Self::EvictColdPages => EcsWorkKind::RunSystem,
         }
     }
@@ -209,11 +204,11 @@ impl EcsSpatialScheduleSet {
             Self::BuildDerivedArtifacts => {
                 Self::build_derived_artifact_execution(EcsArtifactConsumer::Renderer)
             }
-            Self::PropagateDirtyRegions => frame_ecs_contract(),
+            Self::ApplyArtifactCommands => EcsSystemExecutionContract::COMMAND_BARRIER,
             Self::PublishRendererHandoffs => Self::renderer_handoff_execution(true),
             Self::PublishLuxHandoffs => Self::lux_handoff_execution(true),
             Self::PublishPhysicsHandoffs => Self::physics_handoff_execution(true),
-            Self::PublishNetworkHandoffs => network_handoff_contract(),
+            Self::ApplyHandoffCommands => EcsSystemExecutionContract::COMMAND_BARRIER,
             Self::EvictColdPages => idle_page_scheduler_contract(),
             Self::FlushDiagnostics => telemetry_idle_contract(),
         }
@@ -347,6 +342,12 @@ pub fn spatial_system_descriptor(set: EcsSpatialScheduleSet) -> FunSystemDescrip
         EcsSpatialScheduleSet::ApplyStreamCommands => descriptor
             .with_chunk_policy(FunSystemChunkPolicy::CommandBarrier)
             .with_direct_world_structure_write(),
+        EcsSpatialScheduleSet::ApplyArtifactCommands => descriptor
+            .with_chunk_policy(FunSystemChunkPolicy::CommandBarrier)
+            .with_direct_world_structure_write(),
+        EcsSpatialScheduleSet::ApplyHandoffCommands => descriptor
+            .with_chunk_policy(FunSystemChunkPolicy::CommandBarrier)
+            .with_direct_world_structure_write(),
         EcsSpatialScheduleSet::DecodePages => descriptor
             .with_liveness_class(EcsLivenessClass::SchedulerWait)
             .with_awaited_token(spatial_token(EcsSpatialWaitTokenKind::PageSourceReady))
@@ -359,9 +360,6 @@ pub fn spatial_system_descriptor(set: EcsSpatialScheduleSet) -> FunSystemDescrip
             .with_awaited_token(spatial_token(EcsSpatialWaitTokenKind::PageDecoded))
             .with_produced_token(spatial_token(EcsSpatialWaitTokenKind::DerivedArtifactReady))
             .with_command_output(FUN_COMMAND_BUFFER_ARTIFACTS),
-        EcsSpatialScheduleSet::PropagateDirtyRegions => descriptor
-            .with_command_output(FUN_COMMAND_BUFFER_DIRTY_PROPAGATION)
-            .reads_post_command_state(),
         EcsSpatialScheduleSet::PublishRendererHandoffs => descriptor
             .with_liveness_class(EcsLivenessClass::SchedulerWait)
             .with_awaited_token(spatial_token(EcsSpatialWaitTokenKind::DerivedArtifactReady))
@@ -380,14 +378,6 @@ pub fn spatial_system_descriptor(set: EcsSpatialScheduleSet) -> FunSystemDescrip
             .with_liveness_class(EcsLivenessClass::SchedulerWait)
             .with_awaited_token(spatial_token(EcsSpatialWaitTokenKind::DerivedArtifactReady))
             .with_produced_token(spatial_token(EcsSpatialWaitTokenKind::PhysicsProxyReady))
-            .with_command_output(FUN_COMMAND_BUFFER_HANDOFFS)
-            .reads_post_command_state(),
-        EcsSpatialScheduleSet::PublishNetworkHandoffs => descriptor
-            .with_liveness_class(EcsLivenessClass::SchedulerWait)
-            .with_awaited_token(spatial_token(EcsSpatialWaitTokenKind::DerivedArtifactReady))
-            .with_produced_token(spatial_token(
-                EcsSpatialWaitTokenKind::NetworkDeltaPublished,
-            ))
             .with_command_output(FUN_COMMAND_BUFFER_HANDOFFS)
             .reads_post_command_state(),
         EcsSpatialScheduleSet::FlushDiagnostics => {
@@ -448,6 +438,8 @@ pub fn spatial_set_access(set: EcsSpatialScheduleSet) -> FunSystemAccess {
                 FunSystemAccess::write_table_kind(FunEcsResourceKind::StreamRequestQueue),
             )
         }
+        EcsSpatialScheduleSet::ApplyArtifactCommands => apply_artifact_access(),
+        EcsSpatialScheduleSet::ApplyHandoffCommands => apply_handoff_access(),
         EcsSpatialScheduleSet::AcquireSources => {
             FunSystemAccess::read_table_kind(FunEcsResourceKind::StreamRequestQueue)
                 .merge(FunSystemAccess::read_resource_kind(
@@ -474,15 +466,6 @@ pub fn spatial_set_access(set: EcsSpatialScheduleSet) -> FunSystemAccess {
                 FunSystemAccess::command_output(FUN_COMMAND_BUFFER_ARTIFACTS),
             )
         }
-        EcsSpatialScheduleSet::PropagateDirtyRegions => {
-            FunSystemAccess::write_table_kind(FunEcsResourceKind::PageResidencyTable)
-                .merge(FunSystemAccess::write_table_kind(
-                    FunEcsResourceKind::DirtyRegionLedger,
-                ))
-                .merge(FunSystemAccess::command_output(
-                    FUN_COMMAND_BUFFER_DIRTY_PROPAGATION,
-                ))
-        }
         EcsSpatialScheduleSet::PublishRendererHandoffs => {
             FunSystemAccess::read_table_kind(FunEcsResourceKind::DerivedArtifactRegistry)
                 .merge(FunSystemAccess::command_output(FUN_COMMAND_BUFFER_HANDOFFS))
@@ -492,10 +475,6 @@ pub fn spatial_set_access(set: EcsSpatialScheduleSet) -> FunSystemAccess {
                 .merge(FunSystemAccess::command_output(FUN_COMMAND_BUFFER_HANDOFFS))
         }
         EcsSpatialScheduleSet::PublishPhysicsHandoffs => {
-            FunSystemAccess::read_table_kind(FunEcsResourceKind::DerivedArtifactRegistry)
-                .merge(FunSystemAccess::command_output(FUN_COMMAND_BUFFER_HANDOFFS))
-        }
-        EcsSpatialScheduleSet::PublishNetworkHandoffs => {
             FunSystemAccess::read_table_kind(FunEcsResourceKind::DerivedArtifactRegistry)
                 .merge(FunSystemAccess::command_output(FUN_COMMAND_BUFFER_HANDOFFS))
         }
@@ -523,6 +502,7 @@ pub const fn spatial_token(kind: EcsSpatialWaitTokenKind) -> WorkWaitToken {
 pub const ECS_SPATIAL_DEFAULT_DECODE_CHUNKS: u16 = 2;
 pub const ECS_SPATIAL_MAX_COMPILE_CHUNKS: u16 = 64;
 pub const ECS_SPATIAL_MAX_COMPILED_CHUNKS: u16 = ECS_SPATIAL_MAX_COMPILE_CHUNKS;
+pub const ECS_PROCEDURAL_GENERATION_ESTIMATED_VOXELS_PER_PAGE: u32 = 32 * 32 * 32;
 pub const ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT: usize = 8;
 pub const ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS: [EcsArtifactConsumer;
     ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT] = [
@@ -538,11 +518,55 @@ pub const ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS: [EcsArtifactConsumer;
 
 pub type EcsSpatialProductWorkGraph = WorkGraph<EcsWork<ProductRegistry>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralGenerationChunk {
+    pub first_request: u32,
+    pub request_count: u16,
+    pub estimated_voxels: u32,
+    pub priority_floor: EcsStreamPriority,
+}
+
+impl ProceduralGenerationChunk {
+    #[must_use]
+    pub const fn new(
+        first_request: u32,
+        request_count: u16,
+        estimated_voxels: u32,
+        priority_floor: EcsStreamPriority,
+    ) -> Self {
+        Self {
+            first_request,
+            request_count,
+            estimated_voxels,
+            priority_floor,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralGenerationChunkSpec {
+    pub page: EcsSpatialPageKey,
+    pub chunk_key: EcsChunkKey,
+    pub chunk: ProceduralGenerationChunk,
+}
+
+impl ProceduralGenerationChunkSpec {
+    #[must_use]
+    pub fn new(page: EcsSpatialPageKey, chunk: ProceduralGenerationChunk) -> Self {
+        Self {
+            page,
+            chunk_key: page.chunk_key(),
+            chunk,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EcsSpatialScheduleBuildInput {
     pub graph_id: WorkGraphId,
     pub observed_revision: FunRevision,
     pub decode_chunk_count: u16,
+    pub procedural_generation_chunks: Vec<ProceduralGenerationChunkSpec>,
 }
 
 impl Default for EcsSpatialScheduleBuildInput {
@@ -551,37 +575,65 @@ impl Default for EcsSpatialScheduleBuildInput {
             graph_id: WorkGraphId::new(1_600),
             observed_revision: FunRevision::INITIAL,
             decode_chunk_count: ECS_SPATIAL_DEFAULT_DECODE_CHUNKS,
+            procedural_generation_chunks: Vec::new(),
         }
     }
 }
 
 impl EcsSpatialScheduleBuildInput {
     #[must_use]
-    pub const fn with_graph_id(mut self, graph_id: WorkGraphId) -> Self {
+    pub fn with_graph_id(mut self, graph_id: WorkGraphId) -> Self {
         self.graph_id = graph_id;
         self
     }
 
     #[must_use]
-    pub const fn with_observed_revision(mut self, revision: FunRevision) -> Self {
+    pub fn with_observed_revision(mut self, revision: FunRevision) -> Self {
         self.observed_revision = revision;
         self
     }
 
     #[must_use]
-    pub const fn with_decode_chunk_count(mut self, chunks: u16) -> Self {
+    pub fn with_decode_chunk_count(mut self, chunks: u16) -> Self {
         self.decode_chunk_count = chunks;
         self
     }
 
     #[must_use]
-    pub const fn normalized_decode_chunk_count(self) -> u16 {
+    pub fn with_stream_requests(mut self, requests: &[EcsStreamRequest]) -> Self {
+        self.procedural_generation_chunks = procedural_generation_chunks_from_requests(
+            requests,
+            self.normalized_decode_chunk_count(),
+        );
+        self
+    }
+
+    #[must_use]
+    pub fn with_procedural_generation_chunks(
+        mut self,
+        chunks: Vec<ProceduralGenerationChunkSpec>,
+    ) -> Self {
+        self.procedural_generation_chunks = normalize_procedural_generation_chunks(chunks);
+        self
+    }
+
+    #[must_use]
+    pub const fn normalized_decode_chunk_count(&self) -> u16 {
         if self.decode_chunk_count == 0 {
             1
         } else if self.decode_chunk_count > ECS_SPATIAL_MAX_COMPILE_CHUNKS {
             ECS_SPATIAL_MAX_COMPILE_CHUNKS
         } else {
             self.decode_chunk_count
+        }
+    }
+
+    #[must_use]
+    pub fn procedural_generation_chunks(&self) -> Vec<ProceduralGenerationChunkSpec> {
+        if self.procedural_generation_chunks.is_empty() {
+            default_procedural_generation_chunks(self.normalized_decode_chunk_count())
+        } else {
+            normalize_procedural_generation_chunks(self.procedural_generation_chunks.clone())
         }
     }
 }
@@ -643,7 +695,9 @@ pub struct EcsSpatialAccessPlan {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EcsSpatialChunkPlan {
+    pub procedural_generation_chunks: u16,
     pub decode_chunks: u16,
+    pub artifact_page_chunks: u16,
     pub artifact_consumer_chunks: u16,
     pub chunk_nodes: u32,
 }
@@ -713,6 +767,7 @@ impl EcsSpatialScheduleCompiler {
     pub fn compile(
         input: EcsSpatialScheduleBuildInput,
     ) -> Result<EcsSpatialScheduleCompileOutput, EcsSpatialScheduleCompileError> {
+        let generation_chunks = input.procedural_generation_chunks();
         let mut graph = WorkGraph::new(
             input.graph_id,
             ScheduleDomain::FunEcs,
@@ -728,7 +783,7 @@ impl EcsSpatialScheduleCompiler {
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::SenseSources,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -739,7 +794,7 @@ impl EcsSpatialScheduleCompiler {
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::BuildInterest,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -752,7 +807,7 @@ impl EcsSpatialScheduleCompiler {
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::PlanStreamWave,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -765,7 +820,7 @@ impl EcsSpatialScheduleCompiler {
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::DiffRequests,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -777,7 +832,7 @@ impl EcsSpatialScheduleCompiler {
         let apply_requests = add_barrier_node(
             &mut graph,
             &mut node_specs,
-            input,
+            &input,
             EcsSpatialScheduleSet::ApplyStreamCommands,
             EcsSpatialCompilerBarrierKind::ApplyRequestCommands,
             Some(FUN_COMMAND_BUFFER_SPATIAL_REQUESTS.scheduler_id()),
@@ -789,7 +844,7 @@ impl EcsSpatialScheduleCompiler {
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::AcquireSources,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -799,42 +854,44 @@ impl EcsSpatialScheduleCompiler {
         add_dependency(&mut graph, apply_requests, acquire);
 
         let mut decode_nodes = Vec::new();
-        for idx in 0..input.normalized_decode_chunk_count() {
-            let chunk_key = decode_chunk_key(idx);
+        for (idx, spec) in generation_chunks.iter().enumerate() {
+            let chunk_index = idx.min(u16::MAX as usize) as u16;
+            let chunk_key = spec.chunk_key;
             let decode = add_set_node_with_access(
                 &mut graph,
                 &mut node_specs,
                 &mut token_producers,
-                input,
+                &input,
                 EcsSpatialScheduleSet::DecodePages,
                 EcsSpatialWorkNodeKind::ChunkSet,
                 chunk_key,
-                idx,
+                chunk_index,
                 None,
                 decode_chunk_access(chunk_key),
-                EcsSpatialScheduleSet::DecodePages.execution_contract(),
+                procedural_chunk_execution(spec.chunk.priority_floor),
             )?;
             add_dependency(&mut graph, acquire, decode);
             decode_nodes.push(decode);
         }
 
         let mut artifact_nodes = Vec::new();
-        for consumer in ECS_SPATIAL_ARTIFACT_BUILD_CONSUMERS {
-            let chunk_key = artifact_consumer_chunk_key(consumer);
+        for (idx, spec) in generation_chunks.iter().enumerate() {
+            let chunk_index = idx.min(u16::MAX as usize) as u16;
+            let chunk_key = spec.chunk_key;
             let artifact = add_set_node_with_access(
                 &mut graph,
                 &mut node_specs,
                 &mut token_producers,
-                input,
+                &input,
                 EcsSpatialScheduleSet::BuildDerivedArtifacts,
                 EcsSpatialWorkNodeKind::ChunkSet,
                 chunk_key,
-                consumer as u16,
-                Some(consumer),
-                artifact_consumer_access(chunk_key),
-                EcsSpatialScheduleSet::build_derived_artifact_execution(consumer),
+                chunk_index,
+                None,
+                artifact_page_chunk_access(chunk_key),
+                procedural_chunk_execution(spec.chunk.priority_floor),
             )?;
-            for decode in &decode_nodes {
+            if let Some(decode) = decode_nodes.get(idx) {
                 add_dependency(&mut graph, *decode, artifact);
             }
             artifact_nodes.push(artifact);
@@ -843,8 +900,8 @@ impl EcsSpatialScheduleCompiler {
         let apply_artifacts = add_barrier_node(
             &mut graph,
             &mut node_specs,
-            input,
-            EcsSpatialScheduleSet::BuildDerivedArtifacts,
+            &input,
+            EcsSpatialScheduleSet::ApplyArtifactCommands,
             EcsSpatialCompilerBarrierKind::ApplyArtifactCommands,
             Some(FUN_COMMAND_BUFFER_ARTIFACTS.scheduler_id()),
             apply_artifact_access().to_scheduler_access_for::<ProductRegistry>(),
@@ -853,48 +910,24 @@ impl EcsSpatialScheduleCompiler {
             add_dependency(&mut graph, *artifact, apply_artifacts);
         }
 
-        let dirty = add_set_node(
-            &mut graph,
-            &mut node_specs,
-            &mut token_producers,
-            input,
-            EcsSpatialScheduleSet::PropagateDirtyRegions,
-            EcsSpatialWorkNodeKind::ScalarSet,
-            EcsChunkKey::WHOLE_WORLD,
-            0,
-            None,
-        )?;
-        add_dependency(&mut graph, apply_artifacts, dirty);
-
-        let apply_dirty = add_barrier_node(
-            &mut graph,
-            &mut node_specs,
-            input,
-            EcsSpatialScheduleSet::PropagateDirtyRegions,
-            EcsSpatialCompilerBarrierKind::ApplyDirtyPropagationCommands,
-            Some(FUN_COMMAND_BUFFER_DIRTY_PROPAGATION.scheduler_id()),
-            apply_dirty_access().to_scheduler_access_for::<ProductRegistry>(),
-        );
-        add_dependency(&mut graph, dirty, apply_dirty);
-
         let renderer = add_set_node(
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::PublishRendererHandoffs,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
             0,
             None,
         )?;
-        add_dependency(&mut graph, apply_dirty, renderer);
+        add_dependency(&mut graph, apply_artifacts, renderer);
 
         let lux = add_set_node(
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::PublishLuxHandoffs,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -907,7 +940,7 @@ impl EcsSpatialScheduleCompiler {
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::PublishPhysicsHandoffs,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -916,35 +949,22 @@ impl EcsSpatialScheduleCompiler {
         )?;
         add_dependency(&mut graph, lux, physics);
 
-        let network = add_set_node(
-            &mut graph,
-            &mut node_specs,
-            &mut token_producers,
-            input,
-            EcsSpatialScheduleSet::PublishNetworkHandoffs,
-            EcsSpatialWorkNodeKind::ScalarSet,
-            EcsChunkKey::WHOLE_WORLD,
-            0,
-            None,
-        )?;
-        add_dependency(&mut graph, physics, network);
-
         let apply_handoffs = add_barrier_node(
             &mut graph,
             &mut node_specs,
-            input,
-            EcsSpatialScheduleSet::PublishNetworkHandoffs,
+            &input,
+            EcsSpatialScheduleSet::ApplyHandoffCommands,
             EcsSpatialCompilerBarrierKind::ApplyHandoffCommands,
             Some(FUN_COMMAND_BUFFER_HANDOFFS.scheduler_id()),
             apply_handoff_access().to_scheduler_access_for::<ProductRegistry>(),
         );
-        add_dependency(&mut graph, network, apply_handoffs);
+        add_dependency(&mut graph, physics, apply_handoffs);
 
         let evict = add_set_node(
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::EvictColdPages,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
@@ -953,29 +973,18 @@ impl EcsSpatialScheduleCompiler {
         )?;
         add_dependency(&mut graph, apply_handoffs, evict);
 
-        let before_diagnostics = add_barrier_node(
-            &mut graph,
-            &mut node_specs,
-            input,
-            EcsSpatialScheduleSet::FlushDiagnostics,
-            EcsSpatialCompilerBarrierKind::BeforeDiagnostics,
-            None,
-            diagnostics_finalize_access().to_scheduler_access_for::<ProductRegistry>(),
-        );
-        add_dependency(&mut graph, evict, before_diagnostics);
-
         let diagnostics = add_set_node(
             &mut graph,
             &mut node_specs,
             &mut token_producers,
-            input,
+            &input,
             EcsSpatialScheduleSet::FlushDiagnostics,
             EcsSpatialWorkNodeKind::ScalarSet,
             EcsChunkKey::WHOLE_WORLD,
             0,
             None,
         )?;
-        add_dependency(&mut graph, before_diagnostics, diagnostics);
+        add_dependency(&mut graph, evict, diagnostics);
 
         add_token_wait_edges(&mut graph, &token_producers);
         install_write_conflict_set(&mut graph);
@@ -985,8 +994,10 @@ impl EcsSpatialScheduleCompiler {
         let graph_digest = EcsSpatialGraphDigest::from_graph(&graph);
         let access_plan = EcsSpatialAccessPlan::from_graph(&graph);
         let chunk_plan = EcsSpatialChunkPlan {
-            decode_chunks: input.normalized_decode_chunk_count(),
-            artifact_consumer_chunks: ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT as u16,
+            procedural_generation_chunks: generation_chunks.len().min(u16::MAX as usize) as u16,
+            decode_chunks: generation_chunks.len().min(u16::MAX as usize) as u16,
+            artifact_page_chunks: generation_chunks.len().min(u16::MAX as usize) as u16,
+            artifact_consumer_chunks: 0,
             chunk_nodes: node_specs
                 .iter()
                 .filter(|spec| spec.kind == EcsSpatialWorkNodeKind::ChunkSet)
@@ -1163,7 +1174,7 @@ fn add_set_node(
     graph: &mut EcsSpatialProductWorkGraph,
     node_specs: &mut Vec<EcsSpatialWorkNodeSpec>,
     token_producers: &mut Vec<(WorkWaitToken, WorkNodeId)>,
-    input: EcsSpatialScheduleBuildInput,
+    input: &EcsSpatialScheduleBuildInput,
     set: EcsSpatialScheduleSet,
     kind: EcsSpatialWorkNodeKind,
     chunk_key: EcsChunkKey,
@@ -1193,7 +1204,7 @@ fn add_set_node_with_access(
     graph: &mut EcsSpatialProductWorkGraph,
     node_specs: &mut Vec<EcsSpatialWorkNodeSpec>,
     token_producers: &mut Vec<(WorkWaitToken, WorkNodeId)>,
-    input: EcsSpatialScheduleBuildInput,
+    input: &EcsSpatialScheduleBuildInput,
     set: EcsSpatialScheduleSet,
     kind: EcsSpatialWorkNodeKind,
     chunk_key: EcsChunkKey,
@@ -1266,7 +1277,7 @@ fn add_set_node_with_access(
 fn add_barrier_node(
     graph: &mut EcsSpatialProductWorkGraph,
     node_specs: &mut Vec<EcsSpatialWorkNodeSpec>,
-    input: EcsSpatialScheduleBuildInput,
+    input: &EcsSpatialScheduleBuildInput,
     set: EcsSpatialScheduleSet,
     barrier: EcsSpatialCompilerBarrierKind,
     command_buffer: Option<EcsCommandBufferId>,
@@ -1420,19 +1431,6 @@ fn apply_artifact_access() -> FunSystemAccess {
     FunSystemAccess::write_table_kind(FunEcsResourceKind::DerivedArtifactRegistry)
 }
 
-fn apply_dirty_access() -> FunSystemAccess {
-    FunSystemAccess::write_table_kind(FunEcsResourceKind::DirtyRegionLedger)
-        .merge(FunSystemAccess::write_table_kind(
-            FunEcsResourceKind::DerivedArtifactRegistry,
-        ))
-        .merge(FunSystemAccess::write_table_kind(
-            FunEcsResourceKind::PageResidencyTable,
-        ))
-        .merge(FunSystemAccess::write_table_kind(
-            FunEcsResourceKind::PhysicsCookQueue,
-        ))
-}
-
 fn apply_handoff_access() -> FunSystemAccess {
     FunSystemAccess::write_table_kind(FunEcsResourceKind::RendererHandoffQueue)
         .merge(FunSystemAccess::write_table_kind(
@@ -1442,28 +1440,6 @@ fn apply_handoff_access() -> FunSystemAccess {
             FunEcsResourceKind::PhysicsCookQueue,
         ))
         .merge(FunSystemAccess::write_table_kind(
-            FunEcsResourceKind::NetworkHandoffQueue,
-        ))
-}
-
-fn diagnostics_finalize_access() -> FunSystemAccess {
-    FunSystemAccess::read_resource_kind(FunEcsResourceKind::TelemetryEventQueue)
-        .merge(FunSystemAccess::read_table_kind(
-            FunEcsResourceKind::PageResidencyTable,
-        ))
-        .merge(FunSystemAccess::read_table_kind(
-            FunEcsResourceKind::DerivedArtifactRegistry,
-        ))
-        .merge(FunSystemAccess::read_table_kind(
-            FunEcsResourceKind::RendererHandoffQueue,
-        ))
-        .merge(FunSystemAccess::read_table_kind(
-            FunEcsResourceKind::LuxHandoffQueue,
-        ))
-        .merge(FunSystemAccess::read_table_kind(
-            FunEcsResourceKind::PhysicsCookQueue,
-        ))
-        .merge(FunSystemAccess::read_table_kind(
             FunEcsResourceKind::NetworkHandoffQueue,
         ))
 }
@@ -1483,10 +1459,334 @@ fn decode_chunk_access(chunk: EcsChunkKey) -> FunSystemAccess {
         ))
 }
 
-fn artifact_consumer_access(chunk: EcsChunkKey) -> FunSystemAccess {
+fn artifact_page_chunk_access(chunk: EcsChunkKey) -> FunSystemAccess {
     read_table_chunk_kind(FunEcsResourceKind::DecodedPageQueue, chunk).merge(
         FunSystemAccess::command_output(FUN_COMMAND_BUFFER_ARTIFACTS),
     )
+}
+
+fn procedural_generation_chunks_from_requests(
+    requests: &[EcsStreamRequest],
+    fallback_count: u16,
+) -> Vec<ProceduralGenerationChunkSpec> {
+    if requests.is_empty() {
+        return default_procedural_generation_chunks(fallback_count);
+    }
+
+    let mut indexed: Vec<(usize, EcsStreamRequest)> =
+        requests.iter().copied().enumerate().collect();
+    indexed.sort_by_key(|(index, request)| {
+        (
+            request.priority.order_key(),
+            schedule_page_sort_key(request.page),
+            *index,
+        )
+    });
+
+    let mut chunks: Vec<ProceduralGenerationChunkSpec> = Vec::new();
+    for (index, request) in indexed
+        .into_iter()
+        .take(ECS_SPATIAL_MAX_COMPILE_CHUNKS as usize)
+    {
+        let chunk_key = request.page.chunk_key();
+        if let Some(existing) = chunks.iter_mut().find(|chunk| chunk.chunk_key == chunk_key) {
+            existing.chunk.request_count = existing.chunk.request_count.saturating_add(1);
+            if request.priority.order_key() > existing.chunk.priority_floor.order_key() {
+                existing.chunk.priority_floor = request.priority;
+            }
+            continue;
+        }
+
+        chunks.push(ProceduralGenerationChunkSpec::new(
+            request.page,
+            ProceduralGenerationChunk::new(
+                index.min(u32::MAX as usize) as u32,
+                1,
+                ECS_PROCEDURAL_GENERATION_ESTIMATED_VOXELS_PER_PAGE,
+                request.priority,
+            ),
+        ));
+    }
+    chunks
+}
+
+fn normalize_procedural_generation_chunks(
+    mut chunks: Vec<ProceduralGenerationChunkSpec>,
+) -> Vec<ProceduralGenerationChunkSpec> {
+    if chunks.is_empty() {
+        return default_procedural_generation_chunks(ECS_SPATIAL_DEFAULT_DECODE_CHUNKS);
+    }
+
+    chunks.sort_by_key(|spec| {
+        (
+            spec.chunk.priority_floor.order_key(),
+            schedule_page_sort_key(spec.page),
+            spec.chunk.first_request,
+        )
+    });
+    chunks.dedup_by_key(|spec| spec.chunk_key);
+    chunks.truncate(ECS_SPATIAL_MAX_COMPILE_CHUNKS as usize);
+    chunks
+}
+
+fn default_procedural_generation_chunks(count: u16) -> Vec<ProceduralGenerationChunkSpec> {
+    let normalized = count.clamp(1, ECS_SPATIAL_MAX_COMPILE_CHUNKS);
+    let mut chunks = Vec::with_capacity(normalized as usize);
+    for index in 0..normalized {
+        let page = default_procedural_generation_page(index);
+        chunks.push(ProceduralGenerationChunkSpec::new(
+            page,
+            ProceduralGenerationChunk::new(
+                u32::from(index),
+                1,
+                ECS_PROCEDURAL_GENERATION_ESTIMATED_VOXELS_PER_PAGE,
+                EcsStreamPriority::new(EcsStreamInterestKind::Backfill, index, 0),
+            ),
+        ));
+    }
+    chunks
+}
+
+#[must_use]
+pub fn procedural_generation_default_chunk_key(index: u16) -> EcsChunkKey {
+    default_procedural_generation_page(index).chunk_key()
+}
+
+fn default_procedural_generation_page(index: u16) -> EcsSpatialPageKey {
+    EcsSpatialPageKey::new(
+        EcsSpatialDomainKind::Terrain,
+        EcsSpatialGridId::new(1),
+        0,
+        i32::from(index),
+        0,
+        0,
+        EcsPageChannel::Surface,
+    )
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ProceduralTerrainSchedulerWorkClass {
+    #[default]
+    CameraContainingPageGeneration = 0,
+    ActiveNearCollisionShell = 1,
+    NearbyVisibleSurfacePackets = 2,
+    VisibleMaterialPage = 3,
+    VisibleRendererHandoff = 4,
+    CurrentVisiblePageWithoutFallback = 5,
+    OuterShellGeneration = 6,
+    FarSurfaceRefinement = 7,
+    LoadAnimation = 8,
+    LuxShadowInvalidation = 9,
+    TerrainSdf = 10,
+    CollisionCriticalPhysicsProxy = 11,
+    OptionalPhysicsProxy = 12,
+    DiagnosticsOverlay = 13,
+    StaleSourceRecipe = 14,
+    InProgressCommandBarrier = 15,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProceduralTerrainCancellationContext {
+    pub after_teleport: bool,
+    pub under_pressure: bool,
+    pub stale_stream_wave: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum ProceduralTerrainCancellationDecision {
+    #[default]
+    Keep = 0,
+    NeverCancel = 1,
+    Defer = 2,
+    Cancel = 3,
+}
+
+#[must_use]
+pub const fn procedural_terrain_work_deadline(
+    work: ProceduralTerrainSchedulerWorkClass,
+    priority: EcsStreamPriority,
+) -> ScheduleDeadline {
+    match work {
+        ProceduralTerrainSchedulerWorkClass::CameraContainingPageGeneration
+        | ProceduralTerrainSchedulerWorkClass::ActiveNearCollisionShell
+        | ProceduralTerrainSchedulerWorkClass::NearbyVisibleSurfacePackets
+        | ProceduralTerrainSchedulerWorkClass::VisibleMaterialPage
+        | ProceduralTerrainSchedulerWorkClass::VisibleRendererHandoff
+        | ProceduralTerrainSchedulerWorkClass::CurrentVisiblePageWithoutFallback => {
+            if priority.shell == 0 {
+                ScheduleDeadline::Frame
+            } else {
+                ScheduleDeadline::Stream
+            }
+        }
+        ProceduralTerrainSchedulerWorkClass::CollisionCriticalPhysicsProxy => {
+            ScheduleDeadline::FixedStep
+        }
+        ProceduralTerrainSchedulerWorkClass::DiagnosticsOverlay => ScheduleDeadline::IdleWindow,
+        ProceduralTerrainSchedulerWorkClass::OuterShellGeneration
+        | ProceduralTerrainSchedulerWorkClass::FarSurfaceRefinement
+        | ProceduralTerrainSchedulerWorkClass::LoadAnimation
+        | ProceduralTerrainSchedulerWorkClass::LuxShadowInvalidation
+        | ProceduralTerrainSchedulerWorkClass::TerrainSdf
+        | ProceduralTerrainSchedulerWorkClass::OptionalPhysicsProxy
+        | ProceduralTerrainSchedulerWorkClass::StaleSourceRecipe
+        | ProceduralTerrainSchedulerWorkClass::InProgressCommandBarrier => ScheduleDeadline::Stream,
+    }
+}
+
+#[must_use]
+pub const fn procedural_terrain_work_requiredness(
+    work: ProceduralTerrainSchedulerWorkClass,
+) -> WorkRequiredness {
+    match work {
+        ProceduralTerrainSchedulerWorkClass::CameraContainingPageGeneration
+        | ProceduralTerrainSchedulerWorkClass::ActiveNearCollisionShell
+        | ProceduralTerrainSchedulerWorkClass::NearbyVisibleSurfacePackets
+        | ProceduralTerrainSchedulerWorkClass::VisibleMaterialPage
+        | ProceduralTerrainSchedulerWorkClass::VisibleRendererHandoff
+        | ProceduralTerrainSchedulerWorkClass::CurrentVisiblePageWithoutFallback
+        | ProceduralTerrainSchedulerWorkClass::CollisionCriticalPhysicsProxy
+        | ProceduralTerrainSchedulerWorkClass::InProgressCommandBarrier => {
+            WorkRequiredness::Required
+        }
+        ProceduralTerrainSchedulerWorkClass::OuterShellGeneration
+        | ProceduralTerrainSchedulerWorkClass::FarSurfaceRefinement
+        | ProceduralTerrainSchedulerWorkClass::LoadAnimation
+        | ProceduralTerrainSchedulerWorkClass::LuxShadowInvalidation
+        | ProceduralTerrainSchedulerWorkClass::TerrainSdf
+        | ProceduralTerrainSchedulerWorkClass::OptionalPhysicsProxy
+        | ProceduralTerrainSchedulerWorkClass::DiagnosticsOverlay
+        | ProceduralTerrainSchedulerWorkClass::StaleSourceRecipe => WorkRequiredness::Optional,
+    }
+}
+
+#[must_use]
+pub const fn procedural_terrain_artifact_deadline(
+    artifact: EcsDerivedArtifactKind,
+    priority: EcsStreamPriority,
+) -> ScheduleDeadline {
+    match artifact {
+        EcsDerivedArtifactKind::TerrainCoarseProxy
+        | EcsDerivedArtifactKind::TerrainSurfacePackets
+        | EcsDerivedArtifactKind::TerrainMaterialPage => procedural_terrain_work_deadline(
+            ProceduralTerrainSchedulerWorkClass::NearbyVisibleSurfacePackets,
+            priority,
+        ),
+        EcsDerivedArtifactKind::PhysicsCookRequests
+        | EcsDerivedArtifactKind::PhysicsCollisionProxy
+        | EcsDerivedArtifactKind::CollisionSdfProxy => {
+            if matches!(
+                priority.criticality,
+                EcsStreamInterestKind::CollisionCriticalNear
+            ) {
+                ScheduleDeadline::FixedStep
+            } else {
+                ScheduleDeadline::Stream
+            }
+        }
+        EcsDerivedArtifactKind::VirtualShadowInvalidation
+        | EcsDerivedArtifactKind::TerrainSdf
+        | EcsDerivedArtifactKind::ShadowInvalidationRows => ScheduleDeadline::Stream,
+        EcsDerivedArtifactKind::LoadAnimationRecord => ScheduleDeadline::Stream,
+        _ => ScheduleDeadline::Stream,
+    }
+}
+
+#[must_use]
+pub const fn procedural_terrain_artifact_requiredness(
+    artifact: EcsDerivedArtifactKind,
+    priority: EcsStreamPriority,
+) -> WorkRequiredness {
+    match artifact {
+        EcsDerivedArtifactKind::TerrainCoarseProxy => WorkRequiredness::Required,
+        EcsDerivedArtifactKind::TerrainSurfacePackets
+        | EcsDerivedArtifactKind::TerrainMaterialPage => {
+            if matches!(
+                priority.criticality,
+                EcsStreamInterestKind::CameraContainingPage
+                    | EcsStreamInterestKind::VisibleNear
+                    | EcsStreamInterestKind::VisibleCoarseFallback
+            ) {
+                WorkRequiredness::Required
+            } else {
+                WorkRequiredness::Optional
+            }
+        }
+        EcsDerivedArtifactKind::LoadAnimationRecord
+        | EcsDerivedArtifactKind::VirtualShadowInvalidation
+        | EcsDerivedArtifactKind::TerrainSdf
+        | EcsDerivedArtifactKind::PhysicsCookRequests => WorkRequiredness::Optional,
+        _ => WorkRequiredness::Optional,
+    }
+}
+
+#[must_use]
+pub const fn procedural_terrain_cancellation_decision(
+    work: ProceduralTerrainSchedulerWorkClass,
+    context: ProceduralTerrainCancellationContext,
+) -> ProceduralTerrainCancellationDecision {
+    match work {
+        ProceduralTerrainSchedulerWorkClass::CameraContainingPageGeneration
+        | ProceduralTerrainSchedulerWorkClass::ActiveNearCollisionShell
+        | ProceduralTerrainSchedulerWorkClass::CurrentVisiblePageWithoutFallback
+        | ProceduralTerrainSchedulerWorkClass::InProgressCommandBarrier => {
+            ProceduralTerrainCancellationDecision::NeverCancel
+        }
+        ProceduralTerrainSchedulerWorkClass::StaleSourceRecipe if context.stale_stream_wave => {
+            ProceduralTerrainCancellationDecision::Cancel
+        }
+        ProceduralTerrainSchedulerWorkClass::OuterShellGeneration if context.after_teleport => {
+            ProceduralTerrainCancellationDecision::Cancel
+        }
+        ProceduralTerrainSchedulerWorkClass::OuterShellGeneration
+        | ProceduralTerrainSchedulerWorkClass::FarSurfaceRefinement
+        | ProceduralTerrainSchedulerWorkClass::LoadAnimation
+        | ProceduralTerrainSchedulerWorkClass::LuxShadowInvalidation
+        | ProceduralTerrainSchedulerWorkClass::TerrainSdf
+        | ProceduralTerrainSchedulerWorkClass::OptionalPhysicsProxy
+        | ProceduralTerrainSchedulerWorkClass::DiagnosticsOverlay
+            if context.under_pressure =>
+        {
+            ProceduralTerrainCancellationDecision::Defer
+        }
+        _ => ProceduralTerrainCancellationDecision::Keep,
+    }
+}
+
+fn procedural_chunk_execution(priority: EcsStreamPriority) -> EcsSystemExecutionContract {
+    EcsSystemExecutionContract {
+        deadline: procedural_generation_deadline(priority),
+        requiredness: procedural_priority_requiredness(priority),
+        ..chunked_page_scheduler_contract()
+    }
+}
+
+#[must_use]
+pub const fn procedural_generation_deadline(priority: EcsStreamPriority) -> ScheduleDeadline {
+    match priority.criticality {
+        EcsStreamInterestKind::CameraContainingPage
+        | EcsStreamInterestKind::CollisionCriticalNear
+        | EcsStreamInterestKind::VisibleNear
+        | EcsStreamInterestKind::VisibleCoarseFallback
+        | EcsStreamInterestKind::VelocityLookahead
+            if priority.shell == 0 =>
+        {
+            ScheduleDeadline::Frame
+        }
+        EcsStreamInterestKind::Diagnostics => ScheduleDeadline::IdleWindow,
+        _ => ScheduleDeadline::Stream,
+    }
+}
+
+#[must_use]
+pub const fn procedural_priority_requiredness(priority: EcsStreamPriority) -> WorkRequiredness {
+    if priority.criticality.is_required() && priority.shell == 0 {
+        WorkRequiredness::Required
+    } else {
+        WorkRequiredness::Optional
+    }
 }
 
 fn read_table_chunk_kind(kind: FunEcsResourceKind, chunk: EcsChunkKey) -> FunSystemAccess {
@@ -1497,12 +1797,16 @@ fn write_table_chunk_kind(kind: FunEcsResourceKind, chunk: EcsChunkKey) -> FunSy
     FunSystemAccess::write_table_chunk(FunResourceTableId::from_resource_kind(kind), chunk)
 }
 
-const fn decode_chunk_key(index: u16) -> EcsChunkKey {
-    EcsChunkKey::new(0x0dec_0000_u64 + index as u64 + 1)
-}
-
-const fn artifact_consumer_chunk_key(consumer: EcsArtifactConsumer) -> EcsChunkKey {
-    EcsChunkKey::new(0x0a7f_0000_u64 + consumer as u64 + 1)
+fn schedule_page_sort_key(page: EcsSpatialPageKey) -> (u8, u64, u8, i32, i32, i32, u8) {
+    (
+        page.domain as u8,
+        page.grid_id.get(),
+        page.level,
+        page.x,
+        page.y,
+        page.z,
+        page.channel as u8,
+    )
 }
 
 const fn barrier_work_kind(barrier: EcsSpatialCompilerBarrierKind) -> EcsWorkKind {
@@ -1732,15 +2036,6 @@ const fn blocking_stream_contract() -> EcsSystemExecutionContract {
     }
 }
 
-const fn network_handoff_contract() -> EcsSystemExecutionContract {
-    EcsSystemExecutionContract {
-        domain: ScheduleDomain::ThunderNetwork,
-        lane: ScheduleLane::NetworkRealtime,
-        deadline: ScheduleDeadline::Stream,
-        ..non_blocking_contract()
-    }
-}
-
 const fn idle_page_scheduler_contract() -> EcsSystemExecutionContract {
     EcsSystemExecutionContract {
         domain: ScheduleDomain::RendererPageScheduler,
@@ -1881,7 +2176,6 @@ mod tests {
             EcsSpatialScheduleSet::PublishRendererHandoffs,
             EcsSpatialScheduleSet::PublishLuxHandoffs,
             EcsSpatialScheduleSet::PublishPhysicsHandoffs,
-            EcsSpatialScheduleSet::PublishNetworkHandoffs,
         ] {
             let descriptor = publisher.system_descriptor();
             assert!(
@@ -1902,11 +2196,9 @@ mod tests {
         for set in [
             EcsSpatialScheduleSet::DiffRequests,
             EcsSpatialScheduleSet::BuildDerivedArtifacts,
-            EcsSpatialScheduleSet::PropagateDirtyRegions,
             EcsSpatialScheduleSet::PublishRendererHandoffs,
             EcsSpatialScheduleSet::PublishLuxHandoffs,
             EcsSpatialScheduleSet::PublishPhysicsHandoffs,
-            EcsSpatialScheduleSet::PublishNetworkHandoffs,
         ] {
             let descriptor = set.system_descriptor();
             assert!(!descriptor.command_outputs.is_empty());
@@ -1921,7 +2213,6 @@ mod tests {
             EcsSpatialScheduleSet::PublishRendererHandoffs,
             EcsSpatialScheduleSet::PublishLuxHandoffs,
             EcsSpatialScheduleSet::PublishPhysicsHandoffs,
-            EcsSpatialScheduleSet::PublishNetworkHandoffs,
         ] {
             let descriptor = set.system_descriptor();
             assert_eq!(descriptor.liveness_class, EcsLivenessClass::SchedulerWait);
@@ -1984,15 +2275,20 @@ mod tests {
             ECS_SPATIAL_DEFAULT_DECODE_CHUNKS
         );
         assert_eq!(
-            output.chunk_plan.artifact_consumer_chunks,
-            ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT as u16
+            output.chunk_plan.procedural_generation_chunks,
+            ECS_SPATIAL_DEFAULT_DECODE_CHUNKS
         );
-        assert_eq!(output.barrier_plan.barrier_nodes, 5);
+        assert_eq!(
+            output.chunk_plan.artifact_page_chunks,
+            ECS_SPATIAL_DEFAULT_DECODE_CHUNKS
+        );
+        assert_eq!(output.chunk_plan.artifact_consumer_chunks, 0);
+        assert_eq!(output.barrier_plan.barrier_nodes, 3);
         assert!(output.barrier_plan.request_apply);
         assert!(output.barrier_plan.artifact_apply);
-        assert!(output.barrier_plan.dirty_apply);
+        assert!(!output.barrier_plan.dirty_apply);
         assert!(output.barrier_plan.handoff_apply);
-        assert!(output.barrier_plan.diagnostics_finalize);
+        assert!(!output.barrier_plan.diagnostics_finalize);
         assert_eq!(
             output.build_report.work_nodes,
             output.build_report.scalar_nodes
@@ -2032,7 +2328,123 @@ mod tests {
                 .filter(|spec| spec.set == EcsSpatialScheduleSet::BuildDerivedArtifacts)
                 .filter(|spec| spec.kind == EcsSpatialWorkNodeKind::ChunkSet)
                 .count(),
-            ECS_SPATIAL_ARTIFACT_BUILD_CONSUMER_COUNT
+            ECS_SPATIAL_DEFAULT_DECODE_CHUNKS as usize
+        );
+    }
+
+    #[test]
+    fn procedural_generation_chunks_use_page_keys_and_voxel_estimates() {
+        let near_priority = EcsStreamPriority::new(EcsStreamInterestKind::VisibleNear, 0, 0);
+        let page = EcsSpatialPageKey::new(
+            EcsSpatialDomainKind::Terrain,
+            EcsSpatialGridId::new(1),
+            0,
+            -3,
+            1,
+            2,
+            EcsPageChannel::Surface,
+        );
+        let request = EcsStreamRequest::new(
+            crate::EcsStreamRequestId::new(7),
+            crate::EcsStreamSourceId::new(1),
+            crate::EcsStreamCameraId::new(1),
+            page,
+            near_priority,
+        );
+        let output = EcsSpatialScheduleCompiler::compile(
+            EcsSpatialScheduleBuildInput::default().with_stream_requests(&[request]),
+        )
+        .expect("compile page-key procedural chunks");
+
+        assert_eq!(output.chunk_plan.procedural_generation_chunks, 1);
+        assert_eq!(output.chunk_plan.decode_chunks, 1);
+        assert_eq!(output.chunk_plan.artifact_page_chunks, 1);
+        for spec in output.node_specs.iter().filter(|spec| {
+            spec.set == EcsSpatialScheduleSet::DecodePages
+                || spec.set == EcsSpatialScheduleSet::BuildDerivedArtifacts
+        }) {
+            assert_eq!(spec.chunk_key, page.chunk_key());
+            assert_eq!(spec.execution.deadline, ScheduleDeadline::Frame);
+            assert_eq!(spec.execution.requiredness, WorkRequiredness::Required);
+        }
+
+        let chunks = EcsSpatialScheduleBuildInput::default()
+            .with_stream_requests(&[request])
+            .procedural_generation_chunks();
+        assert_eq!(
+            chunks[0].chunk.estimated_voxels,
+            ECS_PROCEDURAL_GENERATION_ESTIMATED_VOXELS_PER_PAGE
+        );
+        assert_eq!(chunks[0].chunk.priority_floor, near_priority);
+    }
+
+    #[test]
+    fn procedural_scheduler_policy_matches_required_optional_and_cancellation_rules() {
+        let near = EcsStreamPriority::new(EcsStreamInterestKind::CameraContainingPage, 0, 0);
+        let outer = EcsStreamPriority::new(EcsStreamInterestKind::Backfill, 4, 0);
+        let collision = EcsStreamPriority::new(EcsStreamInterestKind::CollisionCriticalNear, 0, 0);
+
+        assert_eq!(
+            procedural_generation_deadline(near),
+            ScheduleDeadline::Frame
+        );
+        assert_eq!(
+            procedural_generation_deadline(outer),
+            ScheduleDeadline::Stream
+        );
+        assert_eq!(
+            procedural_terrain_artifact_deadline(
+                EcsDerivedArtifactKind::PhysicsCookRequests,
+                collision
+            ),
+            ScheduleDeadline::FixedStep
+        );
+        assert_eq!(
+            procedural_terrain_work_deadline(
+                ProceduralTerrainSchedulerWorkClass::DiagnosticsOverlay,
+                outer
+            ),
+            ScheduleDeadline::IdleWindow
+        );
+        assert_eq!(
+            procedural_terrain_artifact_requiredness(
+                EcsDerivedArtifactKind::TerrainMaterialPage,
+                near
+            ),
+            WorkRequiredness::Required
+        );
+        assert_eq!(
+            procedural_terrain_artifact_requiredness(EcsDerivedArtifactKind::TerrainSdf, near),
+            WorkRequiredness::Optional
+        );
+
+        let pressure = ProceduralTerrainCancellationContext {
+            under_pressure: true,
+            ..ProceduralTerrainCancellationContext::default()
+        };
+        assert_eq!(
+            procedural_terrain_cancellation_decision(
+                ProceduralTerrainSchedulerWorkClass::CameraContainingPageGeneration,
+                pressure
+            ),
+            ProceduralTerrainCancellationDecision::NeverCancel
+        );
+        assert_eq!(
+            procedural_terrain_cancellation_decision(
+                ProceduralTerrainSchedulerWorkClass::TerrainSdf,
+                pressure
+            ),
+            ProceduralTerrainCancellationDecision::Defer
+        );
+        assert_eq!(
+            procedural_terrain_cancellation_decision(
+                ProceduralTerrainSchedulerWorkClass::StaleSourceRecipe,
+                ProceduralTerrainCancellationContext {
+                    stale_stream_wave: true,
+                    ..ProceduralTerrainCancellationContext::default()
+                }
+            ),
+            ProceduralTerrainCancellationDecision::Cancel
         );
     }
 

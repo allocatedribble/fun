@@ -161,6 +161,11 @@ fn artifact_rows(rows: u32, consumer: EcsBenchmarkConsumer) -> Vec<EcsDerivedArt
             source_page: terrain_page(index, EcsPageChannel::Surface),
             kind,
             source_epoch: 1,
+            source_digest: derived_artifact_source_digest(
+                terrain_page(index, EcsPageChannel::Surface),
+                1,
+                index + 1,
+            ),
             artifact_epoch: index + 1,
             state: EcsArtifactState::Ready,
             requiredness,
