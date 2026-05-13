@@ -28,7 +28,7 @@
 //! closures (`no_swapchain_configured`, `no_render_encoder`,
 //! `no_frame_readback`).
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 use std::time::Instant;
 
 use crate::scene_streaming::{

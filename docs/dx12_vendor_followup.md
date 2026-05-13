@@ -32,7 +32,7 @@ specific enough to act on.
 
 | bottleneck | required evidence | allowed first experiments |
 | --- | --- | --- |
-| descriptor churn | PIX descriptor heap switches or `render_churn_bind_group*` deltas | bindless-like material table evaluation where Bevy/wgpu permits it; fewer per-draw bind group changes; descriptor rollover inspection |
+| descriptor churn | PIX descriptor heap switches or `render_churn_bind_group*` deltas | bindless-like material table evaluation where RetiredEngine/wgpu permits it; fewer per-draw bind group changes; descriptor rollover inspection |
 | pipeline churn / PSO churn | runtime pipeline creation, cache-miss counters, or PIX PSO creation | stronger pipeline warmup; persistent PSO cache experiment; lower material key fragmentation |
 | upload-bound | `render_upload_*`, meshlet/world-stream upload, NATIVE_UI upload/copy counters, or PIX copy evidence | persistent staging or native upload-heap prototype for measured callsites only |
 | barrier/state-bound | PIX resource barrier summary naming the pass | collapse redundant transitions; fix pass ordering/resource-state ownership before queue experiments |

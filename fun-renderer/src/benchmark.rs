@@ -272,7 +272,7 @@ pub struct RendererBenchmarkMetrics {
     pub upscaler_time_us: u32,
     pub fg_generated_count: u32,
     pub fg_presented_count: u32,
-    pub product_bevy_ui_dependency_detected: bool,
+    pub product_retired_engine_ui_dependency_detected: bool,
     pub fallback_reasons: Vec<&'static str>,
 }
 
@@ -302,7 +302,7 @@ impl RendererBenchmarkMetrics {
             upscaler_time_us: 0,
             fg_generated_count: 0,
             fg_presented_count: 0,
-            product_bevy_ui_dependency_detected: false,
+            product_retired_engine_ui_dependency_detected: false,
             fallback_reasons: Vec::new(),
         }
     }
@@ -325,7 +325,7 @@ impl Default for RendererBenchmarkMetrics {
 pub struct RendererBenchmarkGitRevisions {
     pub root_revision: String,
     pub fun_revision: String,
-    pub bevy_revision: String,
+    pub retired_engine_revision: String,
 }
 
 impl RendererBenchmarkGitRevisions {
@@ -334,7 +334,7 @@ impl RendererBenchmarkGitRevisions {
         Self {
             root_revision: String::from("unknown"),
             fun_revision: String::from("unknown"),
-            bevy_revision: String::from("unknown"),
+            retired_engine_revision: String::from("unknown"),
         }
     }
 }
@@ -464,7 +464,7 @@ pub enum RendererPerfGateKind {
     NoProductCpuNativeUiFallback,
     NoUnboundedPageFaultStorm,
     NoUnsupportedFrameGeneration,
-    NoHiddenBevyUiProductDependency,
+    NoHiddenRetiredEngineUiProductDependency,
     NoPerformanceClaimWithoutArtifact,
 }
 
@@ -475,7 +475,7 @@ impl RendererPerfGateKind {
         Self::NoProductCpuNativeUiFallback,
         Self::NoUnboundedPageFaultStorm,
         Self::NoUnsupportedFrameGeneration,
-        Self::NoHiddenBevyUiProductDependency,
+        Self::NoHiddenRetiredEngineUiProductDependency,
         Self::NoPerformanceClaimWithoutArtifact,
     ];
 
@@ -487,7 +487,9 @@ impl RendererPerfGateKind {
             Self::NoProductCpuNativeUiFallback => "no_product_cpu_native_ui_fallback",
             Self::NoUnboundedPageFaultStorm => "no_unbounded_page_fault_storm",
             Self::NoUnsupportedFrameGeneration => "no_unsupported_frame_generation",
-            Self::NoHiddenBevyUiProductDependency => "no_hidden_bevy_ui_product_dependency",
+            Self::NoHiddenRetiredEngineUiProductDependency => {
+                "no_hidden_retired_engine_ui_product_dependency"
+            }
             Self::NoPerformanceClaimWithoutArtifact => "no_performance_claim_without_artifact",
         }
     }
@@ -658,7 +660,7 @@ pub fn evaluate_perf_gates(
     results.push(product_native_ui_gate(scene, capabilities, metrics));
     results.push(page_fault_gate(metrics, config));
     results.push(frame_generation_gate(settings, capabilities, metrics));
-    results.push(bevy_ui_gate(metrics));
+    results.push(retired_engine_ui_gate(metrics));
     results.push(performance_claim_gate(performance_claim, artifact_present));
 
     RendererPerfGateReport::from_results(results)
@@ -800,19 +802,19 @@ fn frame_generation_gate(
     )
 }
 
-fn bevy_ui_gate(metrics: &RendererBenchmarkMetrics) -> RendererPerfGateResult {
-    if metrics.product_bevy_ui_dependency_detected {
+fn retired_engine_ui_gate(metrics: &RendererBenchmarkMetrics) -> RendererPerfGateResult {
+    if metrics.product_retired_engine_ui_dependency_detected {
         return RendererPerfGateResult::fail(
-            RendererPerfGateKind::NoHiddenBevyUiProductDependency,
+            RendererPerfGateKind::NoHiddenRetiredEngineUiProductDependency,
             1,
             None,
-            "product_bevy_ui_dependency_detected",
+            "product_retired_engine_ui_dependency_detected",
         );
     }
     RendererPerfGateResult::pass(
-        RendererPerfGateKind::NoHiddenBevyUiProductDependency,
+        RendererPerfGateKind::NoHiddenRetiredEngineUiProductDependency,
         0,
-        "no_product_bevy_ui_dependency_detected",
+        "no_product_retired_engine_ui_dependency_detected",
     )
 }
 
@@ -1300,7 +1302,7 @@ mod tests {
         );
 
         let mut metrics = RendererBenchmarkMetrics::clean_smoke();
-        metrics.product_bevy_ui_dependency_detected = true;
+        metrics.product_retired_engine_ui_dependency_detected = true;
         assert!(
             evaluate_perf_gates(
                 scene(BenchmarkSceneKind::StaticScene),
@@ -1311,7 +1313,7 @@ mod tests {
                 false,
                 RendererPerfGateConfig::STRICT,
             )
-            .failed_gate(RendererPerfGateKind::NoHiddenBevyUiProductDependency)
+            .failed_gate(RendererPerfGateKind::NoHiddenRetiredEngineUiProductDependency)
             .is_some()
         );
 

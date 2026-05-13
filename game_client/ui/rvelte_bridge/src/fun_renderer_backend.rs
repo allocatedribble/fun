@@ -14,7 +14,7 @@
 //! one pass.
 //!
 //! Feature gate: `fun_renderer_backend`. With the gate off, the
-//! bridge crate stays free of bevy / wgpu / dx12 / vulkan / metal /
+//! bridge crate stays free of retired_engine / wgpu / dx12 / vulkan / metal /
 //! swapchain dependencies. With the gate on, this module is
 //! the *only* place fun-renderer enters the bridge.
 

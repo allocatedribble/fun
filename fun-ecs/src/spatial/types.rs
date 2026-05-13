@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::{Component, Resource};
+use crate::{Component, Resource};
 use fun_scheduler_types::{EcsChunkKey, EcsSpatialDomainKind, EcsVirtualResourceKey};
 use smallvec::SmallVec;
 

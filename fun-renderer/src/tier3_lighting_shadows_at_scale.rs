@@ -54,7 +54,7 @@
 //! validators run against real GPU readback and the verdicts
 //! must continue to pass.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::{RenderAabb, RenderColor, RenderExtent2d, RenderLayerMask, RenderVec3};
 use crate::lighting_stack::{

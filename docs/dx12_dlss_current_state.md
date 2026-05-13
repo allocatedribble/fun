@@ -6,10 +6,10 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 
 ## Existing Wiring
 
-- `game_client` defaults to the existing Bevy-facing `dlss` feature and forwards it to `fun_render`.
-- `fun_render/winit_presentation` inserts the NVIDIA `DlssProjectId` before Bevy `DefaultPlugins` when the existing Bevy DLSS feature is compiled.
+- `game_client` defaults to the existing RetiredEngine-facing `dlss` feature and forwards it to `fun_render`.
+- `fun_render/winit_presentation` inserts the NVIDIA `DlssProjectId` before RetiredEngine `DefaultPlugins` when the existing RetiredEngine DLSS feature is compiled.
 - `fun_dx12_dlss` now exists as the native Windows C ABI bridge crate, but it is a fail-closed scaffold until Streamline or NGX is linked.
-- The local Bevy fork exposes DLSS through `bevy_anti_alias::dlss`, and that crate depends on `dlss_wgpu`.
+- The local RetiredEngine fork exposes DLSS through `retired_engine_anti_alias::dlss`, and that crate depends on `dlss_wgpu`.
 - `game_client` has camera-side plumbing for `Dlss<DlssRayReconstructionFeature>`, including support checks, history reset, and activation when Solari denoise mode is the RR preset.
 - `fun_render` owns Solari denoiser selection, render path signatures, RT feature policy, backend selection, and diagnostics.
 - Benchmark scripts already collect DLSS Ray Reconstruction timing via `dlss_rr_gpu_ns` and `solari_pass_dlss_rr_guide_resolve_ns`.
@@ -18,14 +18,14 @@ scope: native DirectX 12 DLSS Super Resolution integration boundary
 
 - DLSS Ray Reconstruction is preserved as an explicit `rr`/`dlss-rr` comparison lane, but current docs already mark it as not functioning properly for normal runtime use.
 - Current RR behavior can leave Solari shadows broken or missing; BalancedFast remains the normal runtime denoiser.
-- Existing Bevy DLSS setup should not be assumed to provide a working DirectX 12 path.
+- Existing RetiredEngine DLSS setup should not be assumed to provide a working DirectX 12 path.
 
 ## Missing DX12 Backend
 
 - There is a native Windows bridge crate scaffold, but it does not initialize Streamline or NGX against a D3D12 device and command queue yet.
 - `fun_render::dx12_native` is now the controlled wgpu HAL trapdoor for D3D12 device, queue, and texture resource handles.
 - Command encoder HAL extraction is centralized there, but `ID3D12GraphicsCommandList` access intentionally fails closed because wgpu-hal 29 does not expose the raw command list publicly.
-- Native SR now has Bevy-side resource, size, texture format, depth, and motion-vector gates before evaluation. There is still no SDK resource tagging or successful command-list evaluation path.
+- Native SR now has RetiredEngine-side resource, size, texture format, depth, and motion-vector gates before evaluation. There is still no SDK resource tagging or successful command-list evaluation path.
 - SDK/runtime discovery exists in `fun_dx12_dlss` for `NVIDIA_STREAMLINE_SDK`, `NVIDIA_NGX_SDK`, `FUN_NVIDIA_DLSS_SDK`, and `FUN_NVIDIA_DLSS_DLL`, but support still reports false until the SDK integration is linked.
 - The native SR schedule node is inserted into the 3D pipeline, and the Rust-side resize, mode-switch, and device-recovery lifecycle is represented. It still cannot call NVIDIA SDK resize/evaluate/destroy code until the native bridge and raw command-list accessor exist.
 
@@ -81,7 +81,7 @@ temporal input would contaminate SR/RR history.
 - When native SR support is not ready, marked cameras run as `NativeTaa`: stale DLSS render-scale overrides are removed and mip bias is reset to native.
 - Render-world output management recreates the intermediate output target when input size, output size, texture format, DLSS mode, runtime mode, or device generation changes.
 - Resource recreation records a runtime transition, clears the native SR failure counter, marks native resize pending, and skips DLSS evaluation for one frame before falling back to a copy for that frame.
-- Device recovery observation uses Bevy `RenderRecoveryStatus` plus render-device change tracking. On device loss or recreation, render-world native SR output components are removed and the status returns to pending support so stale D3D12 device, queue, resource, descriptor, or command-list pointers cannot be reused by future native code.
+- Device recovery observation uses RetiredEngine `RenderRecoveryStatus` plus render-device change tracking. On device loss or recreation, render-world native SR output components are removed and the status returns to pending support so stale D3D12 device, queue, resource, descriptor, or command-list pointers cannot be reused by future native code.
 - Streamline/NGX context destruction, SDK-backed `fun_dlss_resize`, SDK support re-query, and feature-context recreation are still pending. The `fun_dx12_dlss` crate currently provides the ABI and fail-closed lifecycle entry points those hooks will consume.
 
 ## Ray Reconstruction Gate
@@ -94,7 +94,7 @@ temporal input would contaminate SR/RR history.
   - Solari guide resources are valid.
   - the current scene path supports the required guide data.
 - Current default status is still rejected because native SR support is unsupported until the native bridge exists.
-- `game_client` still contains the old Bevy camera-side `Dlss<DlssRayReconstructionFeature>` activation hook, but it no longer becomes reachable from the Solari RR denoise token alone.
+- `game_client` still contains the old RetiredEngine camera-side `Dlss<DlssRayReconstructionFeature>` activation hook, but it no longer becomes reachable from the Solari RR denoise token alone.
 
 ## Solari RR Guide Surface Audit
 
@@ -110,11 +110,11 @@ The current known guide surfaces are represented in `fun_render::solari_rr_guide
 | `normal_roughness` | yes | present | `Rgba16Float` | native DLSS input | world normal xyz, roughness w | `ViewDlssRayReconstructionTextures`, storage write then shader resource |
 | `specular_motion_vectors` | yes | present | `Rg16Float` | native DLSS input | specular virtual-position motion in normalized UV | `ViewDlssRayReconstructionTextures`, storage write then shader resource |
 | `bias` | yes | present | `Rgba8Unorm` | native DLSS input | current-color bias scalar | `ViewDlssRayReconstructionTextures`, storage write then shader resource |
-| `exposure` | no | pending native bridge | SDK optional | 1x1 or view-dependent | Bevy view exposure | future bridge input |
+| `exposure` | no | pending native bridge | SDK optional | 1x1 or view-dependent | RetiredEngine view exposure | future bridge input |
 | `ray_distance` | no | missing | not allocated | native DLSS input | world-space ray t | future Solari guide |
 | `reactive_mask` | no | missing | not allocated | native DLSS input | SDK reactive mask | future transparency/particle guide |
 
-All required present guide surfaces must still be validated at the native-DX12 handle, resource-state, dimension, camera-association, and history-reset boundary before RR can be enabled. The audit records existing Bevy/Solari resources; it is not an SDK support claim.
+All required present guide surfaces must still be validated at the native-DX12 handle, resource-state, dimension, camera-association, and history-reset boundary before RR can be enabled. The audit records existing RetiredEngine/Solari resources; it is not an SDK support claim.
 
 ## Current RR Artifact Investigation
 
@@ -171,14 +171,14 @@ The acceptance command fails if the estimated stress-frame count is below `-RrSt
 - Mode scale factors are currently deterministic: Quality `2/3`, Balanced `0.58`, Performance `0.5`, Ultra Performance `1/3`; mip bias is `log2(internal_scale)`.
 - Previous/current jittered and non-jittered view-projection matrices are tracked by `Dx12DlssPreviousViewProjection`; the first frame is marked as missing a valid previous matrix.
 - `DlssHistoryReset` centralizes reset state and reasons. The current implemented reset request sources are startup/default, window resize/scale-factor change, Solari reset events, render-scale/mode changes from the native camera setup, and explicit `FUN_RENDER_DX12_DLSS_RESET`.
-- Depth convention is recorded as Bevy/FUN reversed-Z, infinite far plane, non-linear depth.
-- Motion-vector convention is recorded as Bevy prepass current-minus-previous normalized UV offset, low-resolution, jitter-excluded, with camera and object motion included.
+- Depth convention is recorded as RetiredEngine/FUN reversed-Z, infinite far plane, non-linear depth.
+- Motion-vector convention is recorded as RetiredEngine prepass current-minus-previous normalized UV offset, low-resolution, jitter-excluded, with camera and object motion included.
 - Debug visualization modes and depth diagnostic payload types exist, but GPU-side depth preview, min/max histogram, invalid-depth counter, motion heatmap, zero/overlarge masks, and moving-object overlays still need render-node/readback implementation.
 
 ## Places Not To Modify Yet
 
-- Do not rewrite Bevy's `bevy_anti_alias::dlss` internals.
-- Do not replace `dlss_wgpu`; keep it as the existing Vulkan/Bevy comparison and fallback lane.
+- Do not rewrite RetiredEngine's `retired_engine_anti_alias::dlss` internals.
+- Do not replace `dlss_wgpu`; keep it as the existing Vulkan/RetiredEngine comparison and fallback lane.
 - Do not remove the explicit Vulkan comparison lane; Windows now defaults to
   DX12, but `FUN_RENDER_BACKEND=vulkan` and `--render-backend vulkan` must remain
   available for comparison and fallback captures.

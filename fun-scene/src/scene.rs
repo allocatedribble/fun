@@ -1,12 +1,45 @@
-pub trait FunScene: bevy_scene::Scene {}
+use fun_ecs::Resource;
 
-impl<T: bevy_scene::Scene> FunScene for T {}
+pub trait FunScene: 'static {}
 
-use bevy_ecs::prelude::Resource;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunSceneDeclaration {
+    pub node_count_hint: u16,
+}
+
+impl FunSceneDeclaration {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { node_count_hint: 0 }
+    }
+}
+
+impl FunScene for FunSceneDeclaration {}
+
+pub trait FunSceneComponent: fun_ecs::Component {}
+
+impl<T: fun_ecs::Component> FunSceneComponent for T {}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunResolveContext {
+    pub strict_validation: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunSceneDependencies {
+    pub component_count: u16,
+    pub resource_count: u16,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunInheritSceneError;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunResolveSceneError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct FunSceneAuthoringPolicy {
-    pub bevy_scene_bsn_reuse_confirmed: bool,
+    pub fun_scene_macros_are_native: bool,
     pub fun_macro_is_primary_authoring_surface: bool,
     pub deterministic_manifest_required: bool,
     pub server_editor_renderer_shared_authority: bool,
@@ -16,7 +49,7 @@ pub struct FunSceneAuthoringPolicy {
 
 impl FunSceneAuthoringPolicy {
     pub const DEFAULT: Self = Self {
-        bevy_scene_bsn_reuse_confirmed: true,
+        fun_scene_macros_are_native: true,
         fun_macro_is_primary_authoring_surface: true,
         deterministic_manifest_required: true,
         server_editor_renderer_shared_authority: true,
@@ -30,9 +63,3 @@ impl Default for FunSceneAuthoringPolicy {
         Self::DEFAULT
     }
 }
-
-pub use bevy_scene::{
-    InheritSceneError as FunInheritSceneError, ResolveContext as FunResolveContext,
-    ResolveSceneError as FunResolveSceneError, Scene as BevyScene,
-    SceneComponent as FunSceneComponent, SceneDependencies as FunSceneDependencies, on as fun_on,
-};

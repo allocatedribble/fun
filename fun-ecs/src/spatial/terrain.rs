@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Resource;
+use crate::Resource;
 
 use crate::{
     BiomeSourceId, EcsDecodeTelemetry, EcsDecodedPagePayloadKind, EcsDecodedPageRecord,

@@ -9,7 +9,7 @@
 //!
 //! `Dx12WarmupState` is the typed state machine
 //! (Cold / Warming / Warm / Production) so the runtime knows when
-//! "after warmup" applies. `Dx12RuntimeGateCounters` is the Bevy
+//! "after warmup" applies. `Dx12RuntimeGateCounters` is the RetiredEngine
 //! Resource that tracks cumulative shader translations, pipeline
 //! creations, bind layout creations, resource creations, and
 //! normal-frame blocking waits per warmup state. The renderer
@@ -23,13 +23,13 @@
 //! `PerFrameResourceCreationGrowth`, `NormalFrameBlockingWait`,
 //! `BackendMismatch`, `DeviceLostUnhandled`, and
 //! `NativeCommandListClaimedButUnavailable`.
-//! `Dx12RuntimeGateReport` is the Bevy Resource that aggregates
+//! `Dx12RuntimeGateReport` is the RetiredEngine Resource that aggregates
 //! the violation list per frame and per warmup state.
 //! `Dx12NativeSdkClaimPolicy` is the typed scaffold that asserts
 //! DLSS / native SDK claims remain blocked until either wgpu
 //! exposes sanctioned command-list access or a direct DX12 backend
 //! owns command recording. `Dx12ProductionHardeningReport` is the
-//! top-level Bevy Resource that ties the bridge health surface,
+//! top-level RetiredEngine Resource that ties the bridge health surface,
 //! runtime gate report, native SDK claim policy, and warmup state
 //! into one typed artifact bundle.
 //!
@@ -44,7 +44,7 @@
 //! a fatal startup violation — the `Dx12StrictStartupOutcome` enum
 //! encodes it as `RejectedDueToBackendMismatch`.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 

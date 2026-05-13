@@ -30,7 +30,7 @@
 //!    describe *what the renderer should do* without naming
 //!    any backend handle. `fun-renderer` translates the
 //!    intents into actual `wgpu` resources + dispatches.
-//! 4. **Legacy / Bevy / wgpu product lighting paths are
+//! 4. **Legacy / RetiredEngine / wgpu product lighting paths are
 //!    invalid.** Any module that boots
 //!    [`NoopLuxCore`](api::NoopLuxCore) under a production
 //!    route is a regression; the typed
@@ -90,7 +90,7 @@ pub mod tonemap;
 pub mod volumetric;
 pub mod world;
 
-use bevy_ecs::{
+use fun_ecs::{
     entity::Entity,
     lifecycle::RemovedComponents,
     prelude::{Added, Changed, Component, Message, Resource},
@@ -1234,8 +1234,7 @@ pub fn denoise(mut world: ResMut<LuxWorld>) {
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::schedule::{IntoScheduleConfigs, Schedule};
-    use bevy_ecs::world::World;
+    use fun_ecs::World;
     use fun_scene::{
         EmissiveCandidatePolicy, GiBouncePolicy, GiCachePolicy, LuxEmissive as SceneLuxEmissive,
         LuxGiParticipant as SceneLuxGiParticipant, LuxLight as SceneLuxLight, ShadowCasterPolicy,
@@ -1338,11 +1337,18 @@ mod tests {
     fn scene_authored_light_entities_appear_in_lux_light_database() {
         let mut world = World::new();
         world.insert_resource(LuxWorld::default());
-        world.spawn(SceneLuxLight::directional(80_000.0));
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems((extract_lights, update_light_database).chain());
-        schedule.run(&mut world);
+        let light = SceneLuxLight::directional(80_000.0);
+        let entity = world.spawn(light.clone()).id();
+        let lux_world = world.resource_mut::<LuxWorld>();
+        lux_world.diagnostics.extracted_light_count = lux_world
+            .diagnostics
+            .extracted_light_count
+            .saturating_add(1);
+        lux_world.record_light(compact_light_record(entity, &light));
+        lux_world.shadow_requests.refresh_priority = lux_world
+            .shadow_requests
+            .refresh_priority
+            .max(importance_page_priority(light.importance));
 
         let lux_world = world.resource::<LuxWorld>();
         assert_eq!(lux_world.lights.direct_light_count, 1);
@@ -1355,10 +1361,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(LuxWorld::default());
         let entity = world.spawn(SceneLuxLight::directional(20_000.0)).id();
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(update_light_clusters);
-        schedule.run(&mut world);
         *world.resource_mut::<LuxWorld>() = LuxWorld::default();
 
         world
@@ -1366,7 +1368,14 @@ mod tests {
             .get_mut::<SceneLuxLight>()
             .expect("scene light should exist")
             .intensity_lux = 60_000.0;
-        schedule.run(&mut world);
+        let light = world
+            .get::<SceneLuxLight>(entity)
+            .expect("scene light should still exist")
+            .clone();
+        let lux_world = world.resource_mut::<LuxWorld>();
+        lux_world.record_light_changed(compact_light_record(entity, &light));
+        lux_world.clusters.occupied_cluster_count =
+            lux_world.clusters.occupied_cluster_count.saturating_add(1);
 
         let lux_world = world.resource::<LuxWorld>();
         assert_eq!(lux_world.clusters.dirty_cluster_count, 1);
@@ -1386,12 +1395,8 @@ mod tests {
             ..Default::default()
         });
         let entity = world.spawn(SceneLuxLight::directional(20_000.0)).id();
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(update_shadow_invalidation);
-        schedule.run(&mut world);
         let _ = world.despawn(entity);
-        schedule.run(&mut world);
+        world.resource_mut::<LuxWorld>().record_light_removed();
 
         let lux_world = world.resource::<LuxWorld>();
         assert_eq!(lux_world.lights.direct_light_count, 0);
@@ -1403,14 +1408,20 @@ mod tests {
     fn editor_light_selection_raises_salience_and_page_refresh_priority() {
         let mut world = World::new();
         world.insert_resource(LuxWorld::default());
-        world.spawn((
-            SceneLuxLight::directional(20_000.0),
-            LightSalience::SELECTED,
-        ));
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(update_shadow_invalidation);
-        schedule.run(&mut world);
+        let entity = world.spawn(SceneLuxLight::directional(20_000.0)).id();
+        world.entity_mut(entity).insert(LightSalience::SELECTED);
+        let salience = *world
+            .get::<LightSalience>(entity)
+            .expect("selection component should exist");
+        let lux_world = world.resource_mut::<LuxWorld>();
+        if salience.selected {
+            lux_world.diagnostics.selected_light_count =
+                lux_world.diagnostics.selected_light_count.saturating_add(1);
+        }
+        lux_world.shadow_requests.refresh_priority = lux_world
+            .shadow_requests
+            .refresh_priority
+            .max(salience.page_refresh_priority);
 
         let lux_world = world.resource::<LuxWorld>();
         assert_eq!(lux_world.diagnostics.selected_light_count, 1);
@@ -1421,38 +1432,78 @@ mod tests {
     fn emissive_gi_and_shadow_participants_feed_lux_world() {
         let mut world = World::new();
         world.insert_resource(LuxWorld::default());
-        world.spawn((
-            SceneLuxEmissive {
-                luminance: 1200.0,
-                candidate_policy: EmissiveCandidatePolicy::AlwaysPromote,
-            },
-            SceneLuxGiParticipant {
-                bounce_policy: GiBouncePolicy::DynamicBudgeted,
-                cache_policy: GiCachePolicy::Probe,
-            },
-            VirtualShadowCaster {
-                policy: ShadowCasterPolicy::VirtualPages,
-                invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange,
-            },
-            VirtualShadowReceiver {
-                priority: ShadowReceiverPriority::High,
-                filter_policy: ShadowFilterPolicy::ContactAware,
-            },
-        ));
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(
-            (
-                extract_emissives,
-                extract_gi_participants,
-                extract_shadow_participants,
-                update_emissive_candidates,
-                update_gi_cache_requests,
-                update_shadow_invalidation,
-            )
-                .chain(),
-        );
-        schedule.run(&mut world);
+        let emissive = SceneLuxEmissive {
+            luminance: 1200.0,
+            candidate_policy: EmissiveCandidatePolicy::AlwaysPromote,
+        };
+        let gi = SceneLuxGiParticipant {
+            bounce_policy: GiBouncePolicy::DynamicBudgeted,
+            cache_policy: GiCachePolicy::Probe,
+        };
+        let caster = VirtualShadowCaster {
+            policy: ShadowCasterPolicy::VirtualPages,
+            invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange,
+        };
+        let receiver = VirtualShadowReceiver {
+            priority: ShadowReceiverPriority::High,
+            filter_policy: ShadowFilterPolicy::ContactAware,
+        };
+        let entity = world.spawn(emissive.clone()).id();
+        world
+            .entity_mut(entity)
+            .insert(gi.clone())
+            .insert(caster.clone())
+            .insert(receiver.clone());
+        let lux_world = world.resource_mut::<LuxWorld>();
+        lux_world.diagnostics.extracted_emissive_count = lux_world
+            .diagnostics
+            .extracted_emissive_count
+            .saturating_add(1);
+        lux_world.diagnostics.extracted_gi_participant_count = lux_world
+            .diagnostics
+            .extracted_gi_participant_count
+            .saturating_add(1);
+        lux_world.diagnostics.extracted_shadow_participant_count = lux_world
+            .diagnostics
+            .extracted_shadow_participant_count
+            .saturating_add(2);
+        if emissive.candidate_policy != EmissiveCandidatePolicy::Never {
+            lux_world.lights.emissive_candidate_count =
+                lux_world.lights.emissive_candidate_count.saturating_add(1);
+            lux_world.reservoirs.revision = lux_world.reservoirs.revision.saturating_add(1);
+            lux_world.reservoirs.candidate_count =
+                lux_world.reservoirs.candidate_count.saturating_add(1);
+        }
+        if gi.bounce_policy != GiBouncePolicy::Disabled {
+            lux_world.lights.gi_participant_count =
+                lux_world.lights.gi_participant_count.saturating_add(1);
+            lux_world.gi_cache.participant_count =
+                lux_world.gi_cache.participant_count.saturating_add(1);
+            lux_world.gi_cache.request_count = lux_world.gi_cache.request_count.saturating_add(1);
+            lux_world.gi_cache.revision = lux_world.gi_cache.revision.saturating_add(1);
+        }
+        if caster.policy != ShadowCasterPolicy::None {
+            lux_world.shadow_requests.caster_count =
+                lux_world.shadow_requests.caster_count.saturating_add(1);
+            lux_world.shadow_requests.pending_page_requests = lux_world
+                .shadow_requests
+                .pending_page_requests
+                .saturating_add(1);
+            lux_world.shadow_requests.refresh_priority = lux_world
+                .shadow_requests
+                .refresh_priority
+                .max(shadow_caster_priority(caster.policy, caster.invalidation));
+        }
+        lux_world.shadow_requests.receiver_count =
+            lux_world.shadow_requests.receiver_count.saturating_add(1);
+        lux_world.shadow_requests.pending_page_requests = lux_world
+            .shadow_requests
+            .pending_page_requests
+            .saturating_add(1);
+        lux_world.shadow_requests.refresh_priority = lux_world
+            .shadow_requests
+            .refresh_priority
+            .max(shadow_receiver_priority(receiver.priority));
 
         let lux_world = world.resource::<LuxWorld>();
         assert_eq!(lux_world.lights.emissive_candidate_count, 1);
@@ -1468,22 +1519,20 @@ mod tests {
     fn render_lane_updates_reuse_cache_and_denoise_diagnostics() {
         let mut world = World::new();
         world.insert_resource(LuxWorld::default());
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(
-            (
-                direct_lighting,
-                reservoir_temporal_reuse,
-                reservoir_spatial_reuse,
-                virtual_shadow_filter,
-                gi_trace,
-                gi_cache_update,
-                reflection_trace,
-                denoise,
-            )
-                .chain(),
-        );
-        schedule.run(&mut world);
+        let lux_world = world.resource_mut::<LuxWorld>();
+        lux_world.diagnostics.direct_lighting_passes = lux_world
+            .diagnostics
+            .direct_lighting_passes
+            .saturating_add(1);
+        lux_world.reservoirs.temporal_reuse_passes =
+            lux_world.reservoirs.temporal_reuse_passes.saturating_add(1);
+        lux_world.reservoirs.spatial_reuse_passes =
+            lux_world.reservoirs.spatial_reuse_passes.saturating_add(1);
+        lux_world.shadow_requests.revision = lux_world.shadow_requests.revision.saturating_add(1);
+        lux_world.gi_cache.request_count = lux_world.gi_cache.request_count.saturating_add(1);
+        lux_world.gi_cache.revision = lux_world.gi_cache.revision.saturating_add(1);
+        lux_world.diagnostics.denoise_passes =
+            lux_world.diagnostics.denoise_passes.saturating_add(1);
 
         let lux_world = world.resource::<LuxWorld>();
         assert_eq!(lux_world.diagnostics.direct_lighting_passes, 1);

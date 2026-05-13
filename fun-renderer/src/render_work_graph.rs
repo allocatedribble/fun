@@ -368,10 +368,10 @@ fn add_dep(g: &mut RendererWorkGraph, node_id: WorkNodeId, predecessor: WorkNode
     // stored node's `dependencies` Vec. The kernel topo sort reads
     // `WorkNode::dependencies` directly.
     let idx = node_id.get() as usize;
-    if let Some(node) = g.nodes.get_mut(idx) {
-        if !node.dependencies.contains(&predecessor) {
-            node.dependencies.push(predecessor);
-        }
+    if let Some(node) = g.nodes.get_mut(idx)
+        && !node.dependencies.contains(&predecessor)
+    {
+        node.dependencies.push(predecessor);
     }
 }
 
@@ -899,7 +899,7 @@ mod tests {
             let _: RendererGraphPhase = w.phase;
             let _: Option<FrameGraphPassRole> = w.pass_role;
             let _: Option<LuxNodeKind> = w.lux_kind;
-            let _: Option<fun_lux::frame_plan::LuxResourceIntentKind> = w.resource_intent;
+            let _: Option<crate::schedule_contract::LuxResourceIntentKind> = w.resource_intent;
             let _: u64 = w.generation;
         }
     }

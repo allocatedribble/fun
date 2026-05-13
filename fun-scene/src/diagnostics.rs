@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 pub const TELEMETRY_BUDGET_CLASS: &str = "SampledRuntime";
 pub const TELEMETRY_RETENTION_CLASS: &str = "KeepSummary";

@@ -14,7 +14,7 @@ Pass 73 wires fun-renderer's experimental `native_ui_adapter`
 feature into the rvelte bridge as a real
 [`FunUiFramePacketConsumer`]. The integration is feature-gated
 (`fun_renderer_backend`), default-off so the bridge's production
-dependency tree stays free of bevy / wgpu / dx12 / vulkan / metal /
+dependency tree stays free of retired_engine / wgpu / dx12 / vulkan / metal /
 native_ui / swapchain crates. With the feature on the bridge gains the
 `fun_renderer_backend::FunRendererPacketConsumer` consumer, which
 lifts a `FunUiFramePacket` through fun-renderer's
@@ -184,7 +184,7 @@ graphics-API crates. With the `fun_renderer_backend` feature off:
   fun_renderer"` returns 0.
 
 With the feature on, the production tree gains `fun_renderer` and
-its transitive bevy/wgpu surface — the explicit price of opting
+its transitive retired_engine/wgpu surface — the explicit price of opting
 into the experimental backend. Pass 73 does not change the
 rvelte-side adapter's forbidden-surface guarantee; the rvelte crate
 remains backend-free.

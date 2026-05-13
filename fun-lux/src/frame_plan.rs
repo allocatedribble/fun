@@ -550,9 +550,7 @@ impl LuxBackendContract {
 
     #[must_use]
     pub fn is_forbidden_import(&self, crate_name: &str) -> bool {
-        self.forbidden_fun_lux_imports
-            .iter()
-            .any(|forbidden| *forbidden == crate_name)
+        self.forbidden_fun_lux_imports.contains(&crate_name)
     }
 }
 
@@ -810,7 +808,7 @@ mod tests {
                 "forbidden list must include {forbidden}",
             );
         }
-        assert!(!contract.is_forbidden_import("bevy_ecs"));
+        assert!(!contract.is_forbidden_import("fun_ecs"));
         assert!(!contract.is_forbidden_import("fun_scene"));
     }
 
@@ -847,7 +845,7 @@ mod tests {
                         || trimmed.starts_with(&standalone_pub_use)
                         || trimmed.starts_with(&standalone_extern)
                     {
-                        bad.push((path.display().to_string(), trimmed.to_string()));
+                        bad.push((path.display().to_string(), trimmed.to_owned()));
                     }
                 }
             }

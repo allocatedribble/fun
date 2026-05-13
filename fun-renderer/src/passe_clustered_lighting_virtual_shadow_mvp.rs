@@ -50,7 +50,7 @@
 //! - **`crate::virtual_shadow`** for the `VirtualShadowStorage`
 //!   page-table scaffold.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::RenderExtent2d;
 use crate::lighting_stack::{
@@ -224,7 +224,7 @@ impl PassEClusteredLightingVirtualShadowOutcome {
 }
 
 // ============================================================================
-// Section 4 — Bundle (Bevy Resource) + canonical artifact path
+// Section 4 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, PartialEq, Resource)]
@@ -817,7 +817,7 @@ mod tests {
     /// verdict continues to gate shipping.
     #[test]
     fn live_passe_runs_one_update_and_records_strict_passes_under_product_default() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::FunRendererPlugin;

@@ -51,7 +51,7 @@
 //! makes those algorithms validatable on the typed pipeline data
 //! path so the smoke gate exists *now*.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 #[cfg(test)]
 use crate::component_api::RenderStableId;

@@ -1983,6 +1983,10 @@ mod tests {
     fn unsupported_vendor_and_rt_settings_are_rejected_with_reasons() {
         let mut capabilities = RendererCapabilityFacts::minimal();
         capabilities.compiled_features.new_core = true;
+        capabilities.compiled_features.virtual_geometry = false;
+        capabilities.compiled_features.virtual_shadows = false;
+        capabilities.compiled_features.many_light = false;
+        capabilities.compiled_features.hybrid_gi = false;
         capabilities.native_ui_gpu_transport_available = true;
         capabilities.upscalers = UpscalerCapabilities::software_only();
         let mut request = RendererSettingsRequest::for_tier(RendererQualityTier::RtAssisted);

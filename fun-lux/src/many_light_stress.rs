@@ -512,7 +512,7 @@ impl LuxManyLightStressScene {
             stable_id: stress_scene_stable_id(preset),
             preset,
             cluster_layout,
-            light_index_layout: LuxLightIndexLayout::PRODUCT_DEFAULT,
+            light_index_layout: LuxLightIndexLayout::for_cluster_grid(cluster_layout),
             reservoir_layout: LuxReservoirLayout::PRODUCT_DEFAULT,
             overflow_policy: LuxManyLightCandidateOverflowPolicy::PromoteToReservoir,
             emissive_mode: LuxEmissivePromotionMode::ThresholdAtLoad,

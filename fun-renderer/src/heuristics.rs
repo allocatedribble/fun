@@ -1,13 +1,12 @@
-use bevy_camera::visibility::{ViewVisibility, Visibility};
-use bevy_ecs::{
+use fun_ecs::{
     prelude::{Commands, Component, Entity, Mut, Query, Res, ResMut, Resource},
     schedule::SystemSet,
 };
-use bevy_transform::components::{GlobalTransform, Transform};
 use fun_scene::{
-    EditorSelection, GameplaySalient, LuxEmissive, LuxGiParticipant, LuxImportance, LuxLight,
-    PagePriorityHint, Renderable, SceneChunkId, ShadowFilterPolicy, ShadowReceiverPriority,
-    StreamingPriority, TemporalInstability, VirtualGeometryAuthoring, VirtualShadowReceiver,
+    EditorSelection, GameplaySalient, GlobalTransform, LuxEmissive, LuxGiParticipant,
+    LuxImportance, LuxLight, PagePriorityHint, Renderable, SceneChunkId, ShadowFilterPolicy,
+    ShadowReceiverPriority, StreamingPriority, TemporalInstability, Transform, ViewVisibility,
+    VirtualGeometryAuthoring, VirtualShadowReceiver, Visibility,
 };
 
 pub const RENDER_HEURISTIC_SCHEMA_VERSION: u16 = 1;
@@ -1231,7 +1230,7 @@ fn write_ml_inference_priority(
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::{
+    use fun_ecs::{
         schedule::{IntoScheduleConfigs, Schedule},
         world::World,
     };

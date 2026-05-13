@@ -40,7 +40,7 @@
 //! debug counter readback and the verdict must continue to be
 //! `Match`.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::{RenderAabb, RenderStableId, RenderVec3};
 use crate::gpu_driven::{

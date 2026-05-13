@@ -34,11 +34,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fun_macros_target_bevy_scene_during_transition() {
-        assert_eq!(fun_macro::FUN_MACRO_TARGET, "::fun_scene::bevy_scene::bsn!");
+    fn fun_macros_target_fun_scene_primitives() {
+        assert_eq!(
+            fun_macro::FUN_MACRO_TARGET,
+            "::fun_scene::fun_scene_macro_expand!"
+        );
         assert_eq!(
             fun_list_macro::FUN_LIST_MACRO_TARGET,
-            "::fun_scene::bevy_scene::bsn_list!"
+            "::fun_scene::fun_scene_list_macro_expand!"
         );
     }
 

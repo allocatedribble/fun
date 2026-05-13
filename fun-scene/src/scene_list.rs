@@ -1,5 +1,22 @@
-pub trait FunSceneList: bevy_scene::SceneList {}
+pub trait FunSceneList {}
 
-impl<T: bevy_scene::SceneList> FunSceneList for T {}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunEmptySceneList;
 
-pub use bevy_scene::{SceneList as BevySceneList, SceneListBox as FunSceneListBox};
+impl FunSceneList for FunEmptySceneList {}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunSceneListBox {
+    pub scene_count_hint: u16,
+}
+
+impl FunSceneListBox {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            scene_count_hint: 0,
+        }
+    }
+}
+
+impl FunSceneList for FunSceneListBox {}

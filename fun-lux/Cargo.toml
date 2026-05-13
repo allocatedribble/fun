@@ -24,7 +24,6 @@ fun_lux_many_light = ["many_light"]
 fun_lux_virtual_shadows = ["virtual_shadows"]
 
 [dependencies]
-bevy_ecs.workspace = true
 fun_ecs.workspace = true
 fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types", optional = true }
 fun_scene.workspace = true

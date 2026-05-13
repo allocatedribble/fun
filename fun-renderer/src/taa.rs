@@ -189,7 +189,7 @@ impl TaaHistoryAllocation {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
+#[cfg_attr(feature = "fun_ecs", derive(fun_ecs::Resource))]
 pub struct TaaHistoryAllocator {
     schema_version: u16,
     allocations: Vec<TaaHistoryAllocation>,

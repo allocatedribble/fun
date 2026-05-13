@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+extern crate self as fun_ecs;
+
 pub mod adapters;
 pub mod api;
 #[path = "spatial/artifact.rs"]
@@ -17,6 +19,7 @@ pub mod experiments;
 pub mod frame_graph;
 #[path = "spatial/load_animation.rs"]
 pub mod load_animation;
+pub mod marker;
 #[path = "spatial/page_table.rs"]
 pub mod page_table;
 #[path = "spatial/procedural.rs"]
@@ -38,6 +41,43 @@ pub mod streaming;
 pub mod terrain;
 #[path = "spatial/voxel.rs"]
 pub mod voxel;
+
+pub mod entity {
+    pub use crate::Entity;
+}
+
+pub mod lifecycle {
+    pub use crate::RemovedComponents;
+}
+
+pub mod message {
+    pub use crate::Messages;
+}
+
+pub mod prelude {
+    pub use crate::{
+        Added, Bundle, Changed, Commands, Component, Entity, EntityCommands, EntityMut, EntityRef,
+        EventQueue, EventReader, EventWriter, Events, Message, Mut, Or, Query, RemovedComponents,
+        Res, ResMut, Resource, SystemSet, With, Without,
+    };
+}
+
+pub mod system {
+    pub use crate::{Commands, EntityCommands, Query, Res, ResMut};
+}
+
+pub mod template {
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct TemplateContext;
+
+    pub trait Template: 'static {}
+    pub trait FromTemplate: 'static {}
+    pub trait BuiltInTemplate: Template {}
+}
+
+pub mod world {
+    pub use crate::World;
+}
 
 pub use adapters::{
     AiEcsBridge, AiProposalPlan, AnimationEcsBridge, AnimationPoseArtifactManifest, AvisEcsBridge,
@@ -111,42 +151,44 @@ pub use core::{
     DenseResourceTable, DenseResourceTableAccess, DenseResourceTableAccessKind,
     DenseResourceTableChunk, DenseResourceTableChunkRow, DenseResourceTableConfig,
     DenseResourceTableDigest, DenseResourceTableIndex, DenseResourceTableKey,
-    DenseResourceTableRevision, DenseResourceTableRow, DenseResourceTableStats, EntityMut,
-    EntityRef, EventReader, EventWriter, Events, ExternalArtifactMut, ExternalArtifactRef,
-    ExternalSlabMut, ExternalSlabRef, ExternalSlabRevision, FUN_COMMAND_BUFFER_ARTIFACTS,
-    FUN_COMMAND_BUFFER_DEFAULT_CAPACITY, FUN_COMMAND_BUFFER_DIRTY_PROPAGATION,
-    FUN_COMMAND_BUFFER_HANDOFFS, FUN_COMMAND_BUFFER_SPATIAL_REQUESTS,
-    FUN_COMMAND_BUFFER_WORLD_STRUCTURE, FUN_COMMAND_JOURNAL_MAX_ROWS,
-    FUN_ECS_MAX_RESOURCE_REVISION_RECORDS, FUN_ECS_MAX_REVISION_TOUCH_ROWS,
-    FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT, FUN_WORLD_SPATIAL_RESOURCE_KINDS, FrameRevision,
-    FunArchetypeId, FunArtifactId, FunCommandApplyReport, FunCommandApplyRevisionReport,
-    FunCommandBuffer, FunCommandBufferClass, FunCommandBufferDeclaration, FunCommandBufferId,
-    FunCommandBufferOutput, FunCommandDeterministicKey, FunCommandDigest, FunCommandDrainPolicy,
-    FunCommandEnvelope, FunCommandJournal, FunCommandKind, FunCommandMergePolicy,
-    FunCommandPayload, FunCommandPhase, FunCommandValidationError, FunComponentId,
-    FunComponentParam, FunEntity, FunEntityGeneration, FunEventParam, FunExternalArtifactParam,
-    FunExternalSlabId, FunExternalSlabParam, FunExternalWaitSafety, FunFrameId, FunQueryAccess,
-    FunQueryFilterAccess, FunQueryId, FunQueryMetadata, FunQueryValidationError, FunResourceAccess,
-    FunResourceId, FunResourceParam, FunResourceTableId, FunRevision, FunRevisionLedgerError,
-    FunRunCondition, FunRunConditionId, FunSchedulerEcsRegistry, FunSchedulerVirtualResourceKey,
-    FunSchedulerWaitToken, FunSchedulerWaitTokenId, FunSpatialPageVirtualResourceKey,
-    FunStorageChunkId, FunSubsystemCommand, FunSystem, FunSystemAccess, FunSystemAccessMode,
-    FunSystemAccessRow, FunSystemAccessTarget, FunSystemChunkPolicy, FunSystemClass,
-    FunSystemDescriptor, FunSystemExecutionContract, FunSystemId, FunSystemParam,
-    FunSystemParamAccess, FunSystemSet, FunSystemSetId, FunSystemValidationError, FunTableParam,
-    FunVirtualResourceParam, FunWaitTokenDirection, FunWorld, FunWorldBuilder, FunWorldDiagnostics,
-    FunWorldId, FunWorldMode, FunWorldResourceSet, FunWorldRevision, FunWorldSchedulerAuthority,
+    DenseResourceTableRevision, DenseResourceTableRow, DenseResourceTableStats, EntityCommands,
+    EntityMut, EntityRef, EventReader, EventWriter, Events, ExternalArtifactMut,
+    ExternalArtifactRef, ExternalSlabMut, ExternalSlabRef, ExternalSlabRevision,
+    FUN_COMMAND_BUFFER_ARTIFACTS, FUN_COMMAND_BUFFER_DEFAULT_CAPACITY,
+    FUN_COMMAND_BUFFER_DIRTY_PROPAGATION, FUN_COMMAND_BUFFER_HANDOFFS,
+    FUN_COMMAND_BUFFER_SPATIAL_REQUESTS, FUN_COMMAND_BUFFER_WORLD_STRUCTURE,
+    FUN_COMMAND_JOURNAL_MAX_ROWS, FUN_ECS_MAX_RESOURCE_REVISION_RECORDS,
+    FUN_ECS_MAX_REVISION_TOUCH_ROWS, FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT,
+    FUN_WORLD_SPATIAL_RESOURCE_KINDS, FrameRevision, FunArchetypeId, FunArtifactId,
+    FunCommandApplyReport, FunCommandApplyRevisionReport, FunCommandBuffer, FunCommandBufferClass,
+    FunCommandBufferDeclaration, FunCommandBufferId, FunCommandBufferOutput,
+    FunCommandDeterministicKey, FunCommandDigest, FunCommandDrainPolicy, FunCommandEnvelope,
+    FunCommandJournal, FunCommandKind, FunCommandMergePolicy, FunCommandPayload, FunCommandPhase,
+    FunCommandValidationError, FunComponentId, FunComponentParam, FunEntity, FunEntityGeneration,
+    FunEntityMut, FunEventParam, FunExternalArtifactParam, FunExternalSlabId, FunExternalSlabParam,
+    FunExternalWaitSafety, FunFrameId, FunQueryAccess, FunQueryFilterAccess, FunQueryId,
+    FunQueryMetadata, FunQueryValidationError, FunResourceAccess, FunResourceId, FunResourceParam,
+    FunResourceTableId, FunRevision, FunRevisionLedgerError, FunRunCondition, FunRunConditionId,
+    FunSchedulerEcsRegistry, FunSchedulerVirtualResourceKey, FunSchedulerWaitToken,
+    FunSchedulerWaitTokenId, FunSpatialPageVirtualResourceKey, FunStorageChunkId,
+    FunSubsystemCommand, FunSystem, FunSystemAccess, FunSystemAccessMode, FunSystemAccessRow,
+    FunSystemAccessTarget, FunSystemChunkPolicy, FunSystemClass, FunSystemDescriptor,
+    FunSystemExecutionContract, FunSystemId, FunSystemParam, FunSystemParamAccess, FunSystemSet,
+    FunSystemSetId, FunSystemValidationError, FunTableParam, FunVirtualResourceParam,
+    FunWaitTokenDirection, FunWorld, FunWorldBuilder, FunWorldDiagnostics, FunWorldId,
+    FunWorldMode, FunWorldQuery, FunWorldResourceSet, FunWorldRevision, FunWorldSchedulerAuthority,
     FunWorldStorageBackend, HandoffCommandBuffer, HandoffCommands, HandoffRevision, HotFieldMask,
     IntoSchedulerChunkKey, IntoSchedulerEntityId, IntoSchedulerVirtualResourceKey,
-    IntoSchedulerWaitToken, NetworkCommandBuffer, Or, PhysicsCommandBuffer, Query,
+    IntoSchedulerWaitToken, Mut, NetworkCommandBuffer, Or, PhysicsCommandBuffer, Query,
     RendererCommandBuffer, Res, ResMut, ResourceRevisionLedger, ResourceRevisionRecord,
     ResourceTableLayout, ResourceTableRevision, ResourceTableUseCase, RevisionCategory,
     ScheduleRevision, SpatialCommandBuffer, SpatialCommandJournalContext, SpatialCommands,
-    SpatialPageRevision, TableChunkMut, TableChunkRef, TableLayoutAdvice, TableLayoutAdvisor,
-    TableMut, TableRef, UiCommandBuffer, VirtualResourceMut, VirtualResourceRef, With, Without,
-    WorldRevisionLedger, external_slab_virtual_resource_key, scheduler_component_id,
-    scheduler_resource_id, scheduler_system_id, scheduler_table_resource_id,
-    spatial_command_journal_from_commands, stage_agent_proposal, validate_agent_proposal,
+    SpatialPageRevision, SpawnedEntity, TableChunkMut, TableChunkRef, TableLayoutAdvice,
+    TableLayoutAdvisor, TableMut, TableRef, UiCommandBuffer, VirtualResourceMut,
+    VirtualResourceRef, With, Without, WorldRevisionLedger, external_slab_virtual_resource_key,
+    scheduler_component_id, scheduler_resource_id, scheduler_system_id,
+    scheduler_table_resource_id, spatial_command_journal_from_commands, stage_agent_proposal,
+    validate_agent_proposal,
 };
 pub use diagnostics::{
     ECS_BENCHMARK_TOTAL_WORKLOADS, ECS_DIAGNOSTICS_UI_VIEW_COUNT, ECS_DIAGNOSTICS_UI_VIEWS,
@@ -189,6 +231,7 @@ pub use frame_graph::{
     EcsCrossDomainWaitDecision, EcsCrossDomainWaitPolicy, EcsCrossDomainWaitRejectReason,
     EcsCrossDomainWaitToken, EcsCrossDomainWaitTokenKind,
 };
+pub use fun_ecs_macros::{Bundle, Component, FunFromTemplate, Message, Resource, SystemSet};
 pub use fun_scheduler_types::{
     EcsAccess, EcsAccessTarget, EcsAgentManifestId, EcsChunkKey, EcsCommandBufferId,
     EcsComponentId, EcsEntityId, EcsExternalArtifactKey, EcsLivenessClass, EcsResourceId,
@@ -206,6 +249,11 @@ pub use load_animation::{
     LoadAnimationState, LoadAnimationStyle, build_load_animation_records,
     load_animation_artifact_record, load_animation_handoff_queue_from_commands,
     publish_load_animation_handoffs,
+};
+pub use marker::{
+    Bundle, Component, EngineExitRequested, Entity, EventQueue, InputReceived, IntoScheduleConfigs,
+    Message, Messages, RemovedComponents, RendererDeviceLost, Resource, Schedule, SurfaceLost,
+    SurfaceReconfigured, SystemSet, WindowCloseRequested, WindowCreated, WindowResized,
 };
 pub use page_table::{EcsPageResidencyTable, EcsSpatialPageTable};
 pub use procedural::{
@@ -383,8 +431,6 @@ ecs_id!(NetworkPlayerId, u64);
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::world::World;
-
     use super::*;
 
     fn bounds() -> EcsBoundsUm {
@@ -539,7 +585,8 @@ mod tests {
             max_requests_per_frame: 64,
         };
 
-        let entity = world.spawn((volume, camera)).id();
+        let entity = world.spawn(volume).id();
+        world.entity_mut(entity).insert(camera);
         assert_eq!(world.get::<EcsSpatialVolume>(entity), Some(&volume));
         assert_eq!(world.get::<EcsStreamCamera>(entity), Some(&camera));
     }
@@ -752,9 +799,14 @@ mod tests {
             reason: DebugPinReason::ResidencyDebug,
         };
 
-        let entity = world
-            .spawn((camera, terrain, overlay, foliage, storm, pin))
-            .id();
+        let entity = world.spawn(camera).id();
+        world
+            .entity_mut(entity)
+            .insert(terrain)
+            .insert(overlay)
+            .insert(foliage)
+            .insert(storm)
+            .insert(pin);
         assert_eq!(world.get::<SpatialStreamCamera>(entity), Some(&camera));
         assert_eq!(world.get::<VoxelTerrainVolume>(entity), Some(&terrain));
         assert_eq!(world.get::<FineDetailOverlayVolume>(entity), Some(&overlay));

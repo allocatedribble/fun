@@ -53,7 +53,7 @@
 
 use flume::unbounded;
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 use crate::bridge::wgpu::{
@@ -808,7 +808,7 @@ impl LiveGraphExecutorPassKindCounters {
 // Section 5f — RendererSurfaceResource (Pass 1's typed contract)
 // ============================================================================
 
-/// Typed `RendererSurfaceResource` Bevy Resource. The user's
+/// Typed `RendererSurfaceResource` RetiredEngine Resource. The user's
 /// minimum plan ("Pass 1: Configure visible surface and present
 /// path") asks for a `RendererSurfaceResource` that records the
 /// typed surface configuration. The headless lane sets the typed

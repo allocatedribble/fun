@@ -1,7 +1,7 @@
-use bevy_app::App;
-use bevy_ecs::prelude::Resource;
-use bevy_ecs::world::World;
-use bevy_transform::components::Transform;
+use fun_ecs::Resource;
+use fun_ecs::World;
+use fun_scene::Transform;
+use retired_engine_app::App;
 
 use crate::backend::NativeBackend;
 use crate::component_api::{
@@ -211,10 +211,10 @@ pub fn spawn_proof_scene(world: &mut World, spec: ProofSceneSpec) -> ProofSceneE
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProofSceneEntities {
-    pub camera: bevy_ecs::entity::Entity,
-    pub static_mesh: bevy_ecs::entity::Entity,
-    pub directional_light: Option<bevy_ecs::entity::Entity>,
-    pub ui_surface: Option<bevy_ecs::entity::Entity>,
+    pub camera: fun_ecs::Entity,
+    pub static_mesh: fun_ecs::Entity,
+    pub directional_light: Option<fun_ecs::Entity>,
+    pub ui_surface: Option<fun_ecs::Entity>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -601,7 +601,7 @@ mod tests {
         install_render_world_extraction_resources,
     };
     use crate::plugin::{FunRendererPlugin, RendererFrameIndex};
-    use bevy_ecs::schedule::{IntoScheduleConfigs, Schedule};
+    use fun_ecs::{IntoScheduleConfigs, Schedule};
 
     fn baseline_app() -> App {
         let mut app = App::new();

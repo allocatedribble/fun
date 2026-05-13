@@ -4,7 +4,7 @@
   "description": "Alpha local stack: backend/server/client launch spine using fun-renderer virtual geometry, Lux virtual shadows, fun-ecs/Avis handoff authority, arena-blockout scene, native rvelte route path, and canonical frame graph trace outputs.",
   "build": {
     "release": false,
-    "static_bevy": true
+    "static_engine": true
   },
   "features": {
     "disable_clouds": false,

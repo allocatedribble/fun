@@ -35,7 +35,7 @@ Done in this frontier:
   derived artifact registry, and handoff queues
 - add query metadata and command-buffer declarations for the ECS kernel
 - lower compiled spatial schedule nodes into a `fun-scheduler` work graph
-- record adapter contracts for Bevy, renderer, Lux, Avis, Thunder, and rvelte
+- record adapter contracts for RetiredEngine, renderer, Lux, Avis, Thunder, and rvelte
 
 Remaining kernel work:
 

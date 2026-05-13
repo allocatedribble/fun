@@ -69,7 +69,7 @@
 
 use flume::unbounded;
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::bridge::wgpu::{
     Dx12Native, WgpuBridgeDeviceState, WgpuBridgeRuntimeFailure, WgpuBridgeRuntimeOptions,

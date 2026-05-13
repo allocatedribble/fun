@@ -47,7 +47,7 @@ impl Dx12DlssContext {
     ///
     /// `desc.d3d12_device` and `desc.d3d12_queue` must be valid D3D12 COM
     /// pointers that outlive the returned context. The native shim does not own
-    /// the renderer, and callers must destroy this context before the Bevy/wgpu
+    /// the renderer, and callers must destroy this context before the RetiredEngine/wgpu
     /// device or queue is torn down.
     pub unsafe fn create(desc: CreateDesc) -> Result<Self, Dx12DlssError> {
         let app_id = cstring_lossless(desc.app_id);

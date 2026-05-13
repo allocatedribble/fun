@@ -1,4 +1,4 @@
-use bevy_ecs::schedule::SystemSet;
+use fun_ecs::SystemSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
 pub enum FunSceneSet {

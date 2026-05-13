@@ -1,19 +1,5 @@
 #![allow(dead_code)]
 
-#[cfg(all(feature = "release-telemetry", feature = "debug-diagnostics"))]
-compile_error!("game_client release telemetry cannot be built with debug-diagnostics");
-#[cfg(all(feature = "release-telemetry", feature = "debug-benchmarks"))]
-compile_error!("game_client release telemetry cannot be built with debug-benchmarks");
-#[cfg(all(feature = "release-telemetry", feature = "local-debug-captures"))]
-compile_error!("game_client release telemetry cannot be built with local-debug-captures");
-#[cfg(all(feature = "release-telemetry", feature = "diagnostics"))]
-compile_error!("game_client release telemetry cannot be built with diagnostics");
-#[cfg(all(feature = "release-telemetry", feature = "render_diagnostics"))]
-compile_error!("game_client release telemetry cannot be built with render_diagnostics");
-#[cfg(all(feature = "release-telemetry", feature = "benchmarks"))]
-compile_error!("game_client release telemetry cannot be built with benchmarks");
-#[cfg(all(feature = "release-telemetry", feature = "telemetry-rendered-views"))]
-compile_error!("game_client release telemetry cannot be built with telemetry-rendered-views");
 #[cfg(all(not(debug_assertions), feature = "debug-diagnostics"))]
 compile_error!("game_client debug-diagnostics requires debug assertions");
 #[cfg(all(not(debug_assertions), feature = "debug-benchmarks"))]
@@ -30,7 +16,7 @@ compile_error!("game_client release telemetry requires telemetry-upload");
 compile_error!("game_client release telemetry requires telemetry-retention");
 
 #[cfg(feature = "client-telemetry")]
-use bevy::prelude::Resource;
+use fun_ecs::Resource;
 
 #[cfg(feature = "client-telemetry")]
 pub const CLIENT_TELEMETRY_SYMBOL_PRESENT: bool = true;
@@ -51,6 +37,24 @@ pub const RELEASE_TELEMETRY_FEATURE_PRESENT: bool = cfg!(feature = "release-tele
 pub const DEBUG_DIAGNOSTICS_FEATURE_PRESENT: bool = cfg!(feature = "debug-diagnostics");
 pub const DEBUG_BENCHMARKS_FEATURE_PRESENT: bool = cfg!(feature = "debug-benchmarks");
 pub const LOCAL_DEBUG_CAPTURES_FEATURE_PRESENT: bool = cfg!(feature = "local-debug-captures");
+
+const RELEASE_TELEMETRY_ACTIVE: bool = cfg!(feature = "release-telemetry");
+const DEBUG_DIAGNOSTICS_ACTIVE: bool = cfg!(all(
+    feature = "debug-diagnostics",
+    not(feature = "release-telemetry")
+));
+const DEBUG_BENCHMARKS_ACTIVE: bool = cfg!(all(
+    feature = "debug-benchmarks",
+    not(feature = "release-telemetry")
+));
+const LOCAL_DEBUG_CAPTURES_ACTIVE: bool = cfg!(all(
+    feature = "local-debug-captures",
+    not(feature = "release-telemetry")
+));
+const TELEMETRY_RENDERED_VIEWS_ACTIVE: bool = cfg!(all(
+    feature = "telemetry-rendered-views",
+    not(feature = "release-telemetry")
+));
 
 #[cfg(feature = "client-telemetry")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Resource)]
@@ -98,7 +102,7 @@ pub fn client_telemetry_contract() -> ClientTelemetryFeatureContract {
     )
     .unwrap_or_default();
     ClientTelemetryFeatureContract {
-        profile: if cfg!(feature = "release-telemetry") {
+        profile: if RELEASE_TELEMETRY_ACTIVE {
             TelemetryProfileMarker::Release
         } else {
             TelemetryProfileMarker::Debug
@@ -108,13 +112,13 @@ pub fn client_telemetry_contract() -> ClientTelemetryFeatureContract {
         upload_or_spool: cfg!(feature = "telemetry-upload"),
         crash_capture: cfg!(feature = "crash-telemetry"),
         retention_metadata: cfg!(feature = "telemetry-retention"),
-        rendered_views: cfg!(feature = "telemetry-rendered-views"),
-        debug_diagnostics: cfg!(feature = "debug-diagnostics"),
-        debug_benchmarks: cfg!(feature = "debug-benchmarks"),
-        local_debug_captures: cfg!(feature = "local-debug-captures"),
+        rendered_views: TELEMETRY_RENDERED_VIEWS_ACTIVE,
+        debug_diagnostics: DEBUG_DIAGNOSTICS_ACTIVE,
+        debug_benchmarks: DEBUG_BENCHMARKS_ACTIVE,
+        local_debug_captures: LOCAL_DEBUG_CAPTURES_ACTIVE,
         source_project: metadata.source_project,
         artifact_kind: metadata.artifact_kind,
-        budget_class: if cfg!(feature = "release-telemetry") {
+        budget_class: if RELEASE_TELEMETRY_ACTIVE {
             fun_telemetry_core::enum_values::BUDGET_CLASS_SAMPLED_RUNTIME
         } else {
             fun_telemetry_core::enum_values::BUDGET_CLASS_TARGETED_TRACE
@@ -130,7 +134,7 @@ pub fn client_telemetry_contract() -> ClientTelemetryFeatureContract {
 pub fn canonical_runtime_writer(
     started_unix_ms: u64,
 ) -> fun_telemetry_core::ProjectTelemetryFunnel {
-    if cfg!(feature = "release-telemetry") {
+    if RELEASE_TELEMETRY_ACTIVE {
         fun_telemetry_core::ProjectTelemetryFunnel::release(started_unix_ms)
     } else {
         fun_telemetry_core::ProjectTelemetryFunnel::debug_local(started_unix_ms)
@@ -209,7 +213,8 @@ mod tests {
     #[cfg(all(
         feature = "debug-diagnostics",
         feature = "debug-benchmarks",
-        feature = "local-debug-captures"
+        feature = "local-debug-captures",
+        not(feature = "release-telemetry")
     ))]
     #[test]
     fn debug_client_symbols_present() {

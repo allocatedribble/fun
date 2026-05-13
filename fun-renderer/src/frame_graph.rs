@@ -894,7 +894,7 @@ pub struct RendererFrameGraphDebugArtifact {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
+#[cfg_attr(feature = "fun_ecs", derive(fun_ecs::Resource))]
 pub struct RendererFrameGraph {
     frame_index: u64,
     passes: Vec<FrameGraphPass>,

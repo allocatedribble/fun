@@ -43,7 +43,7 @@
 //! against real GPU output and the rules continue to gate
 //! shipping.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::RenderViewId;
 use crate::gpu_driven_runtime::GpuDrivenParityVerdict;
@@ -207,7 +207,7 @@ impl PassDGpuSceneIndirectDrawOutcome {
 }
 
 // ============================================================================
-// Section 4 — Bundle (Bevy Resource) + canonical artifact path
+// Section 4 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Resource)]
@@ -581,7 +581,7 @@ mod tests {
     /// immediately.
     #[test]
     fn live_passd_runs_one_update_and_records_strict_parity_on_proof_and_stress() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::FunRendererPlugin;

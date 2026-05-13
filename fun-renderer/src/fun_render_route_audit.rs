@@ -274,16 +274,18 @@ impl ProductCloudExecutionRouteAudit {
             FunRenderCloudShadowExecutionPolicy::ExtractsOnly,
         );
         // Typed retirement contract flags typed
-        // `bevy_cloud_path_is_diagnostic_only` so the
+        // `retired_engine_cloud_path_is_diagnostic_only` so the
         // typed legacy renderer is typed off-path.
-        let bevy_diag = self.retirement_contract.bevy_cloud_path_is_diagnostic_only;
+        let retired_engine_diag = self
+            .retirement_contract
+            .retired_engine_cloud_path_is_diagnostic_only;
         // Typed retirement contract confirms typed
         // product GPU work lives in typed `fun-renderer`.
         let gpu_in_renderer = self.retirement_contract.product_gpu_work_in_fun_renderer;
         // Typed retirement contract confirms typed
         // `fun_render` is typed extracts-only.
         let extracts_only = self.retirement_contract.fun_render_extracts_only;
-        policy_ok && bevy_diag && gpu_in_renderer && extracts_only
+        policy_ok && retired_engine_diag && gpu_in_renderer && extracts_only
     }
 
     /// Typed predicate: does the typed audit support the
@@ -444,7 +446,7 @@ mod tests {
 
     /// Pass C9.8 — the typed source-level audit test per
     /// user spec.  Drives the typed `Product route does
-    /// not call legacy Bevy cloud compute/composite
+    /// not call legacy RetiredEngine cloud compute/composite
     /// systems` acceptance bullet at the typed source
     /// layer.
     #[test]
@@ -463,12 +465,12 @@ mod tests {
     }
 
     /// Pass C9.8 acceptance — product route does not call
-    /// legacy Bevy cloud compute/composite systems.
+    /// legacy RetiredEngine cloud compute/composite systems.
     /// Verified by typed retirement contract +
     /// `fun_render_sky_does_not_execute_product_gpu_passes`
     /// predicate.
     #[test]
-    fn product_route_does_not_call_legacy_bevy_cloud_systems() {
+    fn product_route_does_not_call_legacy_retired_engine_cloud_systems() {
         let audit = ProductCloudExecutionRouteAudit::PRODUCT;
         assert!(audit.fun_render_sky_does_not_execute_product_gpu_passes());
         // Typed retirement policy is typed ExtractsOnly.
@@ -476,8 +478,12 @@ mod tests {
             audit.cloud_executor.retirement_policy,
             FunRenderCloudShadowExecutionPolicy::ExtractsOnly,
         );
-        // Typed bevy cloud path is typed diagnostic-only.
-        assert!(audit.retirement_contract.bevy_cloud_path_is_diagnostic_only);
+        // Typed retired_engine cloud path is typed diagnostic-only.
+        assert!(
+            audit
+                .retirement_contract
+                .retired_engine_cloud_path_is_diagnostic_only
+        );
         // Typed product GPU work lives in typed
         // fun-renderer.
         assert!(audit.retirement_contract.product_gpu_work_in_fun_renderer);
@@ -620,7 +626,7 @@ mod tests {
         let audit = ProductCloudExecutionRouteAudit::PRODUCT;
 
         // Bullet 1: Product route does not call legacy
-        // Bevy cloud compute/composite systems.
+        // RetiredEngine cloud compute/composite systems.
         assert!(audit.fun_render_sky_does_not_execute_product_gpu_passes());
 
         // Bullet 2: Legacy cloud rendering requires

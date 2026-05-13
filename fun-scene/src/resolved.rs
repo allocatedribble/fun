@@ -1,5 +1,17 @@
-pub type ResolvedFunScene = bevy_scene::ResolvedScene;
-pub type ResolvedFunSceneRoot = bevy_scene::ResolvedSceneRoot;
-pub type ResolvedFunSceneListRoot = bevy_scene::ResolvedSceneListRoot;
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResolvedFunScene {
+    pub node_count: u16,
+}
 
-pub use bevy_scene::ApplySceneError as FunApplySceneError;
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResolvedFunSceneRoot {
+    pub node_count: u16,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResolvedFunSceneListRoot {
+    pub scene_count: u16,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunApplySceneError;

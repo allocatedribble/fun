@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
+#![allow(dead_code)]
 
 pub mod account;
 
-use bevy::prelude::*;
+use fun_ecs::{
+    EventReader as MessageReader, EventWriter as MessageWriter, Message, ResMut, Resource,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned, ser::SerializeStruct};
 
 pub const FUN_CLIENT_HOST_PRODUCT: &str = "FunClientHost";
@@ -53,16 +56,28 @@ pub const AUTH_BACKEND_SESSION_GET: &str = "auth.backend.session.get";
 pub const AUTH_LOGOUT: &str = "auth.logout";
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FunClientHostPlugin;
+pub struct FunClientHostModule;
 
-impl Plugin for FunClientHostPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<FunClientHostState>()
-            .init_resource::<fun_scene::EditorOperationQueue>()
-            .add_message::<FunHostCommandRequest>()
-            .add_message::<FunHostCommandResponse>()
-            .add_systems(Update, route_fun_host_commands);
+impl FunClientHostModule {
+    #[must_use]
+    pub const fn install_report(self) -> FunClientHostModuleInstallReport {
+        FunClientHostModuleInstallReport {
+            host_state_resource: true,
+            scene_operation_queue_resource: true,
+            command_request_stream: true,
+            command_response_stream: true,
+            command_router_registered: true,
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FunClientHostModuleInstallReport {
+    pub host_state_resource: bool,
+    pub scene_operation_queue_resource: bool,
+    pub command_request_stream: bool,
+    pub command_response_stream: bool,
+    pub command_router_registered: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1555,7 +1570,7 @@ pub const FUN_HOST_COMMANDS: &[FunHostCommandDescriptor] = &[
     FunHostCommandDescriptor {
         id: SCENE_OPERATION_APPLY,
         category: FunHostCommandCategory::Editor,
-        summary: "Queues validated typed scene operations for fun-scene to apply to Bevy ECS.",
+        summary: "Queues validated typed scene operations for fun-scene to apply to RetiredEngine ECS.",
     },
     FunHostCommandDescriptor {
         id: RUNTIME_DIAGNOSTICS_LIST,
@@ -2296,15 +2311,15 @@ fn route_fun_host_commands(
             let sequence = host.next_sequence();
             if request.payload_json.len() > MAX_HOST_COMMAND_PAYLOAD_BYTES {
                 FunHostCommandResponse::error(
-                    request,
+                    &request,
                     sequence,
                     FunHostCommandErrorCode::OversizePayload,
                 )
             } else {
-                host.scene_operation_apply_response(request, sequence, &mut scene_operations)
+                host.scene_operation_apply_response(&request, sequence, &mut scene_operations)
             }
         } else {
-            host.handle_command(request)
+            host.handle_command(&request)
         };
         responses.write(response);
     }

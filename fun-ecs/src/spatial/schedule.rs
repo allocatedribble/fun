@@ -1,3 +1,5 @@
+pub use crate::{IntoScheduleConfigs, Schedule, SystemSet};
+
 use fun_scheduler_types::{
     CommitPolicy, DeterministicDescriptor, EcsAccessMode, EcsChunkKey, EcsCommandBufferId,
     EcsLivenessClass, EcsSpatialDomainKind, EcsSpatialWaitTokenKind, EcsSystemClass,

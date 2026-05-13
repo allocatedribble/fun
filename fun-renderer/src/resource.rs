@@ -1195,8 +1195,8 @@ impl RendererResourceRegistry {
 pub enum RendererResourceOwner {
     FunRenderer,
     FunRenderBridge,
-    BevyGeneric,
-    BevyLowLevel,
+    RetiredEngineGeneric,
+    RetiredEngineLowLevel,
     GameClient,
     FunUiNativeUi,
     VendorSdk,
@@ -1207,9 +1207,9 @@ impl RendererResourceOwner {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::FunRenderer => crate::FUN_RENDERER_CRATE_NAME,
-            Self::FunRenderBridge => crate::FUN_RENDER_BRIDGE_PACKAGE_NAME,
-            Self::BevyGeneric => "bevy_generic_render_resource",
-            Self::BevyLowLevel => "bevy_low_level",
+            Self::FunRenderBridge => crate::FUN_RENDER_DONOR_PACKAGE_NAME,
+            Self::RetiredEngineGeneric => "retired_engine_generic_render_resource",
+            Self::RetiredEngineLowLevel => "retired_engine_low_level",
             Self::GameClient => "game_client",
             Self::FunUiNativeUi => "fun_ui_native_ui",
             Self::VendorSdk => "vendor_sdk",
@@ -1263,9 +1263,9 @@ pub struct RendererResourceOwnershipPolicy {
     pub policy_owner: RendererResourceOwner,
     pub compatibility_shim_owner: RendererResourceOwner,
     pub hidden_transient_allocations_allowed_in_major_passes: bool,
-    pub force_bevy_prepare_stage_helpers_through_upload_arena: bool,
+    pub force_retired_engine_prepare_stage_helpers_through_upload_arena: bool,
     pub semantic_owner_required_before_generic_helper_migration: bool,
-    pub top_small_buffer_offenders_are_generic_bevy_helpers: bool,
+    pub top_small_buffer_offenders_are_generic_retired_engine_helpers: bool,
 }
 
 pub const RENDERER_RESOURCE_OWNERSHIP_POLICY: RendererResourceOwnershipPolicy =
@@ -1273,9 +1273,9 @@ pub const RENDERER_RESOURCE_OWNERSHIP_POLICY: RendererResourceOwnershipPolicy =
         policy_owner: RendererResourceOwner::FunRenderer,
         compatibility_shim_owner: RendererResourceOwner::FunRenderBridge,
         hidden_transient_allocations_allowed_in_major_passes: false,
-        force_bevy_prepare_stage_helpers_through_upload_arena: false,
+        force_retired_engine_prepare_stage_helpers_through_upload_arena: false,
         semantic_owner_required_before_generic_helper_migration: true,
-        top_small_buffer_offenders_are_generic_bevy_helpers: true,
+        top_small_buffer_offenders_are_generic_retired_engine_helpers: true,
     };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1347,10 +1347,10 @@ pub const FUN_UPLOAD_ARENA_ALLOCATION_SITE: RendererResourceAllocationSite =
 
 pub const HOT_UPLOAD_KILL_LIST: [RendererResourceAllocationSite; 4] = [
     RendererResourceAllocationSite {
-        stable_id: "bevy.dynamic_uniform_buffer.write_buffer_with.uniform_buffer_311",
-        module: "bevy_render::render_resource::DynamicUniformBuffer",
+        stable_id: "retired_engine.dynamic_uniform_buffer.write_buffer_with.uniform_buffer_311",
+        module: "retired_engine_render::render_resource::DynamicUniformBuffer",
         kind: RendererResourceKind::Upload(UploadResourceKind::TransientUploadBatches),
-        current_owner: RendererResourceOwner::BevyGeneric,
+        current_owner: RendererResourceOwner::RetiredEngineGeneric,
         intended_owner: RendererResourceOwner::FunRenderer,
         priority: ResourceMigrationPriority::BenchmarkedHotUploadOffender,
         phase: ResourceOwnershipPhase::ObserveOnly,
@@ -1358,10 +1358,10 @@ pub const HOT_UPLOAD_KILL_LIST: [RendererResourceAllocationSite; 4] = [
         migration_gate: "split_semantic_owner_before_upload_arena_migration",
     },
     RendererResourceAllocationSite {
-        stable_id: "bevy.raw_buffer_vec.write_buffer.buffer_vec_183",
-        module: "bevy_render::render_resource::RawBufferVec",
+        stable_id: "retired_engine.raw_buffer_vec.write_buffer.buffer_vec_183",
+        module: "retired_engine_render::render_resource::RawBufferVec",
         kind: RendererResourceKind::Upload(UploadResourceKind::TransientUploadBatches),
-        current_owner: RendererResourceOwner::BevyGeneric,
+        current_owner: RendererResourceOwner::RetiredEngineGeneric,
         intended_owner: RendererResourceOwner::FunRenderer,
         priority: ResourceMigrationPriority::BenchmarkedHotUploadOffender,
         phase: ResourceOwnershipPhase::ObserveOnly,
@@ -1369,10 +1369,10 @@ pub const HOT_UPLOAD_KILL_LIST: [RendererResourceAllocationSite; 4] = [
         migration_gate: "batch_or_split_semantic_owner_before_upload_arena_migration",
     },
     RendererResourceAllocationSite {
-        stable_id: "bevy.dynamic_uniform_buffer.write_buffer.uniform_buffer_140",
-        module: "bevy_render::render_resource::DynamicUniformBuffer",
+        stable_id: "retired_engine.dynamic_uniform_buffer.write_buffer.uniform_buffer_140",
+        module: "retired_engine_render::render_resource::DynamicUniformBuffer",
         kind: RendererResourceKind::Upload(UploadResourceKind::TransientUploadBatches),
-        current_owner: RendererResourceOwner::BevyGeneric,
+        current_owner: RendererResourceOwner::RetiredEngineGeneric,
         intended_owner: RendererResourceOwner::FunRenderer,
         priority: ResourceMigrationPriority::BenchmarkedHotUploadOffender,
         phase: ResourceOwnershipPhase::ObserveOnly,
@@ -1380,10 +1380,10 @@ pub const HOT_UPLOAD_KILL_LIST: [RendererResourceAllocationSite; 4] = [
         migration_gate: "split_semantic_owner_before_upload_arena_migration",
     },
     RendererResourceAllocationSite {
-        stable_id: "bevy.raw_buffer_vec.write_buffer.buffer_vec_442",
-        module: "bevy_render::render_resource::RawBufferVec",
+        stable_id: "retired_engine.raw_buffer_vec.write_buffer.buffer_vec_442",
+        module: "retired_engine_render::render_resource::RawBufferVec",
         kind: RendererResourceKind::Upload(UploadResourceKind::TransientUploadBatches),
-        current_owner: RendererResourceOwner::BevyGeneric,
+        current_owner: RendererResourceOwner::RetiredEngineGeneric,
         intended_owner: RendererResourceOwner::FunRenderer,
         priority: ResourceMigrationPriority::BenchmarkedHotUploadOffender,
         phase: ResourceOwnershipPhase::ObserveOnly,
@@ -1690,20 +1690,20 @@ mod tests {
             RendererResourceOwner::FunRenderBridge
         );
         assert!(!policy.hidden_transient_allocations_allowed_in_major_passes);
-        assert!(!policy.force_bevy_prepare_stage_helpers_through_upload_arena);
+        assert!(!policy.force_retired_engine_prepare_stage_helpers_through_upload_arena);
         assert!(policy.semantic_owner_required_before_generic_helper_migration);
-        assert!(policy.top_small_buffer_offenders_are_generic_bevy_helpers);
+        assert!(policy.top_small_buffer_offenders_are_generic_retired_engine_helpers);
     }
 
     #[test]
-    fn resource_hot_upload_kill_list_names_bevy_generic_offenders_and_artifacts() {
+    fn resource_hot_upload_kill_list_names_retired_engine_generic_offenders_and_artifacts() {
         assert!(HOT_UPLOAD_KILL_LIST.iter().any(|site| {
-            site.module == "bevy_render::render_resource::DynamicUniformBuffer"
+            site.module == "retired_engine_render::render_resource::DynamicUniformBuffer"
                 && site.benchmark_artifact == PASS5_DX12_PARITY_ARTIFACT
                 && site.phase == ResourceOwnershipPhase::ObserveOnly
         }));
         assert!(HOT_UPLOAD_KILL_LIST.iter().any(|site| {
-            site.module == "bevy_render::render_resource::RawBufferVec"
+            site.module == "retired_engine_render::render_resource::RawBufferVec"
                 && site.priority == ResourceMigrationPriority::BenchmarkedHotUploadOffender
                 && site.migration_gate.contains("semantic_owner")
         }));

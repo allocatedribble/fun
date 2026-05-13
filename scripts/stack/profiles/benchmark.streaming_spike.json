@@ -4,7 +4,7 @@
   "description": "Benchmark profile for startup and world-stream spike capture.",
   "build": {
     "release": false,
-    "static_bevy": false
+    "static_engine": false
   },
   "features": {
     "disable_clouds": false,

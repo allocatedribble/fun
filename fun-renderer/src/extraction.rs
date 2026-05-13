@@ -1,12 +1,13 @@
 use std::{marker::PhantomData, mem::size_of, time::Instant};
 
-use bevy_app::App;
-use bevy_ecs::{
+use fun_asset::AssetHandle;
+use fun_ecs::{
     entity::Entity,
     lifecycle::RemovedComponents,
     prelude::{Added, Changed, Or, Query, Res, ResMut, Resource, With, Without},
 };
-use bevy_transform::components::{GlobalTransform, Transform};
+use fun_scene::{GlobalTransform, Transform};
+use retired_engine_app::App;
 
 use crate::{component_api::*, plugin::RendererFrameIndex};
 
@@ -1453,7 +1454,7 @@ fn synthetic_stable_id(kind: RenderStableIdKind, entity: Entity) -> RenderStable
     )
 }
 
-fn stable_id_from_asset(kind: RenderStableIdKind, asset: RenderAssetId) -> RenderStableId {
+fn stable_id_from_asset<T>(kind: RenderStableIdKind, asset: AssetHandle<T>) -> RenderStableId {
     if !asset.is_valid() {
         return RenderStableId::INVALID;
     }
@@ -1486,7 +1487,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::{
+    use fun_ecs::{
         prelude::World,
         schedule::{IntoScheduleConfigs, Schedule},
     };

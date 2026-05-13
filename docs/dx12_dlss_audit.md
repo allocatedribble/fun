@@ -6,27 +6,27 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 
 ## Crate Graph
 
-- `game_client`: runtime executable host. Enables `fun_render/winit_presentation`, forwards `dlss` and `force_disable_dlss` to Bevy and `fun_render`, owns the legacy camera-side DLSS Ray Reconstruction activation hook behind the new explicit RR gate.
+- `game_client`: runtime executable host. Enables `fun_render/winit_presentation`, forwards `dlss` and `force_disable_dlss` to RetiredEngine and `fun_render`, owns the legacy camera-side DLSS Ray Reconstruction activation hook behind the new explicit RR gate.
 - `fun_render`: first-party render policy and diagnostics layer. Owns render backend selection, Winit/offscreen presentation plugins, Solari settings, render path signatures, RT feature policy, and performance diagnostics labels.
 - `game_shared`: shared protocol and diagnostics types used by client/server and render reporting.
-- `bevy`: local patched engine checkout through workspace path dependency and crate patches.
-- `bevy_anti_alias`: local Bevy anti-aliasing crate. Its `dlss` feature depends on `dlss_wgpu` and `bevy_render/raw_vulkan_init`.
-- `bevy_solari`: local Bevy Solari implementation used by `fun_render` for lighting and DLSS Ray Reconstruction denoiser mode plumbing.
+- `retired_engine`: local patched engine checkout through workspace path dependency and crate patches.
+- `retired_engine_anti_alias`: local RetiredEngine anti-aliasing crate. Its `dlss` feature depends on `dlss_wgpu` and `retired_engine_render/raw_vulkan_init`.
+- `retired_engine_solari`: local RetiredEngine Solari implementation used by `fun_render` for lighting and DLSS Ray Reconstruction denoiser mode plumbing.
 
 ## Relevant Cargo Features
 
 - `game_client/default`: `dlss`, `volumetric_clouds`.
-- `game_client/dlss`: `bevy/dlss`, `fun_render/dlss`.
-- `game_client/force_disable_dlss`: `bevy/force_disable_dlss`, `fun_render/force_disable_dlss`.
-- `game_client/render_diagnostics`: enables Bevy debug, PBR/meshlet diagnostics, `fun_render/render_diagnostics`, and `game_shared/diagnostics`.
+- `game_client/dlss`: `retired_engine/dlss`, `fun_render/dlss`.
+- `game_client/force_disable_dlss`: `retired_engine/force_disable_dlss`, `fun_render/force_disable_dlss`.
+- `game_client/render_diagnostics`: enables RetiredEngine debug, PBR/meshlet diagnostics, `fun_render/render_diagnostics`, and `game_shared/diagnostics`.
 - `game_client/dx12_dlss_native`: forwards to `fun_render/dx12_dlss_native`.
-- `fun_render/dlss`: forwards to `bevy/dlss`.
-- `fun_render/force_disable_dlss`: forwards to `bevy/force_disable_dlss`.
+- `fun_render/dlss`: forwards to `retired_engine/dlss`.
+- `fun_render/force_disable_dlss`: forwards to `retired_engine/force_disable_dlss`.
 - `fun_render/dx12_dlss_native`: experimental Windows-only native DLSS gate. It exposes config, diagnostics, camera correctness gates, the centralized DX12 native interop boundary, and the first SR schedule node; the NVIDIA native bridge is not implemented.
 
 ## Render Plugin Entry Points
 
-- `fun_render::FunRenderWinitPresentationPlugin`: selects `FUN_RENDER_BACKEND`, canonical `FUN_RENDER_PRESENT_MODE` with the legacy `FUN_PRESENT_MODE` alias, creates the Winit window, injects the Bevy render plugin, and logs native DX12 DLSS startup status.
+- `fun_render::FunRenderWinitPresentationPlugin`: selects `FUN_RENDER_BACKEND`, canonical `FUN_RENDER_PRESENT_MODE` with the legacy `FUN_PRESENT_MODE` alias, creates the Winit window, injects the RetiredEngine render plugin, and logs native DX12 DLSS startup status.
 - `fun_render::FunRenderOffscreenPresentationPlugin`: selects the same backend for editor/offscreen presentation, inserts the offscreen target, and logs native DX12 DLSS startup status.
 - `fun_render::FunRenderCorePlugin`: installs render policy, Solari plugins, diagnostics resources, render path signature, world-stream activation, and temporal reset systems.
 - `game_client::build_app_with_options`: adds `FunRenderWinitPresentationPlugin` and `FunRenderCorePlugin` for the product client.
@@ -39,8 +39,8 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 
 ## Current Anti-Aliasing Path
 
-- Existing `dlss` feature enters through Bevy's `bevy_anti_alias::dlss`.
-- The local Bevy crate declares `bevy_anti_alias/dlss = ["dep:dlss_wgpu", "dep:uuid", "bevy_render/raw_vulkan_init"]`.
+- Existing `dlss` feature enters through RetiredEngine's `retired_engine_anti_alias::dlss`.
+- The local RetiredEngine crate declares `retired_engine_anti_alias/dlss = ["dep:dlss_wgpu", "dep:uuid", "retired_engine_render/raw_vulkan_init"]`.
 - `fun_render::winit` inserts `DlssProjectId` before `DefaultPlugins` when `dlss` is enabled and `force_disable_dlss` is absent.
 - FUN camera code currently activates DLSS Ray Reconstruction components conditionally; it does not provide a native DX12 Super Resolution backend.
 
@@ -48,7 +48,7 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 
 - `FUN_SOLARI_DENOISE_MODE=rr|dlss|dlss-rr|ray-reconstruction` only selects `SolariDenoiseMode::DlssRayReconstruction` when `FUN_RENDER_DX12_DLSS_RR=1` is set and `FUN_DISABLE_DLSS_RR` is absent.
 - `FUN_DISABLE_DLSS_RR=1` remains a legacy kill switch and blocks RR activation even when the new gate is set.
-- `game_client` only inserts `Dlss<DlssRayReconstructionFeature>` when the explicit RR gate is open and Bevy reports `DlssRayReconstructionSupported`.
+- `game_client` only inserts `Dlss<DlssRayReconstructionFeature>` when the explicit RR gate is open and RetiredEngine reports `DlssRayReconstructionSupported`.
 - RR diagnostics include `dlss_rr_gpu_ns` and `solari_pass_dlss_rr_guide_resolve_ns`.
 - BalancedFast remains the normal Solari denoiser; RR is an explicit comparison lane.
 
@@ -72,7 +72,7 @@ scope: DirectX 12 native DLSS Super Resolution path planning
 - `fun_render/src/dx12_native`: isolated wgpu DX12 HAL extraction for borrowed device, queue, texture, and future command-list handles.
 - `fun_render/src/core.rs`: disables RR unless Solari denoise mode is RR.
 - `fun_render/src/solari.rs`: denoiser mode parsing.
-- `fun_render/src/signature.rs`: render path signature records Bevy-facing RR state.
+- `fun_render/src/signature.rs`: render path signature records RetiredEngine-facing RR state.
 - `game_client/src/lib.rs`: camera-side RR activation, reset, and diagnostics.
 - `fun-bench client`: `dlss_rr_gpu_ms` parsing and benchmark output.
 - `fun-bench denoisers`: denoiser/RR cost comparison.

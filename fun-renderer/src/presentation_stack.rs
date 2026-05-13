@@ -28,7 +28,7 @@
 //!    typed `PostProcessIntermediateSlot` that names the underlying
 //!    `FrameGraphResourceType`; callers cannot bypass the registry.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::{CameraDebugView, RenderExtent2d, RenderStableId, UiColorSpace};
 use crate::frame_graph::FrameGraphResourceType;

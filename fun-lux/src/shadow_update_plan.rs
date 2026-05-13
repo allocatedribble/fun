@@ -507,7 +507,7 @@ impl LuxShadowUpdatePlan {
     /// [`Self::deferred_cost_us`].
     pub fn finalize(&mut self) {
         self.requests
-            .sort_by(|a, b| b.priority_q16.cmp(&a.priority_q16));
+            .sort_by_key(|request| std::cmp::Reverse(request.priority_q16));
         self.admitted_cost_us = 0;
         self.deferred_request_count = 0;
         self.deferred_cost_us = 0;
@@ -1229,19 +1229,19 @@ mod tests {
             LuxShadowQualityTierProfile::LOW.directional_cascade_count,
             2
         );
-        assert!(!LuxShadowQualityTierProfile::LOW.uses_static_cache);
+        const { assert!(!LuxShadowQualityTierProfile::LOW.uses_static_cache) };
 
         assert_eq!(
             LuxShadowQualityTierProfile::MEDIUM.directional_cascade_count,
             3
         );
-        assert!(LuxShadowQualityTierProfile::MEDIUM.uses_static_cache);
+        const { assert!(LuxShadowQualityTierProfile::MEDIUM.uses_static_cache) };
 
         assert_eq!(
             LuxShadowQualityTierProfile::HIGH.directional_cascade_count,
             4
         );
-        assert!(LuxShadowQualityTierProfile::HIGH.contact_aware_filtering);
+        const { assert!(LuxShadowQualityTierProfile::HIGH.contact_aware_filtering) };
 
         let cine = LuxShadowQualityTierProfile::CINEMATIC;
         assert!(cine.stochastic_soft_shadows);

@@ -10,10 +10,10 @@ name = "fun_renderer"
 workspace = true
 
 [features]
-default = ["bevy_ecs", "fun_renderer_core", "native_ui_adapter", "wgpu_bridge"]
-bevy_ecs = ["dep:bevy_app", "dep:bevy_camera", "dep:bevy_ecs", "dep:bevy_transform"]
+default = ["fun_renderer_core", "wgpu_bridge"]
+fun_ecs = ["schedule_contract", "surface_lifecycle"]
 native_ui_adapter = [
-    "bevy_ecs",
+    "fun_ecs",
     "dep:rvelte-core",
     "dep:rvelte-fun-render-adapter",
     "dep:rvelte-fun-ui-core",
@@ -26,16 +26,17 @@ experimental_renderer_ml = ["dep:fun_ai_core"]
 frame_generation = []
 fsr = []
 fun_renderer_core = []
-hybrid_gi = ["fun_lux/hybrid_gi"]
+scene_contract = ["dep:fun_lux", "dep:fun_scene"]
+hybrid_gi = ["scene_contract", "fun_lux/hybrid_gi"]
 learned_page_priority_predictor = ["experimental_renderer_ml"]
 legacy_renderer = []
-many_light = ["fun_lux/many_light"]
+many_light = ["scene_contract", "fun_lux/many_light"]
 mesh_shader_path = []
 metal_backend = []
 neural_texture_compression = []
 upscaling = []
 virtual_geometry = []
-virtual_shadows = ["fun_lux/virtual_shadows"]
+virtual_shadows = ["scene_contract", "fun_lux/virtual_shadows"]
 vulkan_backend = []
 wgpu_bridge = ["dep:naga", "dep:wgpu"]
 # V2-3A / V2-3C: pull in the cross-subsystem schedule contract types
@@ -45,6 +46,7 @@ wgpu_bridge = ["dep:naga", "dep:wgpu"]
 # taxonomies. Opt-in because the renderer must stay buildable without
 # the scheduler workspace present.
 schedule_contract = ["dep:fun-scheduler-types"]
+surface_lifecycle = ["dep:fun_window"]
 
 # FS-M1.4E: layer the graph-shaped renderer adapter (render_work_graph)
 # on top of `schedule_contract`. This pulls in `fun-scheduler-core` so
@@ -70,17 +72,15 @@ fun_renderer_upscale = ["upscaling"]
 fun_renderer_vulkan = ["vulkan_backend"]
 
 [dependencies]
-bevy_app = { workspace = true, optional = true }
-bevy_camera = { workspace = true, optional = true }
-bevy_ecs = { workspace = true, optional = true }
-bevy_transform = { workspace = true, optional = true }
-fun_lux.workspace = true
-fun_ai_core = { workspace = true, optional = true }
+fun_asset.workspace = true
 fun_ecs.workspace = true
-fun_scene.workspace = true
+fun_lux = { workspace = true, optional = true }
+fun_ai_core = { workspace = true, optional = true }
+fun_scene = { workspace = true, optional = true }
 fun_telemetry_core.workspace = true
 flume.workspace = true
 hashbrown.workspace = true
+fun_window = { workspace = true, optional = true, default-features = false }
 fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types", optional = true }
 fun-scheduler-core = { path = "../../fun-scheduler/crates/fun-scheduler-core", optional = true }
 rvelte-core = { path = "../../rvelte/crates/rvelte-core", optional = true }

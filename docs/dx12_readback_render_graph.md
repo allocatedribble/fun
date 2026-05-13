@@ -8,10 +8,10 @@ Reordering or pass fusion needs PIX/benchmark evidence first.
 
 | source | cadence | category | blocking policy |
 |---|---|---|---|
-| `bevy_render::gpu_readback` | only entities with `Readback`; can be every frame if the component stays active | explicit GPU readback | nonblocking `map_async`; completions are consumed on later extract ticks |
-| `bevy_render::view::window::screenshot` | capture-only | screenshot | nonblocking `map_async`; completion is awaited in the async task, outside the render hot path |
-| `bevy_render::diagnostic::internal` | render diagnostics only | timestamp/query/value diagnostics | nonblocking query readback with submitted-frame reuse |
-| `bevy_render::diagnostic::tracy_gpu` | Tracy GPU context initialization | timestamp | one explicit wait during Tracy GPU startup only |
+| `retired_engine_render::gpu_readback` | only entities with `Readback`; can be every frame if the component stays active | explicit GPU readback | nonblocking `map_async`; completions are consumed on later extract ticks |
+| `retired_engine_render::view::window::screenshot` | capture-only | screenshot | nonblocking `map_async`; completion is awaited in the async task, outside the render hot path |
+| `retired_engine_render::diagnostic::internal` | render diagnostics only | timestamp/query/value diagnostics | nonblocking query readback with submitted-frame reuse |
+| `retired_engine_render::diagnostic::tracy_gpu` | Tracy GPU context initialization | timestamp | one explicit wait during Tracy GPU startup only |
 | NATIVE_UI GPU interop | UI transport only | native copy, not a readback | must not map to CPU in accelerated lanes |
 
 Normal performance lanes should have zero blocking readback waits. Any active
@@ -24,7 +24,7 @@ Enable counters with:
 
 ```text
 $env:FUN_RENDER_READBACK_DIAGNOSTICS = "1"
-$env:BEVY_RENDER_READBACK_DIAGNOSTICS = "1"
+$env:RETIRED_ENGINE_RENDER_READBACK_DIAGNOSTICS = "1"
 ```
 
 `fun-bench run-stack --render-diagnostics` and `--frame-time-diagnostics` enable

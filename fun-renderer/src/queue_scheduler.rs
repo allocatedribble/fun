@@ -325,7 +325,7 @@ impl OverlapOpportunity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
+#[cfg_attr(feature = "fun_ecs", derive(fun_ecs::Resource))]
 pub struct RenderQueueScheduler {
     schema_version: u16,
     capabilities: RenderQueueCapabilities,

@@ -61,7 +61,7 @@
 //!   Pass M completes Phase 1; the relationships of the others
 //!   are recorded in [`PassMNextPhaseRelationship`].
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 pub const PASSM_WINDOWED_SURFACE_PRESENT_SCHEMA_VERSION: u16 = 1;
 pub const PASSM_RULE_COUNT: usize = 8;

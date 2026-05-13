@@ -20,7 +20,7 @@
 //!   and signals.
 //! - Product cloud shadow GPU work runs through
 //!   `fun-renderer`.
-//! - Any Bevy cloud path is explicit diagnostic-only.
+//! - Any RetiredEngine cloud path is explicit diagnostic-only.
 //! - Startup logs identify `fun-renderer` as cloud-shadow
 //!   executor.
 
@@ -44,7 +44,7 @@ pub enum FunRenderCloudShadowExecutionPolicy {
     #[default]
     ExtractsOnly,
     /// Typed diagnostic-only — typed `fun_render` may
-    /// still own a typed Bevy cloud path for typed
+    /// still own a typed RetiredEngine cloud path for typed
     /// debug / typed parity comparison, but it MUST NOT
     /// be the typed product cloud-shadow executor.
     /// Typed startup logs MUST flag this typed mode as
@@ -114,9 +114,9 @@ pub struct FunRenderCloudRetirementContract {
     /// Typed product cloud shadow GPU work runs through
     /// `fun-renderer`.  Audit flag.
     pub product_gpu_work_in_fun_renderer: bool,
-    /// Typed any Bevy cloud path is explicit
+    /// Typed any RetiredEngine cloud path is explicit
     /// diagnostic-only.  Audit flag.
-    pub bevy_cloud_path_is_diagnostic_only: bool,
+    pub retired_engine_cloud_path_is_diagnostic_only: bool,
     /// Typed startup logs identify `fun-renderer` as the
     /// typed cloud-shadow executor.  Audit flag.
     pub startup_log_identifies_executor: bool,
@@ -131,7 +131,7 @@ impl FunRenderCloudRetirementContract {
         policy: FunRenderCloudShadowExecutionPolicy::ExtractsOnly,
         fun_render_extracts_only: true,
         product_gpu_work_in_fun_renderer: true,
-        bevy_cloud_path_is_diagnostic_only: true,
+        retired_engine_cloud_path_is_diagnostic_only: true,
         startup_log_identifies_executor: true,
     };
 
@@ -144,7 +144,7 @@ impl FunRenderCloudRetirementContract {
         policy: FunRenderCloudShadowExecutionPolicy::DiagnosticOnly,
         fun_render_extracts_only: false,
         product_gpu_work_in_fun_renderer: false,
-        bevy_cloud_path_is_diagnostic_only: false,
+        retired_engine_cloud_path_is_diagnostic_only: false,
         startup_log_identifies_executor: false,
     };
 
@@ -155,7 +155,7 @@ impl FunRenderCloudRetirementContract {
         self.policy.is_product_permitted()
             && self.fun_render_extracts_only
             && self.product_gpu_work_in_fun_renderer
-            && self.bevy_cloud_path_is_diagnostic_only
+            && self.retired_engine_cloud_path_is_diagnostic_only
             && self.startup_log_identifies_executor
     }
 
@@ -308,12 +308,12 @@ mod tests {
         );
     }
 
-    /// Pass C7.12 acceptance — any Bevy cloud path is
+    /// Pass C7.12 acceptance — any RetiredEngine cloud path is
     /// explicit diagnostic-only.
     #[test]
-    fn bevy_cloud_path_is_diagnostic_only() {
+    fn retired_engine_cloud_path_is_diagnostic_only() {
         let contract = FunRenderCloudRetirementContract::PRODUCT;
-        assert!(contract.bevy_cloud_path_is_diagnostic_only);
+        assert!(contract.retired_engine_cloud_path_is_diagnostic_only);
         // Typed DiagnosticOnly policy correctly flags
         // typed retains GPU work + typed non-production.
         let policy = FunRenderCloudShadowExecutionPolicy::DiagnosticOnly;

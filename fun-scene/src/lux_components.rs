@@ -1,7 +1,6 @@
-use bevy_color::Color;
-use bevy_ecs::prelude::Component;
+use fun_ecs::Component;
 
-use crate::FunSceneOwner;
+use crate::{Color, FunSceneOwner};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LuxLightKind {

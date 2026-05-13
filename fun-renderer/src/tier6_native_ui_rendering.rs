@@ -13,7 +13,7 @@
 //!    stream and produces a small number of `Tier6UiBatch`
 //!    records — consecutive draws with the same key fold into
 //!    one batch.
-//! 2. **Glyph atlas** — typed `Tier6GlyphAtlasTable` Bevy
+//! 2. **Glyph atlas** — typed `Tier6GlyphAtlasTable` RetiredEngine
 //!    Resource with LRU eviction, `Tier6SubpixelPositioning`
 //!    (Off / FractionalQuarterX / FractionalQuarterXY) policy,
 //!    `Tier6MissingGlyphFallback` (TofuMarker /
@@ -39,7 +39,7 @@
 //! UI constants survive into the GPU vertex / fragment
 //! shaders.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 pub const TIER6_NATIVE_UI_RENDERING_SCHEMA_VERSION: u16 = 1;
 

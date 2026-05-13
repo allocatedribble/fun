@@ -55,7 +55,7 @@
 //! `gap.command_list_unavailable` fails the test suite
 //! immediately.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 use crate::dx12_production::{
@@ -208,7 +208,7 @@ impl PassHNativeCommandListFailClosedOutcome {
 }
 
 // ============================================================================
-// Section 4 — Bundle (Bevy Resource) + canonical artifact path
+// Section 4 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Resource)]
@@ -601,7 +601,7 @@ mod tests {
     /// path the live binary uses, then evaluates the bundle.
     #[test]
     fn live_passh_runs_one_update_and_records_fail_closed_contract_holds() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::FunRendererPlugin;

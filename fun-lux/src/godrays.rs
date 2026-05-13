@@ -7,8 +7,8 @@
 //! - Primary godrays: shadowed volumetric scattering (typed
 //!   via Pass 8's `LuxVolumetricPassRole::VolumetricShadowSample`
 //!   + `LuxVolumetricLightInject{Directional,Local}` passes
-//!   plus the per-light overrides in
-//!   `LuxVolumetricLightOverride`).
+//!     plus the per-light overrides in
+//!     `LuxVolumetricLightOverride`).
 //! - Screen-space fallback: typed
 //!   `LuxGodrayPassRole::ScreenSpaceGodrayPass` with typed
 //!   radial depth-aware sampling settings.  Allowed in

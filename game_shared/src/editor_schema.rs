@@ -1,7 +1,7 @@
 //! Editor-visible ECS schema and mutation validation contracts.
 //!
-//! This module stays Bevy-free on purpose. Runtime crates register concrete
-//! Bevy component/resource types through the macros below, while the editor
+//! This module stays RetiredEngine-free on purpose. Runtime crates register concrete
+//! RetiredEngine component/resource types through the macros below, while the editor
 //! protocol sees stable [`NetEntity`], [`ComponentKind`], and [`ResourceKind`]
 //! values.
 

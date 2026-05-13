@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Resource;
+use crate::Resource;
 
 use crate::{
     ECS_SPATIAL_MAX_LOAD_ANIMATION_ARTIFACTS, EcsArtifactConsumer, EcsArtifactState,

@@ -28,7 +28,6 @@
 use core::fmt;
 use core::marker::PhantomData;
 
-use fun_lux::frame_plan::LuxResourceIntentKind;
 use fun_scheduler_types::budget::{BudgetOrigin, Deadline, TaskBudget};
 use fun_scheduler_types::class::{TaskClass, TaskPriority};
 use fun_scheduler_types::schedule::{
@@ -40,6 +39,95 @@ use fun_scheduler_types::work_graph::{
 };
 
 use crate::frame_graph::FrameGraphPassRole;
+
+pub const LUX_RESOURCE_INTENT_KIND_COUNT: usize = 22;
+
+/// Renderer-side resource intent kind used for scheduler budgeting.
+///
+/// This is a value contract, not a lighting-crate dependency. The
+/// lighting pipeline may emit equivalent tags, but scheduler-visible
+/// renderer work must stay buildable without pulling scene or backend
+/// integration crates into the core schedule lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LuxResourceIntentKind {
+    LightBuffer,
+    LightIndexBuffer,
+    ClusterGrid,
+    ReservoirBuffer,
+    ShadowRequestBuffer,
+    ShadowAtlas,
+    VirtualShadowPageTable,
+    VoxelShadowPageTable,
+    VoxelTerrainSdfPool,
+    SurfaceCache,
+    RadianceCache,
+    VoxelTerrainRadianceClipmap,
+    VoxelCanopyOpacityClipmap,
+    StormExtinctionClipmap,
+    ProbeCache,
+    ReflectionTraceBuffer,
+    DenoiseHistory,
+    VolumetricFroxelDensity,
+    VolumetricFroxelScattering,
+    VolumetricHistory,
+    IntegratedFog,
+    LuxDebugBuffer,
+}
+
+impl LuxResourceIntentKind {
+    pub const ALL: [Self; LUX_RESOURCE_INTENT_KIND_COUNT] = [
+        Self::LightBuffer,
+        Self::LightIndexBuffer,
+        Self::ClusterGrid,
+        Self::ReservoirBuffer,
+        Self::ShadowRequestBuffer,
+        Self::ShadowAtlas,
+        Self::VirtualShadowPageTable,
+        Self::VoxelShadowPageTable,
+        Self::VoxelTerrainSdfPool,
+        Self::SurfaceCache,
+        Self::RadianceCache,
+        Self::VoxelTerrainRadianceClipmap,
+        Self::VoxelCanopyOpacityClipmap,
+        Self::StormExtinctionClipmap,
+        Self::ProbeCache,
+        Self::ReflectionTraceBuffer,
+        Self::DenoiseHistory,
+        Self::VolumetricFroxelDensity,
+        Self::VolumetricFroxelScattering,
+        Self::VolumetricHistory,
+        Self::IntegratedFog,
+        Self::LuxDebugBuffer,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::LightBuffer => "light_buffer",
+            Self::LightIndexBuffer => "light_index_buffer",
+            Self::ClusterGrid => "cluster_grid",
+            Self::ReservoirBuffer => "reservoir_buffer",
+            Self::ShadowRequestBuffer => "shadow_request_buffer",
+            Self::ShadowAtlas => "shadow_atlas",
+            Self::VirtualShadowPageTable => "virtual_shadow_page_table",
+            Self::VoxelShadowPageTable => "voxel_shadow_page_table",
+            Self::VoxelTerrainSdfPool => "voxel_terrain_sdf_pool",
+            Self::SurfaceCache => "surface_cache",
+            Self::RadianceCache => "radiance_cache",
+            Self::VoxelTerrainRadianceClipmap => "voxel_terrain_radiance_clipmap",
+            Self::VoxelCanopyOpacityClipmap => "voxel_canopy_opacity_clipmap",
+            Self::StormExtinctionClipmap => "storm_extinction_clipmap",
+            Self::ProbeCache => "probe_cache",
+            Self::ReflectionTraceBuffer => "reflection_trace_buffer",
+            Self::DenoiseHistory => "denoise_history",
+            Self::VolumetricFroxelDensity => "volumetric_froxel_density",
+            Self::VolumetricFroxelScattering => "volumetric_froxel_scattering",
+            Self::VolumetricHistory => "volumetric_history",
+            Self::IntegratedFog => "integrated_fog",
+            Self::LuxDebugBuffer => "lux_debug_buffer",
+        }
+    }
+}
 
 /// V2-3C reason code: renderer pass scheduled on the present-critical
 /// lane.
@@ -324,7 +412,7 @@ impl fmt::Display for RendererSchedulePlanV1 {
 #[repr(u8)]
 #[non_exhaustive]
 pub enum RendererGraphPhase {
-    /// Bevy ECS → render world extraction.
+    /// FUN ECS to render-world extraction.
     RenderExtract = 0,
     /// Asset prep (texture decompression, mesh upload prep, shader
     /// preflight).

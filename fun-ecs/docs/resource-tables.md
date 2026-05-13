@@ -26,7 +26,7 @@ The generic table provides:
 - chunk extraction by contiguous row range, spatial chunk key, consumer,
   artifact kind, priority band, and deadline class
 
-The table does not make Bevy the authority. Bevy compatibility can mirror
+The table does not make RetiredEngine the authority. RetiredEngine compatibility can mirror
 resources, but `fun-ecs` owns the table facts and `fun-scheduler` owns
 execution.
 

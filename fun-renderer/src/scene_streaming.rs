@@ -26,7 +26,7 @@
 //!    so diagnostics can name *why* the renderer regenerated all
 //!    records.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::*;
 
@@ -1472,7 +1472,7 @@ impl GpuSceneBufferDiagnostics {
 
 /// Run the visibility / queue / GPU-scene pipeline for a single
 /// camera + renderable list. Test surface — production wiring is a
-/// Bevy schedule but we keep the data-shape helper here so a unit
+/// RetiredEngine schedule but we keep the data-shape helper here so a unit
 /// test can exercise the contract without spinning up a `World`.
 pub fn populate_render_queues_for_view(
     renderables: &[RendererRenderableInput],

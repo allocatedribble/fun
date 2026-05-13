@@ -64,7 +64,7 @@
 //!   [`crate::FunRendererFrameGraphStage`] keeping the UI
 //!   composition stage ordered after the 3D rendering stages.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::FunRendererFrameGraphStage;
 use crate::tier6_native_ui_rendering::{
@@ -392,7 +392,7 @@ impl PassGNativeUiProductRouteOutcome {
 }
 
 // ============================================================================
-// Section 8 — Bundle (Bevy Resource) + canonical artifact path
+// Section 8 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Resource)]
@@ -916,7 +916,7 @@ mod tests {
     /// fixture provides a deterministic comparison baseline.
     #[test]
     fn live_passg_runs_one_update_and_records_strict_passes_under_launcher_boot() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::FunRendererPlugin;

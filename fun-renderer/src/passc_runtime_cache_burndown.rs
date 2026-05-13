@@ -33,7 +33,7 @@
 //! driving the stress scene through real frames and the verdict
 //! flips to passing if every counter remains zero post-warmup.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::dx12_production::{Dx12RuntimeGateCounters, Dx12RuntimeResourceKind, Dx12WarmupState};
 use crate::tier1_cache_backed_optimization::Tier1StressScenario;
@@ -284,7 +284,7 @@ impl PassCObservedCounters {
 }
 
 // ============================================================================
-// Section 5 — Bundle (Bevy Resource) + canonical artifact path
+// Section 5 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Resource)]
@@ -720,7 +720,7 @@ mod tests {
     /// failed rule recorded.
     #[test]
     fn live_passc_runs_one_update_and_records_not_yet_measured() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::FunRendererPlugin;
@@ -730,7 +730,7 @@ mod tests {
         app.update();
 
         // Pass C is the post-warmup-counter contract. The plugin
-        // does not yet install `Dx12RuntimeGateCounters` as a Bevy
+        // does not yet install `Dx12RuntimeGateCounters` as a RetiredEngine
         // Resource (counter accumulation depends on closing the
         // Pass A Immediate Gaps `gap.tier0.no_render_encoder` /
         // `gap.tier0.no_graph_executor`), so the live test

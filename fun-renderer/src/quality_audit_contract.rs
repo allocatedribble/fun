@@ -31,7 +31,7 @@
 //!   records the five canonical categories; only
 //!   `SurfacePresent` satisfies visible-frame claims.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::FunRendererFrameGraphStage;
 use crate::FunRendererSubsystem;
@@ -411,7 +411,7 @@ impl UiCompositionNamingPolicy {
 // ============================================================================
 
 /// Typed integration test category. The user's 6.4 rule: "A
-/// one-update Bevy ECS test is useful, but it cannot prove
+/// one-update RetiredEngine ECS test is useful, but it cannot prove
 /// OS-surface integration. Add a separate integration category:
 /// `headless_contract_tests`, `adapter_device_tests`,
 /// `surface_present_tests`, `frame_probe_tests`,

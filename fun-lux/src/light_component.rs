@@ -7,7 +7,7 @@
 //! bloom/emissive hint + lighting mode + layer mask + scene
 //! mask + priority + dirty flags.
 //!
-//! `FunLuxLightComponent` is a `bevy_ecs::Component`; the
+//! `FunLuxLightComponent` is a `fun_ecs::Component`; the
 //! lighting extraction systems read it and project into the
 //! Pass 2 dense `LuxLightRecord` table the renderer consumes.
 //!
@@ -18,7 +18,7 @@
 //! `VolumetricDirty` / `Removed` / `Created` flags map exactly
 //! to the existing bits.
 
-use bevy_ecs::prelude::Component;
+use fun_ecs::Component;
 
 use crate::dirty::LuxDirtyFlags;
 
@@ -277,7 +277,7 @@ impl FunLuxSceneMask {
 // Section 5 — Typed light component (4.2 full schema)
 // ============================================================================
 
-/// Typed light component. `bevy_ecs::Component` the
+/// Typed light component. `fun_ecs::Component` the
 /// extraction system reads each frame; mirrors the user's
 /// "4.2 Light component schema" field set.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
@@ -372,6 +372,7 @@ impl FunLuxLightComponent {
 
     /// Typed spot-light constructor.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn spot(
         stable_light_key: u64,
         position: [f32; 3],

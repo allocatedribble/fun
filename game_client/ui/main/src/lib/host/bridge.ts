@@ -254,7 +254,7 @@ function capabilityForCommand(command: string): string {
     command.startsWith('viewport.') ||
     command.startsWith('preview.') ||
     command === 'host.commandbar.execute' ||
-    command === 'bevy.demo.launch'
+    command === 'retired_engine.demo.launch'
   ) {
     return 'ControlRuntime';
   }

@@ -1,7 +1,6 @@
-use bevy_camera::primitives::Aabb;
-use bevy_ecs::prelude::Component;
+use fun_ecs::Component;
 
-use crate::{FunFromTemplate, FunSceneOwner};
+use crate::{FunFromTemplate, FunSceneOwner, Vec3};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GeometryRef(pub u32);
@@ -124,8 +123,35 @@ pub struct VirtualGeometryAuthoring {
 
 #[derive(Debug, Default, Clone, FunFromTemplate, Component)]
 pub struct RendererBounds {
-    pub local_bounds: Aabb,
+    pub local_bounds: SceneAabb,
     pub streaming_radius: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneAabb {
+    pub center: Vec3,
+    pub half_extents: Vec3,
+}
+
+impl SceneAabb {
+    pub const EMPTY: Self = Self {
+        center: Vec3::ZERO,
+        half_extents: Vec3::ZERO,
+    };
+
+    #[must_use]
+    pub const fn new(center: Vec3, half_extents: Vec3) -> Self {
+        Self {
+            center,
+            half_extents,
+        }
+    }
+}
+
+impl Default for SceneAabb {
+    fn default() -> Self {
+        Self::EMPTY
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]

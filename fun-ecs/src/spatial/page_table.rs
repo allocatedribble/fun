@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Resource;
+use crate::Resource;
 use std::collections::HashMap;
 
 use crate::{

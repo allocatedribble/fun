@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::{RenderMaterialAssetId, RenderMeshAssetId, RenderTextureAssetId};
 use crate::extraction::RendererAssetEvents;

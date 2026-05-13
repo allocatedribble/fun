@@ -1,4 +1,3 @@
-use bevy_ecs::prelude::{Component, World};
 use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -226,7 +225,7 @@ fn bench_entity_kernel(c: &mut Criterion) {
         );
     });
 
-    c.bench_function("ecs/entity/bevy_changed_query", |b| {
+    c.bench_function("ecs/entity/fun_changed_query", |b| {
         b.iter(|| {
             let mut world = World::new();
             for index in 0..ENTITY_ROWS {

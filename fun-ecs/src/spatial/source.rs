@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Resource;
+use crate::Resource;
 
 use crate::{
     ECS_SPATIAL_MAX_DECODE_OVERLAYS, ECS_SPATIAL_MAX_DECODED_PAGE_ROWS,

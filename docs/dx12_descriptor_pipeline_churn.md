@@ -10,11 +10,11 @@ can break shader contracts.
 
 ## Runtime Counters
 
-`bevy_render` owns the engine-level resource churn counters. They are disabled
+`retired_engine_render` owns the engine-level resource churn counters. They are disabled
 unless one of these environment variables is enabled:
 
 - `FUN_RENDER_CHURN_COUNTERS=1`
-- `BEVY_RENDER_CHURN_COUNTERS=1`
+- `RETIRED_ENGINE_RENDER_CHURN_COUNTERS=1`
 - `FUN_RENDER_PIPELINE_COUNTERS=1`
 
 `fun-bench run-stack --render-diagnostics` enables them together with render
@@ -39,7 +39,7 @@ Creation-focused rows are emitted separately so cache hits do not bury the
 labels that matter for warmup and layout decisions:
 
 ```text
-[client perf] render churn creation top: rank=1 operation=render_pipeline_created category=solari label=bevy_solari::realtime::diffuse calls=1
+[client perf] render churn creation top: rank=1 operation=render_pipeline_created category=solari label=retired_engine_solari::realtime::diffuse calls=1
 ```
 
 Benchmark JSON stores those rows under `render_churn_creation_events`.
@@ -55,10 +55,10 @@ Engine-level counters currently cover:
 - render and compute pipelines queued through `PipelineCache`;
 - render and compute pipeline GPU object creation through `RenderDevice`;
 - render and compute pipelines becoming ready or failing through `PipelineCache`;
-- specialized pipeline cache hits and misses through Bevy's specialized pipeline
+- specialized pipeline cache hits and misses through RetiredEngine's specialized pipeline
   caches.
 
-The first pass does not count every `set_bind_group` call. Bevy exposes those as
+The first pass does not count every `set_bind_group` call. RetiredEngine exposes those as
 raw pass methods today, and wrapping every pass command would be a larger engine
 surface change. Use PIX for bind-group set calls until a safe render-pass wrapper
 exists.
@@ -184,9 +184,9 @@ Do not remove a key bit without a visual comparison and a pipeline-count delta.
 Current behavior:
 
 - `off`: do nothing.
-- `basic`: process the queued Bevy `PipelineCache` once in the render
+- `basic`: process the queued RetiredEngine `PipelineCache` once in the render
   `Prepare` set before the render graph consumes it.
-- `observed`: process the queued Bevy `PipelineCache` while runtime pipeline
+- `observed`: process the queued RetiredEngine `PipelineCache` while runtime pipeline
   work is still being observed, then stop after 30 consecutive idle render
   frames or after 240 render frames. This is the default next experiment when
   the cardinality report shows runtime-created pipelines but does not yet
@@ -205,11 +205,11 @@ runtime pipelines are created after loading.
 
 Pass 4 adds a renderer-core registry in `fun-renderer/src/pipeline.rs`.
 `fun_render` reads that registry at startup and logs a
-renderer-initialization warmup plan before the current Bevy `PipelineCache`
+renderer-initialization warmup plan before the current RetiredEngine `PipelineCache`
 warmup executor runs. The registry is metadata first: it gives every known or
 reserved renderer pipeline a stable ID, static label, shader path, feature mask,
 backend mask, quality-tier mask, warmup boundary, and pass dependency list. The
-execution path still consumes Bevy cached pipelines until `fun-renderer` owns
+execution path still consumes RetiredEngine cached pipelines until `fun-renderer` owns
 the visible backend.
 
 Shader variants in the registry are limited to the explicit axes that are

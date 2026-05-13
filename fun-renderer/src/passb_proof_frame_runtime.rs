@@ -40,7 +40,7 @@
 //! ledger's `Immediate Gaps` table and the bundle's `gaps` list
 //! refer to the same typed values across passes.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 use crate::dx12_production::{
@@ -297,7 +297,7 @@ impl PassBRuntimeEvidence {
 }
 
 // ============================================================================
-// Section 5 — Bundle (Bevy Resource) + canonical artifact path
+// Section 5 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Resource)]
@@ -881,7 +881,7 @@ mod tests {
     /// `passes()` flips to true.
     #[test]
     fn live_passb_runs_one_update_and_records_blocked_by_gaps() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::{FunRendererPlugin, RendererBridgeState, RendererFailureState};

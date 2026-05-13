@@ -99,7 +99,7 @@ impl NativeUiProducerEntry {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
+#[cfg_attr(feature = "fun_ecs", derive(fun_ecs::Resource))]
 pub struct NativeUiProducerEvents {
     schema_version: u16,
     next_fence_value: u64,

@@ -45,7 +45,7 @@
 //! authoritative sources flow into the typed guards here so a
 //! future bridge implementation cannot fake activation.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::dx12_production::Dx12NativeSdkClaimPolicy;
 use crate::vendor_sdk_bridge::{

@@ -89,7 +89,7 @@ The Pass 2 layout separates compatibility surface from ownership boundaries:
   resource-table primitives, and command-buffer declarations.
 - `src/runtime/` lowers ECS schedule intent into `fun-scheduler` work graphs.
 - `src/spatial/` contains the current spatial vertical slice.
-- `src/adapters/` records Bevy and subsystem interop contracts.
+- `src/adapters/` records RetiredEngine and subsystem interop contracts.
 - `src/experiments/` keeps opt-in storage and execution experiments out of the
   default path.
 - `src/diagnostics/` exposes compact debug snapshots for graph and control

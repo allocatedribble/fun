@@ -4,7 +4,7 @@
   "description": "Default local stack with Vulkan immediate present for control-lane comparisons.",
   "build": {
     "release": false,
-    "static_bevy": false
+    "static_engine": false
   },
   "features": {
     "disable_clouds": false,

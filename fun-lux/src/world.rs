@@ -16,7 +16,7 @@
 //! planner consumes).
 
 use crate::aabb::{LuxAabb, LuxTableRange};
-use crate::dirty::{LuxDirtyFlags, LuxDirtyQueue, LuxDirtyRegion};
+use crate::dirty::{LuxDirtyFlags, LuxDirtyQueue};
 use crate::frame_plan::{LuxSceneId, LuxScenePriority};
 
 pub const FUN_LUX_WORLD_SCHEMA_VERSION: u16 = 1;
@@ -166,6 +166,7 @@ pub struct LuxLightRecord {
 
 impl LuxLightRecord {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new_created(
         stable_light_key: u64,
         generation: u32,
@@ -372,6 +373,7 @@ impl LuxVolumetricWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dirty::{LuxDirtyFlags, LuxDirtyRegion};
     use crate::frame_plan::LuxSceneId;
 
     #[test]

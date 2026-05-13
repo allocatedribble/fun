@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn ecs_reports_cover_requested_storage_table_and_handoff_fields() {
-        let world = FunWorld::hybrid(crate::FunWorldId::ROOT);
+        let world = FunWorld::fun_native(crate::FunWorldId::ROOT);
         let storage = EcsStorageReport::from_world(&world);
         let table = EcsTableReport::from_world(&world);
         let handoffs = EcsHandoffReport::from_world(&world, 7, 3);

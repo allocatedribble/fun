@@ -50,7 +50,7 @@
 //! wgpu resource creation and the savings verdict must continue
 //! to hold under capture evidence.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::dx12_production::Dx12NativeSdkClaimPolicy;
 use crate::frame_graph::FrameGraphResourceType;

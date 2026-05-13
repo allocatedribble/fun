@@ -1,0 +1,12 @@
+[package]
+name = "fun-asset"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "fun_asset"
+
+[lints]
+workspace = true
+
+[dependencies]

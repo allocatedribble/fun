@@ -1,4 +1,5 @@
-use bevy_ecs::prelude::Component;
+use fun_asset::AssetHandle;
+use fun_ecs::Component;
 
 pub const RENDERER_COMPONENT_API_SCHEMA_VERSION: u16 = 1;
 pub const PUBLIC_RENDER_COMPONENT_COUNT: usize = 49;
@@ -22,41 +23,24 @@ impl RenderStableId {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RenderAssetId {
-    pub slot: u32,
-    pub generation: u32,
-}
+pub struct RenderGenericAsset;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderMeshAsset;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderMaterialAsset;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderTextureAsset;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderSamplerAsset;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderShaderAsset;
 
-impl RenderAssetId {
-    pub const INVALID: Self = Self {
-        slot: u32::MAX,
-        generation: 0,
-    };
-
-    #[must_use]
-    pub const fn new(slot: u32, generation: u32) -> Self {
-        Self { slot, generation }
-    }
-
-    #[must_use]
-    pub const fn first(slot: u32) -> Self {
-        Self {
-            slot,
-            generation: 1,
-        }
-    }
-
-    #[must_use]
-    pub const fn is_valid(self) -> bool {
-        self.slot != u32::MAX && self.generation != 0
-    }
-}
-
-pub type RenderMeshAssetId = RenderAssetId;
-pub type RenderMaterialAssetId = RenderAssetId;
-pub type RenderTextureAssetId = RenderAssetId;
-pub type RenderSamplerAssetId = RenderAssetId;
-pub type RenderShaderAssetId = RenderAssetId;
+pub type RenderAssetId = AssetHandle<RenderGenericAsset>;
+pub type RenderMeshAssetId = AssetHandle<RenderMeshAsset>;
+pub type RenderMaterialAssetId = AssetHandle<RenderMaterialAsset>;
+pub type RenderTextureAssetId = AssetHandle<RenderTextureAsset>;
+pub type RenderSamplerAssetId = AssetHandle<RenderSamplerAsset>;
+pub type RenderShaderAssetId = AssetHandle<RenderShaderAsset>;
 
 macro_rules! render_generation_id {
     ($name:ident) => {
@@ -307,7 +291,7 @@ pub enum ComponentTemperature {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeDetectionPolicy {
-    BevyChanged,
+    FunChangeTick,
     MarkerSpecialization,
     DirtyBitsOrEvents,
     AssetVersion,
@@ -1264,7 +1248,7 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "RenderBounds",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "RenderLayer",
@@ -1274,7 +1258,7 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "RenderVisibility",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "RenderObjectId",
@@ -1299,7 +1283,7 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "RenderCamera",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "MainCamera",
@@ -1309,12 +1293,12 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "CameraProjection",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "CameraExposure",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "CameraJitter",
@@ -1329,27 +1313,27 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "CameraRenderTarget",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "CameraDebugView",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "DirectionalLight",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "PointLight",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "SpotLight",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "ShadowCaster",
@@ -1369,7 +1353,7 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "LightBounds",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UiSurface",
@@ -1384,27 +1368,27 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "UiCompositeOrder",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UiOpacity",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UiColorSpace",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UiTargetRect",
         ComponentTemperature::Hot,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UiDebugBorder",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "NativeUiSurface",
@@ -1434,42 +1418,42 @@ pub const RENDERER_COMPONENT_HOT_COLD_SPLIT_GUIDE: [RendererComponentApiDescript
     component(
         "ToneMappingSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "ExposureSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "ColorGradingSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "SharpeningSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "BloomSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "TaaSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "HdrOutputSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UpscalerSettings",
         ComponentTemperature::Cold,
-        ChangeDetectionPolicy::BevyChanged,
+        ChangeDetectionPolicy::FunChangeTick,
     ),
     component(
         "UpscalerStatus",
@@ -1543,13 +1527,13 @@ const fn asset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_ecs::prelude::Component;
+    use fun_ecs::Component;
 
     fn assert_component<T: Component>() {}
     fn assert_copy<T: Copy>() {}
 
     #[test]
-    fn public_renderer_components_are_bevy_components() {
+    fn public_renderer_components_use_fun_markers() {
         assert_component::<Renderable>();
         assert_component::<RenderMesh>();
         assert_component::<RenderMaterial>();

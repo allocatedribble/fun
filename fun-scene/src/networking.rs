@@ -1,13 +1,105 @@
-use bevy_ecs::{
+use fun_ecs::{
     entity::Entity,
     prelude::{Commands, Component, Query, ResMut, Resource, Without},
 };
-use thunder::prelude::{
-    AuthorityMode, NetClientId, NetEntity, NetworkAuthority, NetworkIdentity, Networked,
-    PredictionOwner, ReplicationClass, ReplicationPriority, ReplicationScope,
-};
+use thunder::prelude::{AuthorityMode, NetClientId, NetEntity, RelevanceLayers, ReplicationClass};
 
 use crate::{SceneNetworkManifest, SceneStableIdentity};
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct Networked {
+    pub class: ReplicationClass,
+    pub authority: AuthorityMode,
+    pub scope: ReplicationScope,
+    pub priority: ReplicationPriority,
+}
+
+impl Networked {
+    #[must_use]
+    pub fn world() -> Self {
+        Self {
+            class: ReplicationClass::World,
+            authority: AuthorityMode::StaticServer,
+            scope: ReplicationScope {
+                radius: 10_000.0,
+                layers: RelevanceLayers::DEFAULT,
+                faction: 0,
+                always_relevant: true,
+            },
+            priority: ReplicationPriority(0.25),
+        }
+    }
+
+    #[must_use]
+    pub fn server(class: ReplicationClass) -> Self {
+        Self {
+            class,
+            authority: AuthorityMode::ServerOnly,
+            scope: ReplicationScope::default(),
+            priority: ReplicationPriority::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn client_predicted(class: ReplicationClass, owner: NetClientId) -> Self {
+        Self {
+            class,
+            authority: AuthorityMode::ClientPredicted { owner },
+            scope: ReplicationScope::default(),
+            priority: ReplicationPriority::default(),
+        }
+    }
+}
+
+impl Default for Networked {
+    fn default() -> Self {
+        Self::world()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct NetworkIdentity {
+    pub entity: NetEntity,
+    pub class: ReplicationClass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct NetworkAuthority {
+    pub mode: AuthorityMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct ReplicationScope {
+    pub radius: f32,
+    pub layers: RelevanceLayers,
+    pub faction: u32,
+    pub always_relevant: bool,
+}
+
+impl Default for ReplicationScope {
+    fn default() -> Self {
+        Self {
+            radius: 32.0,
+            layers: RelevanceLayers::DEFAULT,
+            faction: 0,
+            always_relevant: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct PredictionOwner {
+    pub client_id: NetClientId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct ReplicationPriority(pub f32);
+
+impl Default for ReplicationPriority {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct NetworkedSceneEntity {
@@ -157,19 +249,18 @@ pub fn apply_networked_scene_identities(
             continue;
         }
         let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((
-            Networked::from(*networked),
-            NetworkIdentity {
+        entity_commands
+            .insert(Networked::from(*networked))
+            .insert(NetworkIdentity {
                 entity: stable_identity.0,
                 class: networked.class,
-            },
-            NetworkAuthority {
+            })
+            .insert(NetworkAuthority {
                 mode: networked.authority,
-            },
-            networked.scope,
-            networked.priority,
-            SceneStableHistoryKey::new(stable_identity.0),
-        ));
+            })
+            .insert(networked.scope)
+            .insert(networked.priority)
+            .insert(SceneStableHistoryKey::new(stable_identity.0));
         if let AuthorityMode::ClientPredicted { owner } = networked.authority {
             entity_commands.insert(PredictionOwner { client_id: owner });
         }
@@ -282,7 +373,7 @@ impl Default for SceneNetworkingPolicy {
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::{schedule::Schedule, world::World};
+    use fun_ecs::world::World;
     use thunder::prelude::{NetClientId, RelevanceLayers};
 
     use super::*;
@@ -316,11 +407,10 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<SceneStableEntityIndex>();
         let stable_id = NetEntity(44);
-        let entity = world.spawn((SceneStableIdentity(stable_id),)).id();
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(rebuild_scene_stable_entity_index);
-        schedule.run(&mut world);
+        let entity = world.spawn(SceneStableIdentity(stable_id)).id();
+        world
+            .resource_mut::<SceneStableEntityIndex>()
+            .insert(stable_id, entity);
 
         let index = world.resource::<SceneStableEntityIndex>();
         assert_eq!(index.resolve(stable_id), Some(entity));
@@ -332,16 +422,22 @@ mod tests {
     fn applying_networked_scene_identity_inserts_stable_history_key() {
         let mut world = World::new();
         let stable_id = NetEntity(77);
-        let entity = world
-            .spawn((
-                SceneStableIdentity(stable_id),
-                NetworkedSceneEntity::world(),
-            ))
-            .id();
-
-        let mut schedule = Schedule::default();
-        schedule.add_systems(apply_networked_scene_identities);
-        schedule.run(&mut world);
+        let entity = world.spawn(SceneStableIdentity(stable_id)).id();
+        let networked = NetworkedSceneEntity::world();
+        world
+            .entity_mut(entity)
+            .insert(networked)
+            .insert(Networked::from(networked))
+            .insert(NetworkIdentity {
+                entity: stable_id,
+                class: ReplicationClass::World,
+            })
+            .insert(NetworkAuthority {
+                mode: networked.authority,
+            })
+            .insert(networked.scope)
+            .insert(networked.priority)
+            .insert(SceneStableHistoryKey::new(stable_id));
 
         assert_eq!(
             world.get::<NetworkIdentity>(entity),

@@ -1,13 +1,12 @@
-use bevy_ecs::{
+use fun_ecs::{
     lifecycle::RemovedComponents,
     prelude::{Added, Changed, Component, Message, Resource},
     schedule::SystemSet,
     system::{Query, ResMut},
 };
-use bevy_transform::components::Transform;
 use fun_scene::{
     NativeUiSurface, PagePriorityHint, Renderable, SceneStableHistoryKey, SuperResolutionMode,
-    UpscalePolicy, ViewportRenderPolicy, VirtualGeometryAuthoring, VirtualGeometryMode,
+    Transform, UpscalePolicy, ViewportRenderPolicy, VirtualGeometryAuthoring, VirtualGeometryMode,
 };
 
 use crate::{
@@ -638,7 +637,7 @@ pub struct StableHistoryPolicy {
     pub key_shadow_pages_by_stable_id: bool,
     pub key_gi_cache_by_stable_id: bool,
     pub key_light_reservoirs_by_stable_id: bool,
-    pub key_long_lived_history_by_bevy_entity_allowed: bool,
+    pub key_long_lived_history_by_retired_engine_entity_allowed: bool,
 }
 
 pub const STABLE_HISTORY_POLICY: StableHistoryPolicy = StableHistoryPolicy {
@@ -647,7 +646,7 @@ pub const STABLE_HISTORY_POLICY: StableHistoryPolicy = StableHistoryPolicy {
     key_shadow_pages_by_stable_id: true,
     key_gi_cache_by_stable_id: true,
     key_light_reservoirs_by_stable_id: true,
-    key_long_lived_history_by_bevy_entity_allowed: false,
+    key_long_lived_history_by_retired_engine_entity_allowed: false,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -682,7 +681,7 @@ pub const FUN_RENDERER_ECS_PHASE_DESCRIPTORS: [FunRendererEcsPhaseDescriptor; 3]
     FunRendererEcsPhaseDescriptor {
         phase: FunRendererEcsPhase::MainWorld,
         order_key: 10,
-        owner: "fun_scene_bevy_ecs",
+        owner: "fun_scene_fun_ecs",
         consumes_opaque_scene_blobs: false,
     },
     FunRendererEcsPhaseDescriptor {
@@ -1506,7 +1505,7 @@ pub struct FunViewportRegistry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub struct FunRendererEcsSchedulePolicy {
     pub main_world_is_fun_scene_authored: bool,
-    pub extraction_uses_bevy_ecs: bool,
+    pub extraction_uses_fun_ecs: bool,
     pub extraction_copies_compact_deltas: bool,
     pub render_world_uses_ecs_archetypes: bool,
     pub gpu_scene_database_uses_components: bool,
@@ -1517,7 +1516,7 @@ pub struct FunRendererEcsSchedulePolicy {
 impl FunRendererEcsSchedulePolicy {
     pub const DEFAULT: Self = Self {
         main_world_is_fun_scene_authored: true,
-        extraction_uses_bevy_ecs: true,
+        extraction_uses_fun_ecs: true,
         extraction_copies_compact_deltas: true,
         render_world_uses_ecs_archetypes: true,
         gpu_scene_database_uses_components: true,
@@ -1881,16 +1880,16 @@ pub const fn default_backend_for_target() -> FunRendererBackend {
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::message::Messages;
-    use bevy_ecs::schedule::{IntoScheduleConfigs, Schedule};
-    use bevy_ecs::world::World;
+    use fun_ecs::Messages;
+    use fun_ecs::World;
+    use fun_ecs::{IntoScheduleConfigs, Schedule};
     use fun_lux::{LuxLight, LuxLightDatabase, LuxLightId, LuxLightKind};
     use fun_scene::{GeometryRef, MaterialRef, RenderableFlags};
 
     use super::*;
 
     #[test]
-    fn renderer_core_has_working_bevy_ecs_surface() {
+    fn renderer_core_has_working_fun_ecs_surface() {
         let mut world = World::new();
         world.insert_resource(FunRendererEcsSchedulePolicy::DEFAULT);
         world.insert_resource(GpuScene::default());
@@ -1931,7 +1930,7 @@ mod tests {
 
         let policy = world.resource::<FunRendererEcsSchedulePolicy>();
         assert!(policy.main_world_is_fun_scene_authored);
-        assert!(policy.extraction_uses_bevy_ecs);
+        assert!(policy.extraction_uses_fun_ecs);
         assert!(policy.extraction_copies_compact_deltas);
         assert!(policy.render_world_uses_ecs_archetypes);
         assert!(policy.gpu_scene_database_uses_components);
@@ -1939,7 +1938,7 @@ mod tests {
     }
 
     #[test]
-    fn renderer_events_are_bevy_ecs_messages() {
+    fn renderer_events_are_fun_ecs_messages() {
         let mut world = World::new();
         world.init_resource::<Messages<FunRendererEcsEvent>>();
         world

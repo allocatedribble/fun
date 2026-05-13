@@ -4,7 +4,7 @@
   "description": "Render diagnostics profile with upload, churn, command, readback, and shader counters.",
   "build": {
     "release": false,
-    "static_bevy": false
+    "static_engine": false
   },
   "features": {
     "disable_clouds": false,

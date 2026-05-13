@@ -1,4 +1,5 @@
 use core::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 
 use fun_scheduler_types::{
     EcsChunkKey, EcsCommandBufferId, EcsComponentId, EcsExternalArtifactKey, EcsLivenessClass,
@@ -10,8 +11,8 @@ use fun_scheduler_types::{
 
 use crate::{
     FunCommandBufferClass, FunCommandBufferId, FunComponentId, FunEcsComponentKind,
-    FunEcsResourceKind, FunExternalSlabId, FunResourceId, FunResourceTableId, FunRevision,
-    FunSystemId, FunSystemSetId,
+    FunEcsResourceKind, FunEntity, FunExternalSlabId, FunResourceId, FunResourceTableId,
+    FunRevision, FunSystemId, FunSystemSetId,
 };
 
 pub const FUN_COMMAND_BUFFER_WORLD_STRUCTURE: FunCommandBufferOutput = FunCommandBufferOutput::new(
@@ -731,6 +732,65 @@ pub struct Query<T, Filter = ()> {
     marker: PhantomData<(T, Filter)>,
 }
 
+impl<T, Filter> Query<T, Filter> {
+    pub fn iter(&self) -> std::iter::Empty<T> {
+        std::iter::empty()
+    }
+
+    pub fn iter_mut(&mut self) -> std::iter::Empty<T> {
+        std::iter::empty()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        true
+    }
+}
+
+impl<T, Filter> IntoIterator for &Query<T, Filter> {
+    type Item = T;
+    type IntoIter = std::iter::Empty<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<T, Filter> IntoIterator for &mut Query<T, Filter> {
+    type Item = T;
+    type IntoIter = std::iter::Empty<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Mut<T> {
+    value: T,
+}
+
+impl<T> Mut<T> {
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T> Deref for Mut<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> DerefMut for Mut<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EntityRef<T> {
     marker: PhantomData<T>,
@@ -771,14 +831,76 @@ pub struct And<T> {
     marker: PhantomData<T>,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Res<T> {
-    marker: PhantomData<T>,
+    value: T,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+impl<T> Res<T> {
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<T: Default> Default for Res<T> {
+    fn default() -> Self {
+        Self {
+            value: T::default(),
+        }
+    }
+}
+
+impl<T> Deref for Res<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResMut<T> {
-    marker: PhantomData<T>,
+    value: T,
+}
+
+impl<T> ResMut<T> {
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<T: Default> Default for ResMut<T> {
+    fn default() -> Self {
+        Self {
+            value: T::default(),
+        }
+    }
+}
+
+impl<T> Deref for ResMut<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> DerefMut for ResMut<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -834,6 +956,29 @@ pub struct ExternalArtifactMut<T = ()> {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Commands;
 
+impl Commands {
+    #[must_use]
+    pub const fn entity(&mut self, entity: FunEntity) -> EntityCommands {
+        EntityCommands { entity }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntityCommands {
+    entity: FunEntity,
+}
+
+impl EntityCommands {
+    #[must_use]
+    pub const fn id(&self) -> FunEntity {
+        self.entity
+    }
+
+    pub fn insert<T>(&mut self, _bundle: T) -> &mut Self {
+        self
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SpatialCommands;
 
@@ -853,9 +998,23 @@ pub struct EventWriter<T> {
     marker: PhantomData<T>,
 }
 
+impl<T> EventWriter<T> {
+    pub fn write(&mut self, _event: T) {}
+
+    pub fn send(&mut self, event: T) {
+        self.write(event);
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EventReader<T> {
     marker: PhantomData<T>,
+}
+
+impl<T> EventReader<T> {
+    pub fn read(&mut self) -> std::iter::Empty<T> {
+        std::iter::empty()
+    }
 }
 
 impl<T, Filter> FunSystemParamAccess for Query<T, Filter>

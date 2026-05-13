@@ -50,7 +50,7 @@
 //! the four test-scenario outcomes synthesized from the existing
 //! `Tier5TaaResolveStep` + `compute_pixel_velocity` primitives.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::UpscalerKind;
 use crate::dx12_production::Dx12NativeSdkClaimPolicy;
@@ -285,7 +285,7 @@ impl PassFTemporalStackOutcome {
 }
 
 // ============================================================================
-// Section 5 — Bundle (Bevy Resource) + canonical artifact path
+// Section 5 — Bundle (RetiredEngine Resource) + canonical artifact path
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Resource)]
@@ -943,7 +943,7 @@ mod tests {
     /// typed-contract layer.
     #[test]
     fn live_passf_runs_one_update_and_records_strict_passes_under_default_route() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::FunRendererPlugin;

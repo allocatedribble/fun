@@ -82,31 +82,30 @@ rendered later from the bundle when needed.
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- run-stack --render-diagnostics --trace-diagnostics --render-backend dx12 --present-mode immediate
 ```
 
-`--trace-diagnostics` sets both `RUST_LOG` and `BEVY_LOG`. Bevy's log plugin
-uses `RUST_LOG`; `BEVY_LOG` is kept as a project-level alias for Rust command
+`--trace-diagnostics` sets both `RUST_LOG` and `RETIRED_ENGINE_LOG`. RetiredEngine's log plugin
+uses `RUST_LOG`; `RETIRED_ENGINE_LOG` is kept as a project-level alias for Rust command
 surfaces.
 
 ```text
-RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun::perf::clouds=info,fun::render::clouds=debug,fun::weather=debug,bevy_solari=debug,bevy_solari::realtime=debug,bevy_render::transient=debug,bevy_render::scheduler=trace,bevy_pbr::meshlet::scheduler=trace,bevy_pbr::meshlet::vram=debug
+RUST_LOG=info,fun=debug,fun::diag=info,fun::perf=info,fun::perf::solari=info,fun::perf::clouds=info,fun::render::clouds=debug,fun::weather=debug,retired_engine_solari=debug,retired_engine_solari::realtime=debug,retired_engine_render::transient=debug,retired_engine_render::scheduler=trace,retired_engine_pbr::meshlet::scheduler=trace,retired_engine_pbr::meshlet::vram=debug
 ```
 
 You can override `RUST_LOG` manually when you need a narrower view.
 For every-frame Solari dispatch tracing, use
-`RUST_LOG=info,fun::perf=info,bevy_solari::realtime=trace` for a short capture;
+`RUST_LOG=info,fun::perf=info,retired_engine_solari::realtime=trace` for a short capture;
 that mode is intentionally not used by comparison commands because trace volume
 can perturb frame time.
 
 ## Frame-Time Profiler
 
 The detailed frame profiler is compile-gated behind both
-`game_client/render_diagnostics` and `debug_assertions`. `fun-bench run-stack`
+`game_client/debug-diagnostics` and `debug_assertions`. `fun-bench run-stack`
 enables that feature automatically for debug builds when frame-time, render,
 trace, or verbose render-profile diagnostics are requested, and refuses to
 compile diagnostic features into `--release` runs. Normal and release client
-builds do not compile the profiler module, FPS overlay, Bevy render diagnostics
-plugin, or client diagnostic systems. That same feature enables Bevy's `debug`
-and `track_location` feature flags for debug diagnostic builds so system/debug
-metadata is available without leaking that overhead into release.
+builds do not compile profiler modules, FPS overlays, renderer diagnostics
+bridges, or client diagnostic systems. The debug feature keeps FUN-owned
+phase metadata available without leaking that overhead into release.
 
 Use this for a targeted frame tree without launching any separate benchmark
 tool:
@@ -136,8 +135,8 @@ main-thread -
 -main-schedule 92.89% 2798600 ns
 --RunFixedMainLoop 54.73% 1531600 ns self_ns=295000 start_ns=506100
 ---FixedUpdate 9.38% 143700 ns count=2 self_ns=113000 start_ns=687100
-----apply_kinematic_movement [fn=apply_kinematic_movement @ game_client/src/first_person.rs:660] 21.36% 30700 ns count=2 self_ns=8600 start_ns=719200
------move_and_slide [fn=move_and_slide @ game_client/src/first_person.rs:605] 71.99% 22100 ns count=2 start_ns=721500
+----collect_window_events [fn=collect_window_events @ game_client/src/fun_engine_boot.rs:120] 21.36% 30700 ns count=2 self_ns=8600 start_ns=719200
+-----run_client_frame [fn=run_client_frame @ game_client/src/fun_engine_boot.rs:180] 71.99% 22100 ns count=2 start_ns=721500
 --Update 4.21% 117900 ns self_ns=113000 start_ns=2063600
 ---receive_world_stream [fn=receive_world_stream @ game_client/src/lib.rs:1576] 1.27% 1500 ns start_ns=2118700
 -unattributed 7.11% 214300 ns
@@ -155,9 +154,9 @@ slow-spans inclusive -
 Frame nodes keep explicitly recorded inclusive time separate from child time, so
 children do not double-count parent rows. Fixed schedules are nested under
 `RunFixedMainLoop`, and manually instrumented systems are nested under their
-actual Bevy schedule. `self_ns` is emitted when a parent has recorded time not
-explained by profiled children. Source annotations use `#[track_caller]`, giving
-the callsite file and line for client systems and manually instrumented
+actual FUN schedule phase. `self_ns` is emitted when a parent has recorded time
+not explained by profiled children. Source annotations use `#[track_caller]`,
+giving the callsite file and line for client systems and manually instrumented
 sub-steps.
 
 The `summary:` row is also emitted as structured tracing fields on the same
@@ -167,7 +166,7 @@ to filter a capture down to the frame ledger before expanding the hierarchy.
 
 Client instrumentation should use the `frame_profile_start!`,
 `frame_profile_scope!`, `frame_profile_elapsed!`, and `frame_profile_ns!` macros.
-Those macros expand to no-ops unless `game_client/render_diagnostics` and
+Those macros expand to no-ops unless `game_client/debug-diagnostics` and
 `debug_assertions` are both active, so callsites can stay close to the measured
 code without pulling profiler types or timing work into normal/release builds.
 
@@ -202,7 +201,7 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   accept/reset counts, internal dimensions, step counts, quality/profile labels,
   and cloud VRAM bytes.
 - `fun::perf::schedule_heatmap`: actual client system costs gathered from the
-  running Bevy schedule. It reports networking receive, streamed-world apply,
+  running RetiredEngine schedule. It reports networking receive, streamed-world apply,
   movement input, look, first-person physics movement, diagnostics logging,
   render config/window work, Solari runtime-param updates, meshlet extraction,
   and render interpolation as nanoseconds plus share of measured client CPU
@@ -217,7 +216,7 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   buffers, view-visibility mask writes, and per-view reset CPU queue writes.
   Together these show whether static or transform-only scenes are avoiding
   whole-buffer uploads, full material scans, and CPU-side reset write spam.
-- `fun::perf::native_ui`: NATIVE_UI UI transport counters sampled separately from Bevy
+- `fun::perf::native_ui`: NATIVE_UI UI transport counters sampled separately from RetiredEngine
   FPS: CPU `OnPaint` cadence, accelerated-paint cadence, CPU upload bytes, GPU
   copy bytes/ns/failures, GPU frame ready/not-ready/reused/blocking-wait counts,
   transport fallback count, published and sampled generations, and stale GPU
@@ -256,27 +255,27 @@ Each emitted event automatically includes `diag_file`, `diag_line`, and
   surface-loss/acquire failures, recovery attempts, successful reinitialization,
   and frames skipped while the renderer is unavailable.
 - `fun::camera`: camera-count violations.
-- `bevy_solari::realtime`: Solari pipeline initialization and per-dispatch trace
+- `retired_engine_solari::realtime`: Solari pipeline initialization and per-dispatch trace
   fields such as denoise mode, scene generation, resource generation, reset
   state, view size, and world-cache settings.
-- `bevy_solari::vram`: Solari realtime buffer/texture allocation estimates and
+- `retired_engine_solari::vram`: Solari realtime buffer/texture allocation estimates and
   DLSS RR guide texture allocation estimates. DLSS NGX internal allocations are
-  opaque to Bevy and are reported as such.
-- `bevy_pbr::meshlet::vram`: meshlet persistent GPU buffer allocation changes
+  opaque to RetiredEngine and are reported as such.
+- `retired_engine_pbr::meshlet::vram`: meshlet persistent GPU buffer allocation changes
   and queued upload counts.
-- `bevy_render::transient`: frame-local render scratch resource requests,
+- `retired_engine_render::transient`: frame-local render scratch resource requests,
   creates, previous-frame reuses, same-frame lifetime aliases, cached slot
   counts, descriptor miss/near-miss reasons, top descriptor-create rows, and
   label-variant rows.
-- `bevy_render::scheduler`: render graph budget pressure.
-- `bevy_render::capabilities`: one startup capability inventory line with the
+- `retired_engine_render::scheduler`: render graph budget pressure.
+- `retired_engine_render::capabilities`: one startup capability inventory line with the
   backend capability hash, vendor class, RT/AS support, async queue probe state,
   DLSS capability slots, native opacity/SER/LSS slots, and RT validation slot.
 - `fun::render`: one RT gate line with `rt_feature_hash` for the requested
   renderer policy. Benchmark reports keep this separate from
   `backend_capability_hash` so requested features and backend support do not
   collapse into one identifier.
-- `bevy_pbr::meshlet::scheduler`: meshlet visibility budget decisions and
+- `retired_engine_pbr::meshlet::scheduler`: meshlet visibility budget decisions and
   async-compute policy decisions. WGPU currently runs these candidates through
   the graphics-queue fallback unless a backend-specific async path proves a p95
   win.
@@ -296,7 +295,7 @@ configuration and VRAM, but cloud pass timing is not proven.
 
 ## Render Graph Resource Policy
 
-The Bevy fork now exposes a render transient resource arena. Render graph users
+The RetiredEngine fork now exposes a render transient resource arena. Render graph users
 declare scratch resource lifetimes by logical pass range. Matching resources can
 be reused from prior frames, and same-frame aliasing is allowed only when the
 declared lifetimes do not overlap. This is intentionally conservative: it lowers
@@ -305,7 +304,7 @@ allocation churn without depending on backend-specific explicit heap aliasing.
 Meshlet visibility is the first consumer. Its dummy render target is transient,
 while visibility buffers and cull queues stay persistent because they need stable
 capacity and bind-group behavior. The benchmark parser recognizes
-`bevy_render::transient` events as `transient_*` metrics when render diagnostics
+`retired_engine_render::transient` events as `transient_*` metrics when render diagnostics
 are enabled and retained through `fun-data` telemetry bundles. Descriptor audit
 details are documented in
 [`dx12_transient_resource_reuse.md`](dx12_transient_resource_reuse.md).
@@ -401,7 +400,7 @@ tracks confidence/moments for future reuse.
 
 `FUN_SOLARI_INTERNAL_SCALE` currently scales Solari GI reservoirs only. Direct
 lighting stays full resolution so direct shadows remain crisp, and raster
-meshlet presentation is not lowered by this control. Bevy's
+meshlet presentation is not lowered by this control. RetiredEngine's
 `MainPassResolutionOverride` path is still respected by Solari resource
 preparation when a caller explicitly opts into a lower main-pass resolution, but
 the game client does not use that route for the default Solari-only tests.
@@ -428,7 +427,7 @@ telemetry bundles, not `println!` or duplicate stdout paths.
 ## Descriptor And Pipeline Churn
 
 `--render-diagnostics` enables engine-level resource churn counters through
-`FUN_RENDER_CHURN_COUNTERS=1` and `BEVY_RENDER_CHURN_COUNTERS=1`. The client
+`FUN_RENDER_CHURN_COUNTERS=1` and `RETIRED_ENGINE_RENDER_CHURN_COUNTERS=1`. The client
 emits `[client perf] render churn:` totals and top-ten
 `[client perf] render churn top:` rows. Use
 [`dx12_descriptor_pipeline_churn.md`](dx12_descriptor_pipeline_churn.md) for the
@@ -438,7 +437,7 @@ decision path.
 ## Command Submission Shape
 
 The same flag enables command submission counters through
-`FUN_RENDER_COMMAND_COUNTERS=1` and `BEVY_RENDER_COMMAND_COUNTERS=1`. The client
+`FUN_RENDER_COMMAND_COUNTERS=1` and `RETIRED_ENGINE_RENDER_COMMAND_COUNTERS=1`. The client
 emits `[client perf] render commands:` totals and top-ten
 `[client perf] render command top:` rows. Use
 [`dx12_command_submission_strategy.md`](dx12_command_submission_strategy.md) to
@@ -448,7 +447,7 @@ strategy.
 ## Shader Compilation And Quality
 
 `--render-diagnostics` also enables shader diagnostics through
-`FUN_RENDER_SHADER_DIAGNOSTICS=1` and `BEVY_RENDER_SHADER_DIAGNOSTICS=1`. The
+`FUN_RENDER_SHADER_DIAGNOSTICS=1` and `RETIRED_ENGINE_RENDER_SHADER_DIAGNOSTICS=1`. The
 client emits `[client perf] render shaders:` totals and top-ten
 `[client perf] render shader top:` rows. Use
 [`dx12_shader_quality.md`](dx12_shader_quality.md) for the compilation,

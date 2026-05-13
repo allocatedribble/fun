@@ -56,15 +56,13 @@ For fast compile/smoke validation while editing benchmark code:
 cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- criterion --save-baseline smoke --warmup-seconds 0.1 --measurement-seconds 0.2 --sample-size 10
 ```
 
-The first Criterion suite lives at `game_client/benches/client_costs.rs` and
-covers:
+The old client-local Criterion suite has been retired from the product path.
+Client CPU and frame-cost checks now run through the first-party benchmark
+commands so the measured surface stays FUN-owned:
 
-- Solari setup and denoiser/RR mode selection.
-- First-person movement math.
-- Quantized physics state conversion and prediction error.
-- Thunder packet encode/decode for input and streamed worlds.
-- Streaming manifest planning and cache directives.
-- Network relevance selection for large object counts.
+- Renderer-core CPU setup and resource churn through `fun-renderer` benches.
+- Engine, window, scheduler, and telemetry smoke paths through `game_client`.
+- Runtime frame metrics through `fun-bench client` and `fun-bench run-stack`.
 
 Criterion writes its HTML and raw estimates under `target\criterion`.
 
@@ -159,7 +157,7 @@ also report `meshlet_material_queue_cpu_ns` and
 changes must report `meshlet_view_reset_cpu_queue_writes`,
 `meshlet_view_reset_cpu_queue_writes_per_view`, and `meshlet_view_count`.
 When frame attribution is needed, run with `--frame-time-diagnostics`; this enables
-the debug-only `game_client/render_diagnostics` feature and writes a per-frame
+the debug-only `game_client/debug-diagnostics` feature and writes a per-frame
 hierarchical `fun::frame_time` report with thread buckets, function names,
 file/line callsites, inclusive ns, `self_ns`, and child percentages. Diagnostic
 features are intentionally not compiled into release builds. Add
@@ -544,17 +542,15 @@ cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- rt-matrix --rend
 ```
 
 That matrix records both `rt_feature_gates.rt_feature_hash` from the requested
-Fun RT gates and `render_capabilities.backend_capability_hash` from the Bevy
-startup capability line into every benchmark bundle. When Bevy's
-`bevy_dx12_backend_diagnostics` feature emits the compact
-`[bevy render] dx12 backend:` startup line, the benchmark parser also records it
-as `dx12_backend_diagnostics` with the Bevy snapshot schema version, redacted
-adapter identity, selected backend, present mode, frame-latency setting, and
-pipeline-cache policy. Its lanes cover baseline Solari, direct-only, GI-only,
-direct+GI, DLSS RR diagnostic, half-resolution GI reservoirs, async readback
-on/off, and BLAS compaction budget variants. Some gates are still policy
-metadata until the matching Solari pass is wired; they remain captured so later
-tiers cannot land without before/after numbers under the same names.
+Fun RT gates and `render_capabilities.backend_capability_hash` from the
+FUN-owned renderer capability line into every benchmark bundle. The benchmark
+parser records redacted adapter identity, selected backend, present mode,
+frame-latency setting, and pipeline-cache policy as renderer capability
+diagnostics. Its lanes cover baseline Solari, direct-only, GI-only, direct+GI,
+DLSS RR diagnostic, half-resolution GI reservoirs, async readback on/off, and
+BLAS compaction budget variants. Some gates are still policy metadata until the
+matching Solari pass is wired; they remain captured so later tiers cannot land
+without before/after numbers under the same names.
 
 ## Renderer Benchmark Suite
 
@@ -582,7 +578,7 @@ revisions, feature flags, optional captures, p50/p95/p99 CPU and GPU frame
 time, pass timings, upload bytes, allocation counts, runtime pipeline creation,
 page faults, evictions, visible/drawn clusters, light/candidate counts, shadow
 page refreshes, GI cache occupancy, NATIVE_UI import/composite latency, upscaler
-time, FG generated/presented counts, Bevy UI dependency status, and fallback
+time, FG generated/presented counts, external UI dependency status, and fallback
 reasons.
 
 The hard gates are:
@@ -592,7 +588,7 @@ The hard gates are:
 - no product CPU NATIVE_UI fallback;
 - no unbounded page-fault storm;
 - no unsupported frame generation;
-- no hidden product Bevy UI dependency;
+- no hidden product external engine UI dependency;
 - no performance claim without a compressed protobuf benchmark bundle.
 
 Local validation:
@@ -640,7 +636,7 @@ contract is now:
 
 - unset or `auto` resolves to `fun`;
 - explicit `legacy` remains loud and diagnostic-only;
-- product Bevy UI and CPU NATIVE_UI fallback gates remain closed;
+- product external engine UI and CPU NATIVE_UI fallback gates remain closed;
 - renderer ownership is recorded before any performance claim is made.
 
 Local validation:
@@ -666,7 +662,7 @@ cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --render-
 The required performance benchmark for changes that claim client performance is:
 
 ```text
-cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --release --static-bevy --render-backend dx12 --present-mode immediate
+cargo run --manifest-path ..\fun-cli\Cargo.toml -p fun-bench -- client --release --render-backend dx12 --present-mode immediate
 ```
 
 When a change touches one of these systems, also run the matching isolation case:

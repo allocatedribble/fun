@@ -72,13 +72,13 @@ product-critical server paths.
 
 ## World Wrapper
 
-`FunWorld` is the first kernel wrapper. Its default mode is `Hybrid`: Bevy hosts
+`FunWorld` is the first kernel wrapper. Its default mode is `Hybrid`: RetiredEngine hosts
 ordinary compatibility entities, while FUN-owned dense resource tables carry
-the hot spatial facts and subsystem handoff queues. `BevyCompatibility` keeps a
-Bevy world available for migration and ergonomics. `FunNative` is the future
-native backend and does not host Bevy.
+the hot spatial facts and subsystem handoff queues. `RetiredEngineCompatibility` keeps a
+RetiredEngine world available for migration and ergonomics. `FunNative` is the future
+native backend and does not host RetiredEngine.
 
-In every mode, `fun-scheduler` remains the scheduler authority. Bevy is a world
+In every mode, `fun-scheduler` remains the scheduler authority. RetiredEngine is a world
 compatibility substrate, not the owner of global frame orchestration.
 
 ## Identity And Revisions

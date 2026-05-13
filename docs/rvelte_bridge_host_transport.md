@@ -16,14 +16,14 @@ Pass 73 connects the rvelte FUN-native host bridge to the
 product-side `fun_host` wire format. The translator lives in
 `fun-rvelte-bridge::host_transport` and mirrors `fun_host`'s
 `FunHostCommandRequest` / `FunHostCommandResponse` /
-`FunHostCommandErrorCode` shapes **without** pulling Bevy or any
+`FunHostCommandErrorCode` shapes **without** pulling RetiredEngine or any
 graphics-API crate into the bridge's production tree.
 
-The actual Bevy event plumbing — translating between this module's
+The actual RetiredEngine event plumbing — translating between this module's
 wire types and `fun_host`'s `Message`-derived structs — is a
-trivial mapping the consumer (a Bevy plugin in `game_client` or
+trivial mapping the consumer (a RetiredEngine plugin in `game_client` or
 `fun_host` itself) writes once. Pass 73 keeps that translation a
-typed pure-data surface so the bridge crate stays free of bevy,
+typed pure-data surface so the bridge crate stays free of retired_engine,
 wgpu, dx12, vulkan, metal, native_ui, and swapchain references.
 
 ## Wire-Format Mirror
@@ -105,7 +105,7 @@ cargo fmt -p fun-rvelte-bridge --check          # exit 0
 cargo check -p fun-rvelte-bridge                 # exit 0
 cargo clippy -p fun-rvelte-bridge --all-targets -- -D warnings   # exit 0
 cargo test -p fun-rvelte-bridge                  # 27/27 passing (13 smoke + 14 host transport)
-cargo tree -p fun-rvelte-bridge -e normal | grep -ciE "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer|fun_renderer|^bevy"   # 0
+cargo tree -p fun-rvelte-bridge -e normal | grep -ciE "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer|fun_renderer|^retired_engine"   # 0
 ```
 
 Plus regression: `cargo test --workspace` from `rvelte/` continues
@@ -113,14 +113,14 @@ to report 74 test groups, zero failures.
 
 ## Forbidden Surface (Unchanged from Pass 72)
 
-Pass-73 invariant: zero concrete renderer dependency, zero Bevy
+Pass-73 invariant: zero concrete renderer dependency, zero RetiredEngine
 dependency, zero browser dependency.
 
 - `Cargo.toml` adds `serde_json` for wire JSON encoding; nothing
   else.
 - `cargo tree -p fun-rvelte-bridge -e normal | grep -ciE
   "wgpu|vulkan|metal|dx12|d3d12|native_ui|swapchain|fun-renderer
-  |fun_renderer|^bevy"` returns 0.
+  |fun_renderer|^retired_engine"` returns 0.
 
 ## Forward Pointers
 
@@ -135,10 +135,10 @@ Per the pass-71 design's migration plan:
   binary so a single product binary can boot any of the six
   routes through the adapter.
 
-A small Bevy adapter living in `game_client` (or a new
+A small RetiredEngine adapter living in `game_client` (or a new
 `fun_host_bridge` plugin) will translate between the wire types
 defined here and `fun_host`'s `Message`-derived structs. That
-plugin is the *only* place Bevy enters the rvelte bridge code
+plugin is the *only* place RetiredEngine enters the rvelte bridge code
 path.
 
 ## Exit Criteria

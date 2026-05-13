@@ -1,6 +1,6 @@
 //! `LuxFramePlanner` — the lighting brain.
 //!
-//! `LuxFramePlanner` is a bevy_ecs `Resource` the renderer
+//! `LuxFramePlanner` is a fun_ecs `Resource` the renderer
 //! reads each frame to build a typed `LuxFramePlan`. It owns
 //! the typed lighting policy (`LuxSettings`), the per-feature
 //! quality dial (`LuxQualitySettings`), the typed look profile
@@ -9,12 +9,9 @@
 //! (`LuxUpdateScheduler`) that records which scenes / lights /
 //! caches changed this frame.
 //!
-//! Pass 1 retires the production use of `NoopLuxCore::baseline_frame`:
-//! `fun_render`'s bridge now calls `LuxFramePlanner::build_frame_plan`,
-//! and the renderer-side `NoopLuxCorePolicy::CURRENT.real_lux_execution_available`
-//! flips to `true` (see the typed contract in `fun_render::bridge`).
+#![allow(clippy::items_after_test_module)]
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::api::{DirectLightingMode, GiMode, LuxSettings, ReflectionMode, ShadowMode};
 use crate::diagnostics::LuxFramePlanDiagnostics;
@@ -70,7 +67,7 @@ impl LuxUpdateCadence {
     pub const fn triggers(self, frame_index: u64, dirty: bool) -> bool {
         match self {
             Self::EveryFrame => true,
-            Self::EveryNFrames(n) => n > 0 && frame_index % (n as u64) == 0,
+            Self::EveryNFrames(n) => n > 0 && frame_index.is_multiple_of(n as u64),
             Self::OnChangeOnly => dirty,
             Self::Disabled => false,
         }
@@ -785,7 +782,7 @@ mod tests {
     /// dirty regions per scene).
     #[test]
     fn frame_with_no_scene_changes_emits_minimal_plan() {
-        let planner = LuxFramePlanner::product_default();
+        let planner = LuxFramePlanner::cold_default();
         let unchanged = LuxSceneChangeSignal::unchanged_visible(LuxSceneId::PROOF_SCENE, 1);
         let plan = planner.build_frame_plan(7, &[unchanged]);
         assert_eq!(plan.scene_plans.len(), 1);

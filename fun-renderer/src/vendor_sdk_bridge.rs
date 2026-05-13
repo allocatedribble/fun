@@ -36,7 +36,7 @@
 //! through `HudLessSceneColorPolicy` rather than the upscaler input
 //! color.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::{RenderExtent2d, RenderStableId, RenderVec2, RenderVec3};
 use crate::dx12_production::Dx12NativeSdkClaimPolicy;

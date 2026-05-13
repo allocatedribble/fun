@@ -1,11 +1,10 @@
 use core::marker::PhantomData;
 
-use bevy_app::{App, Plugin, PostUpdate, Update};
-use bevy_ecs::{
+use fun_ecs::{
     prelude::{ResMut, Resource},
     schedule::{IntoScheduleConfigs, SystemSet},
 };
-use bevy_transform::TransformSystems;
+use retired_engine_app::{App, Plugin, PostUpdate, Update};
 
 use crate::{
     RendererFeatureToggles,
@@ -37,6 +36,13 @@ use crate::{
 
 pub const FUN_RENDERER_PLUGIN_SCHEMA_VERSION: u16 = 1;
 pub const RENDERER_PHASE_COUNT: usize = 13;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RendererTransformSystems;
+
+impl RendererTransformSystems {
+    const PROPAGATE: Self = Self;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RendererPhase {
@@ -682,7 +688,7 @@ where
             RendererDiagnosticsFlush,
         )
             .chain()
-            .after(TransformSystems::Propagate),
+            .after(RendererTransformSystems::PROPAGATE),
     )
     .add_systems(
         PostUpdate,
@@ -735,7 +741,7 @@ fn install_renderer_phase_systems_dynamic(app: &mut App) {
             RendererDiagnosticsFlush,
         )
             .chain()
-            .after(TransformSystems::Propagate),
+            .after(RendererTransformSystems::PROPAGATE),
     )
     .add_systems(
         PostUpdate,
@@ -972,7 +978,7 @@ struct DynamicBackendToolingState {
 mod wgpu_runtime_resources {
     use std::sync::Arc;
 
-    use bevy_ecs::prelude::Resource;
+    use fun_ecs::Resource;
 
     use crate::bridge::wgpu::{
         WgpuBindingBridgeCache, WgpuBridgeDeviceState, WgpuBridgeHealthArtifact,

@@ -1,6 +1,7 @@
 use fun_scene::{
-    GeometryRef, LuxImportance, LuxLightKind, LuxShadowPolicy, MaterialRef, Renderable,
-    RenderableFlags, SceneStableIdentity, VirtualGeometryAuthoring, VirtualGeometryMode,
+    GeometryRef, GlobalTransform, InheritedVisibility, LuxImportance, LuxLightKind,
+    LuxShadowPolicy, MaterialRef, Renderable, RenderableFlags, SceneStableIdentity, Transform,
+    ViewVisibility, VirtualGeometryAuthoring, VirtualGeometryMode, Visibility,
 };
 
 use crate::resource::{
@@ -193,9 +194,8 @@ impl Default for GpuTransform {
     }
 }
 
-#[cfg(feature = "bevy_ecs")]
-impl From<&bevy_transform::components::Transform> for GpuTransform {
-    fn from(transform: &bevy_transform::components::Transform) -> Self {
+impl From<&Transform> for GpuTransform {
+    fn from(transform: &Transform) -> Self {
         Self {
             translation: GpuVec3 {
                 x: transform.translation.x,
@@ -214,6 +214,41 @@ impl From<&bevy_transform::components::Transform> for GpuTransform {
                 z: transform.scale.z,
             },
         }
+    }
+}
+
+impl From<Transform> for GpuTransform {
+    fn from(transform: Transform) -> Self {
+        Self::from(&transform)
+    }
+}
+
+impl From<&GlobalTransform> for GpuTransform {
+    fn from(transform: &GlobalTransform) -> Self {
+        Self {
+            translation: GpuVec3 {
+                x: transform.translation.x,
+                y: transform.translation.y,
+                z: transform.translation.z,
+            },
+            rotation: GpuQuat {
+                x: transform.rotation.x,
+                y: transform.rotation.y,
+                z: transform.rotation.z,
+                w: transform.rotation.w,
+            },
+            scale: GpuVec3 {
+                x: transform.scale.x,
+                y: transform.scale.y,
+                z: transform.scale.z,
+            },
+        }
+    }
+}
+
+impl From<GlobalTransform> for GpuTransform {
+    fn from(transform: GlobalTransform) -> Self {
+        Self::from(&transform)
     }
 }
 
@@ -344,6 +379,23 @@ pub enum GpuVisibilityState {
     Visible,
     Culled,
     Hidden,
+}
+
+impl GpuVisibilityState {
+    #[must_use]
+    pub const fn from_fun_scene_visibility(
+        local: Visibility,
+        inherited: InheritedVisibility,
+        view: ViewVisibility,
+    ) -> Self {
+        if matches!(local, Visibility::Hidden) || !inherited.visible {
+            Self::Hidden
+        } else if view.visible {
+            Self::Visible
+        } else {
+            Self::Culled
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -607,7 +659,7 @@ impl<T> Default for SceneSlot<T> {
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-#[cfg_attr(feature = "bevy_ecs", derive(bevy_ecs::prelude::Resource))]
+#[cfg_attr(feature = "fun_ecs", derive(fun_ecs::Resource))]
 pub struct GpuSceneDatabase {
     views: Vec<SceneSlot<GpuViewRecord>>,
     instances: Vec<SceneSlot<GpuInstanceRecord>>,
@@ -865,6 +917,23 @@ impl GpuSceneDatabase {
         transform: GpuTransform,
         virtual_geometry: Option<&VirtualGeometryAuthoring>,
     ) -> GpuInstanceHandle {
+        self.upsert_renderable_from_fun_scene_with_visibility(
+            stable_id,
+            renderable,
+            transform,
+            virtual_geometry,
+            GpuVisibilityState::Unknown,
+        )
+    }
+
+    pub fn upsert_renderable_from_fun_scene_with_visibility(
+        &mut self,
+        stable_id: StableInstanceId,
+        renderable: &Renderable,
+        transform: GpuTransform,
+        virtual_geometry: Option<&VirtualGeometryAuthoring>,
+        visibility: GpuVisibilityState,
+    ) -> GpuInstanceHandle {
         let mesh = self.upsert_mesh_from_fun_scene(renderable.geometry);
         let material = self.upsert_material_from_fun_scene(renderable.material);
         let page_metadata = virtual_geometry.map_or(GpuPageMetadataHandle::INVALID, |authoring| {
@@ -880,7 +949,7 @@ impl GpuSceneDatabase {
             mesh,
             material,
             flags,
-            visibility: GpuVisibilityState::Unknown,
+            visibility,
             page_metadata,
         })
     }
@@ -1208,6 +1277,52 @@ mod tests {
                 .any(|range| range.record_kind == SceneRecordKind::Instance)
         );
         assert_eq!(database.diagnostics().updated_record_count, 1);
+    }
+
+    #[test]
+    fn scene_database_consumes_fun_scene_transform_and_visibility() {
+        let mut database = GpuSceneDatabase::default();
+        let renderable = Renderable::new(
+            GeometryRef::new(17),
+            MaterialRef::new(19),
+            RenderableFlags::STATIC,
+        );
+        let local = Transform::from_xyz(1.0, 2.0, 3.0);
+        let visibility = GpuVisibilityState::from_fun_scene_visibility(
+            Visibility::Visible,
+            InheritedVisibility::VISIBLE,
+            ViewVisibility::VISIBLE,
+        );
+
+        let handle = database.upsert_renderable_from_fun_scene_with_visibility(
+            StableInstanceId::new(123),
+            &renderable,
+            GpuTransform::from(local),
+            None,
+            visibility,
+        );
+
+        let instance = database.instance(handle).expect("instance should exist");
+        assert_eq!(instance.transform.translation.x, 1.0);
+        assert_eq!(instance.transform.translation.y, 2.0);
+        assert_eq!(instance.transform.translation.z, 3.0);
+        assert_eq!(instance.visibility, GpuVisibilityState::Visible);
+        assert_eq!(
+            GpuVisibilityState::from_fun_scene_visibility(
+                Visibility::Hidden,
+                InheritedVisibility::VISIBLE,
+                ViewVisibility::VISIBLE,
+            ),
+            GpuVisibilityState::Hidden
+        );
+        assert_eq!(
+            GpuVisibilityState::from_fun_scene_visibility(
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
+                ViewVisibility::CULLED,
+            ),
+            GpuVisibilityState::Culled
+        );
     }
 
     #[test]

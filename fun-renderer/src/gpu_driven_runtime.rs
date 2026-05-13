@@ -29,7 +29,7 @@
 //!    time.
 //! 6. `GpuDrivenParityValidation` — typed CPU/direct-vs-GPU
 //!    parity check the operator can run as a regression gate.
-//! 7. `GpuDrivenRuntimeMetrics` — Bevy Resource that aggregates
+//! 7. `GpuDrivenRuntimeMetrics` — RetiredEngine Resource that aggregates
 //!    per-frame culling, occlusion, and meshlet counts.
 //!
 //! Design rules:
@@ -46,7 +46,7 @@
 //!    cannot prove invisible stays visible; the conservative
 //!    branch is the default and is asserted by tests.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 use crate::gpu_driven::{

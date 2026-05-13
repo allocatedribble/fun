@@ -17,7 +17,7 @@
     "sections": {
       "build": [
         "release",
-        "static_bevy"
+        "static_engine"
       ],
       "features": [
         "disable_solari",
@@ -132,15 +132,15 @@
       "env_vars": [
         "FUN_RENDER_DIAGNOSTICS",
         "FUN_RENDER_UPLOAD_COUNTERS",
-        "BEVY_RENDER_UPLOAD_COUNTERS",
+        "RETIRED_ENGINE_RENDER_UPLOAD_COUNTERS",
         "FUN_RENDER_CHURN_COUNTERS",
-        "BEVY_RENDER_CHURN_COUNTERS",
+        "RETIRED_ENGINE_RENDER_CHURN_COUNTERS",
         "FUN_RENDER_COMMAND_COUNTERS",
-        "BEVY_RENDER_COMMAND_COUNTERS",
+        "RETIRED_ENGINE_RENDER_COMMAND_COUNTERS",
         "FUN_RENDER_READBACK_DIAGNOSTICS",
-        "BEVY_RENDER_READBACK_DIAGNOSTICS",
+        "RETIRED_ENGINE_RENDER_READBACK_DIAGNOSTICS",
         "FUN_RENDER_SHADER_DIAGNOSTICS",
-        "BEVY_RENDER_SHADER_DIAGNOSTICS"
+        "RETIRED_ENGINE_RENDER_SHADER_DIAGNOSTICS"
       ],
       "benchmark_safe": true,
       "debug_only": true
@@ -154,7 +154,7 @@
       ],
       "env_vars": [
         "RUST_LOG",
-        "BEVY_LOG"
+        "RETIRED_ENGINE_LOG"
       ],
       "benchmark_safe": false,
       "debug_only": true

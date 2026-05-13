@@ -226,7 +226,7 @@ export const fallbackStatus: EditorStatus = {
   expected_fun_crates: expectedCrates,
   ui_stack: 'Native rvelte/FUN packets with strict TypeScript browser preview',
   rust_service_status: 'fallback browser preview',
-  bevy_demo_status: 'requires Fun-hosted Rust command',
+  retired_engine_demo_status: 'requires Fun-hosted Rust command',
   current_project: null,
   client_viewport_status: 'requires Fun host',
   runtime_status: fallbackRuntimeStatus,
@@ -666,10 +666,10 @@ export async function getRuntimeHostStatus(): Promise<RuntimeHostStatus> {
   return fallbackRuntimeHostStatus;
 }
 
-export async function launchBevyDemo(): Promise<CommandResult<HostedInstanceSummary>> {
+export async function launchRetiredEngineDemo(): Promise<CommandResult<HostedInstanceSummary>> {
   return isHostRuntime()
-    ? invokeHost<CommandResult<HostedInstanceSummary>>('bevy.demo.launch')
-    : commandUnavailable('bevy.demo.launch', 'The Bevy demo can only be launched from the Fun host.');
+    ? invokeHost<CommandResult<HostedInstanceSummary>>('retired_engine.demo.launch')
+    : commandUnavailable('retired_engine.demo.launch', 'The RetiredEngine demo can only be launched from the Fun host.');
 }
 
 export async function openProject(path?: string): Promise<CommandResult<ProjectSummary>> {

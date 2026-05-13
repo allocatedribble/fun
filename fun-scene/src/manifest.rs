@@ -1,12 +1,14 @@
 use thunder::prelude::{
     AuthorityMode, NetEntity, PackedColorRgba8, QuantizedTransform3, RelevanceLayers,
-    ReplicationClass, ReplicationPriority, ReplicationScope, WorldCatalogRef, WorldPrimitive,
-    WorldRevision, WorldStreamChunk,
+    ReplicationClass, WorldCatalogRef, WorldPrimitive, WorldRevision, WorldStreamChunk,
 };
 
-use crate::streaming::{
-    FNV64_OFFSET_BASIS, fnv1a, fnv1a_i32, fnv1a_str, fnv1a_u8, fnv1a_u64, hash_authority_mode,
-    hash_catalog, hash_color, hash_render, hash_replication_class, hash_transform,
+use crate::{
+    ReplicationPriority, ReplicationScope,
+    streaming::{
+        FNV64_OFFSET_BASIS, fnv1a, fnv1a_i32, fnv1a_str, fnv1a_u8, fnv1a_u64, hash_authority_mode,
+        hash_catalog, hash_color, hash_render, hash_replication_class, hash_transform,
+    },
 };
 
 pub type SceneStreamChunk = WorldStreamChunk;

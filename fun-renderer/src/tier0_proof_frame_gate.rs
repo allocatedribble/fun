@@ -33,7 +33,7 @@
 //! contract is declared but no producer exists yet, or
 //! `FailedToProduce` when the bridge attempted but failed closed.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 use crate::dx12_production::{
@@ -699,7 +699,7 @@ pub fn classify_slot_status_today(
 
 /// Build a fully populated bundle from raw bridge state. This is
 /// the test-friendly entry point that does not require a running
-/// Bevy `App` — the integration test wraps an `App` and feeds the
+/// RetiredEngine `App` — the integration test wraps an `App` and feeds the
 /// observed state in.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -1111,7 +1111,7 @@ mod tests {
     /// records exactly what blocks the visible-frame exit.
     #[test]
     fn live_keystone_runs_one_update_and_produces_typed_bundle() {
-        use bevy_app::App;
+        use retired_engine_app::App;
 
         use crate::backend::WgpuDx12Backend;
         use crate::plugin::{FunRendererPlugin, RendererBridgeState, RendererFailureState};

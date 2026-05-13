@@ -10,7 +10,7 @@ scope: live pass-control checklist for the next DX12 parity implementation campa
 | --- | --- | --- |
 | project-FUN root | `6b1c966` | umbrella baseline before meshlet/world-stream pressure pass |
 | fun | `f90d367` | command/readback decision report baseline before Tier 11 edits |
-| bevy | `020d7d6` | root gitlink baseline before this pass |
+| retired_engine | `020d7d6` | root gitlink baseline before this pass |
 | fun-warden | `4faff82` | dependency baseline before this pass |
 
 The unrelated `game_client/src/warden.rs` validation blocker has been cleared
@@ -120,9 +120,9 @@ Allowed statuses: `missing`, `measured`, `optimized`, `blocked`,
 | present default decision | measured | do not change defaults; the decision report requires a complete live scenario matrix plus latency evidence before recommending a default change | full present matrix with mean FPS, p95, and present-wait recommendations |
 | barrier cleanup decision | blocked | no cleanup selected; local barrier artifact is blocked because no PIX CSV was available | PIX barrier/resource-state summary with named resources and transitions |
 | PSO/churn decision | measured | runtime PSO churn is a current bottleneck candidate; use `FUN_RENDER_PIPELINE_WARMUP=observed` for the next measured lane before layout canonicalization | rerun benchmark after creation-focused churn rows are present, then compare before/after observed warmup |
-| transient reuse decision | measured | no transient descriptor canonicalization selected; current matrix has no descriptor-create rows, and native interop resources remain excluded from aliasing | rerun a transient-focused lane with `bevy_render::transient=debug` before normalizing another texture family |
+| transient reuse decision | measured | no transient descriptor canonicalization selected; current matrix has no descriptor-create rows, and native interop resources remain excluded from aliasing | rerun a transient-focused lane with `retired_engine_render::transient=debug` before normalizing another texture family |
 | command/readback decision | measured | command counters are high but no submit reduction is selected without PIX/GPUView queue-idle evidence; readback is nonblocking with p95 blocking waits at `0` in current and present-smoke lanes | attach PIX/GPUView queue-idle span before moving copy-only work or merging tiny passes; keep diagnostic readback overhead visible |
-| meshlet/world-stream pressure decision | measured | control smoke reports `reallocations_disappeared`, no render-prep limiter, DX12 `frame_ns.p95=102210000`, Vulkan `frame_ns.p95=27000000`, and no matched baseline for before/after improvement claims; remaining top upload offenders are generic Bevy texture/uniform/buffer uploads, not semantic meshlet stream labels | run the full budget/chunk-cap expansion and attach a matched baseline before promoting tuning defaults |
+| meshlet/world-stream pressure decision | measured | control smoke reports `reallocations_disappeared`, no render-prep limiter, DX12 `frame_ns.p95=102210000`, Vulkan `frame_ns.p95=27000000`, and no matched baseline for before/after improvement claims; remaining top upload offenders are generic RetiredEngine texture/uniform/buffer uploads, not semantic meshlet stream labels | run the full budget/chunk-cap expansion and attach a matched baseline before promoting tuning defaults |
 | DLSS gate decision | blocked | DLSS SR remains fail-closed | boundary gate changes from baseline ready `no` to `yes` with attached evidence |
 
 ## Live Gate Controls

@@ -4,7 +4,7 @@
 //! The product cloud renderer is owned by `fun-renderer`.
 //! The typed `fun_render::sky` module stays as a typed
 //! bridge / migration donor (it extracts settings,
-//! weather, and signals from the typed Bevy app world);
+//! weather, and signals from the typed RetiredEngine app world);
 //! actual cloud execution belongs here.
 //!
 //! Pass C0 codifies ownership through the typed

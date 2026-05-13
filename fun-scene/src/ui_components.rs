@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Component;
+use fun_ecs::Component;
 
 use crate::FunFromTemplate;
 

@@ -2,7 +2,7 @@
 
 ## Current State
 
-`game_client` can run the Bevy/wgpu renderer on DX12. The default NATIVE_UI UI
+`game_client` can run the RetiredEngine/wgpu renderer on DX12. The default NATIVE_UI UI
 transport is still the CPU paint path, but an experimental Windows-only
 `native_ui_dx12_accelerated_paint` feature now builds the D3D11On12 bridge and
 per-callback GPU copy boundary.
@@ -23,27 +23,27 @@ Evidence in the current code:
   accelerated transport enables them.
 - `fun_ui_native_ui::render_handler::on_paint` receives a BGRA buffer from NATIVE_UI and
   copies it into a Rust-owned frame.
-- `game_client::native_ui` copies CPU frames into a Bevy `Image` and uploads them
+- `game_client::native_ui` copies CPU frames into a RetiredEngine `Image` and uploads them
   with `RenderQueue::write_texture` on the CPU fallback path.
 - `game_client/src/native_ui_dx12` opens NATIVE_UI's accelerated D3D11 shared texture
   handle inside `OnAcceleratedPaint`, copies immediately into a FUN-owned
   D3D12-backed texture ring through D3D11On12, signals a D3D12 fence, and
   publishes only a safe frame token to the rest of the UI bridge.
-- `game_client::native_ui` consumes that safe token in the existing Bevy UI texture
+- `game_client::native_ui` consumes that safe token in the existing RetiredEngine UI texture
   composition path. The main world creates an uninitialized BGRA `Image`, and
-  the render world copies the ready DX12 ring slot into the same Bevy GPU image
+  the render world copies the ready DX12 ring slot into the same RetiredEngine GPU image
   that the CPU fallback path uses.
 
-This means DX12 is hardware accelerated for the Bevy renderer. The default NATIVE_UI
+This means DX12 is hardware accelerated for the RetiredEngine renderer. The default NATIVE_UI
 handoff remains the CPU path:
 
 ```text
 NATIVE_UI windowless OnPaint
   -> CPU BGRA buffer
   -> fun_ui_native_ui compositor frame
-  -> Bevy Image pixel copy
+  -> RetiredEngine Image pixel copy
   -> wgpu queue.write_texture
-  -> Bevy/FUN render composition
+  -> RetiredEngine/FUN render composition
 ```
 
 The browser paint request and the client-side texture consumer share one
@@ -64,8 +64,8 @@ NATIVE_UI windowless OnAcceleratedPaint
   -> Flush
   -> ID3D12CommandQueue::Signal
   -> publish NativeUiFrameGeneration + ring slot token
-  -> render-world D3D12 CopyResource into the Bevy UI Image texture
-  -> Bevy/FUN render composition
+  -> render-world D3D12 CopyResource into the RetiredEngine UI Image texture
+  -> RetiredEngine/FUN render composition
 ```
 
 The NATIVE_UI handle, source `ID3D11Texture2D`, dirty-rect slice, and
@@ -76,12 +76,12 @@ for later render-world processing.
 
 Launcher and editor routes now show a compact `UI ... fps` badge driven by the
 Svelte page's `requestAnimationFrame` loop. It measures the browser page's UI
-frame cadence, not the Bevy render frame rate and not NATIVE_UI paint callback rate.
+frame cadence, not the RetiredEngine render frame rate and not NATIVE_UI paint callback rate.
 
-This is intentionally separate from the Bevy FPS counter:
+This is intentionally separate from the RetiredEngine FPS counter:
 
 - launcher/editor badge: Svelte/NATIVE_UI page responsiveness.
-- Bevy FPS counter: game/render frame cadence, visible only in game or the
+- RetiredEngine FPS counter: game/render frame cadence, visible only in game or the
   editor preview placement.
 
 ## NATIVE_UI Accelerated Paint Research
@@ -111,7 +111,7 @@ NATIVE_UI windowless OnAcceleratedPaint
   -> D3D11 OpenSharedResource
   -> D3D11on12 bridge tied to the active D3D12 device and 3D queue
   -> copy/resolve into a FUN-owned D3D12/wgpu texture
-  -> Bevy/FUN render composition
+  -> RetiredEngine/FUN render composition
 ```
 
 Microsoft's D3D11on12 documentation describes creating a D3D11 device over an
@@ -273,8 +273,8 @@ Failures request CPU fallback with typed reasons such as
 ## Startup Bridge Gate
 
 NATIVE_UI shared texture mode is selected at browser creation time, but the D3D11On12
-bridge needs Bevy/wgpu's active render device and queue. `game_client` therefore
-does not create an accelerated browser from `main` before Bevy render resources
+bridge needs RetiredEngine/wgpu's active render device and queue. `game_client` therefore
+does not create an accelerated browser from `main` before RetiredEngine render resources
 exist.
 
 The current startup model is:
@@ -309,7 +309,7 @@ NATIVE_UI-specific D3D11On12 bridge, but all wgpu DX12 HAL extraction goes throu
 - calls `D3D11On12CreateDevice` with `D3D11_CREATE_DEVICE_BGRA_SUPPORT`;
 - queries `ID3D11On12Device`;
 - creates an `ID3D12Fence`;
-- creates a reusable direct command allocator/list pair for ring-slot to Bevy
+- creates a reusable direct command allocator/list pair for ring-slot to RetiredEngine
   texture copies;
 - initializes an empty texture ring with depth clamped to the supported
   `2..=5` slot range.
@@ -325,20 +325,20 @@ creating the CPU browser. If an accelerated browser starts and NATIVE_UI produce
 window, the same strict-vs-fallback policy applies with
 `accelerated_paint_not_observed`.
 
-## Render-World Bevy Texture Feed
+## Render-World RetiredEngine Texture Feed
 
-The first accelerated feed keeps the existing Bevy UI image composition. It only
+The first accelerated feed keeps the existing RetiredEngine UI image composition. It only
 replaces the transport into that image:
 
 ```text
 old:
-  CPU pixels -> RenderQueue::write_texture -> Bevy Image
+  CPU pixels -> RenderQueue::write_texture -> RetiredEngine Image
 
 new:
-  D3D12 ring slot -> native D3D12 copy -> Bevy Image
+  D3D12 ring slot -> native D3D12 copy -> RetiredEngine Image
 ```
 
-`copy_latest_native_ui_gpu_frame_to_bevy_image` runs in
+`copy_latest_native_ui_gpu_frame_to_retired_engine_image` runs in
 `RenderSystems::PrepareResources` after the CPU upload lane. It:
 
 - reads the extracted `NativeUiGpuTextureUpload` token;
@@ -346,10 +346,10 @@ new:
 - reuses the last sampled frame when the newest accelerated frame is not ready
   instead of blocking the render frame;
 - validates BGRA8 source and `Bgra8UnormSrgb` target formats;
-- uses the active Bevy `GpuImage` texture as the copy target;
+- uses the active RetiredEngine `GpuImage` texture as the copy target;
 - records a native DX12 `CopyResource` through the isolated interop module;
 - transitions the target texture to `COPY_DEST` for the copy and back to
-  `PIXEL_SHADER_RESOURCE` for Bevy UI sampling;
+  `PIXEL_SHADER_RESOURCE` for RetiredEngine UI sampling;
 - updates `NativeUiGpuUploadState.last_generation` only after the GPU copy has
   been submitted.
 
@@ -391,8 +391,8 @@ Resource states for this pass:
 - NATIVE_UI source shared texture: D3D11 resource opened and released only during
   `OnAcceleratedPaint`; never cached.
 - FUN ring slot: copied through D3D11On12, released in
-  `D3D12_RESOURCE_STATE_COPY_SOURCE`, and held until the Bevy copy fence retires.
-- Bevy UI target texture: treated as `COMMON` on first allocation and
+  `D3D12_RESOURCE_STATE_COPY_SOURCE`, and held until the RetiredEngine copy fence retires.
+- RetiredEngine UI target texture: treated as `COMMON` on first allocation and
   `PIXEL_SHADER_RESOURCE` on later copies, transitioned to `COPY_DEST` for the
   native copy, then restored to `PIXEL_SHADER_RESOURCE`.
 
@@ -400,7 +400,7 @@ First successful frames log:
 
 ```text
 NATIVE_UI UI GPU copy ready generation=... size=... source=native_ui_d3d11_shared target_slot=dx12_ring_slot_N
-NATIVE_UI UI GPU frame copied to Bevy image generation=... target_format=Bgra8UnormSrgb
+NATIVE_UI UI GPU frame copied to RetiredEngine image generation=... target_format=Bgra8UnormSrgb
 ```
 
 ## Transport Counters
@@ -448,7 +448,7 @@ Keep FPS readings separate:
 - UI RAF FPS: the Svelte page's `requestAnimationFrame` responsiveness.
 - NATIVE_UI paint FPS: the CPU `OnPaint` callback cadence.
 - NATIVE_UI accelerated paint FPS: the `OnAcceleratedPaint` callback cadence.
-- Bevy FPS: the game/render frame cadence.
+- RetiredEngine FPS: the game/render frame cadence.
 
 The UI RAF badge is not evidence of NATIVE_UI paint callback cadence or GPU transport.
 
@@ -502,7 +502,7 @@ pub const MAX_ACCELERATED_PAINT_FAILURES_BEFORE_FALLBACK: u32 = 8;
 
 The accelerated callback copy records failures but does not request CPU fallback
 until the same accelerated transport has failed eight consecutive callback
-copies. A successful callback copy resets the budget. The Bevy-image GPU feed
+copies. A successful callback copy resets the budget. The RetiredEngine-image GPU feed
 uses the same eight-frame budget for native copy errors. Ready ring-slot tokens
 that have not completed their fence are counted as not-ready/reused frames and
 do not block or trigger CPU fallback during normal rendering. Strict mode can
@@ -518,9 +518,9 @@ Fallback triggers covered by this pass:
 - repeated `OpenSharedResource` failures.
 - unsupported source format.
 - invalid accelerated frame dimensions.
-- Bevy target texture or native texture extraction failure.
+- RetiredEngine target texture or native texture extraction failure.
 - ring-slot/output texture allocation failure.
-- native Bevy image GPU copy failures.
+- native RetiredEngine image GPU copy failures.
 - copy fence or ready GPU frame stalling past the frame budget in strict mode.
 - DX12 device/queue extraction failure.
 - backend mismatch before accelerated browser creation.
@@ -528,7 +528,7 @@ Fallback triggers covered by this pass:
 
 ## Open Risks
 
-- NATIVE_UI's accelerated texture is D3D11-facing, while Bevy/wgpu DX12 owns D3D12
+- NATIVE_UI's accelerated texture is D3D11-facing, while RetiredEngine/wgpu DX12 owns D3D12
   resources.
 - D3D11on12 is intended for interop and 2D composition, not heavy 3D work; use it
   only for the browser copy/resolve stage.

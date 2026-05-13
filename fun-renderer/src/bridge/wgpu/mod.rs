@@ -210,7 +210,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(first.expect("warmup creation is allowed").created, true);
+        assert!(first.expect("warmup creation is allowed").created);
         assert_eq!(
             second,
             Err(diagnostics::WgpuBridgeFailure::RuntimeCreationAfterWarmup {

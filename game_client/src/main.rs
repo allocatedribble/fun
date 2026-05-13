@@ -1,5 +1,5 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-fn main() {
-    game_client::build_client_app().run();
+fn main() -> Result<(), game_client::ClientBootError> {
+    game_client::run_client_engine().map(|_exit| ())
 }

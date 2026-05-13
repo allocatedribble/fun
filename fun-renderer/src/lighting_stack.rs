@@ -8,7 +8,7 @@
 //!    transmission scaffold slots. Unlike the asset-prep record
 //!    from Pass 21, this descriptor carries the renderer-side
 //!    typed parameters that drive material binding and shading.
-//! 2. A typed `LightingLightTable` Bevy Resource fed from the
+//! 2. A typed `LightingLightTable` RetiredEngine Resource fed from the
 //!    existing ECS `DirectionalLight` / `PointLight` / `SpotLight`
 //!    components plus `LightLayer` / `LightBounds` / `ShadowCaster`
 //!    so every ECS light becomes a typed GPU light record.
@@ -25,7 +25,7 @@
 //!    shadow atlas tile occupancy, cluster utilization, and
 //!    typed lighting cost timings.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::component_api::{
     DirectionalLight, LightBounds, LightLayer, MaterialFeatureMask, PointLight, RenderAabb,
@@ -554,7 +554,7 @@ impl PbrShadowMode {
     }
 }
 
-/// Bevy Resource holding the dense light table the renderer
+/// RetiredEngine Resource holding the dense light table the renderer
 /// recording side iterates. The table is rebuilt each frame from
 /// the ECS lights via `record_*` helpers and consumed by the
 /// clustered lighting pipeline.

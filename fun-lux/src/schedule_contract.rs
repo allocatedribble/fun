@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn conditional_resource_requires_matching_guard_or_fallback() {
-        let resources = vec![LuxResourceManifest::conditional(
+        let resources = [LuxResourceManifest::conditional(
             LuxResourceIntentKind::ReflectionTraceBuffer,
             LuxResourceCondition::Reflections,
         )];
@@ -1631,13 +1631,16 @@ mod tests {
 
     #[test]
     fn versioned_cache_snapshot_can_wait() {
+        let token = WorkWaitToken::new(9);
         LuxScheduleBuilder::new()
             .with_resource(LuxResourceManifest::always(light_buffer()))
+            .with_work(LuxWork::new(LuxWorkKind::DirectLightListBuild).with_produced_token(token))
             .with_work(
                 LuxWork::new(LuxWorkKind::LuxCacheResidency)
                     .with_cache_access(LuxCacheAccess::VersionedSnapshot { version: 4 })
-                    .with_awaited_token(WorkWaitToken::new(9)),
+                    .with_awaited_token(token),
             )
+            .with_dependency(0, 1)
             .build_runtime_checked()
             .expect("versioned snapshot can wait");
     }

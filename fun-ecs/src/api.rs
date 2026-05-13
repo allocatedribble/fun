@@ -776,7 +776,10 @@ mod tests {
     #[test]
     fn stable_facade_compiles_world_schedule_table_and_system_shapes() {
         let world = FunWorldBuilder::default().build();
-        assert_eq!(world.storage_backend, crate::FunWorldStorageBackend::Hybrid);
+        assert_eq!(
+            world.storage_backend,
+            crate::FunWorldStorageBackend::FunNative
+        );
 
         let schedule = FunSchedule::default().from_world_revision(world.revision);
         let graph = compile_schedule_graph(schedule).expect("compile stable schedule graph");

@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 use rvelte_fun_ui_core::{
     FunUiClipId, FunUiClipKind, FunUiClipPacket, FunUiColorRgba8, FunUiColorSpace,
     FunUiCornerRadii, FunUiDrawId, FunUiDrawOperation, FunUiDrawPacket, FunUiFramePacket,
@@ -86,7 +86,7 @@ pub struct RendererUiGlyphResource {
 /// resources. The adapter never invents resource IDs; it only records the
 /// mapping the registry hands back.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_ecs", derive(Resource))]
+#[cfg_attr(feature = "fun_ecs", derive(Resource))]
 pub struct NativeUiResourceTable {
     schema_version: u16,
     images: BTreeMap<u64, RendererUiImageResource>,
@@ -766,7 +766,7 @@ impl Default for NativeUiProductPolicy {
     }
 }
 
-/// Bevy Resource carrying the live native UI adapter state.
+/// RetiredEngine Resource carrying the live native UI adapter state.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Resource)]
 pub struct NativeUiAdapterReport {
     pub schema_version: u16,
@@ -791,7 +791,7 @@ impl NativeUiAdapterReport {
     }
 }
 
-/// Compact summary of a frame's lowering result that fits in a Bevy Resource
+/// Compact summary of a frame's lowering result that fits in a RetiredEngine Resource
 /// without retaining the (potentially large) draw command vector.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeUiRendererDescriptorsSummary {

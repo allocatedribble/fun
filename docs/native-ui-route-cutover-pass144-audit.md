@@ -116,7 +116,7 @@ green. It is **not yet mounted in `game_client` or `fun_host`** — the
 `fun/game_client/src/**/*.rs` and `fun/fun_host/src/**/*.rs` for
 `rvelte_bridge`, `RvelteBridge`, `FunNativeUiRuntime`, `ProductRvelteAdapter`
 — **zero matches** outside the crate itself and its `tests/`. NATIVE_UI is still
-the only product UI plugin added to the Bevy `App`
+the only product UI plugin added to the RetiredEngine `App`
 ([fun/game_client/src/lib.rs:887-888](../game_client/src/lib.rs)).
 
 ## 3. Pass 145 deletion list (with gating)
@@ -173,7 +173,7 @@ Pass 145:
    `fun-renderer` native adapter via the existing `FunRendererPacketConsumer`.
 3. Wire `fun_host` host snapshots / patches into `FunNativeUiRuntime` via
    `host_transport`.
-4. Translate Bevy/winit input into `ProductInputEvent` via
+4. Translate RetiredEngine/winit input into `ProductInputEvent` via
    `fun_rvelte_bridge::input_translator::translate_product_input` and route it
    through the runtime.
 5. Verify launcher / HUD / pause / diagnostics render correctly under

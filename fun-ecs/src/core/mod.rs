@@ -49,8 +49,8 @@ pub use revision::{
     SpatialPageRevision, WorldRevisionLedger,
 };
 pub use system::{
-    Added, And, ArtifactCommands, Changed, Commands, EntityMut, EntityRef, EventReader,
-    EventWriter, Events, ExternalArtifactMut, ExternalArtifactRef, ExternalSlabMut,
+    Added, And, ArtifactCommands, Changed, Commands, EntityCommands, EntityMut, EntityRef,
+    EventReader, EventWriter, Events, ExternalArtifactMut, ExternalArtifactRef, ExternalSlabMut,
     ExternalSlabRef, FUN_COMMAND_BUFFER_ARTIFACTS, FUN_COMMAND_BUFFER_DIRTY_PROPAGATION,
     FUN_COMMAND_BUFFER_HANDOFFS, FUN_COMMAND_BUFFER_SPATIAL_REQUESTS,
     FUN_COMMAND_BUFFER_WORLD_STRUCTURE, FunCommandBufferOutput, FunComponentParam, FunEventParam,
@@ -59,7 +59,7 @@ pub use system::{
     FunSystemAccess, FunSystemAccessMode, FunSystemAccessRow, FunSystemAccessTarget,
     FunSystemChunkPolicy, FunSystemClass, FunSystemDescriptor, FunSystemExecutionContract,
     FunSystemParam, FunSystemParamAccess, FunSystemSet, FunSystemValidationError, FunTableParam,
-    FunVirtualResourceParam, FunWaitTokenDirection, HandoffCommands, Or, Query, Res, ResMut,
+    FunVirtualResourceParam, FunWaitTokenDirection, HandoffCommands, Mut, Or, Query, Res, ResMut,
     SpatialCommands, TableChunkMut, TableChunkRef, TableMut, TableRef, VirtualResourceMut,
     VirtualResourceRef, With, Without, external_slab_virtual_resource_key, scheduler_component_id,
     scheduler_resource_id, scheduler_system_id, scheduler_table_resource_id,
@@ -74,6 +74,7 @@ pub use table::{
     TableLayoutAdvice, TableLayoutAdvisor,
 };
 pub use world::{
-    FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT, FunWorld, FunWorldBuilder, FunWorldDiagnostics,
-    FunWorldId, FunWorldMode, FunWorldSchedulerAuthority, FunWorldStorageBackend,
+    FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT, FunEntityMut, FunWorld, FunWorldBuilder,
+    FunWorldDiagnostics, FunWorldId, FunWorldMode, FunWorldQuery, FunWorldSchedulerAuthority,
+    FunWorldStorageBackend, SpawnedEntity,
 };

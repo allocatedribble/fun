@@ -1147,6 +1147,6 @@ mod tests {
             METAL_BINDING_MAPPING.table,
             BindingTableRealization::MetalArgumentBuffer
         );
-        assert!(DX12_BINDING_MAPPING.cache_key.warmup_only_creation);
+        const { assert!(DX12_BINDING_MAPPING.cache_key.warmup_only_creation) };
     }
 }

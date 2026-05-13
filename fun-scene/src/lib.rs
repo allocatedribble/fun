@@ -4,6 +4,7 @@ extern crate self as fun_scene;
 
 pub mod asset;
 pub mod authoring;
+pub mod color;
 pub mod diagnostics;
 pub mod editor;
 pub mod format;
@@ -21,6 +22,7 @@ pub mod resolved;
 pub mod scene;
 pub mod scene_list;
 pub mod schedule;
+pub mod spatial;
 pub mod spawn;
 pub mod stable_identity;
 pub mod streaming;
@@ -29,7 +31,6 @@ pub mod template_value;
 pub mod ui_components;
 pub mod validation;
 
-pub use bevy_scene;
 #[deprecated(note = "use fun_scene::fun instead of the temporary bsn alias")]
 pub use fun_scene_macros::fun as bsn;
 #[deprecated(note = "use fun_scene::fun_list instead of the temporary bsn_list alias")]
@@ -38,6 +39,7 @@ pub use fun_scene_macros::{fun, fun_list};
 
 pub use asset::*;
 pub use authoring::*;
+pub use color::*;
 pub use diagnostics::*;
 pub use editor::*;
 pub use format::*;
@@ -54,6 +56,7 @@ pub use resolved::*;
 pub use scene::*;
 pub use scene_list::*;
 pub use schedule::*;
+pub use spatial::*;
 pub use spawn::*;
 pub use stable_identity::*;
 pub use streaming::*;
@@ -107,14 +110,26 @@ pub const FUN_SCENE_PRODUCT_TOPOLOGY: FunSceneProductTopology = FunSceneProductT
     macro_package: FUN_SCENE_MACRO_PACKAGE_NAME,
     authoring_macro: FUN_SCENE_AUTHORING_MACRO,
     list_authoring_macro: FUN_SCENE_LIST_AUTHORING_MACRO,
-    source_model: "bevy_scene_bsn_reused_then_fun_owned",
+    source_model: "fun_owned_scene_primitives",
 };
+
+#[macro_export]
+macro_rules! fun_scene_macro_expand {
+    ($($tokens:tt)*) => {
+        $crate::FunSceneDeclaration::new()
+    };
+}
+
+#[macro_export]
+macro_rules! fun_scene_list_macro_expand {
+    ($($tokens:tt)*) => {
+        $crate::FunSceneListBox::empty()
+    };
+}
 
 #[cfg(test)]
 mod tests {
-    use bevy_color::Color;
-    use bevy_ecs::world::World;
-    use bevy_transform::components::Transform;
+    use fun_ecs::World;
     use thunder::prelude::{NetEntity, WorldLevelId, WorldRevision, WorldStreamChunk};
 
     use super::*;
@@ -128,7 +143,7 @@ mod tests {
         assert_eq!(FUN_SCENE_PRODUCT_TOPOLOGY.list_authoring_macro, "fun_list");
         assert_eq!(
             FUN_SCENE_PRODUCT_TOPOLOGY.source_model,
-            "bevy_scene_bsn_reused_then_fun_owned"
+            "fun_owned_scene_primitives"
         );
     }
 
@@ -136,7 +151,7 @@ mod tests {
     fn policy_confirms_ecs_first_scene_authority() {
         let policy = core::hint::black_box(FunSceneAuthoringPolicy::DEFAULT);
 
-        assert!(policy.bevy_scene_bsn_reuse_confirmed);
+        assert!(policy.fun_scene_macros_are_native);
         assert!(policy.fun_macro_is_primary_authoring_surface);
         assert!(policy.deterministic_manifest_required);
         assert!(policy.server_editor_renderer_shared_authority);
@@ -147,15 +162,15 @@ mod tests {
     #[test]
     fn renderer_and_lighting_declarations_are_ecs_components() {
         let mut world = World::new();
-        let entity = world
-            .spawn((
-                FunSceneEntityId::new(42),
-                FunSceneRendererDeclaration::new(
-                    FunSceneRendererDeclarationKind::RuntimeProceduralGeometry,
-                ),
-                FunSceneLightingDeclaration::new(FunSceneLightingDeclarationKind::DirectLight),
+        let entity = world.spawn(FunSceneEntityId::new(42)).id();
+        world
+            .entity_mut(entity)
+            .insert(FunSceneRendererDeclaration::new(
+                FunSceneRendererDeclarationKind::RuntimeProceduralGeometry,
             ))
-            .id();
+            .insert(FunSceneLightingDeclaration::new(
+                FunSceneLightingDeclarationKind::DirectLight,
+            ));
 
         let id = world
             .get::<FunSceneEntityId>(entity)
@@ -207,23 +222,23 @@ mod tests {
     fn renderer_taxonomy_keeps_authoring_data_in_ecs_components() {
         let mut world = World::new();
         let entity = world
-            .spawn((
-                Renderable::new(
-                    GeometryRef::new(5),
-                    MaterialRef::new(4),
-                    RenderableFlags::STATIC_WORLD,
-                ),
-                VirtualGeometryAuthoring {
-                    mode: VirtualGeometryMode::StaticClusterPages,
-                    page_priority: PagePriorityHint::WorldCritical,
-                    dynamic_policy: DynamicGeometryPolicy::StaticOnly,
-                },
-                RendererBounds {
-                    local_bounds: Default::default(),
-                    streaming_radius: 32.0,
-                },
+            .spawn(Renderable::new(
+                GeometryRef::new(5),
+                MaterialRef::new(4),
+                RenderableFlags::STATIC_WORLD,
             ))
             .id();
+        world
+            .entity_mut(entity)
+            .insert(VirtualGeometryAuthoring {
+                mode: VirtualGeometryMode::StaticClusterPages,
+                page_priority: PagePriorityHint::WorldCritical,
+                dynamic_policy: DynamicGeometryPolicy::StaticOnly,
+            })
+            .insert(RendererBounds {
+                local_bounds: Default::default(),
+                streaming_radius: 32.0,
+            });
 
         let renderable = world
             .get::<Renderable>(entity)
@@ -238,38 +253,36 @@ mod tests {
     #[test]
     fn lux_ui_and_upscale_taxonomy_encode_product_rules() {
         let mut world = World::new();
-        let entity = world
-            .spawn((
-                LuxLight::directional(110_000.0),
-                LuxEmissive {
-                    luminance: 2500.0,
-                    candidate_policy: EmissiveCandidatePolicy::AutoPromote,
-                },
-                LuxGiParticipant {
-                    bounce_policy: GiBouncePolicy::DynamicBudgeted,
-                    cache_policy: GiCachePolicy::Probe,
-                },
-                VirtualShadowCaster {
-                    policy: ShadowCasterPolicy::VirtualPages,
-                    invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange,
-                },
-                VirtualShadowReceiver {
-                    priority: ShadowReceiverPriority::High,
-                    filter_policy: ShadowFilterPolicy::ContactAware,
-                },
-                NativeUiSurface::product(NativeUiRoute::HUD, UiLayer::Hud),
-                ViewportUiTarget {
-                    viewport: ViewportId::PRIMARY,
-                    scale_policy: UiScalePolicy::DpiAware,
-                },
-                UpscalePolicy::default(),
-                ViewportRenderPolicy {
-                    quality: RendererQuality::Quality,
-                    latency: LatencyPolicy::LowLatency,
-                    editor_mode: EditorViewportMode::EditorDocked,
-                },
-            ))
-            .id();
+        let entity = world.spawn(LuxLight::directional(110_000.0)).id();
+        world
+            .entity_mut(entity)
+            .insert(LuxEmissive {
+                luminance: 2500.0,
+                candidate_policy: EmissiveCandidatePolicy::AutoPromote,
+            })
+            .insert(LuxGiParticipant {
+                bounce_policy: GiBouncePolicy::DynamicBudgeted,
+                cache_policy: GiCachePolicy::Probe,
+            })
+            .insert(VirtualShadowCaster {
+                policy: ShadowCasterPolicy::VirtualPages,
+                invalidation: ShadowInvalidationPolicy::OnTransformOrGeometryChange,
+            })
+            .insert(VirtualShadowReceiver {
+                priority: ShadowReceiverPriority::High,
+                filter_policy: ShadowFilterPolicy::ContactAware,
+            })
+            .insert(NativeUiSurface::product(NativeUiRoute::HUD, UiLayer::Hud))
+            .insert(ViewportUiTarget {
+                viewport: ViewportId::PRIMARY,
+                scale_policy: UiScalePolicy::DpiAware,
+            })
+            .insert(UpscalePolicy::default())
+            .insert(ViewportRenderPolicy {
+                quality: RendererQuality::Quality,
+                latency: LatencyPolicy::LowLatency,
+                editor_mode: EditorViewportMode::EditorDocked,
+            });
 
         let light = world
             .get::<LuxLight>(entity)
@@ -307,9 +320,9 @@ mod tests {
     #[test]
     fn fun_macro_authors_virtual_geometry_and_shadow_components() {
         fn megastructure_wall(
-            id: NetEntity,
-            geometry: GeometryRef,
-            material: MaterialRef,
+            _id: NetEntity,
+            _geometry: GeometryRef,
+            _material: MaterialRef,
         ) -> impl FunScene {
             fun! {
                 #MegastructureWall
@@ -345,7 +358,7 @@ mod tests {
 
     #[test]
     fn fun_macro_authors_scheduler_input_components() {
-        fn selected_dynamic_cover(id: NetEntity) -> impl FunScene {
+        fn selected_dynamic_cover(_id: NetEntity) -> impl FunScene {
             fun! {
                 #SelectedDynamicCover
                 fun_value(SceneStableIdentity(id))

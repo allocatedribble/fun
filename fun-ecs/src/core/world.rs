@@ -1,11 +1,14 @@
-use bevy_ecs::world::World;
+use std::{
+    any::{Any, TypeId, type_name},
+    collections::{BTreeMap, HashMap},
+};
 
 use crate::{
     EcsCrossDomainHandoffQueues, EcsDecodedPageQueue, EcsDerivedArtifactRegistry,
     EcsDirtyRegionLedger, EcsLuxHandoffQueue, EcsPageResidencyMap, EcsPageResidencyTable,
     EcsPhysicsCookQueue, EcsProceduralWorldManifest, EcsRendererHandoffQueue,
-    EcsSourceAcquireQueue, EcsStreamInterestTable, EcsStreamRequestQueue, FunWorldRevision,
-    RevisionCategory, WorldRevisionLedger,
+    EcsSourceAcquireQueue, EcsStreamInterestTable, EcsStreamRequestQueue, FunEntity,
+    FunEntityGeneration, FunWorldRevision, RevisionCategory, WorldRevisionLedger,
 };
 
 pub const FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT: u16 = 14;
@@ -30,19 +33,15 @@ impl FunWorldId {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum FunWorldMode {
-    BevyCompatibility = 0,
-    FunNative = 1,
     #[default]
-    Hybrid = 2,
+    FunNative = 0,
 }
 
 impl FunWorldMode {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::BevyCompatibility => "bevy_compatibility",
             Self::FunNative => "fun_native",
-            Self::Hybrid => "hybrid",
         }
     }
 }
@@ -50,25 +49,21 @@ impl FunWorldMode {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum FunWorldStorageBackend {
-    BevyWorld = 0,
-    FunNative = 1,
     #[default]
-    Hybrid = 2,
+    FunNative = 0,
 }
 
 impl FunWorldStorageBackend {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::BevyWorld => "bevy_world",
             Self::FunNative => "fun_native",
-            Self::Hybrid => "hybrid",
         }
     }
 
     #[must_use]
-    pub const fn hosts_bevy_world(self) -> bool {
-        matches!(self, Self::BevyWorld | Self::Hybrid)
+    pub const fn is_fun_native(self) -> bool {
+        matches!(self, Self::FunNative)
     }
 }
 
@@ -91,7 +86,7 @@ impl FunWorldSchedulerAuthority {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunWorldDiagnostics {
     pub initialized_spatial_resources: u16,
-    pub bevy_resources_mirrored: u16,
+    pub native_resources_registered: u16,
     pub storage_backend: FunWorldStorageBackend,
     pub scheduler_authority: FunWorldSchedulerAuthority,
 }
@@ -105,11 +100,7 @@ pub struct FunWorldBuilder {
 
 impl Default for FunWorldBuilder {
     fn default() -> Self {
-        Self {
-            id: FunWorldId::ROOT,
-            mode: FunWorldMode::Hybrid,
-            storage_backend: FunWorldStorageBackend::Hybrid,
-        }
+        Self::new()
     }
 }
 
@@ -118,8 +109,8 @@ impl FunWorldBuilder {
     pub const fn new() -> Self {
         Self {
             id: FunWorldId::ROOT,
-            mode: FunWorldMode::Hybrid,
-            storage_backend: FunWorldStorageBackend::Hybrid,
+            mode: FunWorldMode::FunNative,
+            storage_backend: FunWorldStorageBackend::FunNative,
         }
     }
 
@@ -142,20 +133,6 @@ impl FunWorldBuilder {
     }
 
     #[must_use]
-    pub const fn hybrid(mut self) -> Self {
-        self.mode = FunWorldMode::Hybrid;
-        self.storage_backend = FunWorldStorageBackend::Hybrid;
-        self
-    }
-
-    #[must_use]
-    pub const fn bevy_compatibility(mut self) -> Self {
-        self.mode = FunWorldMode::BevyCompatibility;
-        self.storage_backend = FunWorldStorageBackend::BevyWorld;
-        self
-    }
-
-    #[must_use]
     pub const fn fun_native(mut self) -> Self {
         self.mode = FunWorldMode::FunNative;
         self.storage_backend = FunWorldStorageBackend::FunNative;
@@ -164,8 +141,73 @@ impl FunWorldBuilder {
 
     #[must_use]
     pub fn build(self) -> FunWorld {
-        FunWorld::new(self.id, self.mode, self.storage_backend)
+        FunWorld::with_parts(self.id, self.mode, self.storage_backend)
     }
+}
+
+#[derive(Default)]
+struct FunEntityRecord {
+    components: HashMap<TypeId, Box<dyn Any>>,
+}
+
+pub struct SpawnedEntity {
+    entity: FunEntity,
+}
+
+impl SpawnedEntity {
+    #[must_use]
+    pub const fn id(&self) -> FunEntity {
+        self.entity
+    }
+}
+
+pub struct FunEntityMut<'world> {
+    entity: FunEntity,
+    record: &'world mut FunEntityRecord,
+}
+
+impl<'world> FunEntityMut<'world> {
+    pub fn insert<T: 'static>(&mut self, component: T) -> &mut Self {
+        self.record
+            .components
+            .insert(TypeId::of::<T>(), Box::new(component) as Box<dyn Any>);
+        self
+    }
+
+    pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.record
+            .components
+            .get_mut(&TypeId::of::<T>())?
+            .downcast_mut::<T>()
+    }
+
+    pub fn remove<T: 'static>(&mut self) -> Option<T> {
+        self.record
+            .components
+            .remove(&TypeId::of::<T>())
+            .and_then(|component| component.downcast::<T>().ok())
+            .map(|component| *component)
+    }
+
+    pub fn despawn(self) {
+        let _ = self.entity;
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunWorldQuery<T> {
+    marker: std::marker::PhantomData<T>,
+}
+
+impl<T> FunWorldQuery<T> {
+    pub fn iter<'world>(&'world mut self, _world: &'world FunWorld) -> std::iter::Empty<T> {
+        std::iter::empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunEntityLookupError {
+    pub entity: FunEntity,
 }
 
 pub struct FunWorld {
@@ -188,33 +230,26 @@ pub struct FunWorld {
     pub renderer_handoff_queue: EcsRendererHandoffQueue,
     pub lux_handoff_queue: EcsLuxHandoffQueue,
     pub physics_cook_queue: EcsPhysicsCookQueue,
-    bevy_world: Option<World>,
+    resources: HashMap<TypeId, Box<dyn Any>>,
+    entities: BTreeMap<FunEntity, FunEntityRecord>,
+    next_entity_slot: u64,
 }
 
 impl Default for FunWorld {
     fn default() -> Self {
-        Self::hybrid(FunWorldId::ROOT)
+        Self::fun_native(FunWorldId::ROOT)
     }
 }
 
 impl FunWorld {
     #[must_use]
-    pub fn hybrid(id: FunWorldId) -> Self {
-        Self::new(id, FunWorldMode::Hybrid, FunWorldStorageBackend::Hybrid)
-    }
-
-    #[must_use]
-    pub fn bevy_compatibility(id: FunWorldId) -> Self {
-        Self::new(
-            id,
-            FunWorldMode::BevyCompatibility,
-            FunWorldStorageBackend::BevyWorld,
-        )
+    pub fn new() -> Self {
+        Self::default()
     }
 
     #[must_use]
     pub fn fun_native(id: FunWorldId) -> Self {
-        Self::new(
+        Self::with_parts(
             id,
             FunWorldMode::FunNative,
             FunWorldStorageBackend::FunNative,
@@ -222,7 +257,7 @@ impl FunWorld {
     }
 
     #[must_use]
-    pub fn new(
+    pub fn with_parts(
         id: FunWorldId,
         mode: FunWorldMode,
         storage_backend: FunWorldStorageBackend,
@@ -251,7 +286,9 @@ impl FunWorld {
             renderer_handoff_queue: EcsRendererHandoffQueue::default(),
             lux_handoff_queue: EcsLuxHandoffQueue::default(),
             physics_cook_queue: EcsPhysicsCookQueue::default(),
-            bevy_world: storage_backend.hosts_bevy_world().then(World::new),
+            resources: HashMap::new(),
+            entities: BTreeMap::new(),
+            next_entity_slot: 1,
         };
         world.initialize_spatial_resources();
         world
@@ -273,26 +310,8 @@ impl FunWorld {
         self.physics_cook_queue = EcsPhysicsCookQueue::default();
         self.diagnostics.initialized_spatial_resources =
             FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT;
-        self.diagnostics.bevy_resources_mirrored = 0;
-        if let Some(bevy_world) = &mut self.bevy_world {
-            insert_spatial_resources_into_bevy(
-                bevy_world,
-                &self.procedural_world_manifest,
-                &self.spatial_page_table,
-                &self.residency_table,
-                &self.dirty_ledger,
-                &self.stream_interest_table,
-                &self.stream_request_queue,
-                &self.source_acquire_queue,
-                &self.decoded_page_queue,
-                &self.derived_artifact_registry,
-                &self.cross_domain_handoff_queues,
-                &self.renderer_handoff_queue,
-                &self.lux_handoff_queue,
-                &self.physics_cook_queue,
-            );
-            self.diagnostics.bevy_resources_mirrored = FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT;
-        }
+        self.diagnostics.native_resources_registered = FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT;
+        self.register_spatial_resources();
         let (_previous, new) = self
             .revision_ledger
             .advance_category(RevisionCategory::Structure);
@@ -305,13 +324,95 @@ impl FunWorld {
     }
 
     #[must_use]
-    pub fn bevy_world(&self) -> Option<&World> {
-        self.bevy_world.as_ref()
+    pub fn contains_resource<T: 'static>(&self) -> bool {
+        self.resources.contains_key(&TypeId::of::<T>())
+    }
+
+    pub fn insert_resource<T: 'static>(&mut self, resource: T) -> &mut Self {
+        self.resources
+            .insert(TypeId::of::<T>(), Box::new(resource) as Box<dyn Any>);
+        self
+    }
+
+    pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
+        self.resources
+            .remove(&TypeId::of::<T>())
+            .and_then(|resource| resource.downcast::<T>().ok())
+            .map(|resource| *resource)
+    }
+
+    pub fn init_resource<T: Default + 'static>(&mut self) -> &mut Self {
+        if !self.contains_resource::<T>() {
+            self.insert_resource(T::default());
+        }
+        self
     }
 
     #[must_use]
-    pub fn bevy_world_mut(&mut self) -> Option<&mut World> {
-        self.bevy_world.as_mut()
+    pub fn resource<T: 'static>(&self) -> &T {
+        self.resources
+            .get(&TypeId::of::<T>())
+            .and_then(|resource| resource.downcast_ref::<T>())
+            .unwrap_or_else(|| panic!("missing FUN ECS resource {}", type_name::<T>()))
+    }
+
+    pub fn resource_mut<T: 'static>(&mut self) -> &mut T {
+        self.resources
+            .get_mut(&TypeId::of::<T>())
+            .and_then(|resource| resource.downcast_mut::<T>())
+            .unwrap_or_else(|| panic!("missing FUN ECS resource {}", type_name::<T>()))
+    }
+
+    pub fn spawn<T: 'static>(&mut self, bundle: T) -> SpawnedEntity {
+        let entity = FunEntity::new(self.next_entity_slot, FunEntityGeneration::new(1));
+        self.next_entity_slot = self.next_entity_slot.saturating_add(1);
+
+        let mut record = FunEntityRecord::default();
+        record
+            .components
+            .insert(TypeId::of::<T>(), Box::new(bundle) as Box<dyn Any>);
+        self.entities.insert(entity, record);
+        SpawnedEntity { entity }
+    }
+
+    pub fn despawn(&mut self, entity: FunEntity) -> bool {
+        self.entities.remove(&entity).is_some()
+    }
+
+    pub fn entity_mut(&mut self, entity: FunEntity) -> FunEntityMut<'_> {
+        let record = self.entities.entry(entity).or_default();
+        FunEntityMut { entity, record }
+    }
+
+    pub fn get_mut<T: 'static>(&mut self, entity: FunEntity) -> Option<&mut T> {
+        self.entities
+            .get_mut(&entity)?
+            .components
+            .get_mut(&TypeId::of::<T>())?
+            .downcast_mut::<T>()
+    }
+
+    pub fn get_entity(&self, entity: FunEntity) -> Result<FunEntity, FunEntityLookupError> {
+        self.entities
+            .contains_key(&entity)
+            .then_some(entity)
+            .ok_or(FunEntityLookupError { entity })
+    }
+
+    #[must_use]
+    pub fn query<T>(&self) -> FunWorldQuery<T> {
+        FunWorldQuery {
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    #[must_use]
+    pub fn get<T: 'static>(&self, entity: FunEntity) -> Option<&T> {
+        self.entities
+            .get(&entity)?
+            .components
+            .get(&TypeId::of::<T>())?
+            .downcast_ref::<T>()
     }
 
     pub fn set_procedural_world_manifest(
@@ -320,50 +421,29 @@ impl FunWorld {
     ) -> Result<(), crate::EcsSpatialValidationError> {
         manifest.validate()?;
         self.procedural_world_manifest = manifest;
-        if let Some(bevy_world) = &mut self.bevy_world {
-            bevy_world.insert_resource(manifest);
-        }
+        self.insert_resource(manifest);
         let (_previous, new) = self
             .revision_ledger
             .advance_category(RevisionCategory::Structure);
         self.revision = new;
         Ok(())
     }
-}
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "mirrors the explicit acceptance resource set and keeps initialization grep-able"
-)]
-fn insert_spatial_resources_into_bevy(
-    bevy_world: &mut World,
-    procedural_world_manifest: &EcsProceduralWorldManifest,
-    spatial_page_table: &EcsPageResidencyTable,
-    residency_table: &EcsPageResidencyMap,
-    dirty_ledger: &EcsDirtyRegionLedger,
-    stream_interest_table: &EcsStreamInterestTable,
-    stream_request_queue: &EcsStreamRequestQueue,
-    source_acquire_queue: &EcsSourceAcquireQueue,
-    decoded_page_queue: &EcsDecodedPageQueue,
-    derived_artifact_registry: &EcsDerivedArtifactRegistry,
-    cross_domain_handoff_queues: &EcsCrossDomainHandoffQueues,
-    renderer_handoff_queue: &EcsRendererHandoffQueue,
-    lux_handoff_queue: &EcsLuxHandoffQueue,
-    physics_cook_queue: &EcsPhysicsCookQueue,
-) {
-    bevy_world.insert_resource(*procedural_world_manifest);
-    bevy_world.insert_resource(spatial_page_table.clone());
-    bevy_world.insert_resource(residency_table.clone());
-    bevy_world.insert_resource(dirty_ledger.clone());
-    bevy_world.insert_resource(stream_interest_table.clone());
-    bevy_world.insert_resource(stream_request_queue.clone());
-    bevy_world.insert_resource(source_acquire_queue.clone());
-    bevy_world.insert_resource(decoded_page_queue.clone());
-    bevy_world.insert_resource(derived_artifact_registry.clone());
-    bevy_world.insert_resource(cross_domain_handoff_queues.clone());
-    bevy_world.insert_resource(renderer_handoff_queue.clone());
-    bevy_world.insert_resource(lux_handoff_queue.clone());
-    bevy_world.insert_resource(physics_cook_queue.clone());
+    fn register_spatial_resources(&mut self) {
+        self.insert_resource(self.procedural_world_manifest);
+        self.insert_resource(self.spatial_page_table.clone());
+        self.insert_resource(self.residency_table.clone());
+        self.insert_resource(self.dirty_ledger.clone());
+        self.insert_resource(self.stream_interest_table.clone());
+        self.insert_resource(self.stream_request_queue.clone());
+        self.insert_resource(self.source_acquire_queue.clone());
+        self.insert_resource(self.decoded_page_queue.clone());
+        self.insert_resource(self.derived_artifact_registry.clone());
+        self.insert_resource(self.cross_domain_handoff_queues.clone());
+        self.insert_resource(self.renderer_handoff_queue.clone());
+        self.insert_resource(self.lux_handoff_queue.clone());
+        self.insert_resource(self.physics_cook_queue.clone());
+    }
 }
 
 #[cfg(test)]
@@ -378,11 +458,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hybrid_fun_world_initializes_spatial_resource_tables() {
+    fn native_fun_world_initializes_spatial_resource_tables() {
         let world = FunWorld::default();
 
-        assert_eq!(world.mode, FunWorldMode::Hybrid);
-        assert_eq!(world.storage_backend, FunWorldStorageBackend::Hybrid);
+        assert_eq!(world.mode, FunWorldMode::FunNative);
+        assert_eq!(world.storage_backend, FunWorldStorageBackend::FunNative);
         assert_eq!(
             world.diagnostics.initialized_spatial_resources,
             FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT
@@ -407,43 +487,40 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_fun_world_hosts_bevy_for_compatibility_not_scheduler_authority() {
-        let world = FunWorld::hybrid(FunWorldId::new(12));
-        let bevy_world = world.bevy_world().expect("hybrid hosts Bevy world");
+    fn native_fun_world_registers_spatial_resources_in_fun_storage() {
+        let world = FunWorld::fun_native(FunWorldId::new(12));
 
         assert_eq!(
-            world.scheduler_authority(),
-            FunWorldSchedulerAuthority::FunScheduler
-        );
-        assert_eq!(
-            world.diagnostics.bevy_resources_mirrored,
+            world.diagnostics.native_resources_registered,
             FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT
         );
-        assert!(bevy_world.contains_resource::<EcsProceduralWorldManifest>());
-        assert!(bevy_world.contains_resource::<EcsPageResidencyTable>());
-        assert!(bevy_world.contains_resource::<EcsPageResidencyMap>());
-        assert!(bevy_world.contains_resource::<EcsDirtyRegionLedger>());
-        assert!(bevy_world.contains_resource::<EcsStreamInterestTable>());
-        assert!(bevy_world.contains_resource::<EcsStreamRequestQueue>());
-        assert!(bevy_world.contains_resource::<EcsSourceAcquireQueue>());
-        assert!(bevy_world.contains_resource::<EcsDecodedPageQueue>());
-        assert!(bevy_world.contains_resource::<EcsDerivedArtifactRegistry>());
-        assert!(bevy_world.contains_resource::<EcsCrossDomainHandoffQueues>());
-        assert!(bevy_world.contains_resource::<EcsRendererHandoffQueue>());
-        assert!(bevy_world.contains_resource::<EcsLuxHandoffQueue>());
-        assert!(bevy_world.contains_resource::<EcsPhysicsCookQueue>());
+        assert!(world.contains_resource::<EcsProceduralWorldManifest>());
+        assert!(world.contains_resource::<EcsPageResidencyTable>());
+        assert!(world.contains_resource::<EcsPageResidencyMap>());
+        assert!(world.contains_resource::<EcsDirtyRegionLedger>());
+        assert!(world.contains_resource::<EcsStreamInterestTable>());
+        assert!(world.contains_resource::<EcsStreamRequestQueue>());
+        assert!(world.contains_resource::<EcsSourceAcquireQueue>());
+        assert!(world.contains_resource::<EcsDecodedPageQueue>());
+        assert!(world.contains_resource::<EcsDerivedArtifactRegistry>());
+        assert!(world.contains_resource::<EcsCrossDomainHandoffQueues>());
+        assert!(world.contains_resource::<EcsRendererHandoffQueue>());
+        assert!(world.contains_resource::<EcsLuxHandoffQueue>());
+        assert!(world.contains_resource::<EcsPhysicsCookQueue>());
     }
 
     #[test]
-    fn native_fun_world_keeps_bevy_absent_but_resource_tables_ready() {
-        let world = FunWorld::fun_native(FunWorldId::new(44));
+    fn native_fun_world_can_store_resources_and_spawn_entities() {
+        #[derive(Debug, Default, PartialEq, Eq)]
+        struct TestResource(u32);
+        #[derive(Debug, PartialEq, Eq)]
+        struct TestComponent(u32);
 
-        assert_eq!(world.storage_backend, FunWorldStorageBackend::FunNative);
-        assert!(world.bevy_world().is_none());
-        assert_eq!(
-            world.diagnostics.initialized_spatial_resources,
-            FUN_WORLD_INITIALIZED_SPATIAL_RESOURCE_COUNT
-        );
-        assert_eq!(world.diagnostics.bevy_resources_mirrored, 0);
+        let mut world = FunWorld::default();
+        world.insert_resource(TestResource(7));
+        let entity = world.spawn(TestComponent(11)).id();
+
+        assert_eq!(world.resource::<TestResource>().0, 7);
+        assert_eq!(world.get::<TestComponent>(entity), Some(&TestComponent(11)));
     }
 }

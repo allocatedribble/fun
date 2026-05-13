@@ -73,6 +73,11 @@ impl FunEntity {
     pub const fn scheduler_bits(self) -> u64 {
         ((self.generation.get() as u64) << 32) | (self.slot & 0xffff_ffff)
     }
+
+    #[must_use]
+    pub const fn to_bits(self) -> u64 {
+        self.scheduler_bits()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,4 +1,10 @@
-pub use bevy_scene::{OnTemplate as FunOnTemplate, on as fun_on};
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FunOnTemplate;
+
+#[must_use]
+pub fn fun_on<T>(_target: T) -> FunOnTemplate {
+    FunOnTemplate
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FunSceneObserverPolicy {

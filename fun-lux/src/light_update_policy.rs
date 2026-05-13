@@ -521,7 +521,7 @@ impl LuxLightRemovalStrategy {
 
 /// Typed Pass 6 policy bundle. Carries the per-kind policy
 /// + the removal strategy so callers consume a single
-/// typed handle.
+///   typed handle.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LuxLightUpdatePolicy {
     pub schema_version: u16,

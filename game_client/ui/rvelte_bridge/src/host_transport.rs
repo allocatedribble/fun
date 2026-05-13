@@ -3,8 +3,8 @@
 //! Bridges rvelte's typed [`FunNativeHostBridge`] to the
 //! `fun_host` wire format. The translator mirrors `fun_host`'s
 //! `FunHostCommandRequest` / `FunHostCommandResponse` /
-//! `FunHostCommandErrorCode` shapes without pulling Bevy into the
-//! adapter crate; the consumer (a Bevy plugin in `game_client` or
+//! `FunHostCommandErrorCode` shapes without pulling RetiredEngine into the
+//! adapter crate; the consumer (a RetiredEngine plugin in `game_client` or
 //! `fun_host` itself) translates between the wire types defined
 //! here and `fun_host`'s `Message`-derived structs.
 //!
@@ -367,7 +367,7 @@ struct PendingRequest {
 /// The translator is the **single** product-side entry point that
 /// ferries typed messages between the wire format and the rvelte
 /// bridge. Pass-73 keeps the implementation pure-data; the actual
-/// transport (Bevy events, IPC, mock fixture) is a separate
+/// transport (RetiredEngine events, IPC, mock fixture) is a separate
 /// concern handled by the consumer.
 pub struct HostBridgeTranslator {
     bridge: FunNativeHostBridge,

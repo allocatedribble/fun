@@ -3,18 +3,18 @@
 ## Purpose
 
 DX12 p95 can suffer when render scratch textures or buffers are recreated during
-steady-state frames. The Bevy fork already has a transient arena that supports
+steady-state frames. The RetiredEngine fork already has a transient arena that supports
 descriptor-key reuse across frames and conservative same-frame aliasing when
 declared pass lifetimes do not overlap. This document defines the Tier 7
 measurement and cleanup contract.
 
 ## Runtime Metrics
 
-`bevy_render::transient` emits the frame summary when render diagnostics enable
+`retired_engine_render::transient` emits the frame summary when render diagnostics enable
 that target. `fun-bench run-stack --render-diagnostics` now enables:
 
 ```text
-bevy_render::transient=debug
+retired_engine_render::transient=debug
 ```
 
 The frame summary includes the existing metrics:
@@ -97,12 +97,12 @@ Create patterns:
 - `sporadic`: descriptor miss that is not resize-like or every-frame.
 
 Label-variant rows prove label drift separately from descriptor reuse. Labels
-are not part of the Bevy transient arena reuse key, so label-only drift is
+are not part of the RetiredEngine transient arena reuse key, so label-only drift is
 reported but does not prevent reuse.
 
 ## Canonical Descriptors
 
-`bevy_render` exposes:
+`retired_engine_render` exposes:
 
 ```rust
 canonical_transient_texture_desc(kind, size)
@@ -133,7 +133,7 @@ report shows their create/reuse behavior.
 
 ## Alias Pools
 
-The Bevy fork records alias buckets as diagnostic policy:
+The RetiredEngine fork records alias buckets as diagnostic policy:
 
 - `HdrFullRes`
 - `HdrHalfRes`
@@ -148,7 +148,7 @@ a render-graph lifetime map:
 | resource family | first use | last use | pool | native interop |
 |---|---:|---:|---|---|
 | meshlet dummy render target | 35 | 45 | `TinyRenderAttachment` | no |
-| NATIVE_UI UI ring / Bevy UI image | n/a | n/a | excluded | yes |
+| NATIVE_UI UI ring / RetiredEngine UI image | n/a | n/a | excluded | yes |
 | DLSS SR/RR input/output | n/a | n/a | excluded | yes |
 | Solari RR guide resources | n/a | n/a | excluded | future native DLSS input |
 | readback/capture resources | n/a | n/a | excluded | synchronization/capture |

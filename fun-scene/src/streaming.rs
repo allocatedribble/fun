@@ -1,9 +1,10 @@
-use bevy_transform::components::Transform;
 use thunder::prelude::{
     AuthorityMode, PackedColorRgba8, Quantization, QuantizedQuat, QuantizedTransform3,
     QuantizedVec3, ReplicationClass, WorldCatalogRef, WorldCollider, WorldEntitySpec, WorldLevelId,
     WorldPrimitive, WorldRevision, WorldStreamChunk,
 };
+
+use crate::Transform;
 
 pub const WORLD_STREAM_ENTITIES_PER_CHUNK: usize = 16;
 pub const MAX_WORLD_STREAM_CHUNKS: usize = u16::MAX as usize;

@@ -56,7 +56,7 @@
 //! the typed proof-frame gate; Tier 8 extends that contract to
 //! the direct DX12 / Vulkan / Metal paths.
 
-use bevy_ecs::prelude::Resource;
+use fun_ecs::Resource;
 
 use crate::backend::NativeBackend;
 

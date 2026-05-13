@@ -1363,7 +1363,7 @@ mod tests {
 
     #[test]
     fn procedural_terrain_renderer_policy_consumes_artifacts_without_generating_truth() {
-        assert!(!PROCEDURAL_TERRAIN_RENDERER_GENERATES_TERRAIN_TRUTH);
+        const { assert!(!PROCEDURAL_TERRAIN_RENDERER_GENERATES_TERRAIN_TRUTH) };
         assert_eq!(
             PROCEDURAL_TERRAIN_RENDERER_HANDOFF_KINDS,
             [

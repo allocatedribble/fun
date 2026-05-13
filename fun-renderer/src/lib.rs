@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod asset_prep;
 pub mod backend;
 pub mod benchmark;
@@ -10,105 +10,103 @@ pub mod binding;
 // typed product cloud renderer is owned by `fun-renderer`;
 // the typed `fun_render::sky` module stays as a typed
 // bridge / migration donor that extracts settings,
-// weather, and signals from the typed Bevy app world.
+// weather, and signals from the typed RetiredEngine app world.
 #[cfg(feature = "wgpu_bridge")]
 pub mod bridge;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_diagnostics;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_executor;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_gpu_resource_set;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_passes;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_receive_lux_lighting;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_resources;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shaders;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_director;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_dispatch_feedback;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_golden_scenes;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_live_executor;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_look_tuning;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_passes;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_pipelines;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_runtime_diagnostics;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod cloud_shadow_runtime_probe;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod clouds;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(feature = "fun_ecs")]
 pub mod component_api;
+#[cfg(feature = "scene_contract")]
 pub mod default_flip;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod dx12_production;
+#[cfg(feature = "scene_contract")]
 pub mod dynamic_geometry;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod ecs;
 pub mod ecs_handoff;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod exposure_pass;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod extraction;
 pub mod frame_generation;
 pub mod frame_graph;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod fun_render_cloud_retirement;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod fun_render_route_audit;
 pub mod gpu_driven;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod gpu_driven_runtime;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod hdr_pipeline;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod heuristics;
 pub mod ir;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod lighting_stack;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub mod live_proof_frame_executor;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_diagnostics;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_direct_lighting_cloud_layer;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_direct_lighting_cloud_shader;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_graph;
-#[cfg(all(
-    feature = "bevy_ecs",
-    feature = "wgpu_bridge",
-    feature = "fun_renderer_core"
-))]
+#[cfg(any())]
 pub mod lux_live_lighting;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_material_cloud_layer;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_material_pbr_cloud_shader;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_passes;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_resources;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_shadow_aux_layer;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_volumetric_cloud_layer;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_volumetric_executor;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod lux_volumetric_light_inject_cloud_shader;
 #[cfg(feature = "experimental_renderer_ml")]
 pub mod ml;
@@ -116,106 +114,114 @@ pub mod page;
 #[cfg(feature = "schedule_contract")]
 pub mod page_scheduler;
 pub mod parity;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passb_proof_frame_runtime;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passc_runtime_cache_burndown;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passd_gpu_scene_indirect_draw;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passe_clustered_lighting_virtual_shadow_mvp;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passf_temporal_stack;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passg_native_ui_product_route;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod passh_native_command_list_fail_closed;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub mod passi_gpu_driven_compute_indirect;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub mod passj_clustered_lighting_live;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub mod passk_temporal_reconstruction_live;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub mod passl_native_ui_live;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub mod passm_windowed_surface_present;
 pub mod pipeline;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod plugin;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod post_process;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod presentation;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod presentation_stack;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod proof_scene;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod quality_audit_contract;
 pub mod queue_scheduler;
 #[cfg(feature = "schedule_graph")]
 pub mod render_work_graph;
+#[cfg(feature = "fun_ecs")]
+pub mod renderer_integration;
+#[cfg(feature = "scene_contract")]
 pub mod research;
 pub mod resource;
+#[cfg(feature = "scene_contract")]
 pub mod scene;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod scene_streaming;
 #[cfg(feature = "schedule_contract")]
 pub mod schedule_contract;
 pub mod scheduler;
 pub mod settings;
 pub mod shader;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod taa;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier0_proof_frame_gate;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier1_cache_backed_optimization;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier2_gpu_driven_proof;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier3_lighting_shadows_at_scale;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier4_transient_memory_and_barriers;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier5_temporal_reconstruction;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier6_native_ui_rendering;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier7_vendor_sdks_and_frame_generation;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod tier8_direct_backend_experiments;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub mod tonemap_pass;
 pub mod ui;
 pub mod upscaling;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub mod vendor_sdk_bridge;
 pub mod virtual_geometry;
 pub mod virtual_shadow;
 
 pub use ecs_handoff::*;
 pub use fun_ecs;
+#[cfg(feature = "scene_contract")]
 pub use fun_lux;
+#[cfg(feature = "scene_contract")]
 pub use fun_scene;
 pub use parity::*;
 
 pub const FUN_RENDERER_SCHEMA_VERSION: u16 = 1;
 pub const FUN_RENDERER_PACKAGE_NAME: &str = "fun-renderer";
 pub const FUN_RENDERER_CRATE_NAME: &str = "fun_renderer";
-pub const FUN_RENDER_BRIDGE_PACKAGE_NAME: &str = "fun_render";
+pub const FUN_RENDER_DONOR_PACKAGE_NAME: &str = "fun_render";
 pub const FUN_RENDERER_AI_OWNER_PACKAGE_NAME: &str = "fun-ai";
-pub const FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME: &str = fun_scene::FUN_SCENE_PACKAGE_NAME;
-pub const FUN_RENDERER_REQUIRES_BEVY_ECS: bool = true;
+pub const FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME: &str = "fun-scene";
+pub const FUN_RENDERER_SCENE_OWNER_CRATE_NAME: &str = "fun_scene";
+pub const FUN_RENDERER_LIGHTING_OWNER_PACKAGE_NAME: &str = "fun-lux";
+pub const FUN_RENDERER_LIGHTING_OWNER_CRATE_NAME: &str = "fun_lux";
+pub const FUN_RENDERER_REQUIRES_RETIRED_ENGINE_ECS: bool = false;
 pub const FUN_RENDERER_RUNTIME_BACKEND_ENV: &str = "FUN_RENDERER_BACKEND";
-pub const FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION: &str =
-    "fun_render::bridge::RendererBridgeSettings::from_env";
+pub const FUN_RENDERER_BACKEND_FUTURE_DEFAULT_FLIP_LOCATION: &str = "fun-engine::RendererModule";
 pub const FUN_RENDERER_CURRENT_AUTO_RESOLUTION: FunRendererRuntimeBackend =
     FunRendererRuntimeBackend::Fun;
 
 const _: () = {
-    assert!(FUN_RENDERER_REQUIRES_BEVY_ECS);
+    assert!(!FUN_RENDERER_REQUIRES_RETIRED_ENGINE_ECS);
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -471,7 +477,7 @@ pub enum FunRendererOwner {
     Lux,
     FunAi,
     FunRenderBridge,
-    BevyLowLevel,
+    RetiredEngineLowLevel,
 }
 
 impl FunRendererOwner {
@@ -479,23 +485,23 @@ impl FunRendererOwner {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::FunRenderer => FUN_RENDERER_CRATE_NAME,
-            Self::Lux => fun_lux::FUN_LUX_CRATE_NAME,
+            Self::Lux => FUN_RENDERER_LIGHTING_OWNER_CRATE_NAME,
             Self::FunAi => FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
-            Self::FunRenderBridge => FUN_RENDER_BRIDGE_PACKAGE_NAME,
-            Self::BevyLowLevel => "bevy_low_level",
+            Self::FunRenderBridge => FUN_RENDER_DONOR_PACKAGE_NAME,
+            Self::RetiredEngineLowLevel => "retired_engine_low_level",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FunRendererBevyRole {
+pub enum FunRendererRetiredEngineRole {
     None,
     EcsExtractionBridge,
     MinimalPrimitiveSource,
     LowLevelBackendHook,
 }
 
-impl FunRendererBevyRole {
+impl FunRendererRetiredEngineRole {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -512,7 +518,7 @@ pub struct FunRendererSubsystemDescriptor {
     pub stable_id: &'static str,
     pub subsystem: FunRendererSubsystem,
     pub owner: FunRendererOwner,
-    pub bevy_role: FunRendererBevyRole,
+    pub retired_engine_role: FunRendererRetiredEngineRole,
     pub default_renderer_core: bool,
     pub reusable_model_runtime_allowed: bool,
 }
@@ -522,7 +528,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.renderer_core",
         subsystem: FunRendererSubsystem::RendererCore,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::None,
+        retired_engine_role: FunRendererRetiredEngineRole::None,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -530,7 +536,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.virtual_geometry",
         subsystem: FunRendererSubsystem::VirtualGeometry,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::MinimalPrimitiveSource,
+        retired_engine_role: FunRendererRetiredEngineRole::MinimalPrimitiveSource,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -538,7 +544,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.virtual_shadows",
         subsystem: FunRendererSubsystem::VirtualShadows,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::LowLevelBackendHook,
+        retired_engine_role: FunRendererRetiredEngineRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -546,7 +552,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.gpu_scene_database",
         subsystem: FunRendererSubsystem::GpuSceneDatabase,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::EcsExtractionBridge,
+        retired_engine_role: FunRendererRetiredEngineRole::EcsExtractionBridge,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -554,7 +560,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.frame_graph",
         subsystem: FunRendererSubsystem::FrameGraph,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::LowLevelBackendHook,
+        retired_engine_role: FunRendererRetiredEngineRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -562,7 +568,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.render_artifact_realization",
         subsystem: FunRendererSubsystem::RenderArtifactRealization,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::None,
+        retired_engine_role: FunRendererRetiredEngineRole::None,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -570,7 +576,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.ui_composition",
         subsystem: FunRendererSubsystem::UiComposition,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::LowLevelBackendHook,
+        retired_engine_role: FunRendererRetiredEngineRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -578,7 +584,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.upscaling_frame_generation",
         subsystem: FunRendererSubsystem::UpscalingFrameGeneration,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::LowLevelBackendHook,
+        retired_engine_role: FunRendererRetiredEngineRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -586,7 +592,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.backend_abstraction",
         subsystem: FunRendererSubsystem::BackendAbstraction,
         owner: FunRendererOwner::FunRenderer,
-        bevy_role: FunRendererBevyRole::LowLevelBackendHook,
+        retired_engine_role: FunRendererRetiredEngineRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -594,7 +600,7 @@ pub const FUN_RENDERER_SUBSYSTEM_DESCRIPTORS: [FunRendererSubsystemDescriptor; 1
         stable_id: "fun_renderer.subsystem.lighting",
         subsystem: FunRendererSubsystem::Lighting,
         owner: FunRendererOwner::Lux,
-        bevy_role: FunRendererBevyRole::LowLevelBackendHook,
+        retired_engine_role: FunRendererRetiredEngineRole::LowLevelBackendHook,
         default_renderer_core: true,
         reusable_model_runtime_allowed: false,
     },
@@ -636,8 +642,8 @@ pub struct FunRendererUiRuntimePolicy {
     /// Always equals
     /// [`FUN_RENDERER_LIB_LAYER_NATIVE_RVELTE_PACKET_SCHEMA`].
     pub native_ui_product_packet_schema: &'static str,
-    pub bevy_ui_runtime_product_allowed: bool,
-    pub bevy_ui_test_only_allowed: bool,
+    pub retired_engine_ui_runtime_product_allowed: bool,
+    pub retired_engine_ui_test_only_allowed: bool,
     pub launcher_ui_owner: &'static str,
     pub editor_ui_owner: &'static str,
     pub game_hud_owner: &'static str,
@@ -650,8 +656,8 @@ pub const FUN_RENDERER_UI_RUNTIME_POLICY: FunRendererUiRuntimePolicy = FunRender
     native_rvelte_is_product_ui: true,
     native_ui_role_status: FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS,
     native_ui_product_packet_schema: FUN_RENDERER_LIB_LAYER_NATIVE_RVELTE_PACKET_SCHEMA,
-    bevy_ui_runtime_product_allowed: false,
-    bevy_ui_test_only_allowed: true,
+    retired_engine_ui_runtime_product_allowed: false,
+    retired_engine_ui_test_only_allowed: true,
     launcher_ui_owner: "native_rvelte_fun_ui",
     editor_ui_owner: "native_rvelte_fun_ui",
     game_hud_owner: "native_rvelte_fun_ui",
@@ -999,7 +1005,7 @@ pub struct FunRendererProductTopology {
     pub scene_crate: &'static str,
     pub lighting_package: &'static str,
     pub lighting_crate: &'static str,
-    pub bevy_bridge_package: &'static str,
+    pub retired_donor_package: &'static str,
     pub ai_owner_package: &'static str,
 }
 
@@ -1008,187 +1014,189 @@ pub const FUN_RENDERER_PRODUCT_TOPOLOGY: FunRendererProductTopology = FunRendere
     renderer_crate: FUN_RENDERER_CRATE_NAME,
     ecs_package: fun_ecs::FUN_ECS_PACKAGE_NAME,
     ecs_crate: fun_ecs::FUN_ECS_CRATE_NAME,
-    scene_package: fun_scene::FUN_SCENE_PACKAGE_NAME,
-    scene_crate: fun_scene::FUN_SCENE_CRATE_NAME,
-    lighting_package: fun_lux::FUN_LUX_PACKAGE_NAME,
-    lighting_crate: fun_lux::FUN_LUX_CRATE_NAME,
-    bevy_bridge_package: FUN_RENDER_BRIDGE_PACKAGE_NAME,
+    scene_package: FUN_RENDERER_SCENE_OWNER_PACKAGE_NAME,
+    scene_crate: FUN_RENDERER_SCENE_OWNER_CRATE_NAME,
+    lighting_package: FUN_RENDERER_LIGHTING_OWNER_PACKAGE_NAME,
+    lighting_crate: FUN_RENDERER_LIGHTING_OWNER_CRATE_NAME,
+    retired_donor_package: FUN_RENDER_DONOR_PACKAGE_NAME,
     ai_owner_package: FUN_RENDERER_AI_OWNER_PACKAGE_NAME,
 };
 
 pub use api::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use asset_prep::*;
 pub use backend::*;
 pub use benchmark::*;
 // Pass C0 / C1 typed cloud renderer re-exports.
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_diagnostics::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_executor::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_gpu_resource_set::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_passes::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_receive_lux_lighting::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_resources::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shaders::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_director::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_dispatch_feedback::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_golden_scenes::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_live_executor::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_look_tuning::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_passes::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_pipelines::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_runtime_diagnostics::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use cloud_shadow_runtime_probe::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use clouds::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(feature = "fun_ecs")]
 pub use component_api::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use dx12_production::*;
+#[cfg(feature = "scene_contract")]
 pub use dynamic_geometry::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use ecs::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use extraction::*;
 pub use frame_graph::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use fun_render_cloud_retirement::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use fun_render_route_audit::*;
 pub use gpu_driven::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use gpu_driven_runtime::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use heuristics::*;
 pub use ir::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use lighting_stack::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub use live_proof_frame_executor::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_direct_lighting_cloud_layer::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_direct_lighting_cloud_shader::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_material_cloud_layer::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_material_pbr_cloud_shader::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_shadow_aux_layer::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_volumetric_cloud_layer::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_volumetric_light_inject_cloud_shader::*;
+#[cfg(feature = "fun_ecs")]
+pub use renderer_integration::*;
 // Pass V2.5 typed renderer-side HDR-post modules.
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use exposure_pass::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use hdr_pipeline::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_diagnostics::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_graph::*;
-#[cfg(all(
-    feature = "bevy_ecs",
-    feature = "wgpu_bridge",
-    feature = "fun_renderer_core"
-))]
+#[cfg(any())]
 pub use lux_live_lighting::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_passes::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_resources::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use lux_volumetric_executor::*;
 #[cfg(feature = "experimental_renderer_ml")]
 pub use ml::*;
 pub use page::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passb_proof_frame_runtime::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passc_runtime_cache_burndown::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passd_gpu_scene_indirect_draw::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passe_clustered_lighting_virtual_shadow_mvp::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passf_temporal_stack::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passg_native_ui_product_route::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use passh_native_command_list_fail_closed::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub use passi_gpu_driven_compute_indirect::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub use passj_clustered_lighting_live::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub use passk_temporal_reconstruction_live::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub use passl_native_ui_live::*;
-#[cfg(all(feature = "bevy_ecs", feature = "wgpu_bridge"))]
+#[cfg(any())]
 pub use passm_windowed_surface_present::*;
 pub use pipeline::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use plugin::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use post_process::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use presentation::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use presentation_stack::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use proof_scene::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use quality_audit_contract::*;
 pub use queue_scheduler::*;
+#[cfg(feature = "scene_contract")]
 pub use research::*;
 pub use resource::*;
+#[cfg(feature = "scene_contract")]
 pub use scene::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use scene_streaming::*;
 pub use scheduler::*;
 pub use settings::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use taa::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier0_proof_frame_gate::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier1_cache_backed_optimization::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier2_gpu_driven_proof::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier3_lighting_shadows_at_scale::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier4_transient_memory_and_barriers::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier5_temporal_reconstruction::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier6_native_ui_rendering::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier7_vendor_sdks_and_frame_generation::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use tier8_direct_backend_experiments::*;
-#[cfg(all(feature = "bevy_ecs", feature = "fun_renderer_core"))]
+#[cfg(any())]
 pub use tonemap_pass::*;
+#[cfg(any(feature = "scene_contract", feature = "native_ui_adapter"))]
 pub use ui::*;
-#[cfg(feature = "bevy_ecs")]
+#[cfg(any())]
 pub use vendor_sdk_bridge::*;
 pub use virtual_geometry::*;
 pub use virtual_shadow::*;
@@ -1227,7 +1235,7 @@ mod tests {
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.lighting_package, "fun-lux");
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.lighting_crate, "fun_lux");
         assert_eq!(
-            FUN_RENDERER_PRODUCT_TOPOLOGY.bevy_bridge_package,
+            FUN_RENDERER_PRODUCT_TOPOLOGY.retired_donor_package,
             "fun_render"
         );
         assert_eq!(FUN_RENDERER_PRODUCT_TOPOLOGY.ai_owner_package, "fun-ai");
@@ -1282,7 +1290,7 @@ mod tests {
     }
 
     #[test]
-    fn product_ui_policy_prohibits_runtime_bevy_ui() {
+    fn product_ui_policy_prohibits_runtime_retired_engine_ui() {
         let policy = core::hint::black_box(FUN_RENDERER_UI_RUNTIME_POLICY);
 
         // Pass 20 demoted NATIVE_UI/Svelte from the product UI surface; the
@@ -1294,8 +1302,8 @@ mod tests {
             policy.native_ui_role_status,
             FUN_RENDERER_LIB_LAYER_NATIVE_UI_ROLE_STATUS
         );
-        assert!(!policy.bevy_ui_runtime_product_allowed);
-        assert!(policy.bevy_ui_test_only_allowed);
+        assert!(!policy.retired_engine_ui_runtime_product_allowed);
+        assert!(policy.retired_engine_ui_test_only_allowed);
         assert_eq!(policy.game_hud_owner, "native_rvelte_fun_ui");
         assert_eq!(policy.launcher_ui_owner, "native_rvelte_fun_ui");
         assert_eq!(policy.editor_ui_owner, "native_rvelte_fun_ui");
@@ -1311,13 +1319,10 @@ mod tests {
     /// (2) the workspace-map / subsystem taxonomy
     ///     (`FunRendererSubsystem::UiComposition`), which replaces
     ///     the older `NativeUiCompositor` variant,
-    /// (3) the rvelte bridge route selection
-    ///     (`Tier6RvelteBridgeRouteSelection`), which is the typed
-    ///     `--rvelte-bridge=<route>` ingest contract,
-    /// (4) the native UI adapter
+    /// (3) the native UI adapter
     ///     (`NativeUiProductPolicy::PRODUCT_DEFAULT`), which is the
     ///     authoritative typed contract, and
-    /// (5) the NATIVE_UI role status (`NativeUiRenderRoleStatus`), which is
+    /// (4) the NATIVE_UI role status (`NativeUiRenderRoleStatus`), which is
     ///     the typed legacy-status taxonomy,
     /// and asserts that every source of truth agrees NATIVE_UI/Svelte is
     /// demoted to legacy/diagnostic and the product UI surface is
@@ -1325,7 +1330,6 @@ mod tests {
     #[cfg(feature = "native_ui_adapter")]
     #[test]
     fn source_of_truth_ui_policy_aligns_across_lib_subsystem_adapter_and_rvelte_bridge() {
-        use crate::tier6_native_ui_rendering::Tier6RvelteBridgeRouteSelection;
         use crate::ui::native_adapter::{
             NATIVE_UI_ADAPTER_PRODUCT_DEFAULT, NativeUiProductPolicy, NativeUiRenderRoleStatus,
         };
@@ -1357,16 +1361,7 @@ mod tests {
             FunRendererOwner::FunRenderer
         );
 
-        // (3) Rvelte bridge route parser accepts the canonical
-        // `--rvelte-bridge=<route>` ingest argument and produces a
-        // typed `Selected` value rather than `UnknownArgValue`.
-        let parsed = Tier6RvelteBridgeRouteSelection::parse_arg("--rvelte-bridge=hud");
-        assert!(matches!(
-            parsed,
-            Tier6RvelteBridgeRouteSelection::Selected(_)
-        ));
-
-        // (4) Native UI adapter is the authoritative typed contract.
+        // (3) Native UI adapter is the authoritative typed contract.
         let adapter_policy = NativeUiProductPolicy::PRODUCT_DEFAULT;
         assert!(adapter_policy.product_ui_path_is_native_rvelte);
         assert_eq!(
@@ -1376,7 +1371,7 @@ mod tests {
         assert!(adapter_policy.fun_render_adapter_owns_packet_ingest);
         assert!(adapter_policy.renderer_packet_validation_required);
 
-        // (5) Lib-layer mirrors must match the typed adapter values
+        // (4) Lib-layer mirrors must match the typed adapter values
         // exactly, so the two sources of truth cannot drift.
         assert_eq!(
             lib_policy.native_ui_role_status,

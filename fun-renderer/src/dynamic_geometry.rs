@@ -72,6 +72,48 @@ impl Default for DynamicGeometryTransform {
     }
 }
 
+impl From<&fun_scene::Transform> for DynamicGeometryTransform {
+    fn from(transform: &fun_scene::Transform) -> Self {
+        Self {
+            translation: transform.translation.to_array(),
+            rotation_xyzw: [
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+                transform.rotation.w,
+            ],
+            scale: transform.scale.to_array(),
+        }
+    }
+}
+
+impl From<fun_scene::Transform> for DynamicGeometryTransform {
+    fn from(transform: fun_scene::Transform) -> Self {
+        Self::from(&transform)
+    }
+}
+
+impl From<&fun_scene::GlobalTransform> for DynamicGeometryTransform {
+    fn from(transform: &fun_scene::GlobalTransform) -> Self {
+        Self {
+            translation: transform.translation.to_array(),
+            rotation_xyzw: [
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+                transform.rotation.w,
+            ],
+            scale: transform.scale.to_array(),
+        }
+    }
+}
+
+impl From<fun_scene::GlobalTransform> for DynamicGeometryTransform {
+    fn from(transform: fun_scene::GlobalTransform) -> Self {
+        Self::from(&transform)
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct DynamicGeometryPayload {
     pub vertex_count: u32,

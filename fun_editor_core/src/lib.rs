@@ -111,7 +111,7 @@ pub const FUN_EDITOR_COMMANDS: &[FunEditorCommandDescriptor] = &[
         id: SCENE_OPERATION_APPLY,
         category: FunEditorCommandCategory::Scene,
         service: FunEditorCoreService::FunSceneIndex,
-        summary: "Applies validated typed scene operations through fun-scene and Bevy ECS.",
+        summary: "Applies validated typed scene operations through fun-scene and RetiredEngine ECS.",
     },
     FunEditorCommandDescriptor {
         id: PREVIEW_RENDERER_ENSURE,

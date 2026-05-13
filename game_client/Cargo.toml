@@ -7,7 +7,7 @@ version.workspace = true
 workspace = true
 
 [features]
-default = ["dlss", "native_ui_routes", "volumetric_clouds"]
+default = []
 release-telemetry = [
     "client-telemetry",
     "crash-telemetry",
@@ -18,70 +18,21 @@ client-telemetry = ["dep:fun_telemetry_core"]
 server-ingest = []
 crash-telemetry = ["client-telemetry"]
 debug-diagnostics = [
-    "diagnostics",
-    "render_diagnostics",
     "client-telemetry",
     "telemetry-retention",
     "telemetry-rendered-views",
 ]
-debug-benchmarks = ["benchmarks", "debug-diagnostics"]
+debug-benchmarks = ["debug-diagnostics"]
 local-debug-captures = ["debug-diagnostics"]
 telemetry-upload = ["client-telemetry"]
 telemetry-retention = ["client-telemetry"]
 telemetry-rendered-views = ["client-telemetry"]
-benchmarks = [
-    "render_diagnostics",
-    "fun_render/benchmarks",
-    "client-telemetry",
-    "telemetry-retention",
-]
-bevy_debug = ["bevy/debug"]
-native_ui_routes = ["fun-rvelte-bridge/fun_renderer_backend"]
-dx12_native_object_names = ["fun_render/dx12_native_object_names"]
-diagnostics = ["game_shared/diagnostics", "fun_render/diagnostics"]
-dlss = ["bevy/dlss", "fun_render/dlss"]
-dx12_dlss_native = ["fun_render/dx12_dlss_native"]
-force_disable_dlss = ["bevy/force_disable_dlss", "fun_render/force_disable_dlss"]
-render_diagnostics = [
-    "diagnostics",
-    "bevy/debug",
-    "bevy/track_location",
-    "fun_render/render_diagnostics",
-]
-volumetric_clouds = ["fun_render/volumetric_clouds"]
 
 [dependencies]
-avis_runtime = { package = "avian3d", path = "../../avian/crates/avian3d" }
-bevy.workspace = true
-bevy_quinnet.workspace = true
-fun_render = { path = "../fun_render", default-features = false, features = [
-    "winit_presentation",
-    "fun_renderer_core",
-    "virtual_geometry",
-    "fun_lux_virtual_shadows",
-] }
-fun_ecs.workspace = true
-fun_scene.workspace = true
 fun_telemetry_core = { workspace = true, optional = true }
-fun_host = { path = "../fun_host" }
-fun-rvelte-bridge = { path = "ui/rvelte_bridge", default-features = false }
-fun-warden-client = { path = "../../fun-warden/crates/fun-warden-client" }
-fun-warden-core = { path = "../../fun-warden/crates/fun-warden-core" }
-fun-warden-protocol = { path = "../../fun-warden/crates/fun-warden-protocol" }
-fun_ai_core = { path = "../../fun-ai/crates/fun_ai_core" }
-game_scene = { path = "../game_scene" }
-game_shared = { path = "../game_shared" }
-log.workspace = true
-serde_json.workspace = true
-thunder.workspace = true
+fun_ecs.workspace = true
+fun_engine = { workspace = true, features = ["default-stack"] }
+fun_window = { workspace = true, features = ["backend-winit", "surface-wgpu"] }
+pollster.workspace = true
 tracing.workspace = true
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
-zstd = "0.13.3"
-
-[dev-dependencies]
-criterion.workspace = true
-
-[[bench]]
-name = "client_costs"
-harness = false
-required-features = ["benchmarks"]
+wgpu.workspace = true

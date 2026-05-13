@@ -4,7 +4,7 @@
   "description": "Dense high-motion cloud stress profile.",
   "build": {
     "release": false,
-    "static_bevy": false
+    "static_engine": false
   },
   "features": {
     "disable_clouds": false,

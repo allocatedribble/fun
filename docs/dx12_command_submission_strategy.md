@@ -9,9 +9,9 @@ upload batching, async copy, and async compute.
 `fun-bench run-stack --render-diagnostics` enables:
 
 - `FUN_RENDER_COMMAND_COUNTERS=1`
-- `BEVY_RENDER_COMMAND_COUNTERS=1`
+- `RETIRED_ENGINE_RENDER_COMMAND_COUNTERS=1`
 
-The local Bevy fork records:
+The local RetiredEngine fork records:
 
 - `command_encoder_creations`
 - `render_passes`

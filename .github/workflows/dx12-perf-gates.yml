@@ -135,7 +135,7 @@ jobs:
         working-directory: project-FUN/fun
         run: |
           missing=()
-          for path in ../bevy ../avian ../thunder ../bevy_quinnet; do
+          for path in ../thunder; do
             if [ ! -e "${path}" ]; then
               missing+=("${path}")
             fi

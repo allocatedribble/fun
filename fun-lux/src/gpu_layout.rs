@@ -250,7 +250,7 @@ impl LuxGpuLightRecordLayout {
     #[must_use]
     pub fn record_size_accommodates_every_field(&self) -> bool {
         self.record_byte_size >= Self::raw_field_byte_total()
-            && self.record_byte_size % self.alignment == 0
+            && self.record_byte_size.is_multiple_of(self.alignment)
     }
 }
 
@@ -378,6 +378,14 @@ impl LuxLightIndexLayout {
         max_lights_per_cluster: 32,
         bytes_per_index: 4,
     };
+
+    #[must_use]
+    pub const fn for_cluster_grid(cluster_layout: LuxClusterGridLayout) -> Self {
+        Self {
+            max_lights_per_cluster: cluster_layout.max_lights_per_cluster,
+            ..Self::PRODUCT_DEFAULT
+        }
+    }
 
     /// Typed predicate: does this layout agree with the
     /// supplied cluster grid layout on `max_lights_per_cluster`?

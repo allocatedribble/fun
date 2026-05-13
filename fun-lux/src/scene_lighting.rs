@@ -276,7 +276,7 @@ impl FunLuxSceneUpdateCadence {
     pub const fn triggers(self, frame_index: u64, dirty: bool) -> bool {
         match self {
             Self::EveryFrame => true,
-            Self::EveryNFrames(n) => n > 0 && frame_index % (n as u64) == 0,
+            Self::EveryNFrames(n) => n > 0 && frame_index.is_multiple_of(n as u64),
             Self::OnChangeOnly => dirty,
             Self::Skipped => false,
         }

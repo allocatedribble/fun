@@ -65,8 +65,8 @@ PIX capture window:
 Readable markers are required before a capture is considered useful. Current
 markers and tracing targets:
 
-- `fun.native_ui.copy_ring_source_to_bevy_image`: native DX12 copy from the NATIVE_UI GPU
-  ring into the Bevy UI image.
+- `fun.native_ui.copy_ring_source_to_retired_engine_image`: native DX12 copy from the NATIVE_UI GPU
+  ring into the RetiredEngine UI image.
 - `fun::perf::native_ui`: NATIVE_UI paint/copy/generation counters in client logs.
 - `fun::render`: backend, present, DLSS, and renderer policy.
 - `fun::perf::clouds`: cloud pass costs and history state.
@@ -77,9 +77,9 @@ markers and tracing targets:
   interop insertion counts by coarse render category.
 - `fun::perf::render_shaders`: shader module, shader variant, pipeline creation,
   and material specialization counters.
-- `bevy_render::transient`: transient texture/buffer reuse, aliasing,
+- `retired_engine_render::transient`: transient texture/buffer reuse, aliasing,
   descriptor miss reasons, and top descriptor-create rows.
-- `bevy_render::scheduler`: render graph pressure.
+- `retired_engine_render::scheduler`: render graph pressure.
 
 Future marker names should follow `fun.<subsystem>.<pass>` and should be added
 to this document before landing native interop or barrier-sensitive work.
@@ -129,8 +129,8 @@ No native DX12 path should touch a texture that is missing from this table.
 | Main HDR color | main scene lighting | post-process and DLSS SR input placeholder | render target | shader resource or render target for next post pass | wgpu/render graph | future DLSS may read | do not assume | no until audited |
 | Depth | depth/prepass and main scene | motion vectors, Solari, DLSS placeholder | depth write/read by pass | depth read or shader resource by consumer | wgpu/render graph | future DLSS may read | do not assume | no |
 | Motion vectors | motion-vector pass | temporal reconstruction, DLSS placeholder | render target/storage by pass | shader resource | wgpu/render graph | future DLSS may read | do not assume | no |
-| NATIVE_UI UI image | NATIVE_UI CPU upload or DX12 GPU copy | Bevy UI composition | pixel shader resource after creation, copy dest during native copy | pixel shader resource | NATIVE_UI interop module for native copy, then wgpu | yes, NATIVE_UI GPU path | no | no |
-| NATIVE_UI GPU ring slot | `OnAcceleratedPaint` D3D11On12 copy | Bevy UI image native copy | free/copying ring state | copy source until consumed | `game_client::native_ui_dx12` | yes | no | ring reuse only after fence |
+| NATIVE_UI UI image | NATIVE_UI CPU upload or DX12 GPU copy | RetiredEngine UI composition | pixel shader resource after creation, copy dest during native copy | pixel shader resource | NATIVE_UI interop module for native copy, then wgpu | yes, NATIVE_UI GPU path | no | no |
+| NATIVE_UI GPU ring slot | `OnAcceleratedPaint` D3D11On12 copy | RetiredEngine UI image native copy | free/copying ring state | copy source until consumed | `game_client::native_ui_dx12` | yes | no | ring reuse only after fence |
 | Post-process intermediates | post-process passes | next post pass or final composition | render target or shader resource per pass | shader resource or render target per pass | wgpu/render graph | no | do not assume | candidate after PIX proof |
 | Cloud transmittance/noise/history | cloud passes | cloud resolve/composite | shader/storage/render target per pass | shader resource/history | wgpu/render graph | no | do not assume | history resources no |
 | Solari guide surfaces | Solari guide resolve | denoiser/RR diagnostic path | render/storage by guide pass | shader resource | wgpu/render graph | future RR only | no | no |
@@ -146,14 +146,14 @@ The current accelerated NATIVE_UI copy is intentionally full-frame:
 NATIVE_UI D3D11 shared texture
   -> D3D11On12 copy into ring slot
   -> ring slot final D3D12 state COPY_SOURCE
-  -> native D3D12 CopyResource into Bevy UI image
-  -> Bevy UI image restored to PIXEL_SHADER_RESOURCE
+  -> native D3D12 CopyResource into RetiredEngine UI image
+  -> RetiredEngine UI image restored to PIXEL_SHADER_RESOURCE
 ```
 
 Expected PIX result for the NATIVE_UI pass:
 
 - no blocking fence wait in normal frames;
-- at most one transition of the Bevy UI image to `COPY_DEST`;
+- at most one transition of the RetiredEngine UI image to `COPY_DEST`;
 - one transition back to `PIXEL_SHADER_RESOURCE`;
 - no transition of the NATIVE_UI ring slot through `COMMON` unless PIX or validation
   proves the bridge requires it;

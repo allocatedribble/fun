@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Resource;
+use crate::Resource;
 use fun_scheduler_types::{
     EcsChunkKey, EcsSpatialDomainKind, EcsVirtualResourceKey, ScheduleDeadline, ScheduleDomain,
     ScheduleLane, WorkRequiredness, WorkSplitHint, WorkWaitToken,

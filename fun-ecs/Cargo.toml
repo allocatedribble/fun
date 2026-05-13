@@ -19,7 +19,7 @@ experimental-unsafe-storage = []
 workspace = true
 
 [dependencies]
-bevy_ecs.workspace = true
+fun_ecs_macros.workspace = true
 fun-scheduler-core = { path = "../../fun-scheduler/crates/fun-scheduler-core" }
 fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types" }
 smallvec.workspace = true

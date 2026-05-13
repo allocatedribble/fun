@@ -9,9 +9,9 @@ GPU timing and visual regression evidence.
 `fun-bench run-stack --render-diagnostics` enables:
 
 - `FUN_RENDER_SHADER_DIAGNOSTICS=1`
-- `BEVY_RENDER_SHADER_DIAGNOSTICS=1`
+- `RETIRED_ENGINE_RENDER_SHADER_DIAGNOSTICS=1`
 
-The local Bevy fork records:
+The local RetiredEngine fork records:
 
 - shader module creation count and elapsed ns;
 - shader variant requests and total shader definition count;

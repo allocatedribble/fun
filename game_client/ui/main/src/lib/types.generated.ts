@@ -154,5 +154,5 @@ export type TransformPatchResult = { entity_id: string, status: string, world_re
 
 export type EntityStreamCloseSummary = { cursor: string, closed: boolean, };
 
-export type EditorStatus = { stage_name: string, target_fps_path: string, fun_workspace_exists: boolean, expected_fun_crates: Array<string>, ui_stack: string, rust_service_status: string, bevy_demo_status: string, current_project: ProjectReference | null, client_viewport_status: string, runtime_status: RuntimeStatusSummary, auth_session: AuthSessionSummary, };
+export type EditorStatus = { stage_name: string, target_fps_path: string, fun_workspace_exists: boolean, expected_fun_crates: Array<string>, ui_stack: string, rust_service_status: string, retired_engine_demo_status: string, current_project: ProjectReference | null, client_viewport_status: string, runtime_status: RuntimeStatusSummary, auth_session: AuthSessionSummary, };
 

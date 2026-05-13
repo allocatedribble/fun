@@ -10,14 +10,10 @@ name = "fun_scene"
 workspace = true
 
 [dependencies]
-bevy_camera.workspace = true
-bevy_color.workspace = true
-bevy_ecs.workspace = true
-bevy_scene.workspace = true
-bevy_transform.workspace = true
+fun_ecs.workspace = true
 fun_scene_macros.workspace = true
 serde.workspace = true
-thunder.workspace = true
+thunder = { path = "../../thunder", default-features = false }
 
 [dev-dependencies]
 serde_json.workspace = true

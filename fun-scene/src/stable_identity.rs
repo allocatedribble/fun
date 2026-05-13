@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Component;
+use fun_ecs::Component;
 use thunder::prelude::{NetEntity, WorldLevelId, WorldRevision, WorldStreamChunk};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Component)]

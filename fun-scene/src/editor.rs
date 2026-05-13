@@ -1,13 +1,11 @@
-use bevy_ecs::{
+use fun_ecs::{
     entity::Entity,
     prelude::{Component, Resource},
     world::World,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    EditorSelection, GameplaySalient, LuxLight, ViewportRenderPolicy, fun_list, fun_value,
-};
+use crate::{EditorSelection, GameplaySalient, LuxLight, ViewportRenderPolicy};
 
 pub const EDITOR_OPERATION_SCHEMA_VERSION: u16 = 1;
 pub const EDITOR_OPERATION_MAX_ENTITY_URI_BYTES: usize = 160;
@@ -18,7 +16,7 @@ pub const EDITOR_OPERATION_OUTCOME_CAPACITY: usize = 256;
 pub struct EditorIntegrationPolicy {
     pub native_ui_svelte_edits_typed_scene_data: bool,
     pub host_applies_operations_through_fun_scene: bool,
-    pub runtime_bevy_ui_allowed: bool,
+    pub runtime_external_ui_allowed: bool,
     pub native_ui_gpu_only_required: bool,
     pub overlays_are_renderer_debug_or_native_ui_late_composite: bool,
     pub fun_assets_are_declarative: bool,
@@ -31,7 +29,7 @@ impl EditorIntegrationPolicy {
     pub const DEFAULT: Self = Self {
         native_ui_svelte_edits_typed_scene_data: true,
         host_applies_operations_through_fun_scene: true,
-        runtime_bevy_ui_allowed: false,
+        runtime_external_ui_allowed: false,
         native_ui_gpu_only_required: true,
         overlays_are_renderer_debug_or_native_ui_late_composite: true,
         fun_assets_are_declarative: true,
@@ -1033,7 +1031,7 @@ fn apply_component_patch(
     };
     match (component, field) {
         (EditorComponentKind::LuxLight, EditorComponentField::IntensityLux) => {
-            let Some(mut light) = world.get_mut::<LuxLight>(entity) else {
+            let Some(light) = world.get_mut::<LuxLight>(entity) else {
                 return EditorOperationStatus::MissingComponent;
             };
             let Some(value) = value.as_f32() else {
@@ -1099,15 +1097,15 @@ fn apply_selection_salience(
     let Some(entity) = index.resolve(entity_ref) else {
         return EditorOperationStatus::MissingEntity;
     };
-    world.entity_mut(entity).insert((
-        EditorSelection {
+    world
+        .entity_mut(entity)
+        .insert(EditorSelection {
             rank,
             salience: selection_salience,
-        },
-        GameplaySalient {
+        })
+        .insert(GameplaySalient {
             score: gameplay_score,
-        },
-    ));
+        });
     EditorOperationStatus::Applied
 }
 
@@ -1203,12 +1201,7 @@ fn field_value_is_valid(field: EditorComponentField, value: &EditorFieldValue) -
 }
 
 pub fn editor_empty_scene_asset_is_declarative() -> impl crate::FunSceneList {
-    fun_list![
-        (
-            #EditorSceneRoot
-            fun_value(EditorManagedEntity)
-        )
-    ]
+    crate::FunEmptySceneList
 }
 
 #[cfg(test)]
@@ -1221,7 +1214,7 @@ mod tests {
 
         assert!(policy.native_ui_svelte_edits_typed_scene_data);
         assert!(policy.host_applies_operations_through_fun_scene);
-        assert!(!policy.runtime_bevy_ui_allowed);
+        assert!(!policy.runtime_external_ui_allowed);
         assert!(policy.native_ui_gpu_only_required);
         assert!(policy.overlays_are_renderer_debug_or_native_ui_late_composite);
         assert!(policy.fun_assets_are_declarative);
@@ -1262,7 +1255,7 @@ mod tests {
         world.init_resource::<EditorSceneEntityIndex>();
         world.init_resource::<EditorOperationOutcomes>();
 
-        let entity = world.spawn((LuxLight::directional(80_000.0),)).id();
+        let entity = world.spawn(LuxLight::directional(80_000.0)).id();
         world
             .resource_mut::<EditorSceneEntityIndex>()
             .insert(EditorEntityRef::new("scene://arena-blockout/Sun"), entity);
