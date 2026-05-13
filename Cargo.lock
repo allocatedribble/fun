@@ -3302,8 +3302,11 @@ name = "fun_render"
 version = "0.0.1"
 dependencies = [
  "bevy",
+ "fun-ecs",
  "fun-renderer",
  "fun-scene",
+ "fun-scheduler-core",
+ "fun-scheduler-types",
  "fun_dx12_dlss",
  "game_shared",
  "hashbrown 0.17.1",
@@ -3431,6 +3434,7 @@ dependencies = [
  "bevy",
  "bevy_quinnet",
  "criterion 0.8.2",
+ "fun-ecs",
  "fun-rvelte-bridge",
  "fun-scene",
  "fun-telemetry-core",

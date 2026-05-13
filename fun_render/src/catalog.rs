@@ -15,8 +15,8 @@ use thunder::prelude::WorldCatalogRef;
 use crate::{
     ClientRenderConfig, CompiledWorldPackage, FunGeometryClass, FunMaterialClass,
     FunRenderDistanceBand, FunRenderPath, FunRenderPathArbiter, FunRenderPathInput,
-    MaterialInstancePolicy, RenderBatchKey, RenderGeometryClass, RenderGeometryPolicy,
-    RenderPipelineSignatureCatalog, material_policy_for_catalog_entry,
+    FunRendererLitMaterial, MaterialInstancePolicy, RenderBatchKey, RenderGeometryClass,
+    RenderGeometryPolicy, RenderPipelineSignatureCatalog, material_policy_for_catalog_entry,
     render_batch_key_for_catalog_entry,
 };
 
@@ -78,7 +78,7 @@ impl MaterialKey {
 
 #[derive(Debug, Resource)]
 pub struct MaterialHandleCache {
-    handles: HashMap<MaterialKey, Handle<StandardMaterial>>,
+    handles: HashMap<MaterialKey, Handle<FunRendererLitMaterial>>,
     fallback_key: MaterialKey,
 }
 
@@ -92,31 +92,31 @@ impl Default for MaterialHandleCache {
 }
 
 impl MaterialHandleCache {
-    pub fn get(&self, key: MaterialKey) -> Option<Handle<StandardMaterial>> {
+    pub fn get(&self, key: MaterialKey) -> Option<Handle<FunRendererLitMaterial>> {
         self.handles.get(&key).cloned()
     }
 
-    pub fn get_or_fallback(&self, key: MaterialKey) -> Option<Handle<StandardMaterial>> {
+    pub fn get_or_fallback(&self, key: MaterialKey) -> Option<Handle<FunRendererLitMaterial>> {
         self.get(key).or_else(|| self.get(self.fallback_key))
     }
 
     pub fn insert_existing(
         &mut self,
         key: MaterialKey,
-        handle: Handle<StandardMaterial>,
-    ) -> Handle<StandardMaterial> {
+        handle: Handle<FunRendererLitMaterial>,
+    ) -> Handle<FunRendererLitMaterial> {
         self.handles.entry(key).or_insert(handle).clone()
     }
 
     pub fn get_or_insert_with_assets(
         &mut self,
         key: MaterialKey,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Handle<StandardMaterial> {
+        materials: &mut Assets<FunRendererLitMaterial>,
+    ) -> Handle<FunRendererLitMaterial> {
         if let Some(handle) = self.get(key) {
             return handle;
         }
-        let handle = materials.add(standard_material_from_key(key));
+        let handle = materials.add(FunRendererLitMaterial::from_material_key(key));
         self.insert_existing(key, handle)
     }
 
@@ -132,7 +132,7 @@ impl MaterialHandleCache {
 #[derive(Debug, Resource, Default)]
 pub struct WorldRenderCatalog {
     assets: HashMap<u32, CompiledRenderAsset>,
-    materials: HashMap<u32, Handle<StandardMaterial>>,
+    materials: HashMap<u32, Handle<FunRendererLitMaterial>>,
 }
 
 #[derive(Debug)]
@@ -142,7 +142,7 @@ pub struct CompiledRenderAsset {
     pub raster_mesh: Option<Handle<Mesh>>,
     pub meshlet_mesh: Option<Handle<MeshletMesh>>,
     pub ray_proxy: Option<Handle<Mesh>>,
-    pub material: Option<Handle<StandardMaterial>>,
+    pub material: Option<Handle<FunRendererLitMaterial>>,
     pub geometry_class: RenderGeometryClass,
     pub fun_geometry_class: FunGeometryClass,
     pub render_path: FunRenderPath,
@@ -161,7 +161,7 @@ impl WorldRenderCatalog {
         self.assets.values()
     }
 
-    pub fn material_handle(&self, material_id: u32) -> Option<Handle<StandardMaterial>> {
+    pub fn material_handle(&self, material_id: u32) -> Option<Handle<FunRendererLitMaterial>> {
         self.materials.get(&material_id).cloned()
     }
 
@@ -185,7 +185,7 @@ pub fn prewarm_world_render_catalog(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut meshlet_meshes: Option<ResMut<Assets<MeshletMesh>>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<FunRendererLitMaterial>>,
     render_config: Res<ClientRenderConfig>,
 ) {
     let mut catalog_render_config = *render_config;
@@ -380,25 +380,6 @@ pub fn prewarm_world_render_catalog(
     commands.insert_resource(material_cache);
     commands.insert_resource(pipeline_catalog);
     commands.insert_resource(catalog);
-}
-
-fn standard_material_from_key(key: MaterialKey) -> StandardMaterial {
-    let [r, g, b, a] = key.base_color_rgba8;
-    StandardMaterial {
-        base_color: Color::srgba_u8(r, g, b, a),
-        perceptual_roughness: f32::from(key.roughness_bucket) / f32::from(u8::MAX),
-        metallic: f32::from(key.metallic_bucket) / f32::from(u8::MAX),
-        alpha_mode: alpha_mode_from_key(key.alpha_mode),
-        ..default()
-    }
-}
-
-const fn alpha_mode_from_key(alpha_mode: MaterialAlphaModeKey) -> AlphaMode {
-    match alpha_mode {
-        MaterialAlphaModeKey::Opaque => AlphaMode::Opaque,
-        MaterialAlphaModeKey::Mask => AlphaMode::Mask(0.5),
-        MaterialAlphaModeKey::Blend => AlphaMode::Blend,
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -736,7 +717,7 @@ mod tests {
 
     #[test]
     fn material_handle_cache_reuses_equivalent_material_keys() {
-        let mut materials = Assets::<StandardMaterial>::default();
+        let mut materials = Assets::<FunRendererLitMaterial>::default();
         let key = MaterialKey::from_rgba8([82, 89, 107, 255]);
         let mut cache = MaterialHandleCache::default();
 
@@ -754,7 +735,7 @@ mod tests {
         config.meshlets_enabled = false;
         let mut app = App::new();
         app.insert_resource(Assets::<Mesh>::default());
-        app.insert_resource(Assets::<StandardMaterial>::default());
+        app.insert_resource(Assets::<FunRendererLitMaterial>::default());
         app.insert_resource(config);
         app.add_systems(Update, prewarm_world_render_catalog);
 
@@ -779,7 +760,7 @@ mod tests {
         let config = test_render_config(RenderGeometryPolicy::MeshletWhereSupported);
         let mut app = App::new();
         app.insert_resource(Assets::<Mesh>::default());
-        app.insert_resource(Assets::<StandardMaterial>::default());
+        app.insert_resource(Assets::<FunRendererLitMaterial>::default());
         app.insert_resource(config);
         app.add_systems(Update, prewarm_world_render_catalog);
 

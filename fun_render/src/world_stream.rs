@@ -6,17 +6,19 @@ use bevy::{
     prelude::*,
     solari::prelude::RaytracingMesh3d,
 };
+use fun_renderer::component_api as renderer_api;
+use fun_scene::prelude as scene_api;
 use game_shared::{CatalogGeometry, RenderAssetId};
 use thunder::prelude::*;
 
 use crate::{
     ClientOpaqueRenderer, ClientRenderConfig, CompiledRenderAsset, DynamicInstanceClass,
     DynamicInstanceTable, FunGeometryClass, FunMaterialClass, FunRenderDistanceBand, FunRenderPath,
-    FunRenderPathArbiter, FunRenderPathInput, InstanceGpuRecord, MaterialKey, RenderGeometryClass,
-    RenderGeometryPolicy, StaticInstanceTable, StaticRenderBatch, StaticRenderBatchBuilder,
-    StaticRenderBatchSpawnRecord, WorldRenderCatalog, material_policy_for_stream_color,
-    static_catalog_spec_is_batchable, static_catalog_spec_needs_identity_proxy,
-    warn_missing_catalog_ref,
+    FunRenderPathArbiter, FunRenderPathInput, FunRendererLitMaterial, InstanceGpuRecord,
+    MaterialKey, RenderGeometryClass, RenderGeometryPolicy, StaticInstanceTable, StaticRenderBatch,
+    StaticRenderBatchBuilder, StaticRenderBatchSpawnRecord, WorldRenderCatalog,
+    material_policy_for_stream_color, static_catalog_spec_is_batchable_for_render_config,
+    static_catalog_spec_needs_identity_proxy, warn_missing_catalog_ref,
 };
 
 #[derive(Debug, Default, Resource)]
@@ -210,7 +212,7 @@ pub struct PrimitiveRenderHandles {
     pub catalog_asset_id: Option<RenderAssetId>,
     pub raster_mesh: Option<Handle<Mesh>>,
     pub meshlet_mesh: Option<Handle<MeshletMesh>>,
-    pub material: Option<Handle<StandardMaterial>>,
+    pub material: Option<Handle<FunRendererLitMaterial>>,
     pub ray_proxy: Option<Handle<Mesh>>,
     pub geometry_class: RenderGeometryClass,
     pub fun_geometry_class: FunGeometryClass,
@@ -637,7 +639,13 @@ fn resolve_render_world_entity_source<'a>(
                 .min(u128::from(u64::MAX)) as u64,
         );
         return match compiled {
-            Some(compiled) if static_catalog_spec_is_batchable(spec, compiled) => {
+            Some(compiled)
+                if static_catalog_spec_is_batchable_for_render_config(
+                    spec,
+                    compiled,
+                    render_config,
+                ) =>
+            {
                 RenderWorldPreparedSource::StaticCatalog {
                     catalog_ref,
                     compiled,
@@ -1013,6 +1021,7 @@ fn spawn_prepared_render_entity_from_spec(
             outcome.catalog_backed_entities = outcome.catalog_backed_entities.saturating_add(1);
             insert_compiled_render_handles(
                 &mut entity_commands,
+                spec,
                 compiled,
                 render_config.solari_enabled,
             );
@@ -1039,7 +1048,9 @@ fn spawn_prepared_render_entity_from_spec(
             if let Some(cached) = cached {
                 insert_primitive_render_handles(
                     &mut entity_commands,
+                    spec,
                     &cached.handles,
+                    cached.key.material,
                     render_config.solari_enabled,
                 );
 
@@ -1155,7 +1166,7 @@ pub fn spawn_render_entity_from_spec(
                 {
                     entity_commands.insert((
                         MeshletMesh3d(meshlet_mesh.clone()),
-                        MeshMaterial3d::<StandardMaterial>(material.clone()),
+                        MeshMaterial3d::<FunRendererLitMaterial>(material.clone()),
                     ));
                 }
             } else if compiled.geometry_class.uses_raster_mesh()
@@ -1164,8 +1175,11 @@ pub fn spawn_render_entity_from_spec(
             {
                 entity_commands.insert((
                     Mesh3d(mesh.clone()),
-                    MeshMaterial3d::<StandardMaterial>(material.clone()),
+                    MeshMaterial3d::<FunRendererLitMaterial>(material.clone()),
                 ));
+            }
+            if compiled_asset_emits_visible_surface(compiled) {
+                insert_fun_renderer_catalog_contract(&mut entity_commands, spec, compiled);
             }
 
             if render_config.solari_enabled
@@ -1218,7 +1232,9 @@ pub fn spawn_render_entity_from_spec(
             }
             insert_primitive_render_handles(
                 &mut entity_commands,
+                spec,
                 &cached.handles,
+                cached.key.material,
                 render_config.solari_enabled,
             );
 
@@ -1267,6 +1283,7 @@ pub fn spawn_render_entity_from_spec(
 
 fn insert_compiled_render_handles(
     entity_commands: &mut EntityCommands<'_>,
+    spec: &WorldEntitySpec,
     compiled: &CompiledRenderAsset,
     solari_enabled: bool,
 ) {
@@ -1281,7 +1298,7 @@ fn insert_compiled_render_handles(
         {
             entity_commands.insert((
                 MeshletMesh3d(meshlet_mesh.clone()),
-                MeshMaterial3d::<StandardMaterial>(material.clone()),
+                MeshMaterial3d::<FunRendererLitMaterial>(material.clone()),
             ));
         }
     } else if compiled.geometry_class.uses_raster_mesh()
@@ -1290,8 +1307,11 @@ fn insert_compiled_render_handles(
     {
         entity_commands.insert((
             Mesh3d(mesh.clone()),
-            MeshMaterial3d::<StandardMaterial>(material.clone()),
+            MeshMaterial3d::<FunRendererLitMaterial>(material.clone()),
         ));
+    }
+    if compiled_asset_emits_visible_surface(compiled) {
+        insert_fun_renderer_catalog_contract(entity_commands, spec, compiled);
     }
 
     if solari_enabled && let Some(ray_proxy) = compiled.ray_proxy.as_ref() {
@@ -1359,6 +1379,10 @@ fn log_catalog_render_insert(
     );
 }
 
+fn compiled_asset_emits_visible_surface(compiled: &CompiledRenderAsset) -> bool {
+    compiled.entry.geometry.is_some() && compiled.render_path.emits_visible_raster()
+}
+
 pub fn update_render_context_visibility(
     mut renderables: Query<&mut Visibility, With<RenderGeometryClass>>,
 ) {
@@ -1371,7 +1395,9 @@ pub fn update_render_context_visibility(
 
 fn insert_primitive_render_handles(
     entity_commands: &mut EntityCommands<'_>,
+    spec: &WorldEntitySpec,
     handles: &PrimitiveRenderHandles,
+    material_key: MaterialKey,
     solari_enabled: bool,
 ) {
     entity_commands.insert((
@@ -1386,7 +1412,7 @@ fn insert_primitive_render_handles(
         {
             entity_commands.insert((
                 MeshletMesh3d(meshlet_mesh.clone()),
-                MeshMaterial3d::<StandardMaterial>(material.clone()),
+                MeshMaterial3d::<FunRendererLitMaterial>(material.clone()),
             ));
         }
     } else if handles.render_path.emits_visible_raster()
@@ -1395,13 +1421,219 @@ fn insert_primitive_render_handles(
     {
         entity_commands.insert((
             Mesh3d(mesh.clone()),
-            MeshMaterial3d::<StandardMaterial>(material.clone()),
+            MeshMaterial3d::<FunRendererLitMaterial>(material.clone()),
         ));
     }
+    insert_fun_renderer_primitive_contract(entity_commands, spec, handles, material_key);
 
     if solari_enabled && let Some(ray_proxy) = handles.ray_proxy.as_ref() {
         entity_commands.insert(RaytracingMesh3d(ray_proxy.clone()));
     }
+}
+
+fn insert_fun_renderer_catalog_contract(
+    entity_commands: &mut EntityCommands<'_>,
+    spec: &WorldEntitySpec,
+    compiled: &CompiledRenderAsset,
+) {
+    let mesh_slot = compiled.entry.asset_id.0;
+    let material_slot = compiled.entry.material.0;
+    let bounds = renderer_bounds_for_catalog_geometry(compiled.entry.geometry);
+    insert_fun_renderer_entity_contract(
+        entity_commands,
+        spec,
+        mesh_slot,
+        material_slot,
+        bounds,
+        compiled.fun_geometry_class.is_static(),
+    );
+}
+
+fn insert_fun_renderer_primitive_contract(
+    entity_commands: &mut EntityCommands<'_>,
+    spec: &WorldEntitySpec,
+    handles: &PrimitiveRenderHandles,
+    material_key: MaterialKey,
+) {
+    let mesh_slot = handles
+        .catalog_asset_id
+        .map_or_else(|| primitive_mesh_slot(spec), |asset| asset.0);
+    let material_slot = material_slot_from_key(material_key);
+    let bounds = spec
+        .render
+        .map(renderer_bounds_for_world_primitive)
+        .unwrap_or_default();
+    insert_fun_renderer_entity_contract(
+        entity_commands,
+        spec,
+        mesh_slot,
+        material_slot,
+        bounds,
+        handles.fun_geometry_class.is_static(),
+    );
+}
+
+fn insert_fun_renderer_entity_contract(
+    entity_commands: &mut EntityCommands<'_>,
+    spec: &WorldEntitySpec,
+    mesh_slot: u32,
+    material_slot: u32,
+    bounds: renderer_api::RenderBounds,
+    is_static: bool,
+) {
+    entity_commands.insert((
+        renderer_api::Renderable {
+            object_id: render_stable_id_for_net_entity(spec.entity),
+            dirty: renderer_api::RenderDirtyFlags::TRANSFORM
+                .union(renderer_api::RenderDirtyFlags::GEOMETRY)
+                .union(renderer_api::RenderDirtyFlags::MATERIAL),
+        },
+        renderer_api::RenderMesh {
+            mesh: renderer_api::RenderAssetId::first(mesh_slot),
+        },
+        renderer_api::RenderMaterial {
+            material: renderer_api::RenderAssetId::first(material_slot),
+        },
+        bounds,
+        renderer_api::RenderLayer::default(),
+        renderer_api::RenderVisibility {
+            state: renderer_api::RenderVisibilityState::Visible,
+        },
+        renderer_api::ShadowCaster {
+            mode: renderer_api::ShadowMode::VirtualPages,
+        },
+        renderer_api::ShadowReceiver::default(),
+        renderer_api::RenderDebugName {
+            name: "world_stream_entity",
+        },
+    ));
+    insert_fun_scene_virtual_geometry_lux_contract(
+        entity_commands,
+        mesh_slot,
+        material_slot,
+        bounds,
+        is_static,
+    );
+    if is_static {
+        entity_commands.insert(renderer_api::RenderStatic);
+    } else {
+        entity_commands.insert(renderer_api::RenderDynamic {
+            dirty: renderer_api::RenderDirtyFlags::TRANSFORM,
+        });
+    }
+}
+
+fn insert_fun_scene_virtual_geometry_lux_contract(
+    entity_commands: &mut EntityCommands<'_>,
+    mesh_slot: u32,
+    material_slot: u32,
+    bounds: renderer_api::RenderBounds,
+    is_static: bool,
+) {
+    entity_commands.insert((
+        scene_api::Renderable::new(
+            scene_api::GeometryRef::new(mesh_slot),
+            scene_api::MaterialRef::new(material_slot),
+            if is_static {
+                scene_api::RenderableFlags::STATIC_WORLD
+            } else {
+                scene_api::RenderableFlags::DYNAMIC
+                    .union(scene_api::RenderableFlags::SHADOW_CASTER)
+                    .union(scene_api::RenderableFlags::SHADOW_RECEIVER)
+            },
+        ),
+        scene_api::VirtualGeometryAuthoring {
+            mode: if is_static {
+                scene_api::VirtualGeometryMode::StaticClusterPages
+            } else {
+                scene_api::VirtualGeometryMode::DynamicClusterPages
+            },
+            page_priority: scene_api::PagePriorityHint::WorldCritical,
+            dynamic_policy: if is_static {
+                scene_api::DynamicGeometryPolicy::StaticOnly
+            } else {
+                scene_api::DynamicGeometryPolicy::TransformOnly
+            },
+        },
+        scene_api::VirtualShadowCaster {
+            policy: scene_api::ShadowCasterPolicy::VirtualPages,
+            invalidation: scene_api::ShadowInvalidationPolicy::OnTransformOrGeometryChange,
+        },
+        scene_api::VirtualShadowReceiver {
+            priority: scene_api::ShadowReceiverPriority::High,
+            filter_policy: scene_api::ShadowFilterPolicy::ContactAware,
+        },
+        scene_api::LuxGiParticipant {
+            bounce_policy: if is_static {
+                scene_api::GiBouncePolicy::StaticSingleBounce
+            } else {
+                scene_api::GiBouncePolicy::DynamicBudgeted
+            },
+            cache_policy: scene_api::GiCachePolicy::Surface,
+        },
+        scene_api::RendererBounds {
+            local_bounds: Default::default(),
+            streaming_radius: streaming_radius_for_render_bounds(bounds),
+        },
+    ));
+}
+
+fn streaming_radius_for_render_bounds(bounds: renderer_api::RenderBounds) -> f32 {
+    let extents = bounds.local.half_extents;
+    (extents.x * extents.x + extents.y * extents.y + extents.z * extents.z)
+        .sqrt()
+        .max(1.0)
+}
+
+fn render_stable_id_for_net_entity(entity: NetEntity) -> renderer_api::RenderStableId {
+    renderer_api::RenderStableId::new(0x4600_0000_0000_0000 | (entity.0 & 0x00ff_ffff_ffff_ffff))
+}
+
+fn renderer_bounds_for_catalog_geometry(
+    geometry: Option<CatalogGeometry>,
+) -> renderer_api::RenderBounds {
+    geometry
+        .map(|geometry| match geometry {
+            CatalogGeometry::Plane { size } | CatalogGeometry::Cuboid { size } => {
+                renderer_bounds_from_size(size)
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn renderer_bounds_for_world_primitive(primitive: WorldPrimitive) -> renderer_api::RenderBounds {
+    match primitive {
+        WorldPrimitive::Plane { size } | WorldPrimitive::Cuboid { size } => {
+            let [x, y, z] = size.to_f32(Quantization::MILLIMETERS);
+            renderer_bounds_from_size([x, y, z])
+        }
+    }
+}
+
+fn renderer_bounds_from_size(size: [f32; 3]) -> renderer_api::RenderBounds {
+    renderer_api::RenderBounds {
+        local: renderer_api::RenderAabb::new(
+            renderer_api::RenderVec3::ZERO,
+            renderer_api::RenderVec3::new(
+                (size[0] * 0.5).max(0.01),
+                (size[1] * 0.5).max(0.01),
+                (size[2] * 0.5).max(0.01),
+            ),
+        ),
+    }
+}
+
+fn material_slot_from_key(key: MaterialKey) -> u32 {
+    key.material_preset_id.unwrap_or_else(|| {
+        u32::from_le_bytes(key.base_color_rgba8)
+            .wrapping_add(u32::from(key.roughness_bucket) << 16)
+            .wrapping_add(u32::from(key.metallic_bucket) << 24)
+            .max(1)
+    })
+}
+
+fn primitive_mesh_slot(spec: &WorldEntitySpec) -> u32 {
+    (spec.entity.0 as u32).wrapping_add(0x8000_0000).max(1)
 }
 
 fn primitive_kind_from_world_primitive(primitive: WorldPrimitive) -> PrimitiveRenderCachePrimitive {
@@ -1633,6 +1865,7 @@ mod tests {
         let mut config = ClientRenderConfig::from_env();
         config.solari_enabled = false;
         config.meshlets_enabled = false;
+        config.static_batch_renderer_enabled = true;
         config.geometry_policy = RenderGeometryPolicy::Hybrid;
         config
     }
@@ -1645,26 +1878,39 @@ mod tests {
         let mut catalog = WorldRenderCatalog::default();
         let entry = game_shared::demo_catalog_entry(asset_id).expect("demo catalog entry exists");
         let material_policy = crate::material_policy_for_catalog_entry(entry);
+        let render_path = if entry.geometry.is_some() {
+            FunRenderPath::StandardRaster
+        } else {
+            FunRenderPath::RayProxyOnly
+        };
+        let geometry_class = if entry.geometry.is_some() {
+            RenderGeometryClass::SimpleRaster
+        } else {
+            RenderGeometryClass::RayProxyOnly
+        };
         let render_batch_key = crate::render_batch_key_for_catalog_entry(
             entry,
-            FunRenderPath::StandardRaster,
-            RenderGeometryClass::SimpleRaster,
+            render_path,
+            geometry_class,
             FunGeometryClass::StaticOpaqueSimple,
             FunMaterialClass::OpaqueSimple,
             material_policy,
         );
         catalog.insert_compiled_for_test(CompiledRenderAsset {
             entry,
-            raster_mesh: Some(Handle::default()),
+            raster_mesh: entry.geometry.map(|_| Handle::default()),
             meshlet_mesh: None,
-            ray_proxy: Some(Handle::default()),
+            ray_proxy: entry.geometry.map(|_| Handle::default()),
             material: Some(Handle::default()),
-            geometry_class: RenderGeometryClass::SimpleRaster,
+            geometry_class,
             fun_geometry_class: FunGeometryClass::StaticOpaqueSimple,
-            render_path: FunRenderPath::StandardRaster,
+            render_path,
             material_policy,
             render_batch_key,
-            triangle_count: 12,
+            triangle_count: entry.geometry.map_or(0, |geometry| match geometry {
+                CatalogGeometry::Plane { .. } => 2,
+                CatalogGeometry::Cuboid { .. } => 12,
+            }),
         });
         catalog
     }
@@ -1808,6 +2054,115 @@ mod tests {
             .map(StaticRenderBatch::instance_count)
             .collect::<Vec<_>>();
         assert_eq!(instance_counts, vec![2]);
+    }
+
+    #[test]
+    fn apply_render_world_chunk_uses_visible_meshes_when_static_batching_disabled() {
+        let mut config = test_render_config();
+        config.static_batch_renderer_enabled = false;
+
+        let mut app = App::new();
+        app.insert_resource(config)
+            .insert_resource(test_catalog_for_asset(game_shared::ASSET_FLOOR))
+            .insert_resource(PrimitiveRenderCache::default())
+            .init_resource::<StaticInstanceTable>()
+            .init_resource::<DynamicInstanceTable>()
+            .insert_resource(TestChunk(WorldStreamChunk {
+                level_id: WorldLevelId("static-visible-fallback-test".to_owned()),
+                revision: WorldRevision(1),
+                chunk_index: 0,
+                chunk_count: 1,
+                manifest_signature: 0x5a17_c0f1,
+                entities: vec![
+                    static_catalog_spec(1, game_shared::ASSET_FLOOR),
+                    static_catalog_spec(2, game_shared::ASSET_FLOOR),
+                ],
+            }))
+            .init_resource::<RenderWorldContext>()
+            .init_resource::<RenderWorldStatus>()
+            .add_systems(Update, apply_static_batch_test_chunk);
+
+        app.update();
+
+        let outcome = app.world().resource::<TestOutcome>().0;
+        assert_eq!(outcome.spawned_entities, 2);
+        assert_eq!(outcome.static_batch_entities, 0);
+        assert_eq!(outcome.static_batch_instances, 0);
+        assert_eq!(outcome.static_instance_table_records, 0);
+
+        let world = app.world_mut();
+        let mut visible_meshes = world.query::<&Mesh3d>();
+        assert_eq!(visible_meshes.iter(world).count(), 2);
+        let mut lit_materials = world.query::<&MeshMaterial3d<FunRendererLitMaterial>>();
+        assert_eq!(lit_materials.iter(world).count(), 2);
+        let mut renderer_contracts = world.query::<&renderer_api::Renderable>();
+        assert_eq!(renderer_contracts.iter(world).count(), 2);
+        let mut virtual_geometry = world.query::<&scene_api::VirtualGeometryAuthoring>();
+        assert_eq!(virtual_geometry.iter(world).count(), 2);
+        assert!(virtual_geometry.iter(world).all(|authoring| matches!(
+            authoring.mode,
+            scene_api::VirtualGeometryMode::StaticClusterPages
+        )));
+        let mut lux_shadow_casters = world.query::<&scene_api::VirtualShadowCaster>();
+        assert_eq!(lux_shadow_casters.iter(world).count(), 2);
+        assert!(
+            lux_shadow_casters
+                .iter(world)
+                .all(|caster| matches!(caster.policy, scene_api::ShadowCasterPolicy::VirtualPages))
+        );
+        let mut lux_gi = world.query::<&scene_api::LuxGiParticipant>();
+        assert_eq!(lux_gi.iter(world).count(), 2);
+        let mut renderer_shadow_casters = world.query::<&renderer_api::ShadowCaster>();
+        assert!(
+            renderer_shadow_casters
+                .iter(world)
+                .all(|caster| matches!(caster.mode, renderer_api::ShadowMode::VirtualPages))
+        );
+        let mut batches = world.query::<&StaticRenderBatch>();
+        assert_eq!(batches.iter(world).count(), 0);
+    }
+
+    #[test]
+    fn collider_only_catalog_entries_do_not_become_renderer_objects() {
+        let mut config = test_render_config();
+        config.static_batch_renderer_enabled = false;
+
+        let mut app = App::new();
+        app.insert_resource(config)
+            .insert_resource(test_catalog_for_asset(game_shared::ASSET_FLOOR_COLLIDER))
+            .insert_resource(PrimitiveRenderCache::default())
+            .init_resource::<StaticInstanceTable>()
+            .init_resource::<DynamicInstanceTable>()
+            .insert_resource(TestChunk(WorldStreamChunk {
+                level_id: WorldLevelId("collider-only-test".to_owned()),
+                revision: WorldRevision(1),
+                chunk_index: 0,
+                chunk_count: 1,
+                manifest_signature: 0x5a17_c0c1,
+                entities: vec![static_catalog_spec(20, game_shared::ASSET_FLOOR_COLLIDER)],
+            }))
+            .init_resource::<RenderWorldContext>()
+            .init_resource::<RenderWorldStatus>()
+            .add_systems(Update, apply_static_batch_test_chunk);
+
+        app.update();
+
+        let outcome = app.world().resource::<TestOutcome>().0;
+        assert_eq!(outcome.spawned_entities, 1);
+        assert_eq!(outcome.catalog_backed_entities, 1);
+        let world = app.world_mut();
+        let mut visible_meshes = world.query::<&Mesh3d>();
+        assert_eq!(visible_meshes.iter(world).count(), 0);
+        let mut renderer_contracts = world.query::<&renderer_api::Renderable>();
+        assert_eq!(renderer_contracts.iter(world).count(), 0);
+        let mut ray_proxy_only = world.query::<&RenderGeometryClass>();
+        assert_eq!(
+            ray_proxy_only
+                .iter(world)
+                .filter(|class| **class == RenderGeometryClass::RayProxyOnly)
+                .count(),
+            1
+        );
     }
 
     #[test]

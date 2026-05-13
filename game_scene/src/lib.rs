@@ -235,9 +235,9 @@ pub fn spawn_default_scene(mut commands: Commands) {
             fun_value(Transform::from_xyz(-6.0, 0.25, -2.0)
                 .with_rotation(Quat::from_rotation_z(-12.0_f32.to_radians())))
         ),
-        demo_cube(COVER_A_ENTITY, Vec3::new(3.0, 1.0, 2.0)),
-        demo_cube(COVER_B_ENTITY, Vec3::new(5.0, 1.0, -1.5)),
-        demo_cube(COVER_C_ENTITY, Vec3::new(7.0, 2.0, 4.0)),
+        demo_cube(COVER_A_ENTITY, Vec3::new(3.0, 0.5, 2.0)),
+        demo_cube(COVER_B_ENTITY, Vec3::new(5.0, 0.5, -1.5)),
+        demo_cube(COVER_C_ENTITY, Vec3::new(7.0, 0.5, 4.0)),
     ]);
 }
 
@@ -449,7 +449,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
             name: "CoverA",
             network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
-            translation: Vec3::new(3.0, 1.0, 2.0),
+            translation: Vec3::new(3.0, 0.5, 2.0),
             rotation_z_radians: 0.0,
         },
         SceneEntity {
@@ -457,7 +457,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
             name: "CoverB",
             network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
-            translation: Vec3::new(5.0, 1.0, -1.5),
+            translation: Vec3::new(5.0, 0.5, -1.5),
             rotation_z_radians: 0.0,
         },
         SceneEntity {
@@ -465,7 +465,7 @@ fn default_scene_entities() -> [SceneEntity; 7] {
             name: "CoverC",
             network: NetworkedSceneEntity::world(),
             catalog: catalog_ref(ASSET_COVER_CUBE.0, MATERIAL_COVER.0, COLLIDER_COVER_CUBE.0),
-            translation: Vec3::new(7.0, 2.0, 4.0),
+            translation: Vec3::new(7.0, 0.5, 4.0),
             rotation_z_radians: 0.0,
         },
     ]
@@ -606,6 +606,50 @@ mod tests {
             .count();
 
         assert_eq!(body_count, 6);
+    }
+
+    #[test]
+    fn default_scene_catalog_colliders_match_floor_support_height() {
+        for spec in default_scene_world_specs() {
+            let Some(catalog_ref) = spec.catalog else {
+                continue;
+            };
+            let Some(entry) =
+                game_shared::demo_catalog_entry(game_shared::RenderAssetId(catalog_ref.asset_id))
+            else {
+                continue;
+            };
+            let translation = spec.transform.translation.to_f32(Quantization::MILLIMETERS);
+            match entry.collider {
+                Some((
+                    game_shared::COLLIDER_FLOOR,
+                    game_shared::CatalogCollider::Cuboid { size },
+                )) => {
+                    let top = translation[1] + size[1] * 0.5;
+                    assert!(
+                        top.abs() < 0.001,
+                        "{} floor collider top must align to floor plane; got {top}",
+                        spec.name
+                    );
+                }
+                Some((_, game_shared::CatalogCollider::Cuboid { size })) => {
+                    let bottom = translation[1] - size[1] * 0.5;
+                    assert!(
+                        bottom.abs() < 0.001,
+                        "{} collider bottom must sit on the floor plane; got {bottom}",
+                        spec.name
+                    );
+                }
+                None => {
+                    assert!(
+                        translation[1].abs() < 0.001,
+                        "{} visible floor plane must stay at y=0; got {}",
+                        spec.name,
+                        translation[1]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -9,7 +9,8 @@ use thunder::prelude::*;
 
 use crate::{
     ClientOpaqueRenderer, ClientRenderConfig, CompiledRenderAsset, FunGeometryClass, FunRenderPath,
-    InstanceRange, MaterialInstanceTint, MaterialKey, RenderBatchKey, RenderGeometryClass,
+    FunRendererLitMaterial, InstanceRange, MaterialInstanceTint, MaterialKey, RenderBatchKey,
+    RenderGeometryClass,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -131,7 +132,7 @@ pub struct StaticRenderBatch {
     pub aggregate_bounds: StaticRenderBatchBounds,
     pub mesh: Option<Handle<Mesh>>,
     pub meshlet_mesh: Option<Handle<MeshletMesh>>,
-    pub material: Option<Handle<StandardMaterial>>,
+    pub material: Option<Handle<FunRendererLitMaterial>>,
     pub ray_proxy: Option<Handle<Mesh>>,
     pub gpu_instance_buffer_handle: Option<StaticRenderGpuInstanceBufferHandle>,
     pub instance_range: Option<InstanceRange>,
@@ -190,7 +191,7 @@ impl StaticRenderBatchBuilder {
         opaque_renderer: ClientOpaqueRenderer,
         map_to_batch_entity: bool,
     ) -> bool {
-        if !static_catalog_spec_is_batchable(spec, compiled) {
+        if !static_catalog_spec_is_batchable_for_render_config(spec, compiled, render_config) {
             return false;
         }
         let key = StaticRenderBatchKey::from_compiled(compiled, render_config, opaque_renderer);
@@ -257,7 +258,7 @@ struct StaticRenderBatchBuildState {
     aggregate_bounds: StaticRenderBatchBounds,
     mesh: Option<Handle<Mesh>>,
     meshlet_mesh: Option<Handle<MeshletMesh>>,
-    material: Option<Handle<StandardMaterial>>,
+    material: Option<Handle<FunRendererLitMaterial>>,
     ray_proxy: Option<Handle<Mesh>>,
     occluder: bool,
 }
@@ -356,6 +357,14 @@ pub fn static_catalog_spec_is_batchable(
         )
 }
 
+pub fn static_catalog_spec_is_batchable_for_render_config(
+    spec: &WorldEntitySpec,
+    compiled: &CompiledRenderAsset,
+    render_config: &ClientRenderConfig,
+) -> bool {
+    render_config.static_batch_renderer_enabled && static_catalog_spec_is_batchable(spec, compiled)
+}
+
 pub fn static_catalog_spec_needs_identity_proxy(
     spec: &WorldEntitySpec,
     compiled: &CompiledRenderAsset,
@@ -441,6 +450,7 @@ mod tests {
         let mut config = ClientRenderConfig::from_env();
         config.solari_enabled = true;
         config.meshlets_enabled = false;
+        config.static_batch_renderer_enabled = true;
         config.geometry_policy = RenderGeometryPolicy::Hybrid;
         config
     }

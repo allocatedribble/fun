@@ -7,16 +7,18 @@
     "static_bevy": false
   },
   "features": {
-    "disable_solari": false,
-    "disable_meshlets": false,
     "disable_clouds": false,
     "enable_dx12_dlss_rr": false,
     "disable_dlss_rr": false,
-    "solari_debug_direct_visibility": false,
     "render_unknown_vendor": false
   },
-  "env": {
-    "FUN_BENCHMARK_LANE": "full_runtime"
+  "runtime": {
+    "scene_id": "",
+    "frame_graph_trace": false,
+    "frame_graph_trace_format": "",
+    "start_mode": null,
+    "client_mode": "",
+    "benchmark_lane": "full_runtime"
   },
   "processes": {
     "server": true,
@@ -38,21 +40,11 @@
     "present_mode": "immediate",
     "max_frame_latency": 0,
     "geometry_policy": "hybrid",
-    "meshlet_min_triangles": 512,
     "window_width": 0,
     "window_height": 0,
     "maximized": false,
     "disable_fps_overlay": true,
     "enable_fps_overlay": false,
-    "solari_arch": "budgeted",
-    "solari_target_fps": 144,
-    "solari_frame_budget_ns": 6944444,
-    "solari_gpu_budget_ns": 3000000,
-    "solari_visual_target": "competitive",
-    "solari_denoise_mode": "balanced-fast",
-    "solari_internal_scale": "1.0",
-    "solari_blas_compaction_vertices": 0,
-    "solari_debug_overlay": "",
     "cloud_quality": "balanced",
     "cloud_internal_scale": "0.5",
     "cloud_temporal": "1",

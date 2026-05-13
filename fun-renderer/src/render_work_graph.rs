@@ -319,6 +319,13 @@ const fn record_work_kind_for_pass_role(role: FrameGraphPassRole) -> RendererWor
         | FrameGraphPassRole::LuxShadowRequests
         | FrameGraphPassRole::LuxVirtualShadowPages
         | FrameGraphPassRole::LuxVirtualShadowFilter
+        | FrameGraphPassRole::LuxVoxelShadowDemandMark
+        | FrameGraphPassRole::LuxVoxelShadowPageBuild
+        | FrameGraphPassRole::LuxVoxelSdfDistantShadowResolve
+        | FrameGraphPassRole::LuxVoxelRadianceClipmapUpdate
+        | FrameGraphPassRole::LuxVoxelCanopyTransmittanceInject
+        | FrameGraphPassRole::LuxVoxelTerrainAoResolve
+        | FrameGraphPassRole::LuxStormExtinctionInject
         | FrameGraphPassRole::LuxDirectLighting
         | FrameGraphPassRole::LuxGiTrace
         | FrameGraphPassRole::LuxGiCacheUpdate

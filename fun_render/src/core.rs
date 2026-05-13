@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::{
     camera::CameraMainTextureUsages,
-    pbr::experimental::meshlet::MeshletPlugin,
+    pbr::{MaterialPlugin, experimental::meshlet::MeshletPlugin},
     prelude::*,
     render::{
         RenderApp, RenderStartup, backend_capabilities::RenderBackendCapabilities,
@@ -233,6 +233,26 @@ pub struct FunRenderCorePlugin {
     options: FunRenderAppOptions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub struct LuxVirtualShadowRuntimeState {
+    pub compiled: bool,
+    pub enabled_for_ready_world: bool,
+    pub reset_generation: u32,
+}
+
+impl Default for LuxVirtualShadowRuntimeState {
+    fn default() -> Self {
+        Self {
+            compiled: cfg!(any(
+                feature = "virtual_shadows",
+                feature = "fun_lux_virtual_shadows"
+            )),
+            enabled_for_ready_world: false,
+            reset_generation: 0,
+        }
+    }
+}
+
 impl FunRenderCorePlugin {
     pub const fn new(options: FunRenderAppOptions) -> Self {
         Self { options }
@@ -247,6 +267,8 @@ impl Plugin for FunRenderCorePlugin {
 
 pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
     app.add_plugins(fun_renderer::DefaultFunRendererPlugin::default());
+    app.add_plugins(MaterialPlugin::<crate::FunRendererLitMaterial>::default());
+    crate::load_fun_renderer_lit_material_shader_assets(app);
 
     let renderer_bridge_settings = RendererBridgeSettings::from_env();
     install_renderer_bridge_api(app, renderer_bridge_settings);
@@ -292,6 +314,7 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
         .init_resource::<FunPipelineRegistry>()
         .init_resource::<crate::fun_lux::LuxLightDatabase>()
         .init_resource::<crate::fun_lux::LuxWorld>()
+        .init_resource::<LuxVirtualShadowRuntimeState>()
         .init_resource::<FunSceneManifestRegistry>()
         .init_resource::<FunViewportRegistry>()
         .init_resource::<FunRenderSceneExtractionBridge>()
@@ -425,6 +448,36 @@ pub fn install_fun_render_core(app: &mut App, options: &FunRenderAppOptions) {
                 .ambiguous_with_all(),
         );
     }
+}
+
+pub fn enable_lux_virtual_shadows_for_ready_world(
+    commands: &mut Commands,
+    _render_config: &ClientRenderConfig,
+) {
+    let compiled = cfg!(any(
+        feature = "virtual_shadows",
+        feature = "fun_lux_virtual_shadows"
+    ));
+    commands.insert_resource(LuxVirtualShadowRuntimeState {
+        compiled,
+        enabled_for_ready_world: compiled,
+        reset_generation: 0,
+    });
+    game_shared::fun_diag_info!(
+        target: "fun::lux::virtual_shadows",
+        compiled,
+        solari_enabled = _render_config.solari_enabled,
+        meshlets_enabled = _render_config.meshlets_enabled,
+        "Lux virtual-shadow runtime selected for ready world"
+    );
+}
+
+pub fn request_lux_virtual_shadow_history_reset(_reason: &'static str) {
+    game_shared::fun_diag_info!(
+        target: "fun::lux::virtual_shadows",
+        reason = _reason,
+        "requested Lux virtual-shadow history reset"
+    );
 }
 
 fn render_path_config_from_env() -> (ClientRenderConfig, SolariSettings, SolariRuntimeParams) {

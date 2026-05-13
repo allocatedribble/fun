@@ -1,6 +1,6 @@
+use hashbrown::{HashMap, HashSet};
 #[cfg(all(feature = "diagnostics", debug_assertions))]
 use std::time::Instant;
-use hashbrown::{HashMap, HashSet};
 use std::{
     env,
     path::Path,

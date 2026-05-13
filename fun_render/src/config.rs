@@ -80,6 +80,7 @@ pub struct ClientRenderConfig {
     pub dlss_rr_disabled_by_denoise_mode: bool,
     #[cfg(all(feature = "render_diagnostics", debug_assertions))]
     pub render_profile_verbose: bool,
+    pub static_batch_renderer_enabled: bool,
     pub geometry_policy: RenderGeometryPolicy,
     pub meshlet_min_triangles: usize,
     pub rt_features: FunRenderRtFeatures,
@@ -92,11 +93,13 @@ impl ClientRenderConfig {
         let cloud_settings = FunCloudSettings::from_env();
         let native_dlss = NativeDlssConfig::from_env();
         Self {
-            solari_enabled: std::env::var_os("FUN_DISABLE_SOLARI").is_none(),
+            solari_enabled: std::env::var_os("FUN_ENABLE_SOLARI").is_some()
+                && std::env::var_os("FUN_DISABLE_SOLARI").is_none(),
             dlss_rr_enabled: native_dlss.allow_ray_reconstruction
                 && std::env::var_os("FUN_DISABLE_DLSS_RR").is_none(),
             native_dlss,
-            meshlets_enabled: std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
+            meshlets_enabled: std::env::var_os("FUN_ENABLE_MESHLETS").is_some()
+                && std::env::var_os("FUN_DISABLE_MESHLETS").is_none(),
             clouds_enabled: cloud_settings.enabled,
             cloud_quality: cloud_settings.quality,
             cloud_internal_scale: cloud_settings.internal_scale,
@@ -107,6 +110,9 @@ impl ClientRenderConfig {
             dlss_rr_disabled_by_denoise_mode: false,
             #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             render_profile_verbose: std::env::var_os("FUN_RENDER_PROFILE_VERBOSE").is_some(),
+            static_batch_renderer_enabled: std::env::var_os("FUN_ENABLE_STATIC_BATCH_RENDERER")
+                .is_some()
+                && std::env::var_os("FUN_DISABLE_STATIC_BATCH_RENDERER").is_none(),
             geometry_policy: RenderGeometryPolicy::from_env(),
             meshlet_min_triangles: env_usize("FUN_MESHLET_MIN_TRIANGLES", 512),
             rt_features: FunRenderRtFeatures::from_env(),

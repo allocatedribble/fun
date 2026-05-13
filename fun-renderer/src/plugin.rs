@@ -1,10 +1,11 @@
 use core::marker::PhantomData;
 
-use bevy_app::{App, Plugin, Update};
+use bevy_app::{App, Plugin, PostUpdate, Update};
 use bevy_ecs::{
     prelude::{ResMut, Resource},
     schedule::{IntoScheduleConfigs, SystemSet},
 };
+use bevy_transform::TransformSystems;
 
 use crate::{
     RendererFeatureToggles,
@@ -664,7 +665,7 @@ where
     B: RendererBackend + BackendDiagnostics + BackendNativeInterop,
 {
     app.configure_sets(
-        Update,
+        PostUpdate,
         (
             RendererBackendInit,
             RendererExtract,
@@ -680,10 +681,11 @@ where
             RendererCleanup,
             RendererDiagnosticsFlush,
         )
-            .chain(),
+            .chain()
+            .after(TransformSystems::Propagate),
     )
     .add_systems(
-        Update,
+        PostUpdate,
         (
             renderer_backend_init::<B>.in_set(RendererBackendInit),
             (
@@ -716,7 +718,7 @@ where
 
 fn install_renderer_phase_systems_dynamic(app: &mut App) {
     app.configure_sets(
-        Update,
+        PostUpdate,
         (
             RendererBackendInit,
             RendererExtract,
@@ -732,10 +734,11 @@ fn install_renderer_phase_systems_dynamic(app: &mut App) {
             RendererCleanup,
             RendererDiagnosticsFlush,
         )
-            .chain(),
+            .chain()
+            .after(TransformSystems::Propagate),
     )
     .add_systems(
-        Update,
+        PostUpdate,
         (
             dynamic_renderer_backend_init.in_set(RendererBackendInit),
             (

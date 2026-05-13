@@ -23,6 +23,7 @@ pub mod hiz_occlusion;
 pub mod indirect_draw;
 pub mod instance_tables;
 pub mod lighting;
+pub mod lit_material;
 pub mod lux_extraction;
 pub mod material_pipeline;
 #[cfg(feature = "offscreen")]
@@ -93,8 +94,9 @@ pub use config::{
 };
 pub use core::{
     FunDrawCallCounters, FunDrawCallRecord, FunDrawSubmissionKind, FunRenderCorePlugin,
-    FunRenderPhaseKind, enable_solari_lighting_for_ready_world, install_fun_render_core,
-    request_solari_lighting_history_reset,
+    FunRenderPhaseKind, LuxVirtualShadowRuntimeState, enable_lux_virtual_shadows_for_ready_world,
+    enable_solari_lighting_for_ready_world, install_fun_render_core,
+    request_lux_virtual_shadow_history_reset, request_solari_lighting_history_reset,
 };
 pub use dlss_correctness::{
     DlssCameraValidation, DlssDebugVisualization, DlssDepthConvention, DlssDepthDiagnostics,
@@ -160,6 +162,7 @@ pub use extraction::{
 };
 pub use fun_renderer;
 pub use fun_renderer::benchmark::*;
+pub use fun_renderer::component_api as renderer_component_api;
 pub use fun_renderer::ecs::*;
 pub use fun_renderer::frame_graph::*;
 pub use fun_renderer::fun_lux;
@@ -253,6 +256,10 @@ pub use instance_tables::{
     StaticInstanceAllocation, StaticInstanceAllocationRecord, StaticInstanceTable,
     write_instance_range_with_existing_encoder,
 };
+pub use lit_material::{
+    FUN_RENDERER_LIT_MATERIAL_SHADER, FunRendererLitMaterial,
+    load_fun_renderer_lit_material_shader_assets,
+};
 pub use lux_extraction::{
     FUN_RENDER_LUX_EXTRACTION_SCHEMA_VERSION, FunRenderLuxExtractionBridge,
     FunRenderLuxExtractionReport, fun_render_lux_extraction_system,
@@ -311,8 +318,8 @@ pub use static_batches::{
     StaticRenderBatch, StaticRenderBatchBounds, StaticRenderBatchBuilder,
     StaticRenderBatchInstanceRange, StaticRenderBatchKey, StaticRenderBatchSpawnRecord,
     StaticRenderCell, StaticRenderCellId, StaticRenderGpuInstanceBufferHandle,
-    static_catalog_spec_is_batchable, static_catalog_spec_may_batch,
-    static_catalog_spec_needs_identity_proxy,
+    static_catalog_spec_is_batchable, static_catalog_spec_is_batchable_for_render_config,
+    static_catalog_spec_may_batch, static_catalog_spec_needs_identity_proxy,
 };
 pub use upload_arena::{
     FUN_UPLOAD_ARENA_OWNER_MODULE, FUN_UPLOAD_ARENA_RESOURCE_SCHEMA_VERSION,

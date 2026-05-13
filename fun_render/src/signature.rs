@@ -436,6 +436,7 @@ mod tests {
             dlss_rr_disabled_by_denoise_mode: false,
             #[cfg(all(feature = "render_diagnostics", debug_assertions))]
             render_profile_verbose: false,
+            static_batch_renderer_enabled: false,
             geometry_policy: RenderGeometryPolicy::Hybrid,
             meshlet_min_triangles: 512,
             rt_features: FunRenderRtFeatures::default(),

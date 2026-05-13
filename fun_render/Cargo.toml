@@ -34,7 +34,12 @@ fun_renderer_metal = ["metal_backend"]
 fun_renderer_new_core = ["fun_renderer_core"]
 fun_renderer_upscale = ["upscaling"]
 fun_renderer_vulkan = ["vulkan_backend"]
-fun_renderer_core = ["fun_renderer/fun_renderer_core"]
+fun_renderer_core = [
+    "fun_renderer/fun_renderer_core",
+    "fun_renderer/schedule_graph",
+    "dep:fun-scheduler-core",
+    "dep:fun-scheduler-types",
+]
 hybrid_gi = ["fun_renderer/hybrid_gi"]
 legacy_renderer = ["fun_renderer/legacy_renderer"]
 many_light = ["fun_renderer/many_light"]
@@ -44,8 +49,6 @@ render_diagnostics = [
     "diagnostics",
     "bevy/debug",
     "bevy/track_location",
-    "bevy/pbr_debug_diagnostics",
-    "bevy/meshlet_debug_diagnostics",
 ]
 upscaling = ["fun_renderer/upscaling"]
 virtual_geometry = ["fun_renderer/virtual_geometry"]
@@ -57,6 +60,9 @@ winit_presentation = []
 [dependencies]
 bevy.workspace = true
 fun_dx12_dlss = { path = "../fun_dx12_dlss", optional = true }
+fun-scheduler-core = { path = "../../fun-scheduler/crates/fun-scheduler-core", optional = true }
+fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types", optional = true }
+fun_ecs.workspace = true
 fun_renderer.workspace = true
 hashbrown.workspace = true
 # Pass V2.3 — the typed `lux_extraction` system reads

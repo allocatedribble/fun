@@ -1,6 +1,7 @@
 pub mod ai_presentation;
 #[cfg(feature = "native_ui_routes")]
 mod alpha_proof;
+mod avis;
 mod editor_hotkey;
 pub mod first_person;
 mod frame_profile;
@@ -20,6 +21,10 @@ use frame_profile::DetailedFrameProfiler;
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use frame_profile::install_detailed_frame_profiler;
 use fun_host::{FunClientHostPlugin, FunClientHostStartConfig, FunClientHostState, FunHostMode};
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+use fun_render::FunRendererLitMaterial;
+#[cfg(test)]
+use fun_render::RenderWorldChunkOutcome;
 pub(crate) use fun_render::RenderWorldStatus as ClientWorldStatus;
 #[cfg(any(test, feature = "benchmarks"))]
 pub use fun_render::benchmark_parse_solari_denoise_mode;
@@ -28,14 +33,14 @@ use fun_render::{
     FunRenderAppOptions, FunRenderCorePlugin, FunRenderWinitPresentationPlugin,
     PrimitiveRenderCache, RenderGeometryClass, RenderWorldApplyOptions, RenderWorldContext,
     RenderWorldStatus, StaticInstanceTable, WorldRenderCatalog, apply_render_world_chunk,
-    enable_solari_lighting_for_ready_world, request_solari_lighting_history_reset,
+    enable_lux_virtual_shadows_for_ready_world, request_lux_virtual_shadow_history_reset,
 };
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use std::{collections::BTreeMap, time::Instant};
 use std::{collections::VecDeque, time::Duration};
 
-use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody};
+use crate::avis::{AvisClientPlugin, Collider, Position, RigidBody, Rotation};
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 use bevy::anti_alias::dlss::{
     Dlss, DlssPerfQualityMode, DlssRayReconstructionFeature, DlssRayReconstructionSupported,
@@ -44,16 +49,7 @@ use bevy::anti_alias::dlss::{
 use bevy::diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use bevy::render::error_handler::{ErrorType, RenderRecoveryStatus};
-#[cfg(all(feature = "render_diagnostics", debug_assertions))]
-use bevy::solari::prelude::SolariRuntimeParams;
-use bevy::{
-    app::AppExit,
-    prelude::*,
-    solari::prelude::{SolariLighting, SolariResetEvent},
-    window::PrimaryWindow,
-};
-#[cfg(all(feature = "render_diagnostics", debug_assertions))]
-use bevy::{pbr::experimental::meshlet::MeshletMesh3d, solari::prelude::RaytracingMesh3d};
+use bevy::{app::AppExit, prelude::*, window::PrimaryWindow};
 use bevy_quinnet::client::{
     ClientConnectionConfiguration, ClientConnectionConfigurationDefaultables, QuinnetClient,
     QuinnetClientPlugin,
@@ -407,10 +403,57 @@ struct ClientPerfCounters {
     world_stream_render_prep_deferred_chunks: u64,
     world_stream_render_prep_applied_chunks: u64,
     world_stream_render_prep_dynamic_mesh_assets: u64,
-    meshlet_path_instance_count: u64,
+    virtual_geometry_instance_count: u64,
     raster_path_instance_count: u64,
     ray_proxy_only_count: u64,
     last_gpu_sample_render_frame_index: Option<u64>,
+}
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+#[derive(Debug, Clone, Copy)]
+struct ClientLuxVirtualShadowBudget {
+    architecture: &'static str,
+    visual_target: &'static str,
+    target_fps: u32,
+    frame_budget_ns: u32,
+    gpu_budget_ns: u32,
+    quality_level: u32,
+    cache_update_budget: u32,
+    budget_pressure: f32,
+    visual_debt_mean: f32,
+    visual_debt_p95: f32,
+    previous_solari_ns: u32,
+    previous_direct_ns: u32,
+    previous_diffuse_gi_ns: u32,
+    previous_specular_ns: u32,
+    previous_radiance_cache_ns: u32,
+    previous_denoise_ns: u32,
+}
+
+#[cfg(all(feature = "render_diagnostics", debug_assertions))]
+impl Default for ClientLuxVirtualShadowBudget {
+    fn default() -> Self {
+        let frame_budget_ns = ((1_000_000_000.0 / DEFAULT_RENDER_TARGET_RATE_HZ).round() as u64)
+            .min(u64::from(u32::MAX)) as u32;
+        Self {
+            architecture: "fun-renderer-lux",
+            visual_target: "virtual_shadows",
+            target_fps: DEFAULT_RENDER_TARGET_RATE_HZ as u32,
+            frame_budget_ns,
+            gpu_budget_ns: frame_budget_ns / 2,
+            quality_level: 1,
+            cache_update_budget: 0,
+            budget_pressure: 0.0,
+            visual_debt_mean: 0.0,
+            visual_debt_p95: 0.0,
+            previous_solari_ns: 0,
+            previous_direct_ns: 0,
+            previous_diffuse_gi_ns: 0,
+            previous_specular_ns: 0,
+            previous_radiance_cache_ns: 0,
+            previous_denoise_ns: 0,
+        }
+    }
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -448,11 +491,11 @@ impl ClientPerfCounters {
 
     fn set_render_path_counts(
         &mut self,
-        meshlet_path_instance_count: u64,
+        virtual_geometry_instance_count: u64,
         raster_path_instance_count: u64,
         ray_proxy_only_count: u64,
     ) {
-        self.meshlet_path_instance_count = meshlet_path_instance_count;
+        self.virtual_geometry_instance_count = virtual_geometry_instance_count;
         self.raster_path_instance_count = raster_path_instance_count;
         self.ray_proxy_only_count = ray_proxy_only_count;
     }
@@ -669,9 +712,6 @@ struct ClientRenderWorldParam<'w> {
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct ClientTemporalRenderControls<'w, 's> {
-    solari_cameras: Query<'w, 's, Entity, (With<Camera3d>, Without<SolariLighting>)>,
-    solari_lighting: Query<'w, 's, &'static mut SolariLighting>,
-    solari_reset_events: MessageWriter<'w, SolariResetEvent>,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     dlss_rr_supported: Option<Res<'w, DlssRayReconstructionSupported>>,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -730,8 +770,8 @@ const CLIENT_SCHEDULE_SYSTEMS: [ClientScheduleSystem; CLIENT_SCHEDULE_SYSTEM_COU
     ClientScheduleSystem::PhysicsMovement,
     ClientScheduleSystem::DiagnosticsLogging,
     ClientScheduleSystem::RenderConfigWindow,
-    ClientScheduleSystem::SolariRuntimeParamsUpdate,
-    ClientScheduleSystem::MeshletExtraction,
+    ClientScheduleSystem::LuxVirtualShadowBudgetUpdate,
+    ClientScheduleSystem::VirtualGeometryExtraction,
     ClientScheduleSystem::RenderInterpolation,
 ];
 
@@ -745,8 +785,8 @@ pub(crate) enum ClientScheduleSystem {
     PhysicsMovement,
     DiagnosticsLogging,
     RenderConfigWindow,
-    SolariRuntimeParamsUpdate,
-    MeshletExtraction,
+    LuxVirtualShadowBudgetUpdate,
+    VirtualGeometryExtraction,
     RenderInterpolation,
 }
 
@@ -761,8 +801,8 @@ impl ClientScheduleSystem {
             ClientScheduleSystem::PhysicsMovement => 4,
             ClientScheduleSystem::DiagnosticsLogging => 5,
             ClientScheduleSystem::RenderConfigWindow => 6,
-            ClientScheduleSystem::SolariRuntimeParamsUpdate => 7,
-            ClientScheduleSystem::MeshletExtraction => 8,
+            ClientScheduleSystem::LuxVirtualShadowBudgetUpdate => 7,
+            ClientScheduleSystem::VirtualGeometryExtraction => 8,
             ClientScheduleSystem::RenderInterpolation => 9,
         }
     }
@@ -776,8 +816,10 @@ impl ClientScheduleSystem {
             ClientScheduleSystem::PhysicsMovement => "physics_movement",
             ClientScheduleSystem::DiagnosticsLogging => "diagnostics_logging",
             ClientScheduleSystem::RenderConfigWindow => "render_config_window",
-            ClientScheduleSystem::SolariRuntimeParamsUpdate => "solari_runtime_params_update",
-            ClientScheduleSystem::MeshletExtraction => "meshlet_extraction",
+            ClientScheduleSystem::LuxVirtualShadowBudgetUpdate => {
+                "lux_virtual_shadow_budget_update"
+            }
+            ClientScheduleSystem::VirtualGeometryExtraction => "virtual_geometry_extraction",
             ClientScheduleSystem::RenderInterpolation => "render_interpolation",
         }
     }
@@ -889,7 +931,7 @@ impl Plugin for GameClientPlugin {
 
         if self.options.mode.runs_gameplay_runtime() {
             app.add_plugins((
-                PhysicsPlugins::default(),
+                AvisClientPlugin,
                 QuinnetClientPlugin::default(),
                 ThunderPlugin::default(),
                 FirstPersonControllerPlugin::gameplay(),
@@ -1185,24 +1227,14 @@ fn apply_static_preview_world_stream(
     }
 
     if world_revision_changed {
-        request_solari_lighting_history_reset(
-            "static editor preview stream applied",
-            &mut temporal.solari_reset_events,
-            &mut temporal.solari_lighting,
-        );
+        request_lux_virtual_shadow_history_reset("static editor preview stream applied");
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         reset_dlss_ray_reconstruction_history(&mut temporal.dlss_rr);
     }
 
     preview_stream.applied = true;
     world_status.ready = true;
-    enable_solari_lighting_for_ready_world(
-        &mut commands,
-        &render_config,
-        &temporal.solari_cameras,
-        &mut temporal.solari_lighting,
-        &mut temporal.solari_reset_events,
-    );
+    enable_lux_virtual_shadows_for_ready_world(&mut commands, &render_config);
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     enable_dlss_ray_reconstruction_for_ready_world(
         &mut commands,
@@ -2282,11 +2314,7 @@ fn apply_pending_world_stream_chunks(
 
     if last_world_revision_changed {
         crate::frame_profile_start!(reset_started);
-        request_solari_lighting_history_reset(
-            "streamed world revision changed",
-            &mut temporal.solari_reset_events,
-            &mut temporal.solari_lighting,
-        );
+        request_lux_virtual_shadow_history_reset("streamed world revision changed");
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         reset_dlss_ray_reconstruction_history(&mut temporal.dlss_rr);
         crate::frame_profile_elapsed!(
@@ -2314,13 +2342,7 @@ fn apply_pending_world_stream_chunks(
         render_world.status.ready = true;
         if became_ready {
             crate::frame_profile_start!(ready_started);
-            enable_solari_lighting_for_ready_world(
-                &mut commands,
-                &render_config,
-                &temporal.solari_cameras,
-                &mut temporal.solari_lighting,
-                &mut temporal.solari_reset_events,
-            );
+            enable_lux_virtual_shadows_for_ready_world(&mut commands, &render_config);
             #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
             enable_dlss_ray_reconstruction_for_ready_world(
                 &mut commands,
@@ -2410,15 +2432,11 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     dlss_rr_cameras: &Query<Entity, (With<Camera3d>, Without<Dlss<DlssRayReconstructionFeature>>)>,
     dlss_rr: &mut Query<&mut Dlss<DlssRayReconstructionFeature>>,
 ) {
-    if !render_config.solari_enabled {
-        return;
-    }
-
     if !render_config.dlss_rr_enabled {
         if render_config.dlss_rr_disabled_by_denoise_mode {
             info!(
                 target: "fun::rr",
-                "DLSS Ray Reconstruction disabled by active Solari denoiser"
+                "DLSS Ray Reconstruction disabled by the active denoiser policy"
             );
         } else {
             info!(
@@ -2430,7 +2448,7 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
     }
 
     if dlss_rr_supported.is_none() {
-        info!(target: "fun::rr", "DLSS Ray Reconstruction unavailable; Solari lighting will use its non-DLSS path");
+        info!(target: "fun::rr", "DLSS Ray Reconstruction unavailable; Lux virtual-shadow lighting will use its non-DLSS path");
         return;
     }
 
@@ -2451,7 +2469,7 @@ fn enable_dlss_ray_reconstruction_for_ready_world(
             target: "fun::rr",
             enabled_views = enabled_count,
             mode = ?DLSS_RR_MODE,
-            "DLSS Ray Reconstruction enabled for Solari lighting"
+            "DLSS Ray Reconstruction enabled for Lux virtual-shadow lighting"
         );
     }
 
@@ -2506,18 +2524,40 @@ fn insert_gameplay_colliders_for_chunk(
             if let Some(compiled) = catalog.lookup(catalog_ref)
                 && let Some((_, collider)) = compiled.entry.collider
             {
-                commands
-                    .entity(entity)
-                    .insert((RigidBody::Static, collider_from_catalog(collider)));
+                let (position, rotation) = physics_pose_from_stream_transform(spec.transform);
+                commands.entity(entity).insert((
+                    RigidBody::Static,
+                    position,
+                    rotation,
+                    collider_from_catalog(collider),
+                ));
             }
             continue;
         }
         if let Some(collider) = spec.collider {
-            commands
-                .entity(entity)
-                .insert((RigidBody::Static, collider_from_stream(collider)));
+            let (position, rotation) = physics_pose_from_stream_transform(spec.transform);
+            commands.entity(entity).insert((
+                RigidBody::Static,
+                position,
+                rotation,
+                collider_from_stream(collider),
+            ));
         }
     }
+}
+
+fn physics_pose_from_stream_transform(transform: QuantizedTransform3) -> (Position, Rotation) {
+    let translation = transform.translation.to_f32(Quantization::MILLIMETERS);
+    let rotation = transform.rotation.to_f32();
+    (
+        Position::new(Vec3::from_array(translation)),
+        Rotation(Quat::from_xyzw(
+            rotation[0],
+            rotation[1],
+            rotation[2],
+            rotation[3],
+        )),
+    )
 }
 
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
@@ -2531,7 +2571,6 @@ fn log_client_diagnostics(
     mut diagnostics: ResMut<ClientDiagnostics>,
     render_diagnostics: Res<DiagnosticsStore>,
     render_config: Res<ClientRenderConfig>,
-    mut solari_runtime_params: ResMut<SolariRuntimeParams>,
     mut perf_counters: ResMut<ClientPerfCounters>,
     mut schedule_profiler: ResMut<ClientScheduleProfiler>,
     mut frame_profiler: ResMut<DetailedFrameProfiler>,
@@ -2548,7 +2587,6 @@ fn log_client_diagnostics(
             &GlobalTransform,
             Option<&Camera>,
             Option<&Projection>,
-            Option<&SolariLighting>,
         ),
         With<Camera3d>,
     >,
@@ -2558,20 +2596,12 @@ fn log_client_diagnostics(
             Option<&Name>,
             Option<&GlobalTransform>,
             Option<&Transform>,
-            Option<&MeshletMesh3d>,
-            Option<&RaytracingMesh3d>,
             Option<&Mesh3d>,
-            Option<&MeshMaterial3d<StandardMaterial>>,
+            Option<&MeshMaterial3d<FunRendererLitMaterial>>,
             Option<&Collider>,
             Option<&RenderGeometryClass>,
         ),
-        Or<(
-            With<MeshletMesh3d>,
-            With<RaytracingMesh3d>,
-            With<Mesh3d>,
-            With<Collider>,
-            With<RenderGeometryClass>,
-        )>,
+        Or<(With<Mesh3d>, With<Collider>, With<RenderGeometryClass>)>,
     >,
 ) {
     crate::frame_profile_start!(system_started);
@@ -2593,8 +2623,6 @@ fn log_client_diagnostics(
     crate::frame_profile_start!(diagnostics_started);
 
     let mut renderable_count = 0usize;
-    let mut meshlet_count = 0usize;
-    let mut raytracing_count = 0usize;
     let mut mesh3d_count = 0usize;
     let mut material_count = 0usize;
     let mut collider_count = 0usize;
@@ -2602,8 +2630,8 @@ fn log_client_diagnostics(
     let mut instanced_static_raster_count = 0usize;
     let mut gpu_culled_static_raster_count = 0usize;
     let mut gpu_culled_dynamic_raster_count = 0usize;
-    let mut meshlet_static_dense_count = 0usize;
-    let mut meshlet_dynamic_dense_count = 0usize;
+    let mut legacy_dense_static_count = 0usize;
+    let mut legacy_dense_dynamic_count = 0usize;
     let mut virtual_static_cluster_count = 0usize;
     let mut foliage_aggregate_count = 0usize;
     let mut transparent_raster_count = 0usize;
@@ -2611,22 +2639,10 @@ fn log_client_diagnostics(
     let mut viewmodel_count = 0usize;
     let mut samples = Vec::new();
 
-    for (
-        entity,
-        name,
-        global_transform,
-        transform,
-        meshlet,
-        raytracing,
-        mesh3d,
-        material,
-        collider,
-        geometry_class,
-    ) in &renderables
+    for (entity, name, global_transform, transform, mesh3d, material, collider, geometry_class) in
+        &renderables
     {
         renderable_count += 1;
-        meshlet_count += usize::from(meshlet.is_some());
-        raytracing_count += usize::from(raytracing.is_some());
         mesh3d_count += usize::from(mesh3d.is_some());
         material_count += usize::from(material.is_some());
         collider_count += usize::from(collider.is_some());
@@ -2639,8 +2655,8 @@ fn log_client_diagnostics(
             Some(RenderGeometryClass::GpuCulledDynamicRaster) => {
                 gpu_culled_dynamic_raster_count += 1;
             }
-            Some(RenderGeometryClass::MeshletStaticDense) => meshlet_static_dense_count += 1,
-            Some(RenderGeometryClass::MeshletDynamicDense) => meshlet_dynamic_dense_count += 1,
+            Some(RenderGeometryClass::MeshletStaticDense) => legacy_dense_static_count += 1,
+            Some(RenderGeometryClass::MeshletDynamicDense) => legacy_dense_dynamic_count += 1,
             Some(RenderGeometryClass::VirtualStaticCluster) => virtual_static_cluster_count += 1,
             Some(RenderGeometryClass::FoliageAggregate) => foliage_aggregate_count += 1,
             Some(RenderGeometryClass::TransparentRaster) => transparent_raster_count += 1,
@@ -2655,14 +2671,12 @@ fn log_client_diagnostics(
                 .or_else(|| transform.map(|transform| transform.translation))
                 .unwrap_or(Vec3::NAN);
             samples.push(format!(
-                "{:?}/{} pos=({:.2},{:.2},{:.2}) meshlet={} ray={} mesh3d={} mat={} collider={} class={:?}",
+                "{:?}/{} pos=({:.2},{:.2},{:.2}) mesh3d={} material={} collider={} class={:?}",
                 entity,
                 name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
                 translation.x,
                 translation.y,
                 translation.z,
-                meshlet.is_some(),
-                raytracing.is_some(),
                 mesh3d.is_some(),
                 material.is_some(),
                 collider.is_some(),
@@ -2674,7 +2688,7 @@ fn log_client_diagnostics(
     let camera_count = cameras.iter().count();
     let active_camera_count = cameras
         .iter()
-        .filter(|(_, _, _, camera, _, _)| camera.is_none_or(|camera| camera.is_active))
+        .filter(|(_, _, _, camera, _)| camera.is_none_or(|camera| camera.is_active))
         .count();
     if camera_count != 1 || active_camera_count != 1 {
         game_shared::fun_diag_warn!(
@@ -2697,8 +2711,6 @@ fn log_client_diagnostics(
             cameras = camera_count,
             active_cameras = active_camera_count,
             renderables = renderable_count,
-            meshlets = meshlet_count,
-            raytracing = raytracing_count,
             mesh3d = mesh3d_count,
             materials = material_count,
             colliders = collider_count,
@@ -2707,8 +2719,8 @@ fn log_client_diagnostics(
             instanced_static_raster = instanced_static_raster_count,
             gpu_culled_static_raster = gpu_culled_static_raster_count,
             gpu_culled_dynamic_raster = gpu_culled_dynamic_raster_count,
-            meshlet_static_dense = meshlet_static_dense_count,
-            meshlet_dynamic_dense = meshlet_dynamic_dense_count,
+            legacy_dense_static = legacy_dense_static_count,
+            legacy_dense_dynamic = legacy_dense_dynamic_count,
             virtual_static_cluster = virtual_static_cluster_count,
             foliage_aggregate = foliage_aggregate_count,
             transparent_raster = transparent_raster_count,
@@ -2723,8 +2735,8 @@ fn log_client_diagnostics(
             instanced_static_raster = instanced_static_raster_count,
             gpu_culled_static_raster = gpu_culled_static_raster_count,
             gpu_culled_dynamic_raster = gpu_culled_dynamic_raster_count,
-            meshlet_static_dense = meshlet_static_dense_count,
-            meshlet_dynamic_dense = meshlet_dynamic_dense_count,
+            legacy_dense_static = legacy_dense_static_count,
+            legacy_dense_dynamic = legacy_dense_dynamic_count,
             virtual_static_cluster = virtual_static_cluster_count,
             foliage_aggregate = foliage_aggregate_count,
             transparent_raster = transparent_raster_count,
@@ -2742,13 +2754,14 @@ fn log_client_diagnostics(
         + transparent_raster_count
         + viewmodel_count;
     perf_counters.set_render_path_counts(
-        (meshlet_static_dense_count + meshlet_dynamic_dense_count) as u64,
+        (virtual_static_cluster_count + legacy_dense_static_count + legacy_dense_dynamic_count)
+            as u64,
         raster_path_count as u64,
         ray_proxy_only_count as u64,
     );
 
     if log_config.diagnostics_verbose() {
-        for (entity, name, transform, camera, projection, solari) in &cameras {
+        for (entity, name, transform, camera, projection) in &cameras {
             let translation = transform.translation();
             game_shared::fun_diag_info!(
                 target: "fun::diag::camera",
@@ -2756,7 +2769,6 @@ fn log_client_diagnostics(
                 name = name.map(|name| name.as_str()).unwrap_or("<unnamed>"),
                 active = camera.is_none_or(|camera| camera.is_active),
                 projection = projection.map(projection_summary).unwrap_or("<none>"),
-                solari = solari.is_some(),
                 position_x = translation.x,
                 position_y = translation.y,
                 position_z = translation.z,
@@ -2780,7 +2792,6 @@ fn log_client_diagnostics(
     log_render_performance(
         &render_diagnostics,
         render_recovery.as_deref(),
-        solari_runtime_params.as_mut(),
         perf_counters.as_mut(),
         schedule_profiler.as_mut(),
         render_config.as_ref(),
@@ -2869,7 +2880,6 @@ struct RenderProfileMetric {
 fn log_render_performance(
     diagnostics: &DiagnosticsStore,
     render_recovery: Option<&RenderRecoveryStatus>,
-    solari_runtime_params: &mut SolariRuntimeParams,
     perf_counters: &mut ClientPerfCounters,
     schedule_profiler: &mut ClientScheduleProfiler,
     render_config: &ClientRenderConfig,
@@ -2891,6 +2901,8 @@ fn log_render_performance(
         diagnostic_value(diagnostics, GPU_QUERY_FRAME_INDEX_PATH).map(|value| value as u64);
     let sample_latency_frames =
         diagnostic_value(diagnostics, SAMPLE_LATENCY_FRAMES_PATH).map(|value| value as u64);
+    let mut lux_virtual_shadow_budget = ClientLuxVirtualShadowBudget::default();
+    let solari_runtime_params = &mut lux_virtual_shadow_budget;
     let raw_gpu_sample_status = diagnostic_value(diagnostics, GPU_SAMPLE_STATUS_CODE_PATH)
         .and_then(gpu_sample_status_from_code);
     let gpu_sample_status = classify_gpu_sample_status(
@@ -3012,7 +3024,7 @@ fn log_render_performance(
     solari_runtime_params.previous_radiance_cache_ns = ms_to_u32_ns(solari_world_cache);
     solari_runtime_params.previous_denoise_ns = ms_to_u32_ns(solari_denoise_total);
     schedule_profiler.record_elapsed(
-        ClientScheduleSystem::SolariRuntimeParamsUpdate,
+        ClientScheduleSystem::LuxVirtualShadowBudgetUpdate,
         solari_runtime_update_started,
     );
     let meshlet_visibility = diagnostic_average(
@@ -3046,12 +3058,12 @@ fn log_render_performance(
     let meshlet_path_instance_count =
         diagnostic_average(diagnostics, "meshlet_path_instance_count")
             .map(|value| value as u64)
-            .unwrap_or(perf_counters.meshlet_path_instance_count);
+            .unwrap_or(perf_counters.virtual_geometry_instance_count);
     let meshlet_extract_cpu_ns =
         diagnostic_average(diagnostics, "meshlet_extract_cpu_ns").map(ms_to_ns_from_value);
     if let Some(meshlet_extract_cpu_ns) = meshlet_extract_cpu_ns {
         schedule_profiler.record_ns(
-            ClientScheduleSystem::MeshletExtraction,
+            ClientScheduleSystem::VirtualGeometryExtraction,
             meshlet_extract_cpu_ns,
         );
     }
@@ -4646,7 +4658,6 @@ mod tests {
     fn editor_preview_static_stream_keeps_transforms_stable_across_frames() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<SolariResetEvent>()
             .insert_resource(ClientRenderConfig::from_env())
             .insert_resource(ClientLogConfig {
                 stream_verbose: false,
@@ -4697,7 +4708,6 @@ mod tests {
         }]);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<SolariResetEvent>()
             .insert_resource(ClientRenderConfig::from_env())
             .insert_resource(ClientLogConfig {
                 stream_verbose: false,
@@ -4718,6 +4728,105 @@ mod tests {
 
         assert!(!app.world().resource::<StaticPreviewWorldStream>().applied);
         assert!(!app.world().resource::<RenderWorldStatus>().ready);
+    }
+
+    #[test]
+    fn streamed_gameplay_colliders_use_stream_world_pose() {
+        #[derive(Resource)]
+        struct ColliderPoseTestChunk(WorldStreamChunk);
+
+        #[derive(Resource)]
+        struct ColliderPoseTestOutcome(RenderWorldChunkOutcome);
+
+        fn apply_chunk_and_colliders(
+            mut commands: Commands,
+            mut context: ResMut<RenderWorldContext>,
+            mut status: ResMut<RenderWorldStatus>,
+            mut static_instance_table: ResMut<StaticInstanceTable>,
+            mut dynamic_instance_table: ResMut<DynamicInstanceTable>,
+            catalog: Res<WorldRenderCatalog>,
+            primitive_cache: Res<PrimitiveRenderCache>,
+            render_config: Res<ClientRenderConfig>,
+            chunk: Res<ColliderPoseTestChunk>,
+        ) {
+            let outcome = apply_render_world_chunk(
+                &mut commands,
+                &mut context,
+                &mut status,
+                &mut static_instance_table,
+                &mut dynamic_instance_table,
+                &catalog,
+                &primitive_cache,
+                &render_config,
+                RenderWorldApplyOptions::default(),
+                &chunk.0,
+            );
+            insert_gameplay_colliders_for_chunk(&mut commands, &context, &catalog, &chunk.0);
+            commands.insert_resource(ColliderPoseTestOutcome(outcome));
+        }
+
+        let authored_transform = Transform::from_xyz(-2.0, 0.5, 3.0)
+            .with_rotation(Quat::from_rotation_z(17.0_f32.to_radians()));
+        let chunk = WorldStreamChunk {
+            level_id: WorldLevelId("collider-pose-test".to_owned()),
+            revision: WorldRevision(1),
+            chunk_index: 0,
+            chunk_count: 1,
+            manifest_signature: 0xc011_1dee,
+            entities: vec![WorldEntitySpec {
+                entity: NetEntity(42),
+                name: "ColliderPoseProbe".to_owned(),
+                class: ReplicationClass::World,
+                authority: AuthorityMode::StaticServer,
+                transform: fun_scene::qtransform(&authored_transform),
+                catalog: None,
+                render: None,
+                collider: Some(WorldCollider::Cuboid {
+                    size: QuantizedVec3::from_f32([1.0, 1.0, 1.0], Quantization::MILLIMETERS),
+                }),
+                color: None,
+            }],
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(ClientRenderConfig::from_env())
+            .insert_resource(WorldRenderCatalog::default())
+            .insert_resource(PrimitiveRenderCache::default())
+            .init_resource::<StaticInstanceTable>()
+            .init_resource::<DynamicInstanceTable>()
+            .insert_resource(ColliderPoseTestChunk(chunk))
+            .init_resource::<RenderWorldContext>()
+            .init_resource::<RenderWorldStatus>()
+            .add_systems(Update, apply_chunk_and_colliders);
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<ColliderPoseTestOutcome>()
+                .0
+                .spawned_entities,
+            1
+        );
+        let mut query = app.world_mut().query::<(
+            &NetworkIdentity,
+            &Transform,
+            &Position,
+            &Rotation,
+            &Collider,
+        )>();
+        let rows = query.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        let (_, transform, position, rotation, _) = rows[0];
+        assert!(
+            transform.translation.distance(position.0) < 0.001,
+            "collider Position must match streamed Transform translation"
+        );
+        assert!(
+            transform.rotation.dot(rotation.0).abs() > 0.9999,
+            "collider Rotation must match streamed Transform rotation"
+        );
     }
 
     fn preview_test_chunk() -> WorldStreamChunk {

@@ -1,15 +1,12 @@
 use std::f32::consts::FRAC_PI_2;
 
+use crate::avis::{
+    AdjustPrecision as _, AsF32 as _, Collider, MoveAndSlide, MoveAndSlideConfig,
+    MoveAndSlideHitResponse, Position, RigidBody, Rotation, ShapeCastConfig, SpatialQueryFilter,
+};
 use crate::{ClientHostControlState, ClientWorldStatus};
 #[cfg(all(feature = "render_diagnostics", debug_assertions))]
 use crate::{ClientScheduleProfiler, ClientScheduleSystem, frame_profile::DetailedFrameProfiler};
-use avian3d::{
-    math::{AdjustPrecision as _, AsF32 as _},
-    prelude::{
-        Collider, MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitResponse, RigidBody,
-        ShapeCastConfig, SpatialQueryFilter,
-    },
-};
 use bevy::{
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
@@ -17,6 +14,7 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions},
 };
 use fun_host::{FunClientHostState, FunInputOwner};
+use fun_render::renderer_component_api as renderer_api;
 use fun_scene::prelude::*;
 use game_shared::{DEFAULT_CORRECTION_HALF_LIFE_SECONDS, PLAYER_SPAWN};
 
@@ -287,6 +285,8 @@ fn player_scene(camera: impl FunScene) -> impl FunScene {
         fun_value(RigidBody::Kinematic)
         Collider::capsule(PLAYER_RADIUS, PLAYER_CAPSULE_LENGTH)
         Visibility::default()
+        fun_value(Position::from_xyz(PLAYER_SPAWN[0], PLAYER_SPAWN[1], PLAYER_SPAWN[2]))
+        fun_value(Rotation::IDENTITY)
         fun_value(spawn_transform)
         Children [(
             #YawPivot
@@ -310,8 +310,25 @@ fn base_camera_scene() -> impl FunScene {
     fun! {
         Camera3d
         Camera {
-            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.015, 0.025, 0.045)),
         }
+        fun_value(renderer_api::RenderCamera {
+            layers: renderer_api::RenderLayerMask::DEFAULT,
+            order: 0,
+        })
+        fun_value(renderer_api::MainCamera)
+        fun_value(renderer_api::CameraProjection {
+            mode: renderer_api::CameraProjectionMode::Perspective,
+            vertical_fov_radians: 75.0_f32.to_radians(),
+            orthographic_height: 10.0,
+            near: 0.05,
+            far: 50_000.0,
+        })
+        fun_value(renderer_api::CameraRenderTarget::default())
+        fun_value(renderer_api::CameraExposure {
+            exposure_value: 0.0,
+            auto_exposure: false,
+        })
         fun_value(Msaa::Off)
         fun_value(Projection::from(PerspectiveProjection {
             fov: 75.0_f32.to_radians(),

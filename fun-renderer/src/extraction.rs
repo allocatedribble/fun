@@ -6,7 +6,7 @@ use bevy_ecs::{
     lifecycle::RemovedComponents,
     prelude::{Added, Changed, Or, Query, Res, ResMut, Resource, With, Without},
 };
-use bevy_transform::components::Transform;
+use bevy_transform::components::{GlobalTransform, Transform};
 
 use crate::{component_api::*, plugin::RendererFrameIndex};
 
@@ -437,6 +437,12 @@ impl From<&Transform> for ExtractedTransform {
             ],
             scale: RenderVec3::new(transform.scale.x, transform.scale.y, transform.scale.z),
         }
+    }
+}
+
+impl From<&GlobalTransform> for ExtractedTransform {
+    fn from(transform: &GlobalTransform) -> Self {
+        Self::from(&transform.compute_transform())
     }
 }
 
@@ -881,6 +887,7 @@ pub fn extract_renderer_renderables(
             Option<&RenderBounds>,
             Option<&RenderLayer>,
             Option<&RenderVisibility>,
+            Option<&GlobalTransform>,
             Option<&Transform>,
             Option<&RenderStatic>,
             Option<&RenderDynamic>,
@@ -894,6 +901,7 @@ pub fn extract_renderer_renderables(
             Changed<RenderBounds>,
             Changed<RenderLayer>,
             Changed<RenderVisibility>,
+            Changed<GlobalTransform>,
             Changed<Transform>,
             Changed<RenderStatic>,
             Changed<RenderDynamic>,
@@ -914,6 +922,7 @@ pub fn extract_renderer_renderables(
         bounds,
         layer,
         visibility,
+        global_transform,
         transform,
         static_marker,
         dynamic_marker,
@@ -941,7 +950,10 @@ pub fn extract_renderer_renderables(
             material.map_or(RenderMaterialAssetId::INVALID, |material| material.material);
         let mesh_id = allocator.mesh_id_for_asset(source_mesh);
         let material_id = allocator.material_id_for_asset(source_material);
-        let transform = transform.map_or(ExtractedTransform::IDENTITY, ExtractedTransform::from);
+        let transform = global_transform
+            .map(ExtractedTransform::from)
+            .or_else(|| transform.map(ExtractedTransform::from))
+            .unwrap_or(ExtractedTransform::IDENTITY);
         let bounds = bounds.copied().unwrap_or_default();
         let layer = layer.copied().unwrap_or_default();
         let visibility = visibility.copied().unwrap_or_default();
@@ -1003,6 +1015,7 @@ pub fn extract_renderer_views(
         (
             Entity,
             &RenderCamera,
+            Option<&GlobalTransform>,
             Option<&Transform>,
             Option<&CameraProjection>,
             Option<&CameraExposure>,
@@ -1014,6 +1027,7 @@ pub fn extract_renderer_views(
         Or<(
             Added<RenderCamera>,
             Changed<RenderCamera>,
+            Changed<GlobalTransform>,
             Changed<Transform>,
             Changed<CameraProjection>,
             Changed<CameraExposure>,
@@ -1029,8 +1043,18 @@ pub fn extract_renderer_views(
     mut diagnostics: ResMut<RenderWorldExtractionDiagnostics>,
 ) {
     let started_at = Instant::now();
-    for (entity, camera, transform, projection, exposure, jitter, history, target, debug_view) in
-        query.iter()
+    for (
+        entity,
+        camera,
+        global_transform,
+        transform,
+        projection,
+        exposure,
+        jitter,
+        history,
+        target,
+        debug_view,
+    ) in query.iter()
     {
         diagnostics.queried_entities = diagnostics.queried_entities.saturating_add(1);
         diagnostics.changed_entities = diagnostics.changed_entities.saturating_add(1);
@@ -1046,10 +1070,14 @@ pub fn extract_renderer_views(
             diagnostics.removed_views = diagnostics.removed_views.saturating_add(1);
         }
         let view_id = allocator.view_id_for_stable(stable_id);
+        let transform = global_transform
+            .map(ExtractedTransform::from)
+            .or_else(|| transform.map(ExtractedTransform::from))
+            .unwrap_or(ExtractedTransform::IDENTITY);
         tables.upsert_view(ExtractedView {
             view_id,
             stable_id,
-            transform: transform.map_or(ExtractedTransform::IDENTITY, ExtractedTransform::from),
+            transform,
             camera: *camera,
             projection: projection.copied().unwrap_or_default(),
             exposure: exposure.copied().unwrap_or_default(),
@@ -1081,6 +1109,7 @@ pub fn extract_renderer_lights(
             Option<&DirectionalLight>,
             Option<&PointLight>,
             Option<&SpotLight>,
+            Option<&GlobalTransform>,
             Option<&Transform>,
             Option<&ShadowCaster>,
             Option<&LightLayer>,
@@ -1094,6 +1123,7 @@ pub fn extract_renderer_lights(
                 Changed<PointLight>,
                 Added<SpotLight>,
                 Changed<SpotLight>,
+                Changed<GlobalTransform>,
                 Changed<Transform>,
                 Changed<ShadowCaster>,
                 Changed<LightLayer>,
@@ -1110,7 +1140,9 @@ pub fn extract_renderer_lights(
     mut diagnostics: ResMut<RenderWorldExtractionDiagnostics>,
 ) {
     let started_at = Instant::now();
-    for (entity, directional, point, spot, transform, shadow, layer, bounds) in query.iter() {
+    for (entity, directional, point, spot, global_transform, transform, shadow, layer, bounds) in
+        query.iter()
+    {
         let Some((kind, color, intensity, range, inner, outer)) =
             extracted_light_shape(directional, point, spot)
         else {
@@ -1130,11 +1162,15 @@ pub fn extract_renderer_lights(
             diagnostics.removed_lights = diagnostics.removed_lights.saturating_add(1);
         }
         let light_id = allocator.light_id_for_stable(stable_id);
+        let transform = global_transform
+            .map(ExtractedTransform::from)
+            .or_else(|| transform.map(ExtractedTransform::from))
+            .unwrap_or(ExtractedTransform::IDENTITY);
         tables.upsert_light(ExtractedLight {
             light_id,
             stable_id,
             kind,
-            transform: transform.map_or(ExtractedTransform::IDENTITY, ExtractedTransform::from),
+            transform,
             color,
             intensity,
             range,
@@ -1738,6 +1774,49 @@ mod tests {
                 .max_frame_rate_hz,
             120
         );
+    }
+
+    #[test]
+    fn extraction_prefers_global_transform_for_world_space_camera_and_renderables() {
+        let mut world = World::new();
+        install_resources(&mut world);
+        world.spawn((
+            Renderable {
+                object_id: RenderStableId::new(700),
+                dirty: RenderDirtyFlags::GEOMETRY,
+            },
+            RenderMesh {
+                mesh: RenderMeshAssetId::first(3),
+            },
+            RenderMaterial {
+                material: RenderMaterialAssetId::first(9),
+            },
+            Transform::from_xyz(1.0, 0.0, 0.0),
+            GlobalTransform::from_xyz(11.0, 2.0, 3.0),
+        ));
+        world.spawn((
+            RenderCamera::default(),
+            CameraHistory {
+                history_id: RenderStableId::new(701),
+                reset: false,
+            },
+            Transform::IDENTITY,
+            GlobalTransform::from_xyz(20.0, 5.0, -2.0),
+        ));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems((
+            begin_render_world_extraction_frame,
+            extract_renderer_renderables,
+            extract_renderer_views,
+        ));
+        schedule.run(&mut world);
+
+        let tables = world.resource::<RenderWorldTables>();
+        assert_eq!(tables.object_table[0].transform.translation.x, 11.0);
+        assert_eq!(tables.object_table[0].transform.translation.y, 2.0);
+        assert_eq!(tables.view_table[0].transform.translation.x, 20.0);
+        assert_eq!(tables.view_table[0].transform.translation.y, 5.0);
     }
 
     #[test]

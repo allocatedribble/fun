@@ -46,20 +46,21 @@ render_diagnostics = [
     "diagnostics",
     "bevy/debug",
     "bevy/track_location",
-    "bevy/pbr_debug_diagnostics",
-    "bevy/meshlet_debug_diagnostics",
     "fun_render/render_diagnostics",
 ]
 volumetric_clouds = ["fun_render/volumetric_clouds"]
 
 [dependencies]
-avian3d.workspace = true
+avis_runtime = { package = "avian3d", path = "../../avian/crates/avian3d" }
 bevy.workspace = true
 bevy_quinnet.workspace = true
 fun_render = { path = "../fun_render", default-features = false, features = [
     "winit_presentation",
     "fun_renderer_core",
+    "virtual_geometry",
+    "fun_lux_virtual_shadows",
 ] }
+fun_ecs.workspace = true
 fun_scene.workspace = true
 fun_telemetry_core = { workspace = true, optional = true }
 fun_host = { path = "../fun_host" }
