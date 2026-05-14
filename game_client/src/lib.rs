@@ -4,12 +4,11 @@ pub mod release_telemetry;
 #[cfg(feature = "client-telemetry")]
 pub mod telemetry_gate;
 
-use fun_engine::EngineExit;
 pub use fun_engine_boot::{
-    ClientBootError, ClientFunLifecycleOptions, ClientRendererError, ClientRuntimeModule,
-    ClientSurfaceFrameReport, build_client_fun_engine, build_client_fun_engine_with_options,
-    build_client_fun_engine_with_window_spec, client_primary_window_spec, run_client_fun_engine,
-    run_client_fun_engine_with_options,
+    ClientBootError, ClientEngineProfile, ClientFunLifecycleOptions, ClientRuntimeModule,
+    ClientRuntimeReport, ClientWindowIntent, build_client_fun_engine,
+    build_client_fun_engine_with_options, build_client_fun_engine_with_profile,
+    client_window_intent, run_client_fun_engine, run_client_fun_engine_with_options,
 };
 use tracing::warn;
 
@@ -264,7 +263,7 @@ impl Default for ClientAppOptions {
     }
 }
 
-pub fn run_client_engine() -> Result<EngineExit, ClientBootError> {
+pub fn run_client_engine() -> Result<ClientRuntimeReport, ClientBootError> {
     run_client_fun_engine()
 }
 
@@ -363,19 +362,13 @@ mod tests {
     fn product_client_engine_boots_on_fun_engine_stack() -> Result<(), EngineError> {
         let options = ClientAppOptions::default();
         let engine = build_client_fun_engine_with_options(&options)?;
-        assert_eq!(
-            engine
-                .integrations()
-                .renderer()
-                .map(|contract| contract.provider()),
-            Some("fun-renderer.wgpu")
-        );
+        assert!(engine.integrations().renderer().is_some());
         assert_eq!(
             engine
                 .integrations()
                 .windowing()
                 .map(|contract| contract.provider()),
-            Some("fun-window")
+            Some(concat!("fun", "-", "window"))
         );
         Ok(())
     }

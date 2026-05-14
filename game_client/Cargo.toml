@@ -31,8 +31,5 @@ telemetry-rendered-views = ["client-telemetry"]
 [dependencies]
 fun_telemetry_core = { workspace = true, optional = true }
 fun_ecs.workspace = true
-fun_engine = { workspace = true, features = ["default-stack"] }
-fun_window = { workspace = true, features = ["backend-winit", "surface-wgpu"] }
-pollster.workspace = true
+fun_engine = { workspace = true, features = ["default-stack", "renderer-fun", "interactive-winit"] }
 tracing.workspace = true
-wgpu.workspace = true

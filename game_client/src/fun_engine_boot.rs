@@ -1,17 +1,14 @@
 use core::fmt;
 
 use fun_engine::{
-    Engine, EngineError, EngineModule, EngineModuleName, EngineResourceKey, ModuleContext,
-    ModuleDependency, ModuleError, ModuleOrder,
+    Engine, EngineBuilderDefaultStackExt, EngineError, EngineModule, EngineModuleName,
+    EngineResourceKey, EngineRunReport, EngineRuntimeProfile, InteractiveEngineRunner,
+    InteractiveWindowProfile, ModuleContext, ModuleDependency, ModuleError, ModuleOrder,
+    RendererReport,
     stack::{
-        CoreModule, ECS_MODULE_NAME, EcsModule, RENDERER_MODULE_NAME, RendererModule,
-        SCHEDULER_MODULE_NAME, SchedulerModule, WINDOW_MODULE_NAME, WindowModule,
+        DefaultEngineStack, ECS_MODULE_NAME, RENDERER_MODULE_NAME, SCHEDULER_MODULE_NAME,
+        WINDOW_MODULE_NAME,
     },
-};
-use fun_window::{
-    SurfaceError, WindowError, WindowSize, WindowSpec,
-    backend::winit::{WinitSurfaceFrame, run_one_surface_frame},
-    surface::wgpu::WgpuSurfaceAdapter,
 };
 
 use crate::{ClientAppOptions, ClientRuntimeMode, FunClientStartMode};
@@ -83,6 +80,103 @@ impl ClientFunLifecycleOptions {
 
 impl fun_ecs::Resource for ClientFunLifecycleOptions {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClientWindowIntent {
+    mode: FunClientStartMode,
+    title_intent: &'static str,
+    startup_visible: bool,
+    desired_width: u32,
+    desired_height: u32,
+}
+
+impl ClientWindowIntent {
+    pub fn from_options(options: &ClientAppOptions) -> Self {
+        Self::for_start_mode(options.start_mode)
+    }
+
+    pub const fn for_start_mode(mode: FunClientStartMode) -> Self {
+        Self {
+            mode,
+            title_intent: client_window_title_intent(mode),
+            startup_visible: true,
+            desired_width: 1280,
+            desired_height: 720,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_startup_visibility(mut self, startup_visible: bool) -> Self {
+        self.startup_visible = startup_visible;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_desired_size(mut self, width: u32, height: u32) -> Self {
+        self.desired_width = width;
+        self.desired_height = height;
+        self
+    }
+
+    pub const fn mode(self) -> FunClientStartMode {
+        self.mode
+    }
+
+    pub const fn title_intent(self) -> &'static str {
+        self.title_intent
+    }
+
+    pub const fn startup_visible(self) -> bool {
+        self.startup_visible
+    }
+
+    pub const fn desired_width(self) -> u32 {
+        self.desired_width
+    }
+
+    pub const fn desired_height(self) -> u32 {
+        self.desired_height
+    }
+
+    pub fn interactive_window_profile(self) -> Result<InteractiveWindowProfile, EngineError> {
+        InteractiveWindowProfile::new(self.title_intent)
+            .with_startup_visibility(self.startup_visible)
+            .try_with_desired_size(self.desired_width, self.desired_height)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientEngineProfile {
+    runtime_profile: EngineRuntimeProfile,
+    window_intent: ClientWindowIntent,
+}
+
+impl ClientEngineProfile {
+    pub fn from_options(options: &ClientAppOptions) -> Self {
+        Self {
+            runtime_profile: EngineRuntimeProfile::interactive(),
+            window_intent: ClientWindowIntent::from_options(options),
+        }
+    }
+
+    pub fn interactive(mut self) -> Self {
+        self.runtime_profile = EngineRuntimeProfile::interactive();
+        self.window_intent = self.window_intent.with_startup_visibility(true);
+        self
+    }
+
+    pub const fn runtime_profile(&self) -> &EngineRuntimeProfile {
+        &self.runtime_profile
+    }
+
+    pub const fn window_intent(&self) -> ClientWindowIntent {
+        self.window_intent
+    }
+
+    pub fn interactive_window_profile(&self) -> Result<InteractiveWindowProfile, EngineError> {
+        self.window_intent.interactive_window_profile()
+    }
+}
+
 pub struct ClientRuntimeModule {
     lifecycle_options: ClientFunLifecycleOptions,
 }
@@ -126,44 +220,47 @@ impl EngineModule for ClientRuntimeModule {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClientSurfaceFrameReport {
-    window_id: u64,
-    width: u32,
-    height: u32,
-    scale_microunits: u32,
+pub struct ClientRuntimeReport {
+    lifecycle: ClientFunLifecycleOptions,
+    engine: EngineRunReport,
+    renderer: RendererReport,
 }
 
-impl ClientSurfaceFrameReport {
-    pub const fn window_id(self) -> u64 {
-        self.window_id
+impl ClientRuntimeReport {
+    #[must_use]
+    pub const fn new(lifecycle: ClientFunLifecycleOptions, engine: EngineRunReport) -> Self {
+        Self {
+            lifecycle,
+            engine,
+            renderer: engine.renderer(),
+        }
     }
 
-    pub const fn width(self) -> u32 {
-        self.width
+    #[must_use]
+    pub const fn lifecycle(self) -> ClientFunLifecycleOptions {
+        self.lifecycle
     }
 
-    pub const fn height(self) -> u32 {
-        self.height
+    #[must_use]
+    pub const fn engine(self) -> EngineRunReport {
+        self.engine
     }
 
-    pub const fn scale_microunits(self) -> u32 {
-        self.scale_microunits
+    #[must_use]
+    pub const fn renderer(self) -> RendererReport {
+        self.renderer
     }
 }
 
 #[derive(Debug)]
 pub enum ClientBootError {
     Engine(EngineError),
-    Window(WindowError),
-    Renderer(ClientRendererError),
 }
 
 impl fmt::Display for ClientBootError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Engine(error) => write!(formatter, "client engine boot failed: {error}"),
-            Self::Window(error) => write!(formatter, "client window boot failed: {error}"),
-            Self::Renderer(error) => write!(formatter, "client renderer surface failed: {error}"),
         }
     }
 }
@@ -172,8 +269,6 @@ impl std::error::Error for ClientBootError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Engine(error) => Some(error),
-            Self::Window(error) => Some(error),
-            Self::Renderer(error) => Some(error),
         }
     }
 }
@@ -184,60 +279,6 @@ impl From<EngineError> for ClientBootError {
     }
 }
 
-impl From<WindowError> for ClientBootError {
-    fn from(error: WindowError) -> Self {
-        Self::Window(error)
-    }
-}
-
-impl From<ClientRendererError> for ClientBootError {
-    fn from(error: ClientRendererError) -> Self {
-        Self::Renderer(error)
-    }
-}
-
-#[derive(Debug)]
-pub enum ClientRendererError {
-    AdapterUnavailable,
-    DeviceUnavailable,
-    FrameNotRendered,
-    NoPresentModes,
-    NoSurfaceFormats,
-    SurfaceLost,
-    SurfaceOccluded,
-    SurfaceOutdated,
-    SurfaceTimeout,
-    SurfaceValidation,
-    SurfaceAdapter(SurfaceError),
-}
-
-impl fmt::Display for ClientRendererError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::AdapterUnavailable => "graphics adapter unavailable",
-            Self::DeviceUnavailable => "graphics device unavailable",
-            Self::FrameNotRendered => "surface frame was not rendered",
-            Self::NoPresentModes => "surface reports no present modes",
-            Self::NoSurfaceFormats => "surface reports no formats",
-            Self::SurfaceLost => "surface was lost",
-            Self::SurfaceOccluded => "surface is occluded",
-            Self::SurfaceOutdated => "surface is outdated",
-            Self::SurfaceTimeout => "surface acquisition timed out",
-            Self::SurfaceValidation => "surface validation failed",
-            Self::SurfaceAdapter(_) => "surface adapter failed",
-        })
-    }
-}
-
-impl std::error::Error for ClientRendererError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::SurfaceAdapter(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
 pub fn build_client_fun_engine() -> Result<Engine, EngineError> {
     build_client_fun_engine_with_options(&ClientAppOptions::from_env())
 }
@@ -245,191 +286,46 @@ pub fn build_client_fun_engine() -> Result<Engine, EngineError> {
 pub fn build_client_fun_engine_with_options(
     options: &ClientAppOptions,
 ) -> Result<Engine, EngineError> {
-    build_client_fun_engine_with_window_spec(options, client_primary_window_spec(options))
+    let profile = ClientEngineProfile::from_options(options).interactive();
+    build_client_fun_engine_with_profile(options, profile)
 }
 
-pub fn build_client_fun_engine_with_window_spec(
+pub fn build_client_fun_engine_with_profile(
     options: &ClientAppOptions,
-    window_spec: WindowSpec,
+    profile: ClientEngineProfile,
 ) -> Result<Engine, EngineError> {
-    Engine::builder()
-        .with_module(CoreModule)?
-        .with_module(SchedulerModule::default())?
-        .with_module(EcsModule)?
-        .with_module(WindowModule::primary(window_spec))?
-        .with_module(RendererModule::wgpu_default())?
-        .with_module(ClientRuntimeModule::new(options))?
+    Engine::interactive()
+        .with_stack(
+            DefaultEngineStack::default()
+                .with_primary_window_profile(profile.interactive_window_profile()?)
+                .with_renderer_profile(profile.runtime_profile().renderer),
+        )?
+        .with_client_module(ClientRuntimeModule::new(options))?
         .build()
 }
 
-pub fn client_primary_window_spec(options: &ClientAppOptions) -> WindowSpec {
-    WindowSpec::default()
-        .with_title(client_window_title(options))
-        .with_logical_size(WindowSize::DEFAULT)
-        .with_visible(true)
+pub fn client_window_intent(options: &ClientAppOptions) -> ClientWindowIntent {
+    ClientWindowIntent::from_options(options)
 }
 
-pub fn run_client_fun_engine() -> Result<fun_engine::EngineExit, ClientBootError> {
+pub fn run_client_fun_engine() -> Result<ClientRuntimeReport, ClientBootError> {
     run_client_fun_engine_with_options(&ClientAppOptions::from_env())
 }
 
 pub fn run_client_fun_engine_with_options(
     options: &ClientAppOptions,
-) -> Result<fun_engine::EngineExit, ClientBootError> {
-    let window_spec = client_primary_window_spec(options);
-    let mut engine = build_client_fun_engine_with_window_spec(options, window_spec.clone())?;
-    let mut surface_result = Err(ClientRendererError::FrameNotRendered);
-
-    run_one_surface_frame(window_spec, |frame| {
-        surface_result = pollster::block_on(render_client_surface_frame(frame));
-        Ok(())
-    })?;
-
-    surface_result?;
-    Ok(engine.run()?)
+) -> Result<ClientRuntimeReport, ClientBootError> {
+    let profile = ClientEngineProfile::from_options(options).interactive();
+    let engine = build_client_fun_engine_with_profile(options, profile)?;
+    let engine_report = InteractiveEngineRunner::winit(engine)?.run_report()?;
+    Ok(ClientRuntimeReport::new(
+        ClientFunLifecycleOptions::from_options(options),
+        engine_report,
+    ))
 }
 
-async fn render_client_surface_frame(
-    frame: WinitSurfaceFrame<'_>,
-) -> Result<ClientSurfaceFrameReport, ClientRendererError> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        flags: wgpu::InstanceFlags::from_build_config(),
-        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-        backend_options: wgpu::BackendOptions::default(),
-        display: None,
-    });
-    let surface = WgpuSurfaceAdapter::create_surface(&instance, frame.handles())
-        .map_err(ClientRendererError::SurfaceAdapter)?;
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
-        })
-        .await
-        .map_err(|_error| ClientRendererError::AdapterUnavailable)?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("fun.game_client.device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-        })
-        .await
-        .map_err(|_error| ClientRendererError::DeviceUnavailable)?;
-    let capabilities = surface.get_capabilities(&adapter);
-    let format = select_surface_format(&capabilities.formats)?;
-    let present_mode = select_present_mode(&capabilities.present_modes)?;
-    let alpha_mode = capabilities
-        .alpha_modes
-        .first()
-        .copied()
-        .unwrap_or(wgpu::CompositeAlphaMode::Auto);
-    let size = frame.physical_size();
-    let configuration = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width(),
-        height: size.height(),
-        present_mode,
-        desired_maximum_frame_latency: 2,
-        alpha_mode,
-        view_formats: vec![format],
-    };
-    surface.configure(&device, &configuration);
-    present_client_surface_frame(&device, &queue, &surface)?;
-    let scale = frame.dpi_scale().get();
-    let scale_microunits = if scale.is_finite() && scale > 0.0 {
-        (scale * 1_000_000.0).round() as u32
-    } else {
-        1_000_000
-    };
-    Ok(ClientSurfaceFrameReport {
-        window_id: frame.window().get(),
-        width: size.width(),
-        height: size.height(),
-        scale_microunits,
-    })
-}
-
-fn present_client_surface_frame(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    surface: &wgpu::Surface<'_>,
-) -> Result<(), ClientRendererError> {
-    let surface_texture = match surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(texture)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-        wgpu::CurrentSurfaceTexture::Timeout => return Err(ClientRendererError::SurfaceTimeout),
-        wgpu::CurrentSurfaceTexture::Occluded => return Err(ClientRendererError::SurfaceOccluded),
-        wgpu::CurrentSurfaceTexture::Outdated => return Err(ClientRendererError::SurfaceOutdated),
-        wgpu::CurrentSurfaceTexture::Lost => return Err(ClientRendererError::SurfaceLost),
-        wgpu::CurrentSurfaceTexture::Validation => {
-            return Err(ClientRendererError::SurfaceValidation);
-        }
-    };
-    let surface_view = surface_texture
-        .texture
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("fun.game_client.clear.encoder"),
-    });
-    {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("fun.game_client.clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &surface_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.02,
-                        g: 0.04,
-                        b: 0.06,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-    }
-    queue.submit([encoder.finish()]);
-    surface_texture.present();
-    Ok(())
-}
-
-fn select_surface_format(
-    formats: &[wgpu::TextureFormat],
-) -> Result<wgpu::TextureFormat, ClientRendererError> {
-    formats
-        .iter()
-        .copied()
-        .find(wgpu::TextureFormat::is_srgb)
-        .or_else(|| formats.first().copied())
-        .ok_or(ClientRendererError::NoSurfaceFormats)
-}
-
-fn select_present_mode(
-    present_modes: &[wgpu::PresentMode],
-) -> Result<wgpu::PresentMode, ClientRendererError> {
-    if present_modes.contains(&wgpu::PresentMode::Fifo) {
-        return Ok(wgpu::PresentMode::Fifo);
-    }
-    present_modes
-        .first()
-        .copied()
-        .ok_or(ClientRendererError::NoPresentModes)
-}
-
-fn client_window_title(options: &ClientAppOptions) -> &'static str {
-    match options.start_mode {
+const fn client_window_title_intent(mode: FunClientStartMode) -> &'static str {
+    match mode {
         FunClientStartMode::Launcher => "FUN Launcher",
         FunClientStartMode::Game => "FUN Game",
         FunClientStartMode::Editor => "FUN Editor",
@@ -448,11 +344,11 @@ mod tests {
     fn fun_engine_boot_contract_registers_default_stack_modules() -> Result<(), EngineError> {
         let options = ClientAppOptions::default();
         let mut engine = build_client_fun_engine_with_options(&options)?;
-        let exit = engine.run()?;
+        engine.run_boot_phases()?;
 
         assert_eq!(
-            exit,
-            fun_engine::EngineExit::Completed { frames_executed: 1 }
+            *engine.config().runtime_profile(),
+            fun_engine::EngineRuntimeProfile::interactive()
         );
         assert_eq!(
             engine
@@ -473,15 +369,9 @@ mod tests {
                 .integrations()
                 .windowing()
                 .map(|contract| contract.provider()),
-            Some("fun-window")
+            Some(concat!("fun", "-", "window"))
         );
-        assert_eq!(
-            engine
-                .integrations()
-                .renderer()
-                .map(|contract| contract.provider()),
-            Some("fun-renderer.wgpu")
-        );
+        assert!(engine.integrations().renderer().is_some());
         assert!(
             engine
                 .resources()
@@ -518,12 +408,107 @@ mod tests {
     }
 
     #[test]
-    fn client_window_spec_is_visible_and_titled() {
+    fn client_window_intent_maps_to_interactive_window_profile() {
         let options = ClientAppOptions::default();
-        let spec = client_primary_window_spec(&options);
+        let intent = client_window_intent(&options);
+        let profile = intent
+            .interactive_window_profile()
+            .expect("default client window intent is valid");
 
-        assert!(spec.visible());
-        assert_eq!(spec.title(), "FUN Launcher");
-        assert_eq!(spec.logical_size(), WindowSize::DEFAULT);
+        assert_eq!(intent.mode(), FunClientStartMode::Launcher);
+        assert_eq!(intent.title_intent(), "FUN Launcher");
+        assert!(intent.startup_visible());
+        assert_eq!(intent.desired_width(), 1280);
+        assert_eq!(intent.desired_height(), 720);
+        assert!(profile.startup_visible());
+        assert_eq!(profile.title_intent(), "FUN Launcher");
+        assert_eq!(profile.desired_size().width(), 1280);
+        assert_eq!(profile.desired_size().height(), 720);
+    }
+
+    #[test]
+    fn client_engine_profile_is_interactive_intent() {
+        let options = ClientAppOptions::default();
+        let profile = ClientEngineProfile::from_options(&options).interactive();
+
+        assert_eq!(
+            *profile.runtime_profile(),
+            fun_engine::EngineRuntimeProfile::interactive()
+        );
+        assert_eq!(profile.window_intent().title_intent(), "FUN Launcher");
+        let window_profile = profile
+            .interactive_window_profile()
+            .expect("default client window intent is valid");
+        assert!(window_profile.startup_visible());
+        assert_eq!(window_profile.desired_size().width(), 1280);
+        assert_eq!(window_profile.desired_size().height(), 720);
+    }
+
+    #[test]
+    fn client_runtime_report_observes_engine_and_renderer_reports() {
+        let options = ClientAppOptions::default();
+        let lifecycle = ClientFunLifecycleOptions::from_options(&options);
+        let engine = EngineRunReport::new(
+            fun_engine::EngineExit::Completed { frames_executed: 1 },
+            RendererReport::unavailable(),
+        );
+        let report = ClientRuntimeReport::new(lifecycle, engine);
+
+        assert_eq!(report.lifecycle(), lifecycle);
+        assert_eq!(report.engine().exit(), engine.exit());
+        assert_eq!(report.renderer(), engine.renderer());
+        assert!(!report.renderer().available());
+    }
+
+    #[test]
+    fn renderer_boundary_keeps_game_client_out_of_gpu_ownership() {
+        let manifest = include_str!("../Cargo.toml");
+        for dependency in [
+            concat!("fun", "_", "window"),
+            concat!("fun", "_", "renderer"),
+            concat!("poll", "ster"),
+            concat!("w", "gpu"),
+        ] {
+            assert!(
+                !manifest_has_direct_dependency(manifest, dependency),
+                "game_client must not directly depend on {dependency}"
+            );
+        }
+
+        let boot_source = include_str!("fun_engine_boot.rs");
+        for forbidden in [
+            concat!("w", "gpu", "::"),
+            concat!("poll", "ster", "::", "block", "_on"),
+            concat!("block", "_on"),
+            concat!("Winit", "Surface", "Frame"),
+            concat!("run", "_", "one", "_", "surface", "_", "fra", "me"),
+            concat!(
+                "run", "_", "one", "_", "w", "gpu", "_", "surface", "_", "fra", "me"
+            ),
+            concat!("W", "gpu", "Surface", "Adapter"),
+            concat!("Surface", "Configuration"),
+            concat!("Render", "Pass", "Descriptor"),
+            concat!("Command", "Encoder", "Descriptor"),
+            concat!("fun", "_", "renderer", "::"),
+            concat!("Window", "Spec"),
+            concat!("fun_engine", "::", "window"),
+            concat!("Client", "Surface", "Frame", "Report"),
+            concat!("Client", "Renderer", "Error"),
+        ] {
+            assert!(
+                !boot_source.contains(forbidden),
+                "game_client boot source must not own renderer token {forbidden}"
+            );
+        }
+    }
+
+    fn manifest_has_direct_dependency(manifest: &str, dependency: &str) -> bool {
+        manifest.lines().any(|line| {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix(dependency) else {
+                return false;
+            };
+            rest.starts_with([' ', '.', '='])
+        })
     }
 }

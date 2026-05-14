@@ -1197,7 +1197,7 @@ pub enum RendererResourceOwner {
     FunRenderBridge,
     RetiredEngineGeneric,
     RetiredEngineLowLevel,
-    GameClient,
+    RuntimeClient,
     FunUiNativeUi,
     VendorSdk,
 }
@@ -1210,7 +1210,7 @@ impl RendererResourceOwner {
             Self::FunRenderBridge => crate::FUN_RENDER_DONOR_PACKAGE_NAME,
             Self::RetiredEngineGeneric => "retired_engine_generic_render_resource",
             Self::RetiredEngineLowLevel => "retired_engine_low_level",
-            Self::GameClient => "game_client",
+            Self::RuntimeClient => "runtime_client",
             Self::FunUiNativeUi => "fun_ui_native_ui",
             Self::VendorSdk => "vendor_sdk",
         }

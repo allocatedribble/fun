@@ -168,8 +168,15 @@ pub mod schedule_contract;
 pub mod scheduler;
 pub mod settings;
 pub mod shader;
+#[cfg(feature = "windowed-surface-wgpu")]
+pub mod surface;
 #[cfg(any())]
 pub mod taa;
+#[cfg(any(
+    all(test, feature = "windowed-surface-wgpu"),
+    feature = "renderer-surface-smoke"
+))]
+pub mod testkit;
 #[cfg(any())]
 pub mod tier0_proof_frame_gate;
 #[cfg(any())]

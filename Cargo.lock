@@ -750,6 +750,7 @@ dependencies = [
  "fun-engine-app",
  "fun-engine-types",
  "fun-input",
+ "fun-renderer",
  "fun-scheduler-core",
  "fun-scheduler-engine",
  "fun-scheduler-window",
@@ -813,6 +814,7 @@ dependencies = [
  "fun_ai_core",
  "hashbrown 0.17.1",
  "naga",
+ "pollster",
  "rvelte-core",
  "rvelte-fun-render-adapter",
  "rvelte-fun-ui-core",
@@ -1014,10 +1016,7 @@ dependencies = [
  "fun-ecs",
  "fun-engine",
  "fun-telemetry-core",
- "fun-window",
- "pollster",
  "tracing",
- "wgpu",
 ]
 
 [[package]]

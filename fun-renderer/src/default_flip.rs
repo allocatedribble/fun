@@ -24,7 +24,7 @@ pub enum RendererDefaultFlipStage {
     InternalMinimalScene,
     BenchmarkScenes,
     EditorLauncherViewports,
-    SelectedGameClientScenes,
+    SelectedRuntimeScenes,
     GlobalDefault,
     LegacyDiagnosticOnly,
 }
@@ -34,7 +34,7 @@ impl RendererDefaultFlipStage {
         Self::InternalMinimalScene,
         Self::BenchmarkScenes,
         Self::EditorLauncherViewports,
-        Self::SelectedGameClientScenes,
+        Self::SelectedRuntimeScenes,
         Self::GlobalDefault,
         Self::LegacyDiagnosticOnly,
     ];
@@ -45,7 +45,7 @@ impl RendererDefaultFlipStage {
             Self::InternalMinimalScene => "internal_minimal_scene",
             Self::BenchmarkScenes => "benchmark_scenes",
             Self::EditorLauncherViewports => "editor_launcher_viewports",
-            Self::SelectedGameClientScenes => "selected_game_client_scenes",
+            Self::SelectedRuntimeScenes => "selected_runtime_scenes",
             Self::GlobalDefault => "global_default",
             Self::LegacyDiagnosticOnly => "legacy_diagnostic_only",
         }
@@ -116,8 +116,8 @@ pub const RENDERER_DEFAULT_FLIP_STAGES: [RendererDefaultFlipStageDescriptor;
         true,
     ),
     RendererDefaultFlipStageDescriptor::new(
-        RendererDefaultFlipStage::SelectedGameClientScenes,
-        "renderer.default_flip.stage_4.selected_game_client_scenes",
+        RendererDefaultFlipStage::SelectedRuntimeScenes,
+        "renderer.default_flip.stage_4.selected_runtime_scenes",
         true,
         true,
         true,

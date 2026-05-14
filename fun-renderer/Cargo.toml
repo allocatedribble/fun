@@ -47,6 +47,7 @@ wgpu_bridge = ["dep:naga", "dep:wgpu"]
 # the scheduler workspace present.
 schedule_contract = ["dep:fun-scheduler-types"]
 surface_lifecycle = ["dep:fun_window"]
+renderer-surface-smoke = ["windowed-surface-wgpu"]
 
 # FS-M1.4E: layer the graph-shaped renderer adapter (render_work_graph)
 # on top of `schedule_contract`. This pulls in `fun-scheduler-core` so
@@ -57,6 +58,18 @@ schedule_graph = ["schedule_contract", "dep:fun-scheduler-core"]
 
 # Compatibility aliases for Pass 1 callers. New code should use the canonical
 # ownership-oriented names above.
+#
+# Product surface ownership: live desktop surface creation, device selection,
+# swapchain configuration, clear/record/submit/present, and present error
+# classification live in fun-renderer. Runtime clients may request a renderer
+# frame, but must not depend on wgpu or fun-window surface adapters.
+windowed-surface-wgpu = [
+    "surface_lifecycle",
+    "wgpu_bridge",
+    "dep:pollster",
+    "fun_window/backend-winit",
+    "fun_window/surface-wgpu",
+]
 fun_lux_hybrid_gi = ["hybrid_gi"]
 fun_lux_many_light = ["many_light"]
 fun_lux_virtual_shadows = ["virtual_shadows"]
@@ -81,6 +94,7 @@ fun_telemetry_core.workspace = true
 flume.workspace = true
 hashbrown.workspace = true
 fun_window = { workspace = true, optional = true, default-features = false }
+pollster = { workspace = true, optional = true }
 fun-scheduler-types = { path = "../../fun-scheduler/crates/fun-scheduler-types", optional = true }
 fun-scheduler-core = { path = "../../fun-scheduler/crates/fun-scheduler-core", optional = true }
 rvelte-core = { path = "../../rvelte/crates/rvelte-core", optional = true }

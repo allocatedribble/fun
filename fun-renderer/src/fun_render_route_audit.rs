@@ -408,7 +408,7 @@ pub fn startup_log_contains_all_four_identities(log: &str) -> bool {
 /// Names typed every typed startup site the typed
 /// retirement audit covers.  Drives the typed user-spec
 /// requirement "Audit every product startup path:
-/// game_client, fun_render, renderer bridge settings,
+/// runtime client, fun_render, renderer bridge settings,
 /// stack profiles, cloud feature flags".
 ///
 /// Each typed entry is a typed `&'static str` (typed no
@@ -417,7 +417,7 @@ pub fn startup_log_contains_all_four_identities(log: &str) -> bool {
 /// typed assert + typed iterate the typed manifest in
 /// typed tests.
 pub const PRODUCT_STARTUP_PATH_MANIFEST: &[&str] = &[
-    "game_client::build_client_app",
+    "runtime_client::build_client_app",
     "fun_render::core::install_fun_render_core",
     "fun_render::bridge::RendererBridgeSettings",
     "scripts/stack/profiles (stack profile manifests)",
@@ -529,9 +529,9 @@ mod tests {
         // Typed manifest enumerates typed five sites.
         let sites: Vec<&str> = PRODUCT_STARTUP_PATH_MANIFEST.iter().copied().collect();
         // Typed user-spec list:
-        //   game_client, fun_render, renderer bridge
+        //   runtime client, fun_render, renderer bridge
         //   settings, stack profiles, cloud feature flags.
-        assert!(sites.iter().any(|s| s.contains("game_client")));
+        assert!(sites.iter().any(|s| s.contains("runtime_client")));
         assert!(sites.iter().any(|s| s.contains("fun_render::core")));
         assert!(sites.iter().any(|s| s.contains("RendererBridgeSettings")));
         assert!(sites.iter().any(|s| s.contains("stack profile")));
